@@ -153,7 +153,9 @@ export default async function ApplicantHomePage() {
         </div>
       </header>
 
-      <section className="mx-auto grid max-w-6xl gap-8 px-4 pb-20 md:-mt-12 md:grid-cols-[1.15fr_0.85fr]">
+      <section className="relative z-10 mx-auto grid max-w-6xl gap-8 px-4 pb-20 md:-mt-12 md:grid-cols-[1.15fr_0.85fr]">
+        <ApplicantPortal questions={questions} />
+        <section className="mx-auto grid max-w-6xl gap-8 px-4 pb-20 md:-mt-12 md:grid-cols-[1.15fr_0.85fr]">
         <ApplicantPortal questions={questions} />
 
         <div className="space-y-4">
