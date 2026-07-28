@@ -59,6 +59,7 @@ type Job = {
   createdBy: string;
   lastError: string | null;
   createdAt: string;
+  updatedAt: string; // <-- ĐÃ BỔ SUNG KHAI BÁO TYPE Ở ĐÂY
 };
 type JobStatusResp = { job: Job; stageLabel: string; rowsPerSec: number; etaSec: number | null; errorSample: { rowNumber: number; reason: string; originalData: Record<string, string> }[]; warningSample: { rowNumber: number; reason: string; originalData: Record<string, string> }[] };
 
@@ -163,7 +164,7 @@ export default function ImportDataPage() {
         // Lách Vercel Loop Protection: Trình duyệt đóng vai trò máy trợ tim.
         // Nếu thấy server không update trạng thái quá 15 giây (bị chém ngầm),
         // Trình duyệt lập tức chọc API để ép server chạy lô tiếp theo!
-        const lastUpdated = new Date(d.job.updatedAt).getTime();
+        const lastUpdated = new Date(d.job.updatedAt ?? d.job.createdAt).getTime();
         const now = Date.now();
         if (now - lastUpdated > 15000) {
           console.log("Phát hiện máy chủ bị ngắt kết nối. Trình duyệt đang tự động Resume...");
