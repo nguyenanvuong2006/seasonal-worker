@@ -217,7 +217,6 @@ export default function RegistrationsGrid({
   const [deptFilter, setDeptFilter] = React.useState("ALL");
   const [matchFilter, setMatchFilter] = React.useState("ALL");
   const [globalFilter, setGlobalFilter] = React.useState("");
-  const [limit, setLimit] = React.useState<number>(0);
   const [rows, setRows] = React.useState<AppRow[]>([]);
   const [loading, setLoading] = React.useState(true);
   const [sorting, setSorting] = React.useState<SortingState>([]);
@@ -328,24 +327,20 @@ export default function RegistrationsGrid({
       ch.display({
         id: "select",
         header: ({ table }) => (
-          <div className="pl-6">
-            <input
-              type="checkbox"
-              className="h-4 w-4 accent-gold-500 cursor-pointer"
-              checked={table.getIsAllRowsSelected()}
-              onChange={table.getToggleAllRowsSelectedHandler()}
-            />
-          </div>
+          <input
+            type="checkbox"
+            className="h-4 w-4 accent-gold-500"
+            checked={table.getIsAllRowsSelected()}
+            onChange={table.getToggleAllRowsSelectedHandler()}
+          />
         ),
         cell: ({ row }) => (
-          <div className="pl-6">
-            <input
-              type="checkbox"
-              className="h-4 w-4 accent-gold-500 cursor-pointer"
-              checked={row.getIsSelected()}
-              onChange={row.getToggleSelectedHandler()}
-            />
-          </div>
+          <input
+            type="checkbox"
+            className="h-4 w-4 accent-gold-500"
+            checked={row.getIsSelected()}
+            onChange={row.getToggleSelectedHandler()}
+          />
         ),
       }),
       ch.accessor("regDate", {
@@ -523,12 +518,8 @@ export default function RegistrationsGrid({
     [canEdit, ch, departments, patchRow, statusOptions, stageMeta],
   );
 
-  const displayData = React.useMemo(() => {
-    return limit === 0 ? rows : rows.slice(0, limit);
-  }, [rows, limit]);
-
   const table = useReactTable({
-    data: displayData,
+    data: rows,
     columns,
     state: { sorting, globalFilter, rowSelection },
     getRowId: (r) => r.id,
@@ -560,9 +551,9 @@ export default function RegistrationsGrid({
   });
 
   const selIds = Object.keys(rowSelection).filter((k) => rowSelection[k]);
-  const selRows = displayData.filter((r) => selIds.includes(r.id));
+  const selRows = rows.filter((r) => selIds.includes(r.id));
   const newInSel = selRows.filter((r) => r.dwMatch === "NEW").length;
-  const newApplicants = React.useMemo(() => displayData.filter((r) => r.dwMatch === "NEW"), [displayData]);
+  const newApplicants = React.useMemo(() => rows.filter((r) => r.dwMatch === "NEW"), [rows]);
   const newSelIds = Object.keys(newSel).filter((k) => newSel[k]);
   const [bulkResult, setBulkResult] = React.useState<{
     imported: number;
@@ -723,21 +714,6 @@ export default function RegistrationsGrid({
               ))}
             </select>
           </div>
-          
-          <div>
-            <p className="mb-1 text-[10px] font-black uppercase tracking-widest text-gray-400">Hiển thị</p>
-            <select
-              value={limit}
-              onChange={(e) => setLimit(Number(e.target.value))}
-              className="h-10 rounded-xl border-2 border-gray-200 bg-white px-3 text-[13px] font-bold"
-            >
-              <option value={0}>Tất cả</option>
-              <option value={100}>100 hồ sơ đầu tiên</option>
-              <option value={200}>200 hồ sơ đầu tiên</option>
-              <option value={500}>500 hồ sơ đầu tiên</option>
-            </select>
-          </div>
-
           <div className="min-w-[180px] flex-1">
             <p className="mb-1 text-[10px] font-black uppercase tracking-widest text-gray-400">Tìm nhanh</p>
             <Input
@@ -797,7 +773,7 @@ export default function RegistrationsGrid({
           <p className="text-[12px] font-black uppercase tracking-widest text-hasfarm-800">
             Daily Application — sửa trực tiếp như Google Sheet
           </p>
-          <Badge tone="gold">{displayData.length} đơn</Badge>
+          <Badge tone="gold">{rows.length} đơn</Badge>
         </div>
         <div className="max-h-[62vh] overflow-auto">
           <table className="grid-sheet w-full border-collapse">
@@ -871,9 +847,7 @@ export default function RegistrationsGrid({
             <table className="grid-sheet w-full text-[13px]">
               <thead className="sticky top-0 bg-[#0F3D23] text-white">
                 <tr>
-                  <th className="w-10 px-2 py-2.5 text-center text-[10px] font-black">
-                    <div className="pl-6">✓</div>
-                  </th>
+                  <th className="w-10 px-2 py-2.5 text-center text-[10px] font-black">✓</th>
                   <th className="px-3 py-2.5 text-left text-[10px] font-black uppercase">CCCD</th>
                   <th className="px-3 py-2.5 text-left text-[10px] font-black uppercase">Họ và tên</th>
                   <th className="px-3 py-2.5 text-left text-[10px] font-black uppercase">SĐT</th>
@@ -896,15 +870,13 @@ export default function RegistrationsGrid({
                     className={cn("cursor-pointer hover:bg-gold-50", newSel[r.id] && "bg-gold-50")}
                   >
                     <td className="px-2 py-2 text-center">
-                      <div className="pl-6">
-                        <input
-                          type="checkbox"
-                          checked={!!newSel[r.id]}
-                          onChange={() => setNewSel((s) => ({ ...s, [r.id]: !s[r.id] }))}
-                          onClick={(e) => e.stopPropagation()}
-                          className="h-4 w-4 accent-gold-500 cursor-pointer"
-                        />
-                      </div>
+                      <input
+                        type="checkbox"
+                        checked={!!newSel[r.id]}
+                        onChange={() => setNewSel((s) => ({ ...s, [r.id]: !s[r.id] }))}
+                        onClick={(e) => e.stopPropagation()}
+                        className="h-4 w-4 accent-gold-500"
+                      />
                     </td>
                     <td className="px-3 py-2 font-mono font-bold">{r.cccd}</td>
                     <td className="px-3 py-2 font-bold text-hasfarm-900">{r.fullName}</td>

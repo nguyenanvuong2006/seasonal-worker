@@ -18,7 +18,7 @@ import { CCCD_PATTERN, NUMBER_PATTERN, VN_PHONE_PATTERN } from "@/lib/validators
  *     trách nhiệm tự "chain" bước kế tiếp bằng Next.js `after()`.
  */
 
-export const STAGE_CHUNK = 2000; // số dòng merge / 1 câu lệnh SQL — đủ nhỏ để không chạm giới hạn, đủ lớn để nhanh
+export const STAGE_CHUNK = 8000; // số dòng merge / 1 câu lệnh SQL — đủ nhỏ để không chạm giới hạn, đủ lớn để nhanh
 const STALE_MS = 90_000; // job không có heartbeat > 90s coi là "treo", watchdog được phép resume
 
 type JobType = "department" | "dw_data" | "daily_application";
@@ -139,7 +139,7 @@ export async function stageRows(jobId: string, jobType: JobType, rows: Record<st
                 x.sd, x.sdp, x.al, x.nt, x.vc, x.cc, x.rd, x.rdp, x.ca::jsonb
          FROM unnest($2::int[], $3::text[], $4::text[], $5::text[], $6::text[], $7::text[], $8::text[], $9::text[],
                       $10::text[], $11::text[], $12::text[], $13::text[], $14::text[], $15::text[], $16::text[],
-                      $17::text[], $18::text[], $19::text[], $20::text[], $21::text[], $22::text[], $23::text[], $24::text[], $25::text[])
+                      $17::text[], $18::text[], $19::text[], $20::text[], $21::text[], $22::text[], $23::text[], $24::text[])
            AS x(rn, cccd, fn, gd, dob, age, ph, eth, pa, ra, dt, dn, gn, wd, rc, sd, sdp, al, nt, vc, cc, rd, rdp, ca)`,
         [
           jobId,
@@ -504,25 +504,11 @@ function translateError(error: Error & { code?: string }): string {
 export function triggerWorker(jobId: string, resumeToken: string, baseUrl: string) {
   after(async () => {
     try {
-      // FIX VERCEL LOOP PROTECTION: Chạy vòng lặp while ngay trong background 
-      // để xử lý nhiều chunk nhất có thể trong 45 giây (dưới ngưỡng 60s maxDuration).
-      const deadline = Date.now() + 45000; 
-      let isDone = false;
-      
-      while (!isDone && Date.now() < deadline) {
-        const res = await runNextStep(jobId);
-        isDone = res.done;
-      }
-
-      // Nếu hết 45s mà vẫn chưa done (file cực kỳ lớn), MỚI gọi fetch 1 lần
-      // sang một worker mới để nhường resource và né Loop Protection.
-      if (!isDone) {
-        await fetch(`${baseUrl}/api/import/worker`, {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ jobId, resumeToken }),
-        });
-      }
+      await fetch(`${baseUrl}/api/import/worker`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ jobId, resumeToken }),
+      });
     } catch {
       /* watchdog cron sẽ phát hiện & resume nếu lần "chain" này thất bại (mất mạng, cold start...) */
     }
