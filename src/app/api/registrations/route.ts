@@ -1,8 +1,8 @@
 diff --git a/src/app/api/registrations/route.ts b/src/app/api/registrations/route.ts
-index 056c9d2075a8b44d685815f1f60521aff1e48c85..9c064064fba2ab012e4e3b8090a6fc4564715f90 100644
+index 056c9d2075a8b44d685815f1f60521aff1e48c85..116192a8b6bffd09711cace1b80abd22d0d2d37b 100644
 --- a/src/app/api/registrations/route.ts
 +++ b/src/app/api/registrations/route.ts
-@@ -27,125 +27,131 @@ export async function POST(req: Request) {
+@@ -27,138 +27,151 @@ export async function POST(req: Request) {
        );
      }
      if (!/^\d{9,11}$/.test(phone)) {
@@ -45,10 +45,17 @@ index 056c9d2075a8b44d685815f1f60521aff1e48c85..9c064064fba2ab012e4e3b8090a6fc45
 -        return NextResponse.json(
 -          { error: `Thiếu câu trả lời bắt buộc: "${q.questionText}"` },
 -          { status: 400 },
-+    const isReturningApplicant = Boolean(body.is_returning && match.worker);
++    const [existingProfile] = body.is_returning
++      ? await db
++          .select()
++          .from(workerProfiles)
++          .where(and(eq(workerProfiles.cccd, cccd), isNull(workerProfiles.deletedAt)))
++          .limit(1)
++      : [];
++    const isReturningApplicant = Boolean(body.is_returning && (match.worker || existingProfile));
 +
 +    // Validate câu hỏi động bắt buộc đang hiệu lực. Chỉ bỏ qua khảo sát dành cho người mới
-+    // khi yêu cầu quay lại đã đối chiếu được với hồ sơ DW/worker hiện có ở phía server.
++    // khi yêu cầu quay lại đã đối chiếu được với DW hoặc worker profile hiện có ở phía server.
 +    if (!isReturningApplicant) {
 +      const required = await db
 +        .select()
@@ -99,17 +106,21 @@ index 056c9d2075a8b44d685815f1f60521aff1e48c85..9c064064fba2ab012e4e3b8090a6fc45
        .values({
          regDate: today,
          cccd,
-         fullName: match.worker?.fullName ?? fullName,
+-        fullName: match.worker?.fullName ?? fullName,
 -        gender: body.gender || match.worker?.gender || null,
-+        gender: gender || match.worker?.gender || null,
-         dob: dobStr ?? match.worker?.bod ?? null,
+-        dob: dobStr ?? match.worker?.bod ?? null,
++        fullName: match.worker?.fullName ?? existingProfile?.fullName ?? fullName,
++        gender: gender || match.worker?.gender || existingProfile?.gender || null,
++        dob: dobStr ?? match.worker?.bod ?? existingProfile?.dob ?? null,
          birthYear,
          age: computedAge,
          phone,
 -        ethnicity: body.ethnicity || null,
+-        permanentAddress: body.permanent_address || match.worker?.permanentAddress || null,
+-        residentialAddress: body.residential_address || match.worker?.residentialAddress || null,
 +        ethnicity,
-         permanentAddress: body.permanent_address || match.worker?.permanentAddress || null,
-         residentialAddress: body.residential_address || match.worker?.residentialAddress || null,
++        permanentAddress: body.permanent_address || match.worker?.permanentAddress || existingProfile?.permanentAddress || null,
++        residentialAddress: body.residential_address || match.worker?.residentialAddress || existingProfile?.residentialAddress || null,
          declaredType: body.declared_type === "OLD" ? "OLD" : "NEW",
          dwMatch: match.status,
          dwId: match.worker?.id ?? null,
@@ -128,22 +139,28 @@ index 056c9d2075a8b44d685815f1f60521aff1e48c85..9c064064fba2ab012e4e3b8090a6fc45
        .insert(workerProfiles)
        .values({
          cccd,
-         fullName: match.worker?.fullName ?? fullName,
+-        fullName: match.worker?.fullName ?? fullName,
 -        gender: body.gender || match.worker?.gender || null,
-+        gender: gender || match.worker?.gender || null,
-         dob: dobStr ?? match.worker?.bod ?? null,
+-        dob: dobStr ?? match.worker?.bod ?? null,
++        fullName: match.worker?.fullName ?? existingProfile?.fullName ?? fullName,
++        gender: gender || match.worker?.gender || existingProfile?.gender || null,
++        dob: dobStr ?? match.worker?.bod ?? existingProfile?.dob ?? null,
          phone,
-         permanentAddress: body.permanent_address || match.worker?.permanentAddress || null,
-         residentialAddress: body.residential_address || match.worker?.residentialAddress || null,
+-        permanentAddress: body.permanent_address || match.worker?.permanentAddress || null,
+-        residentialAddress: body.residential_address || match.worker?.residentialAddress || null,
++        permanentAddress: body.permanent_address || match.worker?.permanentAddress || existingProfile?.permanentAddress || null,
++        residentialAddress: body.residential_address || match.worker?.residentialAddress || existingProfile?.residentialAddress || null,
          dwId: match.worker?.id ?? null,
        })
        .onConflictDoUpdate({
          target: workerProfiles.cccd,
          targetWhere: sql`deleted_at is null`,
          set: {
-           fullName: match.worker?.fullName ?? fullName,
+-          fullName: match.worker?.fullName ?? fullName,
++          fullName: match.worker?.fullName ?? existingProfile?.fullName ?? fullName,
            phone,
-           residentialAddress: body.residential_address || match.worker?.residentialAddress || null,
+-          residentialAddress: body.residential_address || match.worker?.residentialAddress || null,
++          residentialAddress: body.residential_address || match.worker?.residentialAddress || existingProfile?.residentialAddress || null,
            updatedAt: new Date(),
          },
        })
@@ -156,3 +173,16 @@ index 056c9d2075a8b44d685815f1f60521aff1e48c85..9c064064fba2ab012e4e3b8090a6fc45
        status: created.status,
      });
  
+     return NextResponse.json({
+       success: true,
+       application: created,
+       dwMatch: match.status,
+       confidence: match.confidence,
+     });
+   } catch (error) {
+     return NextResponse.json(
+       { error: "Lỗi hệ thống: " + (error as Error).message },
+       { status: 500 },
+     );
+   }
+ }
