@@ -18,7 +18,7 @@ import { CCCD_PATTERN, NUMBER_PATTERN, VN_PHONE_PATTERN } from "@/lib/validators
  *     trách nhiệm tự "chain" bước kế tiếp bằng Next.js `after()`.
  */
 
-export const STAGE_CHUNK = 8000; // số dòng merge / 1 câu lệnh SQL — đủ nhỏ để không chạm giới hạn, đủ lớn để nhanh
+export const STAGE_CHUNK = 2000; // số dòng merge / 1 câu lệnh SQL — đủ nhỏ để không chạm giới hạn, đủ lớn để nhanh
 const STALE_MS = 90_000; // job không có heartbeat > 90s coi là "treo", watchdog được phép resume
 
 type JobType = "department" | "dw_data" | "daily_application";
