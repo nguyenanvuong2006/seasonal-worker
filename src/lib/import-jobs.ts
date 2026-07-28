@@ -139,7 +139,7 @@ export async function stageRows(jobId: string, jobType: JobType, rows: Record<st
                 x.sd, x.sdp, x.al, x.nt, x.vc, x.cc, x.rd, x.rdp, x.ca::jsonb
          FROM unnest($2::int[], $3::text[], $4::text[], $5::text[], $6::text[], $7::text[], $8::text[], $9::text[],
                       $10::text[], $11::text[], $12::text[], $13::text[], $14::text[], $15::text[], $16::text[],
-                      $17::text[], $18::text[], $19::text[], $20::text[], $21::text[], $22::text[], $23::text[], $24::text[])
+                      $17::text[], $18::text[], $19::text[], $20::text[], $21::text[], $22::text[], $23::text[], $24::text[], $25::text[])
            AS x(rn, cccd, fn, gd, dob, age, ph, eth, pa, ra, dt, dn, gn, wd, rc, sd, sdp, al, nt, vc, cc, rd, rdp, ca)`,
         [
           jobId,
