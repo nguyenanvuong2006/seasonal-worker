@@ -1,0 +1,144 @@
+@import "tailwindcss";
+
+@theme {
+  --color-hasfarm-50: #eef6f0;
+  --color-hasfarm-100: #d6ecda;
+  --color-hasfarm-200: #b0d8b8;
+  --color-hasfarm-300: #86c095;
+  --color-hasfarm-400: #46a065;
+  --color-hasfarm-500: #1e7a3e;
+  --color-hasfarm-600: #16693a;
+  --color-hasfarm-700: #115830;
+  --color-hasfarm-800: #0d4626;
+  --color-hasfarm-900: #08321b;
+
+  --color-gold-50: #fdf8ec;
+  --color-gold-100: #faedcd;
+  --color-gold-200: #f4dc9c;
+  --color-gold-300: #eec765;
+  --color-gold-400: #e5b23f;
+  --color-gold-500: #d9a327;
+  --color-gold-600: #b8841c;
+  --color-gold-700: #8a5f16;
+}
+
+html,
+body {
+  -webkit-tap-highlight-color: transparent;
+  font-family:
+    Inter,
+    ui-sans-serif,
+    system-ui,
+    -apple-system,
+    Segoe UI,
+    Roboto,
+    Helvetica,
+    Arial;
+  background: #f8fafc;
+}
+
+@keyframes slide-up {
+  from {
+    opacity: 0;
+    transform: translateY(10px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+.animate-slide-up {
+  animation: slide-up 0.28s cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+@keyframes soft-pulse {
+  0%,
+  100% {
+    transform: scale(1);
+  }
+  50% {
+    transform: scale(1.03);
+  }
+}
+.animate-soft-pulse {
+  animation: soft-pulse 2.4s ease-in-out infinite;
+}
+
+.hasfarm-hero {
+  position: relative;
+  background:
+    radial-gradient(900px 420px at 15% -10%, rgba(244, 220, 156, 0.35), transparent 60%),
+    radial-gradient(900px 460px at 95% 0%, rgba(70, 160, 101, 0.35), transparent 55%),
+    linear-gradient(135deg, #071a0e 0%, #0f4a26 28%, #115830 58%, #1a6d3a 100%);
+}
+.hasfarm-hero::after {
+  content: "";
+  position: absolute;
+  inset: auto 0 0 0;
+  height: 1px;
+  background: linear-gradient(90deg, transparent, rgba(217, 163, 39, 0.45), transparent);
+}
+
+.hasfarm-card {
+  border-radius: 1.25rem;
+  border: 1px solid rgba(17, 88, 48, 0.08);
+  background: rgba(255, 255, 255, 0.92);
+  box-shadow:
+    0 1px 1px rgba(8, 50, 27, 0.04),
+    0 8px 24px rgba(8, 50, 27, 0.06);
+  backdrop-filter: blur(6px);
+}
+
+table.grid-sheet th,
+table.grid-sheet td {
+  border-right: 1px solid #eef2ee;
+  border-bottom: 1px solid #eef2ee;
+}
+
+.hasfarm-focus:focus-within {
+  border-color: #115830 !important;
+  box-shadow: 0 0 0 3px rgba(17, 88, 48, 0.12);
+}
+
+@keyframes shimmer {
+  0% {
+    background-position: -400px 0;
+  }
+  100% {
+    background-position: 400px 0;
+  }
+}
+.skeleton {
+  background: linear-gradient(90deg, #eef2ee 25%, #f7faf7 37%, #eef2ee 63%);
+  background-size: 800px 100%;
+  animation: shimmer 1.4s linear infinite;
+  border-radius: 0.75rem;
+}
+
+@keyframes progress-stripe {
+  from {
+    background-position: 0 0;
+  }
+  to {
+    background-position: 32px 0;
+  }
+}
+.progress-glow {
+  background-image: linear-gradient(135deg, rgba(255, 255, 255, 0.22) 25%, transparent 25%, transparent 50%, rgba(255, 255, 255, 0.22) 50%, rgba(255, 255, 255, 0.22) 75%, transparent 75%, transparent);
+  background-size: 32px 32px;
+  animation: progress-stripe 1s linear infinite;
+}
+
+@keyframes fade-in-scale {
+  from {
+    opacity: 0;
+    transform: scale(0.96);
+  }
+  to {
+    opacity: 1;
+    transform: scale(1);
+  }
+}
+.animate-fade-in-scale {
+  animation: fade-in-scale 0.35s cubic-bezier(0.16, 1, 0.3, 1);
+}

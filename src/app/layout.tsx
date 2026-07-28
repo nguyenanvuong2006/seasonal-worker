@@ -1,0 +1,21 @@
+import type { Metadata } from "next";
+import type { ReactNode } from "react";
+import "./globals.css";
+import { Toaster } from "@/components/ui";
+
+export const metadata: Metadata = {
+  title: "Dalat Hasfarm — Hệ Thống Quản Trị Lao Động Thời Vụ",
+  description:
+    "Đăng ký lao động thời vụ, xếp bộ phận và quản trị nhân sự cho Dalat Hasfarm.",
+};
+
+export default function RootLayout({ children }: { children: ReactNode }) {
+  return (
+    <html lang="vi">
+      <body className="bg-gray-50 text-gray-900 antialiased">
+        {children}
+        <Toaster />
+      </body>
+    </html>
+  );
+}
