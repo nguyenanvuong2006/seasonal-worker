@@ -504,11 +504,25 @@ function translateError(error: Error & { code?: string }): string {
 export function triggerWorker(jobId: string, resumeToken: string, baseUrl: string) {
   after(async () => {
     try {
-      await fetch(`${baseUrl}/api/import/worker`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ jobId, resumeToken }),
-      });
+      // FIX VERCEL LOOP PROTECTION: Chạy vòng lặp while ngay trong background 
+      // để xử lý nhiều chunk nhất có thể trong 45 giây (dưới ngưỡng 60s maxDuration).
+      const deadline = Date.now() + 45000; 
+      let isDone = false;
+      
+      while (!isDone && Date.now() < deadline) {
+        const res = await runNextStep(jobId);
+        isDone = res.done;
+      }
+
+      // Nếu hết 45s mà vẫn chưa done (file cực kỳ lớn), MỚI gọi fetch 1 lần
+      // sang một worker mới để nhường resource và né Loop Protection.
+      if (!isDone) {
+        await fetch(`${baseUrl}/api/import/worker`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ jobId, resumeToken }),
+        });
+      }
     } catch {
       /* watchdog cron sẽ phát hiện & resume nếu lần "chain" này thất bại (mất mạng, cold start...) */
     }
