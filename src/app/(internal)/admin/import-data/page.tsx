@@ -59,7 +59,7 @@ type Job = {
   createdBy: string;
   lastError: string | null;
   createdAt: string;
-  updatedAt: string; // <-- ĐÃ BỔ SUNG KHAI BÁO TYPE Ở ĐÂY
+  updatedAt: string; // <-- ĐÃ KHAI BÁO BỔ SUNG ĐỂ PASS VERCEL BUILD
 };
 type JobStatusResp = { job: Job; stageLabel: string; rowsPerSec: number; etaSec: number | null; errorSample: { rowNumber: number; reason: string; originalData: Record<string, string> }[]; warningSample: { rowNumber: number; reason: string; originalData: Record<string, string> }[] };
 
