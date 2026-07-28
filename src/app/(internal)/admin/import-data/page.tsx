@@ -147,7 +147,7 @@ export default function ImportDataPage() {
     void loadHistory();
   }, [loadHistory]);
 
-  // ---- Polling trạng thái Job (KHÔNG điều khiển xử lý — chỉ để hiển thị) ----
+  // ---- Polling & Client-Driven Auto-Resume ----
   useEffect(() => {
     if (!activeJobId) return;
     const poll = async () => {
@@ -155,9 +155,20 @@ export default function ImportDataPage() {
       if (!res.ok) return;
       const d: JobStatusResp = await res.json();
       setJobStatus(d);
+      
       if (["DONE", "FAILED", "CANCELLED"].includes(d.job.status)) {
         if (pollRef.current) clearInterval(pollRef.current);
         void loadHistory();
+      } else if (d.job.status === "RUNNING" || d.job.status === "QUEUED") {
+        // Lách Vercel Loop Protection: Trình duyệt đóng vai trò máy trợ tim.
+        // Nếu thấy server không update trạng thái quá 15 giây (bị chém ngầm),
+        // Trình duyệt lập tức chọc API để ép server chạy lô tiếp theo!
+        const lastUpdated = new Date(d.job.updatedAt).getTime();
+        const now = Date.now();
+        if (now - lastUpdated > 15000) {
+          console.log("Phát hiện máy chủ bị ngắt kết nối. Trình duyệt đang tự động Resume...");
+          fetch(`/api/import/job/${activeJobId}/retry`, { method: "POST" }).catch(() => {});
+        }
       }
     };
     void poll();
