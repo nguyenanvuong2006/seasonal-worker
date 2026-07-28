@@ -1,35 +1,8 @@
 diff --git a/src/app/api/registrations/route.ts b/src/app/api/registrations/route.ts
-index 056c9d2075a8b44d685815f1f60521aff1e48c85..9927b81a6ca5084edb622a2fdc853cf8cd9eef24 100644
+index 056c9d2075a8b44d685815f1f60521aff1e48c85..9c064064fba2ab012e4e3b8090a6fc4564715f90 100644
 --- a/src/app/api/registrations/route.ts
 +++ b/src/app/api/registrations/route.ts
-@@ -1,151 +1,157 @@
- import { NextResponse } from "next/server";
- import { and, asc, desc, eq, gte, inArray, isNull, lte, sql } from "drizzle-orm";
- import { db } from "@/db";
- import { dailyApplications, departments, employmentSessions, formQuestions, workerProfiles } from "@/db/schema";
- import { getSession, getUserScope } from "@/lib/auth";
- import { matchDwWorker } from "@/lib/matching";
- import { todayStr } from "@/lib/helpers";
- import { runRules } from "@/lib/rule-engine";
- 
- export const runtime = "nodejs";
- export const dynamic = "force-dynamic";
- 
- /** Cổng công khai — nộp đơn. CCCD BẮT BUỘC. */
- export async function POST(req: Request) {
-   try {
-     const body = await req.json();
-     const cccd = String(body.cccd ?? "").replace(/\D/g, "");
-     const phone = String(body.phone ?? "").replace(/\D/g, "");
-     const fullName = String(body.full_name ?? "").trim();
-     const answers: Record<string, string> = body.custom_answers ?? {};
-+    const isReturning = Boolean(body.is_returning);
- 
-     // ==== BẮT BUỘC CCCD (bỏ hoàn toàn nhánh "không mang CCCD") ====
-     if (!/^\d{9,12}$/.test(cccd)) {
-       return NextResponse.json(
-         { error: "Bắt buộc phải có số CCCD/CMND hợp lệ (9 hoặc 12 số) để đăng ký." },
-         { status: 400 },
+@@ -27,125 +27,131 @@ export async function POST(req: Request) {
        );
      }
      if (!/^\d{9,11}$/.test(phone)) {
@@ -55,7 +28,7 @@ index 056c9d2075a8b44d685815f1f60521aff1e48c85..9927b81a6ca5084edb622a2fdc853cf8
  
      // Đối chiếu DW Data (nguồn sự thật) — không phụ thuộc lời khai
      const match = await matchDwWorker({ cccd, fullName, dob: body.dob, phone });
- 
+-
 -    // Validate câu hỏi động bắt buộc đang hiệu lực
 -    const required = await db
 -      .select()
@@ -72,9 +45,11 @@ index 056c9d2075a8b44d685815f1f60521aff1e48c85..9927b81a6ca5084edb622a2fdc853cf8
 -        return NextResponse.json(
 -          { error: `Thiếu câu trả lời bắt buộc: "${q.questionText}"` },
 -          { status: 400 },
-+    // Validate câu hỏi động bắt buộc đang hiệu lực. Lao động quay lại đã có hồ sơ
-+    // trong DW/worker profile nên không cần trả lời lại khảo sát dành cho người mới.
-+    if (!isReturning) {
++    const isReturningApplicant = Boolean(body.is_returning && match.worker);
++
++    // Validate câu hỏi động bắt buộc đang hiệu lực. Chỉ bỏ qua khảo sát dành cho người mới
++    // khi yêu cầu quay lại đã đối chiếu được với hồ sơ DW/worker hiện có ở phía server.
++    if (!isReturningApplicant) {
 +      const required = await db
 +        .select()
 +        .from(formQuestions)
