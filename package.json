@@ -1,41 +1,37 @@
-{
-  "name": "nextjs-postgresql-template",
-  "private": true,
-  "scripts": {
-    "dev": "next dev",
-    "build": "next build",
-    "start": "next start",
-    "lint": "eslint .",
-    "typecheck": "tsc --noEmit"
-  },
-  "dependencies": {
-    "@tanstack/react-table": "^8.21.3",
-    "clsx": "^2.1.1",
-    "csv-parse": "^7.0.1",
-    "dotenv": "17.3.1",
-    "drizzle-orm": "0.45.2",
-    "exceljs": "^4.4.0",
-    "jose": "^6.2.4",
-    "lucide-react": "^1.27.0",
-    "jsqr": "^1.4.0",
-    "next": "16.2.6",
-    "pg": "8.20.0",
-    "react": "19.2.6",
-    "react-dom": "19.2.6",
-    "tailwind-merge": "^3.6.0",
-    "xlsx": "^0.18.5"
-  },
-  "devDependencies": {
-    "@tailwindcss/postcss": "4.1.17",
-    "@types/node": "22.19.15",
-    "@types/pg": "8.18.0",
-    "@types/react": "19.2.14",
-    "@types/react-dom": "19.2.3",
-    "drizzle-kit": "0.31.10",
-    "eslint": "9.39.4",
-    "eslint-config-next": "16.2.6",
-    "postcss": "8.5.8",
-    "tailwindcss": "4.1.17",
-    "typescript": "5.9.3"
-  }
-}
+diff --git a/package.json b/package.json
+index ea7b2a06255684cc5b1553225e7532b23152478a..e4a5a33a50f330ccf508b19dd92dfa5dcb9bab68 100644
+--- a/package.json
++++ b/package.json
+@@ -1,31 +1,31 @@
+ {
+   "name": "nextjs-postgresql-template",
+   "private": true,
+   "scripts": {
+     "dev": "next dev",
+-    "build": "next build",
++    "build": "node scripts/check-no-diff-markers.mjs && next build",
+     "start": "next start",
+     "lint": "eslint .",
+     "typecheck": "tsc --noEmit"
+   },
+   "dependencies": {
+     "@tanstack/react-table": "^8.21.3",
+     "clsx": "^2.1.1",
+     "csv-parse": "^7.0.1",
+     "dotenv": "17.3.1",
+     "drizzle-orm": "0.45.2",
+     "exceljs": "^4.4.0",
+     "jose": "^6.2.4",
+     "lucide-react": "^1.27.0",
+     "jsqr": "^1.4.0",
+     "next": "16.2.6",
+     "pg": "8.20.0",
+     "react": "19.2.6",
+     "react-dom": "19.2.6",
+     "tailwind-merge": "^3.6.0",
+     "xlsx": "^0.18.5"
+   },
+   "devDependencies": {
+     "@tailwindcss/postcss": "4.1.17",
+     "@types/node": "22.19.15",
+     "@types/pg": "8.18.0",
