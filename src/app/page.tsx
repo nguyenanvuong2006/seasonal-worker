@@ -72,7 +72,7 @@ export default async function ApplicantHomePage() {
 
                 <BrandLogo
                   light={false}
-                  size="2xl"
+                  size="xl"
                   withText={false}
                 />
 
