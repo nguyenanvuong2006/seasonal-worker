@@ -209,30 +209,24 @@ export default function ApplicantPortal({ questions }: { questions: FormQuestion
                 <span className="ml-1 text-red-500">*</span>
               </Label>
       
-              <div className="flex gap-3">
-      
+              <div className="space-y-3">
+
                 <Input
                   type="tel"
                   inputMode="numeric"
                   maxLength={12}
                   value={cccd}
                   placeholder="Nhập 9 hoặc 12 chữ số"
-      
                   onChange={(e) =>
-                    setCccd(
-                      e.target.value.replace(/\D/g, "")
-                    )
+                    setCccd(e.target.value.replace(/\D/g, ""))
                   }
-      
-                  className="h-14 flex-1 rounded-2xl border-slate-300 bg-slate-50 px-5 text-lg font-semibold tracking-[0.18em] shadow-none focus:bg-white"
+                  className="h-14 rounded-2xl border-slate-300 bg-slate-50 px-5 text-lg font-semibold tracking-[0.18em]"
                 />
-      
-                <div className="shrink-0">
-                  <CccdQrScanner
-                    onResult={handleQrScanned}
-                  />
+              
+                <div className="flex justify-end">
+                  <CccdQrScanner onResult={handleQrScanned} />
                 </div>
-      
+              
               </div>
       
               <div className="rounded-2xl border border-blue-100 bg-blue-50 px-4 py-3 text-sm leading-6 text-slate-600">
