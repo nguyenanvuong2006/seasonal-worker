@@ -113,12 +113,12 @@ export default async function ApplicantHomePage() {
             >
               <p className="text-2xl">☎️</p>
               <p className="mt-2 text-sm font-black text-hasfarm-900">Hỗ trợ nhân sự</p>
-              <p className="text-[11px] text-gray-500">0263 3842777 • 7h-17h</p>
+              <p className="text-[11px] text-gray-500">0263 3620295 • 7h-17h</p>
             </a>
           </div>
 
           <p className="text-center text-[10px] font-bold uppercase tracking-widest text-gray-400">
-            © {new Date().getFullYear()} Dalat Hasfarm — Seasonal HR System
+            © {new Date().getFullYear()} Dalat Hasfarm — Internship
           </p>
         </div>
       </section>
