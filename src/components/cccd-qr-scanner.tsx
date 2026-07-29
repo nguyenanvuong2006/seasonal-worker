@@ -79,11 +79,11 @@ async function applyContinuousFocus(track: MediaStreamTrack | undefined) {
   if (!track) return;
   try {
     const capabilities = track.getCapabilities?.();
-    const supportsContinuousFocus = (capabilities as { focusMode?: string[] } | undefined)?.focusMode?.includes(
+    const supportsContinuousFocus = (capabilities as unknown as { focusMode?: string[] } | undefined)?.focusMode?.includes(
       "continuous",
     );
     if (supportsContinuousFocus) {
-      await track.applyConstraints({ advanced: [{ focusMode: "continuous" }] } as MediaTrackConstraints);
+      await track.applyConstraints({ advanced: [{ focusMode: "continuous" }] } as unknown as MediaTrackConstraints);
     }
   } catch {
     // Thiết bị không hỗ trợ điều khiển focus — bỏ qua, không ảnh hưởng việc quét.
@@ -155,7 +155,7 @@ export function CccdQrScanner({ onResult }: { onResult: (data: CccdQrData) => vo
     const track = torchTrackRef.current;
     if (!track) return;
     try {
-      await track.applyConstraints({ advanced: [{ torch: on }] } as MediaTrackConstraints);
+      await track.applyConstraints({ advanced: [{ torch: on }] } as unknown as MediaTrackConstraints);
     } catch {
       // Thiết bị không hỗ trợ torch — bỏ qua, không throw ra UI.
     }
