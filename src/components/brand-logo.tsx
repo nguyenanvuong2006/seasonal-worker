@@ -2,87 +2,174 @@
 
 import { useState } from "react";
 
-const REAL_LOGO_URL = "https://datax-talent.basecdn.net/dalathasfarm/logo-footer.png";
+const REAL_LOGO_URL =
+  "https://datax-talent.basecdn.net/dalathasfarm/logo-footer.png";
+
+type LogoSize = "sm" | "md" | "lg" | "xl" | "2xl";
+
+interface BrandLogoProps {
+  size?: LogoSize;
+  light?: boolean;
+  withText?: boolean;
+}
 
 export function BrandLogo({
   size = "md",
   light = false,
   withText = true,
-}: {
-  size?: "sm" | "md" | "lg" | "xl";
-  light?: boolean;
-  withText?: boolean;
-}) {
+}: BrandLogoProps) {
   const [imgFailed, setImgFailed] = useState(false);
-  const box =
-    size === "sm"
-      ? "h-9 w-9"
-      : size === "lg"
-        ? "h-[52px] w-[52px]"
-        : size === "xl"
-          ? "h-16 w-16 md:h-20 md:w-20"
-          : "h-11 w-11";
-  const titleSize =
-    size === "sm" ? "text-[13px]" : size === "lg" || size === "xl" ? "text-[22px]" : "text-[16px]";
-  const subSize = size === "sm" ? "text-[8px]" : "text-[10px]";
+
+  const sizes = {
+    sm: {
+      box: "h-10 w-10 rounded-xl",
+      img: "h-[74%] w-[74%]",
+      title: "text-sm",
+      sub: "text-[9px]",
+    },
+    md: {
+      box: "h-14 w-14 rounded-2xl",
+      img: "h-[78%] w-[78%]",
+      title: "text-lg",
+      sub: "text-[10px]",
+    },
+    lg: {
+      box: "h-16 w-16 rounded-2xl",
+      img: "h-[80%] w-[80%]",
+      title: "text-xl",
+      sub: "text-[10px]",
+    },
+    xl: {
+      box: "h-20 w-20 rounded-3xl",
+      img: "h-[82%] w-[82%]",
+      title: "text-2xl",
+      sub: "text-[11px]",
+    },
+    "2xl": {
+      box: "h-24 w-24 rounded-[28px]",
+      img: "h-[84%] w-[84%]",
+      title: "text-3xl",
+      sub: "text-xs",
+    },
+  };
+
+  const current = sizes[size];
 
   return (
-    <div className="flex items-center gap-3">
+    <div className="flex items-center gap-4">
+
       <div
-        className={`${box} relative flex shrink-0 items-center justify-center overflow-hidden rounded-[12px] bg-white shadow-[0_4px_14px_rgba(0,0,0,0.12)] ring-1 ring-black/5`}
+        className={`
+          ${current.box}
+          relative
+          flex
+          shrink-0
+          items-center
+          justify-center
+          overflow-hidden
+          bg-white
+          shadow-[0_18px_45px_rgba(15,23,42,.18)]
+          ring-1
+          ring-slate-200
+          transition-all
+          duration-300
+          hover:-translate-y-1
+          hover:shadow-[0_24px_60px_rgba(15,23,42,.25)]
+        `}
       >
         {!imgFailed ? (
-          // Logo thật của Dalat Hasfarm (từ trang tuyển dụng chính thức) — dự phòng bằng
-          // biểu tượng hoa vẽ tay bên dưới nếu ảnh không tải được (CDN ngoài, không kiểm soát được).
-          // eslint-disable-next-line @next/next/no-img-element
           <img
             src={REAL_LOGO_URL}
             alt="Dalat Hasfarm"
-            className="h-[80%] w-[80%] object-contain"
+            className={`${current.img} object-contain`}
             onError={() => setImgFailed(true)}
           />
         ) : (
-          <svg viewBox="0 0 40 40" className="h-[70%] w-[70%]" aria-hidden>
-            <circle cx="20" cy="19" r="5" fill="#D9A327" />
-            <ellipse cx="20" cy="8" rx="6" ry="7" fill="#115830" opacity={0.95} />
-            <ellipse cx="20" cy="31" rx="6" ry="7" fill="#115830" opacity={0.95} />
-            <ellipse cx="8.5" cy="19" rx="7" ry="6" fill="#16693A" />
-            <ellipse cx="31.5" cy="19" rx="7" ry="6" fill="#16693A" />
-            <ellipse cx="11.5" cy="10.5" rx="5" ry="5.5" fill="#22824B" opacity={0.9} />
-            <ellipse cx="28.5" cy="10.5" rx="5" ry="5.5" fill="#22824B" opacity={0.9} />
-            <ellipse cx="11.5" cy="27.5" rx="5" ry="5.5" fill="#22824B" opacity={0.9} />
-            <ellipse cx="28.5" cy="27.5" rx="5" ry="5.5" fill="#22824B" opacity={0.9} />
+          <svg
+            viewBox="0 0 40 40"
+            className="h-[75%] w-[75%]"
+            aria-hidden
+          >
+            <circle cx="20" cy="20" r="5" fill="#D9A327" />
+
+            <ellipse cx="20" cy="8" rx="6" ry="7" fill="#0D5D35" />
+
+            <ellipse cx="20" cy="32" rx="6" ry="7" fill="#0D5D35" />
+
+            <ellipse cx="8" cy="20" rx="7" ry="6" fill="#197A44" />
+
+            <ellipse cx="32" cy="20" rx="7" ry="6" fill="#197A44" />
+
+            <ellipse cx="12" cy="12" rx="5" ry="5" fill="#2C9856" />
+
+            <ellipse cx="28" cy="12" rx="5" ry="5" fill="#2C9856" />
+
+            <ellipse cx="12" cy="28" rx="5" ry="5" fill="#2C9856" />
+
+            <ellipse cx="28" cy="28" rx="5" ry="5" fill="#2C9856" />
           </svg>
         )}
       </div>
+
       {withText && (
-        <div className="leading-[0.95]">
-          <p
-            className={`${titleSize} font-black tracking-[-0.02em] ${
-              light ? "text-white" : "text-[#0E3A1F]"
-            }`}
-            style={{ fontFamily: "Inter, ui-sans-serif, system-ui" }}
+        <div className="leading-tight">
+
+          <h2
+            className={`
+              ${current.title}
+              font-black
+              tracking-tight
+              ${
+                light
+                  ? "text-white"
+                  : "text-hasfarm-900"
+              }
+            `}
           >
-            DALAT <span className={light ? "text-[#F6D785]" : "text-[#9A6B12]"}>HASFARM</span>
-          </p>
+            DALAT{" "}
+            <span
+              className={
+                light
+                  ? "text-gold-300"
+                  : "text-gold-700"
+              }
+            >
+              HASFARM
+            </span>
+          </h2>
+
           <p
-            className={`${subSize} mt-[2px] font-bold uppercase tracking-[0.22em] ${
-              light ? "text-white/70" : "text-[#6B7F72]"
-            }`}
+            className={`
+              ${current.sub}
+              mt-1
+              font-semibold
+              uppercase
+              tracking-[0.22em]
+              ${
+                light
+                  ? "text-white/70"
+                  : "text-slate-500"
+              }
+            `}
           >
-            Seasonal HR • Đà Lạt
+            Recruitment & Internship Portal
           </p>
+
         </div>
       )}
     </div>
   );
 }
 
-export function HasfarmMark({ className = "" }: { className?: string }) {
+export function HasfarmMark({
+  className = "",
+}: {
+  className?: string;
+}) {
   return (
-    <div className={`pointer-events-none select-none ${className}`}>
-      <p className="text-[10px] font-black uppercase tracking-[0.28em] text-hasfarm-700/50">
-        EST. 1994 — DA LAT — NETHERLANDS — JAPAN
+    <div className={className}>
+      <p className="text-[10px] font-bold uppercase tracking-[0.35em] text-hasfarm-700/40">
+        DALAT HASFARM • GROW HAPPINESS
       </p>
     </div>
   );
