@@ -30,7 +30,7 @@ export default async function ApplicantHomePage() {
   return (
     <main className="min-h-screen bg-[#F8FAFC] text-gray-900">
       <div className="border-b border-amber-200/60 bg-gold-50 px-4 py-2 text-center text-[11px] font-bold uppercase tracking-widest text-gold-800">
-        🌱 Thu nhập ~15 tháng lương/năm • Xe đưa đón Đà Lạt → Đạ Ròn & Lâm Hà • BHXH/BHYT đầy đủ
+        🌱 Thu nhập cao • Được hỗ trợ cơm trưa • Được hướng dẫn khi làm việc
       </div>
 
       <header className="hasfarm-hero relative z-0 overflow-hidden px-4 pb-28 pt-6 text-white">
@@ -79,14 +79,14 @@ export default async function ApplicantHomePage() {
         <div className="space-y-4">
           <div className="hasfarm-card p-5">
             <p className="text-xs font-black uppercase tracking-widest text-hasfarm-700">
-              Quy trình sau khi bạn đăng ký
+              Quy trình sau khi Anh/Chị/Em đăng ký
             </p>
             <ol className="mt-3 space-y-2 text-[13px]">
               {[
-                "Đơn vào sheet Daily Application của HR (chỉ hiện hôm nay cho gọn)",
-                "HR đối chiếu DW Data → xác nhận bạn là lao động cũ hay mới",
-                "HR xếp Bộ phận + Nhóm từ danh sách 71 bộ phận",
-                "Bạn tra cứu buổi chiều để biết bộ phận & người phụ trách",
+                "Thông tin được gửi đến hệ thống tuyển dụng",
+                "Đội ngũ tuyển dụng đối chiếu → xác nhận Anh Chị Em là lao động cũ hay mới",
+                "Người phụ trách xếp Bộ phận và cập nhật hệ thống",
+                "Anh Chị Em có thể tra cứu ngay sau đó để biết bộ phận & người phụ trách",
               ].map((s, i) => (
                 <li key={s} className="flex gap-2.5 rounded-xl bg-gray-50 p-3">
                   <span className="flex h-5 w-5 shrink-0 items-center justify-center rounded-full bg-hasfarm-700 text-[10px] font-black text-white">
