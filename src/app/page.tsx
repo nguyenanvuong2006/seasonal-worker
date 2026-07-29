@@ -1,21 +1,17 @@
 import Link from "next/link";
 import { and, asc, eq, sql } from "drizzle-orm";
 import { db } from "@/db";
-import { dailyApplications, departments, dwData, formQuestions } from "@/db/schema";
+import { formQuestions } from "@/db/schema";
 import ApplicantPortal from "@/components/applicant-portal";
 import { BrandLogo } from "@/components/brand-logo";
 import { ensureSeed, tablesReady } from "@/lib/seed";
-import { formatDate, todayStr } from "@/lib/helpers";
+import { todayStr } from "@/lib/helpers";
 import type { FormQuestion } from "@/db/schema";
 
 export const dynamic = "force-dynamic";
 
 export default async function ApplicantHomePage() {
   let questions: FormQuestion[] = [];
-  let todayCount = 0;
-  let approvedCount = 0;
-  let dwCount = 0;
-  let deptCount = 0;
 
   if (await tablesReady()) {
     await ensureSeed();
@@ -29,24 +25,6 @@ export default async function ApplicantHomePage() {
         ),
       )
       .orderBy(asc(formQuestions.sortOrder));
-
-    const [stat] = await db
-      .select({
-        total: sql<number>`count(*)::int`,
-        approved: sql<number>`count(*) filter (where ${dailyApplications.status} = 'APPROVED')::int`,
-      })
-      .from(dailyApplications)
-      .where(eq(dailyApplications.regDate, todayStr()));
-    todayCount = stat?.total ?? 0;
-    approvedCount = stat?.approved ?? 0;
-
-    const [w] = await db.select({ c: sql<number>`count(*)::int` }).from(dwData);
-    dwCount = w?.c ?? 0;
-    const [d] = await db
-      .select({ c: sql<number>`count(*)::int` })
-      .from(departments)
-      .where(eq(departments.isActive, true));
-    deptCount = d?.c ?? 0;
   }
 
   return (
@@ -55,7 +33,7 @@ export default async function ApplicantHomePage() {
         🌱 Thu nhập ~15 tháng lương/năm • Xe đưa đón Đà Lạt → Đạ Ròn & Lâm Hà • BHXH/BHYT đầy đủ
       </div>
 
-      <header className="hasfarm-hero relative overflow-hidden px-4 pb-24 pt-6 text-white">
+      <header className="hasfarm-hero relative z-0 overflow-hidden px-4 pb-28 pt-6 text-white">
         {/* Ảnh trang trại hoa thật (từ trang tuyển dụng chính thức Dalat Hasfarm) — lớp phủ gradient
             giữ độ tương phản chữ, ảnh chỉ hiển thị khi tải được (không chặn render nếu lỗi mạng). */}
         <div
@@ -68,7 +46,7 @@ export default async function ApplicantHomePage() {
         />
         <div className="relative">
         <div className="mx-auto flex max-w-6xl items-center justify-between">
-          <BrandLogo light size="md" />
+          <BrandLogo light size="xl" withText={false} />
           <div className="flex items-center gap-2">
             <Link
               href="/lookup"
@@ -85,75 +63,17 @@ export default async function ApplicantHomePage() {
           </div>
         </div>
 
-        <div className="mx-auto grid max-w-6xl gap-10 pt-10 md:grid-cols-[1.15fr_0.85fr] md:pt-14">
-          <div>
-            <div className="inline-flex items-center gap-2 rounded-full bg-white/10 px-3 py-1 ring-1 ring-white/20 backdrop-blur">
-              <span className="h-2 w-2 animate-pulse rounded-full bg-emerald-300" />
-              <span className="text-[11px] font-bold uppercase tracking-widest text-white/90">
-                Đăng ký thông tin tập nghề • Dalat Hasfarm
-              </span>
-            </div>
-            <h1 className="mt-5 text-[32px] font-black leading-[0.95] tracking-[-0.03em] md:text-[50px]">
-              Đăng ký làm việc
-              <br />
-              <span className="bg-gradient-to-r from-gold-200 to-gold-400 bg-clip-text text-transparent">
-                bắt buộc có CCCD
-              </span>
-            </h1>
-            <p className="mt-4 max-w-[52ch] text-[15px] leading-relaxed text-white/80">
-              Hệ thống thay thế Google Form + Google Sheet: bắt buộc nhập CCCD, tự động đối chiếu{" "}
-              <b className="text-gold-200">{dwCount.toLocaleString("vi-VN")} hồ sơ DW Data</b> để biết bạn là lao động cũ hay mới —
-              không còn tình trạng &ldquo;quên mang CCCD&rdquo; gây trùng lặp hồ sơ.
-            </p>
-
-            <div className="mt-6 flex flex-wrap gap-3">
-              <div className="rounded-2xl bg-white/10 px-4 py-3 ring-1 ring-white/20 backdrop-blur">
-                <p className="text-[10px] font-bold uppercase tracking-widest text-white/60">
-                  Hôm nay {formatDate(todayStr())}
-                </p>
-                <p className="text-lg font-black">{todayCount} lượt đăng ký</p>
-              </div>
-              <div className="rounded-2xl bg-gold-500 px-4 py-3 text-hasfarm-900 shadow-[0_8px_24px_rgba(217,163,39,0.35)]">
-                <p className="text-[10px] font-bold uppercase tracking-widest opacity-60">Đã xếp việc</p>
-                <p className="text-lg font-black">{approvedCount} lao động</p>
-              </div>
-              <div className="rounded-2xl bg-white px-4 py-3 text-hasfarm-900 shadow">
-                <p className="text-[10px] font-bold uppercase tracking-widest text-gray-400">Bộ phận</p>
-                <p className="text-lg font-black">{deptCount} nhóm</p>
-              </div>
-            </div>
-          </div>
-
-          <div className="hidden md:block">
-            <div className="rounded-[28px] bg-white p-3 shadow-[0_24px_64px_rgba(0,0,0,0.28)] ring-1 ring-black/5">
-              <div className="rounded-[20px] bg-gradient-to-b from-hasfarm-50 to-white p-5">
-                <p className="text-[11px] font-black uppercase tracking-widest text-hasfarm-700">
-                  Thay đổi so với Google Form cũ
-                </p>
-                <ul className="mt-4 space-y-2.5 text-[13px]">
-                  {[
-                    ["❌", "Bỏ nhánh “KHÔNG mang theo CMND/CCCD”", "79/488 đơn cũ thiếu CCCD gây trùng hồ sơ"],
-                    ["✅", "CCCD bắt buộc — chặn ở cả Form & Server", "Không thể nộp đơn nếu thiếu CCCD"],
-                    ["🔍", "Đối chiếu tự động với DW Data 3 tầng", "CCCD → Tên+Năm sinh → Tên+SĐT"],
-                    ["📋", "Vẫn giữ câu tự khai cũ/mới", "Nhưng hệ thống xác minh lại, không tin 100%"],
-                  ].map(([i, a, b]) => (
-                    <li key={a} className="flex gap-2 rounded-xl bg-white p-3 shadow-sm ring-1 ring-black/5">
-                      <span className="text-base">{i}</span>
-                      <span>
-                        <b className="block text-hasfarm-900">{a}</b>
-                        <span className="text-[11px] text-gray-500">{b}</span>
-                      </span>
-                    </li>
-                  ))}
-                </ul>
-              </div>
-            </div>
-          </div>
+        <div className="mx-auto max-w-6xl pt-10 md:pt-14">
+          <h1 className="text-[30px] font-black leading-tight tracking-[-0.02em] md:text-[46px]">
+            <span className="bg-gradient-to-r from-gold-200 to-gold-400 bg-clip-text text-transparent">
+              Đăng ký thông tin tập nghề
+            </span>
+          </h1>
         </div>
         </div>
       </header>
 
-      <section className="mx-auto grid max-w-6xl gap-8 px-4 pb-20 md:-mt-12 md:grid-cols-[1.15fr_0.85fr]">
+      <section className="relative z-10 mx-auto grid max-w-6xl gap-8 px-4 pb-20 md:-mt-24 md:grid-cols-[1.15fr_0.85fr]">
         <ApplicantPortal questions={questions} />
 
         <div className="space-y-4">

@@ -9,15 +9,21 @@ export function BrandLogo({
   light = false,
   withText = true,
 }: {
-  size?: "sm" | "md" | "lg";
+  size?: "sm" | "md" | "lg" | "xl";
   light?: boolean;
   withText?: boolean;
 }) {
   const [imgFailed, setImgFailed] = useState(false);
   const box =
-    size === "sm" ? "h-9 w-9" : size === "lg" ? "h-[52px] w-[52px]" : "h-11 w-11";
+    size === "sm"
+      ? "h-9 w-9"
+      : size === "lg"
+        ? "h-[52px] w-[52px]"
+        : size === "xl"
+          ? "h-16 w-16 md:h-20 md:w-20"
+          : "h-11 w-11";
   const titleSize =
-    size === "sm" ? "text-[13px]" : size === "lg" ? "text-[22px]" : "text-[16px]";
+    size === "sm" ? "text-[13px]" : size === "lg" || size === "xl" ? "text-[22px]" : "text-[16px]";
   const subSize = size === "sm" ? "text-[8px]" : "text-[10px]";
 
   return (
