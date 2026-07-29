@@ -128,7 +128,7 @@ async function decodeBarcodeDetector(
 
   try {
     // @ts-ignore
-    const detector = new BarcodeDetector({
+    const detector = new (window as any).BarcodeDetector({
       formats: ["qr_code"],
     });
 
@@ -365,7 +365,6 @@ export function CccdQrScanner({
 
     toast({
       title: "Đã đọc thành công mã QR CCCD",
-      description: result.data.fullName,
     });
   };
 
@@ -428,9 +427,7 @@ export function CccdQrScanner({
       setLoadingCamera(false);
 
       toast({
-        title: "Không thể mở camera",
-        description:
-          "Hãy kiểm tra quyền truy cập camera hoặc sử dụng chức năng tải ảnh.",
+        title: "Không thể mở camera. Hãy kiểm tra quyền truy cập hoặc dùng chức năng tải ảnh.",
         variant: "destructive",
       });
     }
@@ -516,12 +513,8 @@ export function CccdQrScanner({
 
           if (!result) {
             toast({
-              title:
-                "Không đọc được mã QR",
-              description:
-                "Hãy thử ảnh rõ nét hơn hoặc sử dụng camera.",
-              variant:
-                "destructive",
+              title: "Không đọc được mã QR. Hãy thử ảnh rõ nét hơn hoặc sử dụng camera.",
+              variant: "destructive",
             });
 
             return;
