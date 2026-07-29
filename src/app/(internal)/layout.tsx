@@ -12,7 +12,7 @@ export default async function InternalLayout({ children }: { children: ReactNode
   return (
     <div className="min-h-screen bg-gray-50">
       <Sidebar session={session} />
-      <div className="lg:pl-64">
+      <div className="lg:pl-[296px]">
         <main className="p-4 pt-16 lg:p-8">{children}</main>
       </div>
     </div>
