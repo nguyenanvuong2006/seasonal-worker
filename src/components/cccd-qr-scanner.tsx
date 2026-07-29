@@ -154,7 +154,7 @@ export function CccdQrScanner({ onResult }: { onResult: (data: CccdQrData) => vo
       <Modal open={open} onClose={() => setOpen(false)} title="Quét mã QR mặt sau CCCD">
         <div className="space-y-4">
           <p className="text-xs text-gray-500">
-            Đưa mã QR ở mặt sau thẻ CCCD vào khung camera, hoặc tải ảnh chụp CCCD lên. Hệ thống chỉ đọc dữ liệu để
+            Đưa mã QR vào khung camera, hoặc tải ảnh chụp CCCD lên. Hệ thống chỉ đọc dữ liệu để
             điền form — không lưu ảnh.
           </p>
           <div className="overflow-hidden rounded-xl bg-black">
