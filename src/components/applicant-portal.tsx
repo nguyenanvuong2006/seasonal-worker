@@ -161,211 +161,782 @@ export default function ApplicantPortal({ questions }: { questions: FormQuestion
   return (
     <div className="space-y-6">
       {stage === "check" && (
-        <Card className="hasfarm-card animate-slide-up border-0 shadow-[0_12px_40px_rgba(8,50,27,0.12)]">
-          <CardContent className="space-y-5 p-6 md:p-7">
-            <div className="flex items-center gap-2">
-              <div className="flex h-8 w-8 items-center justify-center rounded-full bg-gold-100 text-gold-700">
-                <Sparkles className="h-4 w-4" />
+        <Card className="overflow-hidden rounded-[32px] border-0 bg-white shadow-[0_25px_80px_rgba(15,23,42,.10)] ring-1 ring-slate-200/70">
+      
+          {/* Header */}
+      
+          <div className="bg-gradient-to-r from-hasfarm-700 via-hasfarm-600 to-hasfarm-700 px-8 py-7 text-white">
+      
+            <div className="flex items-start gap-4">
+      
+              <div className="flex h-14 w-14 shrink-0 items-center justify-center rounded-2xl bg-white/15 backdrop-blur">
+      
+                <ShieldCheck className="h-7 w-7" />
+      
               </div>
-              <p className="text-[11px] font-bold uppercase tracking-[0.2em] text-hasfarm-700">
-                Bước 1/2 — Xác thực danh tính
-              </p>
-            </div>
-
-            <div className="space-y-4">
+      
               <div>
-                <Label>Số CCCD / CMND *</Label>
-                <div className="flex gap-2">
-                  <Input
-                    type="tel"
-                    inputMode="numeric"
-                    maxLength={12}
-                    placeholder="Nhập 9 hoặc 12 số"
-                    value={cccd}
-                    onChange={(e) => setCccd(e.target.value.replace(/\D/g, ""))}
-                    className="h-[56px] flex-1 rounded-[14px] border-2 bg-white text-[18px] font-bold tracking-widest shadow-inner"
-                  />
-                  <CccdQrScanner onResult={handleQrScanned} />
-                </div>
-                <p className="mt-1 text-[11px] text-gray-400">
-                  Nhập chính xác — nếu sai sẽ cần HR sửa lại sau (tính năng sửa lỗi CCCD). Hoặc bấm “Quét QR CCCD” để tự điền.
+      
+                <p className="text-xs font-bold uppercase tracking-[0.25em] text-gold-200">
+                  BƯỚC 1 / 2
                 </p>
+      
+                <h2 className="mt-2 text-3xl font-black">
+                  Xác thực thông tin ứng viên
+                </h2>
+      
+                <p className="mt-3 max-w-xl text-sm leading-7 text-white/80">
+                  Nhập số CCCD và số điện thoại để hệ thống kiểm tra
+                  bạn là lao động mới hay lao động đã có hồ sơ tại
+                  Dalat Hasfarm.
+                </p>
+      
               </div>
-              <div>
-                <Label>Số điện thoại *</Label>
+      
+            </div>
+      
+          </div>
+      
+          <CardContent className="space-y-8 p-8">
+      
+            {/* CCCD */}
+      
+            <div className="space-y-3">
+      
+              <Label className="text-sm font-bold text-slate-700">
+                Số CCCD / CMND
+                <span className="ml-1 text-red-500">*</span>
+              </Label>
+      
+              <div className="flex gap-3">
+      
                 <Input
                   type="tel"
                   inputMode="numeric"
-                  maxLength={11}
-                  placeholder="090..."
-                  value={phone}
-                  onChange={(e) => setPhone(e.target.value.replace(/\D/g, ""))}
-                  className="h-[56px] rounded-[14px] text-[18px] font-semibold"
+                  maxLength={12}
+                  value={cccd}
+                  placeholder="Nhập 9 hoặc 12 chữ số"
+      
+                  onChange={(e) =>
+                    setCccd(
+                      e.target.value.replace(/\D/g, "")
+                    )
+                  }
+      
+                  className="h-14 flex-1 rounded-2xl border-slate-300 bg-slate-50 px-5 text-lg font-semibold tracking-[0.18em] shadow-none focus:bg-white"
                 />
+      
+                <div className="shrink-0">
+                  <CccdQrScanner
+                    onResult={handleQrScanned}
+                  />
+                </div>
+      
               </div>
+      
+              <div className="rounded-2xl border border-blue-100 bg-blue-50 px-4 py-3 text-sm leading-6 text-slate-600">
+      
+                <span className="font-semibold text-slate-800">
+                  Mẹo:
+                </span>
+      
+                {" "}
+                Bạn có thể bấm
+                {" "}
+                <b>Quét QR CCCD</b>
+                {" "}
+                để tự động điền thông tin, hạn chế sai sót khi nhập.
+      
+              </div>
+      
             </div>
-
-            <Button onClick={handleCheck} disabled={loading} variant="gold" size="xl" className="w-full rounded-[14px]">
-              {loading ? <Loader2 className="h-6 w-6 animate-spin" /> : "Tiếp Tục → Kiểm tra hồ sơ"}
+      
+            {/* PHONE */}
+      
+            <div className="space-y-3">
+      
+              <Label className="text-sm font-bold text-slate-700">
+                Số điện thoại
+                <span className="ml-1 text-red-500">*</span>
+              </Label>
+      
+              <Input
+      
+                type="tel"
+      
+                inputMode="numeric"
+      
+                maxLength={11}
+      
+                value={phone}
+      
+                placeholder="Ví dụ: 0901234567"
+      
+                onChange={(e) =>
+                  setPhone(
+                    e.target.value.replace(/\D/g, "")
+                  )
+                }
+      
+                className="h-14 rounded-2xl border-slate-300 bg-slate-50 px-5 text-lg font-semibold shadow-none focus:bg-white"
+      
+              />
+      
+            </div>
+      
+            {/* NOTE */}
+      
+            <div className="rounded-3xl border border-emerald-200 bg-emerald-50 p-5">
+      
+              <div className="flex gap-3">
+      
+                <div className="text-2xl">
+                  🌱
+                </div>
+      
+                <div>
+      
+                  <p className="font-bold text-emerald-900">
+                    Hệ thống nhận diện tự động
+                  </p>
+      
+                  <p className="mt-2 text-sm leading-7 text-slate-600">
+      
+                    Nếu bạn đã từng làm việc tại
+                    Dalat Hasfarm,
+                    hệ thống sẽ tự động nhận diện và
+                    điền lại hồ sơ.
+      
+                    <br />
+      
+                    Nếu là lần đầu đăng ký,
+                    bạn chỉ cần khai báo thông tin
+                    một lần.
+      
+                  </p>
+      
+                </div>
+      
+              </div>
+      
+            </div>
+      
+            {/* BUTTON */}
+      
+            <Button
+      
+              onClick={handleCheck}
+      
+              disabled={loading}
+      
+              variant="gold"
+      
+              size="xl"
+      
+              className="h-14 w-full rounded-2xl text-base font-black shadow-[0_15px_40px_rgba(217,163,39,.30)] transition hover:-translate-y-0.5"
+      
+            >
+      
+              {loading ? (
+      
+                <Loader2 className="h-6 w-6 animate-spin" />
+      
+              ) : (
+      
+                <>
+                  Kiểm tra hồ sơ
+                  <span className="ml-2 text-lg">
+                    →
+                  </span>
+                </>
+      
+              )}
+      
             </Button>
-
-            <div className="flex items-center gap-2 rounded-xl bg-hasfarm-50 p-3 text-[11px] font-medium text-hasfarm-800">
-              <span className="text-base">🌱</span> Hệ thống tự nhận diện bạn là lao động cũ / mới của Dalat Hasfarm
-              — lần đầu chỉ cần điền 1 lần, hôm sau auto-fill.
-            </div>
+      
           </CardContent>
+      
         </Card>
       )}
 
       {stage === "already_registered" && (
-        <Card className="animate-slide-up rounded-[20px] border-2 border-amber-300 bg-gradient-to-b from-amber-50 to-white shadow-xl">
-          <CardContent className="space-y-4 p-7 text-center">
-            <div className="mx-auto flex h-16 w-16 items-center justify-center rounded-full bg-amber-100">
-              <AlertTriangle className="h-8 w-8 text-amber-600" />
-            </div>
-            <h2 className="text-[22px] font-black leading-tight text-hasfarm-900">ĐÃ XÁC NHẬN LÀM VIỆC HÔM NAY</h2>
-            <div className="rounded-2xl border bg-white p-4 shadow-sm">
-              <p className="text-sm text-gray-600">
-                Hồ sơ <b className="text-hasfarm-900">{workerInfo?.full_name || cccd}</b> đang ở:
-              </p>
-              <p className="mt-2 inline-flex rounded-full bg-hasfarm-700 px-4 py-1.5 text-sm font-black uppercase text-white">
-                {workerInfo?.status === "APPROVED"
-                  ? `✅ Đã Nhận — ${workerInfo?.dept_name ?? "Chờ phân xưởng"}`
-                  : workerInfo?.status === "REJECTED"
-                    ? "Không nhận hôm nay"
-                    : "⏳ Đang chờ HR xếp bộ phận"}
-              </p>
-              {workerInfo?.dept_location && (
-                <p className="mt-2 text-xs text-gray-500">📍 {workerInfo.dept_location}</p>
-              )}
-            </div>
-            <p className="text-xs text-gray-400">Bạn không cần gửi lại hồ sơ trong ngày. Vui lòng xem chi tiết ở trang Tra cứu.</p>
-            <Button onClick={reset} variant="outline" className="w-full rounded-[14px]">
-              Kiểm tra CCCD khác
-            </Button>
-          </CardContent>
-        </Card>
-      )}
+  <Card className="overflow-hidden rounded-[32px] border-0 bg-white shadow-[0_25px_80px_rgba(15,23,42,.10)] ring-1 ring-amber-200">
 
-      {stage === "returning_autofilled" && (
-        <Card className="animate-slide-up rounded-[20px] border-2 border-emerald-400 bg-gradient-to-b from-emerald-50 to-white shadow-xl">
-          <CardContent className="space-y-5 p-6">
-            <div className="flex gap-3">
-              <div className="flex h-12 w-12 items-center justify-center rounded-2xl bg-emerald-600 text-white shadow">
-                <ShieldCheck className="h-7 w-7" />
-              </div>
-              <div>
-                <p className="text-[11px] font-bold uppercase tracking-widest text-emerald-700">Lao động đã xác minh</p>
-                <p className="text-[22px] font-black leading-tight text-hasfarm-900">{workerInfo?.full_name}</p>
-                <p className="text-xs text-gray-500">Hệ thống Dalat Hasfarm đã lưu hồ sơ của bạn</p>
-              </div>
+    <div className="bg-gradient-to-r from-amber-500 to-amber-600 px-8 py-7 text-white">
+
+      <div className="flex items-center gap-4">
+
+        <div className="flex h-14 w-14 items-center justify-center rounded-2xl bg-white/20 backdrop-blur">
+          <AlertTriangle className="h-7 w-7" />
+        </div>
+
+        <div>
+
+          <p className="text-xs font-bold uppercase tracking-[0.25em] text-amber-100">
+            ĐÃ TỒN TẠI HỒ SƠ
+          </p>
+
+          <h2 className="mt-2 text-3xl font-black">
+            Bạn đã đăng ký hôm nay
+          </h2>
+
+        </div>
+
+      </div>
+
+    </div>
+
+    <CardContent className="space-y-6 p-8">
+
+      <div className="rounded-3xl border border-slate-200 bg-slate-50 p-6">
+
+        <p className="text-xs font-bold uppercase tracking-[0.2em] text-slate-500">
+          Ứng viên
+        </p>
+
+        <p className="mt-2 text-2xl font-black text-slate-900">
+          {workerInfo?.full_name || cccd}
+        </p>
+
+      </div>
+
+      <div className="rounded-3xl border border-slate-200 bg-white p-6">
+
+        <p className="text-xs font-bold uppercase tracking-[0.2em] text-slate-500">
+          Trạng thái hồ sơ
+        </p>
+
+        <div className="mt-4">
+
+          {workerInfo?.status === "APPROVED" && (
+            <div className="inline-flex rounded-full bg-emerald-100 px-5 py-2 font-bold text-emerald-700">
+              ✅ Đã tiếp nhận
             </div>
+          )}
 
-            <div className="rounded-2xl border bg-white p-4">
-              <p className="text-[10px] font-bold uppercase text-gray-400">Địa chỉ lưu trữ</p>
-              <p className="mt-1 text-sm font-semibold text-gray-800">{workerInfo?.address_current || "Chưa cập nhật"}</p>
+          {workerInfo?.status === "REJECTED" && (
+            <div className="inline-flex rounded-full bg-red-100 px-5 py-2 font-bold text-red-700">
+              ❌ Không tiếp nhận hôm nay
             </div>
+          )}
 
-            <Button onClick={handleConfirmReturning} disabled={loading} variant="gold" size="xl" className="w-full rounded-[14px] shadow-[0_8px_20px_rgba(217,163,39,0.35)]">
-              {loading ? <Loader2 className="h-6 w-6 animate-spin" /> : "✓ Xác nhận đăng ký làm việc ngay"}
-            </Button>
-            <Button onClick={reset} variant="ghost" className="w-full">
-              ← Hủy bỏ
-            </Button>
-          </CardContent>
-        </Card>
-      )}
-
-      {stage === "new" && (
-        <Card className="hasfarm-card animate-slide-up rounded-[20px] border-gold-300 shadow-[0_16px_48px_rgba(8,50,27,0.14)]">
-          <CardContent className="space-y-5 p-6">
-            <div className="flex items-start gap-3 rounded-2xl bg-gold-50 p-4 ring-1 ring-gold-200">
-              <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-gold-500 text-white">
-                <UserPlus className="h-5 w-5" />
-              </div>
-              <div>
-                <p className="text-sm font-black text-hasfarm-900">Chào bạn mới! Điền thông tin lần đầu</p>
-                <p className="mt-1 text-xs leading-relaxed text-gray-600">
-                  Hồ sơ sẽ được lưu vào kho chung. Sau khi HR nhấn <b>“Xác nhận là người mới”</b>, bạn sẽ trở thành lao động chính thức
-                  — lần sau hệ thống sẽ auto-fill cho bạn.
-                </p>
-              </div>
-            </div>
-
-            <div className="flex justify-end">
-              <CccdQrScanner onResult={handleQrScanned} />
-            </div>
-
-            <div className="grid gap-4 md:grid-cols-2">
-              <div>
-                <Label>Họ và Tên *</Label>
-                <Input value={fullName} onChange={(e) => setFullName(e.target.value)} placeholder="Nguyễn Văn A" className="h-[48px] rounded-[12px]" />
-              </div>
-              <div>
-                <Label>Ngày sinh *</Label>
-                <Input type="date" value={dob} onChange={(e) => setDob(e.target.value)} className="h-[48px] rounded-[12px]" />
-              </div>
-            </div>
-
-            <div>
-              <Label>Địa chỉ hiện tại</Label>
-              <Input
-                value={address}
-                onChange={(e) => setAddress(e.target.value)}
-                placeholder="Số nhà, đường/phường, TP. Đà Lạt..."
-                className="h-[48px] rounded-[12px]"
-              />
-            </div>
-
-            {questions.length > 0 && (
-              <div className="space-y-4 border-t border-dashed pt-5">
-                <p className="flex items-center gap-2 text-[11px] font-black uppercase tracking-[0.18em] text-hasfarm-700">
-                  <span className="h-2 w-2 rounded-full bg-gold-500" /> Câu hỏi khảo sát (thêm bởi Quản trị viên)
-                </p>
-                {questions.map((q) => (
-                  <div key={q.id} className="space-y-2 rounded-2xl bg-gray-50 p-4 ring-1 ring-gray-100">
-                    <Label className="text-[13px]">
-                      {q.questionText} {q.isRequired && <span className="text-red-500">*</span>}
-                    </Label>
-                    {q.fieldType === "SELECT" && (q.options?.length ?? 0) > 0 ? (
-                      <SearchableSelect
-                        value={customAnswers[q.fieldKey]}
-                        onChange={(val) => setCustomAnswers({ ...customAnswers, [q.fieldKey]: val })}
-                        options={(q.options ?? []).map((o) => ({ value: o, label: o }))}
-                      />
-                    ) : q.fieldType === "BOOLEAN" ? (
-                      <div className="grid grid-cols-2 gap-2">
-                        <Button
-                          type="button"
-                          size="lg"
-                          variant={customAnswers[q.fieldKey] === "Có" ? "success" : "outline"}
-                          onClick={() => setCustomAnswers({ ...customAnswers, [q.fieldKey]: "Có" })}
-                          className="rounded-[12px]"
-                        >
-                          ✓ Có
-                        </Button>
-                        <Button
-                          type="button"
-                          size="lg"
-                          variant={customAnswers[q.fieldKey] === "Không" ? "destructive" : "outline"}
-                          onClick={() => setCustomAnswers({ ...customAnswers, [q.fieldKey]: "Không" })}
-                          className="rounded-[12px]"
-                        >
-                          ✗ Không
-                        </Button>
-                      </div>
-                    ) : (
-                      <Input
-                        value={customAnswers[q.fieldKey] || ""}
-                        onChange={(e) => setCustomAnswers({ ...customAnswers, [q.fieldKey]: e.target.value })}
-                        className="h-[48px] rounded-[12px] bg-white"
-                        placeholder="Nhập câu trả lời..."
-                      />
-                    )}
-                  </div>
-                ))}
+          {workerInfo?.status !== "APPROVED" &&
+            workerInfo?.status !== "REJECTED" && (
+              <div className="inline-flex rounded-full bg-amber-100 px-5 py-2 font-bold text-amber-700">
+                ⏳ Đang chờ sắp xếp
               </div>
             )}
+
+        </div>
+
+        {workerInfo?.dept_name && (
+          <div className="mt-6 rounded-2xl bg-hasfarm-50 p-4">
+
+            <p className="text-xs uppercase tracking-wider text-slate-500">
+              Bộ phận
+            </p>
+
+            <p className="mt-2 font-bold text-hasfarm-800">
+              {workerInfo.dept_name}
+            </p>
+
+          </div>
+        )}
+
+        {workerInfo?.dept_location && (
+          <div className="mt-4 rounded-2xl bg-slate-50 p-4">
+
+            <p className="text-xs uppercase tracking-wider text-slate-500">
+              Địa điểm
+            </p>
+
+            <p className="mt-2 font-semibold text-slate-700">
+              📍 {workerInfo.dept_location}
+            </p>
+
+          </div>
+        )}
+
+      </div>
+
+      <div className="rounded-3xl border border-amber-200 bg-amber-50 p-5 text-sm leading-7 text-slate-700">
+        Hồ sơ của bạn đã được ghi nhận trong ngày hôm nay.
+        Không cần đăng ký lại.
+        Vui lòng sử dụng chức năng
+        <span className="font-bold text-hasfarm-700">
+          {" "}Tra cứu kết quả
+        </span>
+        để theo dõi tiến trình xử lý.
+      </div>
+
+      <Button
+        onClick={reset}
+        variant="outline"
+        className="h-14 w-full rounded-2xl"
+      >
+        Kiểm tra CCCD khác
+      </Button>
+
+    </CardContent>
+
+  </Card>
+)}
+
+      {stage === "returning_autofilled" && (
+  <Card className="overflow-hidden rounded-[32px] border-0 bg-white shadow-[0_25px_80px_rgba(15,23,42,.10)] ring-1 ring-emerald-200">
+
+    <div className="bg-gradient-to-r from-emerald-600 to-emerald-700 px-8 py-7 text-white">
+
+      <div className="flex items-center gap-4">
+
+        <div className="flex h-14 w-14 items-center justify-center rounded-2xl bg-white/15">
+          <ShieldCheck className="h-7 w-7" />
+        </div>
+
+        <div>
+
+          <p className="text-xs font-bold uppercase tracking-[0.25em] text-emerald-100">
+            HỒ SƠ ĐÃ XÁC MINH
+          </p>
+
+          <h2 className="mt-2 text-3xl font-black">
+            Chào mừng bạn quay trở lại
+          </h2>
+
+        </div>
+
+      </div>
+
+    </div>
+
+    <CardContent className="space-y-7 p-8">
+
+      <div className="rounded-3xl border border-slate-200 bg-slate-50 p-6">
+
+        <p className="text-xs uppercase tracking-[0.2em] text-slate-500">
+          Họ và tên
+        </p>
+
+        <p className="mt-2 text-2xl font-black text-slate-900">
+          {workerInfo?.full_name}
+        </p>
+
+      </div>
+
+      <div className="rounded-3xl border border-slate-200 bg-white p-6">
+
+        <p className="text-xs uppercase tracking-[0.2em] text-slate-500">
+          Địa chỉ hiện tại
+        </p>
+
+        <p className="mt-3 leading-7 text-slate-700">
+          {workerInfo?.address_current || "Chưa cập nhật"}
+        </p>
+
+      </div>
+
+      <div className="rounded-3xl border border-emerald-200 bg-emerald-50 p-5">
+
+        <p className="font-bold text-emerald-900">
+          Hệ thống đã nhận diện bạn là lao động đã có hồ sơ.
+        </p>
+
+        <p className="mt-2 text-sm leading-7 text-slate-700">
+          Bạn chỉ cần xác nhận để gửi yêu cầu làm việc hôm nay.
+          Không cần khai báo lại toàn bộ thông tin cá nhân.
+        </p>
+
+      </div>
+
+      <Button
+        onClick={handleConfirmReturning}
+        disabled={loading}
+        variant="gold"
+        size="xl"
+        className="h-14 w-full rounded-2xl text-base font-black shadow-[0_15px_40px_rgba(217,163,39,.30)]"
+      >
+        {loading ? (
+          <Loader2 className="h-6 w-6 animate-spin" />
+        ) : (
+          <>
+            Xác nhận đăng ký làm việc
+            <span className="ml-2">✓</span>
+          </>
+        )}
+      </Button>
+
+      <Button
+        onClick={reset}
+        variant="ghost"
+        className="h-12 w-full rounded-2xl"
+      >
+        ← Quay lại
+      </Button>
+
+    </CardContent>
+
+  </Card>
+)}
+
+      {stage === "new" && (
+  <Card className="overflow-hidden rounded-[32px] border-0 bg-white shadow-[0_25px_80px_rgba(15,23,42,.10)] ring-1 ring-slate-200/70">
+
+    {/* Header */}
+
+    <div className="bg-gradient-to-r from-hasfarm-700 via-hasfarm-600 to-hasfarm-700 px-8 py-7 text-white">
+
+      <div className="flex items-start gap-4">
+
+        <div className="flex h-14 w-14 shrink-0 items-center justify-center rounded-2xl bg-white/15">
+
+          <UserPlus className="h-7 w-7" />
+
+        </div>
+
+        <div>
+
+          <p className="text-xs font-bold uppercase tracking-[0.25em] text-gold-200">
+            HỒ SƠ MỚI
+          </p>
+
+          <h2 className="mt-2 text-3xl font-black">
+            Đăng ký thông tin lần đầu
+          </h2>
+
+          <p className="mt-3 max-w-2xl text-sm leading-7 text-white/80">
+            Hoàn thành đầy đủ thông tin bên dưới để bộ phận tuyển dụng
+            tiếp nhận hồ sơ và bố trí vị trí phù hợp.
+          </p>
+
+        </div>
+
+      </div>
+
+    </div>
+
+    <CardContent className="space-y-8 p-8">
+
+      {/* QR */}
+
+      <div className="flex flex-col gap-4 rounded-3xl border border-blue-100 bg-blue-50 p-5 md:flex-row md:items-center md:justify-between">
+
+        <div>
+
+          <p className="font-bold text-slate-900">
+            Quét mã QR trên CCCD
+          </p>
+
+          <p className="mt-2 text-sm leading-6 text-slate-600">
+            Hệ thống sẽ tự động điền Họ tên, Ngày sinh,
+            Địa chỉ và Giới tính nếu đọc được dữ liệu.
+          </p>
+
+        </div>
+
+        <div className="shrink-0">
+          <CccdQrScanner
+            onResult={handleQrScanned}
+          />
+        </div>
+
+      </div>
+
+      {/* Personal */}
+
+      <div>
+
+        <div className="mb-5 flex items-center gap-3">
+
+          <div className="h-8 w-1 rounded-full bg-hasfarm-600" />
+
+          <h3 className="text-xl font-black text-slate-900">
+            Thông tin cá nhân
+          </h3>
+
+        </div>
+
+        <div className="grid gap-6 md:grid-cols-2">
+
+          <div className="space-y-3">
+
+            <Label className="text-sm font-bold">
+              Họ và tên
+              <span className="ml-1 text-red-500">*</span>
+            </Label>
+
+            <Input
+              value={fullName}
+              onChange={(e) =>
+                setFullName(e.target.value)
+              }
+              placeholder="Nguyễn Văn A"
+              className="h-14 rounded-2xl bg-slate-50 px-5 text-base"
+            />
+
+          </div>
+
+          <div className="space-y-3">
+
+            <Label className="text-sm font-bold">
+              Ngày sinh
+              <span className="ml-1 text-red-500">*</span>
+            </Label>
+
+            <Input
+              type="date"
+              value={dob}
+              onChange={(e) =>
+                setDob(e.target.value)
+              }
+              className="h-14 rounded-2xl bg-slate-50 px-5"
+            />
+
+          </div>
+
+        </div>
+
+      </div>
+
+      {/* Address */}
+
+      <div className="space-y-3">
+
+        <Label className="text-sm font-bold">
+          Địa chỉ hiện tại
+        </Label>
+
+        <Input
+          value={address}
+          onChange={(e) =>
+            setAddress(e.target.value)
+          }
+          placeholder="Ví dụ: 123 Trần Phú, Phường Xuân Hương, Đà Lạt..."
+          className="h-14 rounded-2xl bg-slate-50 px-5"
+        />
+
+      </div>
+
+      {questions.length > 0 && (
+  <div className="space-y-6 border-t border-slate-200 pt-8">
+
+    {/* Section Title */}
+
+    <div className="flex items-center gap-3">
+
+      <div className="h-8 w-1 rounded-full bg-gold-500" />
+
+      <div>
+
+        <h3 className="text-xl font-black text-slate-900">
+          Thông tin bổ sung
+        </h3>
+
+        <p className="mt-1 text-sm text-slate-500">
+          Vui lòng hoàn thành các câu hỏi dưới đây.
+        </p>
+
+      </div>
+
+    </div>
+
+    {questions.map((q) => (
+
+      <div
+        key={q.id}
+        className="rounded-3xl border border-slate-200 bg-white p-6 transition-all duration-200 hover:border-hasfarm-300 hover:shadow-md"
+      >
+
+        {/* Question */}
+
+        <Label className="mb-4 block text-base font-semibold leading-7 text-slate-800">
+
+          {q.questionText}
+
+          {q.isRequired && (
+            <span className="ml-1 text-red-500">*</span>
+          )}
+
+        </Label>
+
+        {/* SELECT */}
+
+        {q.fieldType === "SELECT" &&
+          (q.options?.length ?? 0) > 0 ? (
+
+          <SearchableSelect
+            value={customAnswers[q.fieldKey]}
+            onChange={(value) =>
+              setCustomAnswers({
+                ...customAnswers,
+                [q.fieldKey]: value,
+              })
+            }
+            options={(q.options ?? []).map((item) => ({
+              value: item,
+              label: item,
+            }))}
+          />
+
+        ) : q.fieldType === "BOOLEAN" ? (
+
+          /* BOOLEAN */
+
+          <div className="grid grid-cols-2 gap-4">
+
+            <Button
+              type="button"
+              size="lg"
+              variant={
+                customAnswers[q.fieldKey] === "Có"
+                  ? "success"
+                  : "outline"
+              }
+              onClick={() =>
+                setCustomAnswers({
+                  ...customAnswers,
+                  [q.fieldKey]: "Có",
+                })
+              }
+              className="h-12 rounded-2xl font-bold"
+            >
+              ✓ Có
+            </Button>
+
+            <Button
+              type="button"
+              size="lg"
+              variant={
+                customAnswers[q.fieldKey] === "Không"
+                  ? "destructive"
+                  : "outline"
+              }
+              onClick={() =>
+                setCustomAnswers({
+                  ...customAnswers,
+                  [q.fieldKey]: "Không",
+                })
+              }
+              className="h-12 rounded-2xl font-bold"
+            >
+              ✕ Không
+            </Button>
+
+          </div>
+
+        ) : (
+
+          /* TEXT */
+
+          <Input
+            value={customAnswers[q.fieldKey] || ""}
+            onChange={(e) =>
+              setCustomAnswers({
+                ...customAnswers,
+                [q.fieldKey]: e.target.value,
+              })
+            }
+            placeholder="Nhập câu trả lời..."
+            className="h-14 rounded-2xl bg-slate-50 px-5"
+          />
+
+        )}
+
+        {/* Required Hint */}
+
+        {q.isRequired && (
+          <p className="mt-3 text-xs text-slate-400">
+            Trường này là bắt buộc.
+          </p>
+        )}
+
+      </div>
+
+    ))}
+
+  </div>
+)}
+
+            {/* Confirmation */}
+
+      <div className="rounded-3xl border border-gold-200 bg-gradient-to-r from-gold-50 to-white p-6">
+
+        <div className="flex items-start gap-4">
+
+          <div className="mt-1 flex h-10 w-10 shrink-0 items-center justify-center rounded-2xl bg-gold-500 text-white">
+            ✓
+          </div>
+
+          <div>
+
+            <h4 className="text-lg font-black text-slate-900">
+              Kiểm tra thông tin trước khi gửi
+            </h4>
+
+            <p className="mt-2 text-sm leading-7 text-slate-600">
+              Vui lòng kiểm tra lại toàn bộ thông tin đã nhập.
+              Sau khi gửi hồ sơ, bộ phận tuyển dụng sẽ tiếp nhận và xử lý.
+              Nếu cần chỉnh sửa sau khi gửi, vui lòng liên hệ bộ phận Nhân sự.
+            </p>
+
+          </div>
+
+        </div>
+
+      </div>
+
+      {/* Submit */}
+
+      <Button
+        onClick={handleNewSubmit}
+        disabled={loading}
+        variant="gold"
+        size="xl"
+        className="
+          h-14
+          w-full
+          rounded-2xl
+          text-base
+          font-black
+          shadow-[0_15px_40px_rgba(217,163,39,.30)]
+          transition-all
+          duration-300
+          hover:-translate-y-0.5
+        "
+      >
+        {loading ? (
+          <Loader2 className="h-6 w-6 animate-spin" />
+        ) : (
+          <>
+            Hoàn tất đăng ký
+            <span className="ml-2 text-lg">
+              →
+            </span>
+          </>
+        )}
+      </Button>
+
+      {/* Back */}
+
+      <Button
+        onClick={reset}
+        variant="outline"
+        className="
+          h-12
+          w-full
+          rounded-2xl
+          border-slate-300
+          font-semibold
+          transition-all
+          hover:bg-slate-50
+        "
+      >
+        ← Quay lại bước trước
+      </Button>
+
+    </CardContent>
+
+  </Card>
+)}
 
             <Button onClick={handleNewSubmit} disabled={loading} variant="gold" size="xl" className="w-full rounded-[14px] shadow-[0_10px_24px_rgba(217,163,39,0.35)]">
               {loading ? <Loader2 className="h-6 w-6 animate-spin" /> : "🚀 Đăng ký hoàn tất"}
