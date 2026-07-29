@@ -949,31 +949,211 @@ export default function ApplicantPortal({ questions }: { questions: FormQuestion
       )}
 
       {stage === "success" && (
-        <Card className="animate-slide-up rounded-[20px] border-2 border-hasfarm-600 bg-gradient-to-b from-hasfarm-50 to-white text-center shadow-xl">
-          <CardContent className="space-y-5 p-8">
-            <div className="mx-auto flex h-20 w-20 items-center justify-center rounded-full bg-hasfarm-600 text-white shadow-lg">
-              <CheckCircle2 className="h-10 w-10" />
+  <Card className="overflow-hidden rounded-[32px] border-0 bg-white shadow-[0_25px_80px_rgba(15,23,42,.10)] ring-1 ring-emerald-200">
+
+    {/* Header */}
+
+    <div className="bg-gradient-to-r from-emerald-600 via-emerald-700 to-hasfarm-700 px-8 py-8 text-white">
+
+      <div className="flex items-center gap-5">
+
+        <div className="flex h-16 w-16 items-center justify-center rounded-3xl bg-white/15 backdrop-blur">
+          <CheckCircle2 className="h-9 w-9" />
+        </div>
+
+        <div>
+
+          <p className="text-xs font-bold uppercase tracking-[0.25em] text-emerald-100">
+            HOÀN TẤT
+          </p>
+
+          <h2 className="mt-2 text-3xl font-black">
+            Đăng ký thành công
+          </h2>
+
+          <p className="mt-2 text-sm leading-7 text-white/80">
+            Hồ sơ của bạn đã được ghi nhận vào hệ thống tuyển dụng Dalat Hasfarm.
+          </p>
+
+        </div>
+
+      </div>
+
+    </div>
+
+    <CardContent className="space-y-7 p-8">
+
+      {/* Success Box */}
+
+      <div className="rounded-3xl border border-emerald-200 bg-emerald-50 p-6">
+
+        <div className="flex gap-4">
+
+          <div className="text-3xl">
+            🎉
+          </div>
+
+          <div>
+
+            <h3 className="text-lg font-black text-emerald-900">
+              Hồ sơ đã được tiếp nhận
+            </h3>
+
+            <p className="mt-2 text-sm leading-7 text-slate-700">
+
+              Bộ phận Nhân sự sẽ kiểm tra và phân công bộ phận làm việc.
+
+              <br />
+
+              Nếu bạn là lao động mới, hồ sơ sẽ được xác minh trước khi đưa vào
+              danh sách lao động chính thức.
+
+            </p>
+
+          </div>
+
+        </div>
+
+      </div>
+
+      {/* Timeline */}
+
+      <div className="rounded-3xl border border-slate-200 bg-white p-6">
+
+        <h3 className="text-lg font-black text-slate-900">
+          Các bước tiếp theo
+        </h3>
+
+        <div className="mt-6 space-y-5">
+
+          <div className="flex gap-4">
+
+            <div className="flex h-8 w-8 items-center justify-center rounded-full bg-hasfarm-700 text-sm font-bold text-white">
+              1
             </div>
+
             <div>
-              <h1 className="text-[26px] font-black tracking-tight text-hasfarm-900">ĐĂNG KÝ THÀNH CÔNG</h1>
-              <p className="mx-auto mt-2 max-w-[34ch] text-sm leading-relaxed text-gray-600">
-                Yêu cầu của bạn đã ghi nhận. HR sẽ xếp bộ phận trong sáng nay. Nếu là người mới, sau khi HR nhấn{" "}
-                <b className="text-hasfarm-700">Xác nhận là người mới</b> bạn sẽ vào kho lao động chính thức.
+
+              <p className="font-semibold text-slate-900">
+                Nhân sự tiếp nhận hồ sơ
               </p>
+
+              <p className="text-sm text-slate-500">
+                Kiểm tra thông tin và xác minh dữ liệu.
+              </p>
+
             </div>
-            <div className="rounded-2xl border border-dashed bg-white p-4 text-xs font-semibold text-gray-600 shadow-sm">
-              Theo dõi kết quả tại{" "}
-              <a href="/lookup" className="font-black text-gold-600 underline underline-offset-4">
-                Tra Cứu Trạng Thái
-              </a>{" "}
-              sau 14h chiều.
+
+          </div>
+
+          <div className="flex gap-4">
+
+            <div className="flex h-8 w-8 items-center justify-center rounded-full bg-hasfarm-700 text-sm font-bold text-white">
+              2
             </div>
-            <Button onClick={reset} variant="outline" className="w-full rounded-[14px]">
-              Đăng ký cho người khác
-            </Button>
-          </CardContent>
-        </Card>
-      )}
+
+            <div>
+
+              <p className="font-semibold text-slate-900">
+                Phân công bộ phận
+              </p>
+
+              <p className="text-sm text-slate-500">
+                Sắp xếp vị trí làm việc phù hợp.
+              </p>
+
+            </div>
+
+          </div>
+
+          <div className="flex gap-4">
+
+            <div className="flex h-8 w-8 items-center justify-center rounded-full bg-hasfarm-700 text-sm font-bold text-white">
+              3
+            </div>
+
+            <div>
+
+              <p className="font-semibold text-slate-900">
+                Tra cứu kết quả
+              </p>
+
+              <p className="text-sm text-slate-500">
+                Sau khi HR xử lý, bạn có thể xem kết quả ngay trên hệ thống.
+              </p>
+
+            </div>
+
+          </div>
+
+        </div>
+
+      </div>
+
+      {/* Notice */}
+
+      <div className="rounded-3xl border border-blue-200 bg-blue-50 p-5">
+
+        <p className="text-sm leading-7 text-slate-700">
+
+          <span className="font-bold text-blue-900">
+            Lưu ý:
+          </span>
+
+          {" "}Trong thời gian chờ xử lý, vui lòng không đăng ký nhiều lần trong cùng một ngày.
+          Nếu cần cập nhật thông tin, hãy liên hệ bộ phận Nhân sự.
+
+        </p>
+
+      </div>
+
+      {/* Action Buttons */}
+
+      <div className="grid gap-4 md:grid-cols-2">
+
+        <Link href="/lookup">
+
+          <Button
+            variant="gold"
+            className="h-14 w-full rounded-2xl text-base font-black shadow-[0_15px_40px_rgba(217,163,39,.30)]"
+          >
+            🔎 Tra cứu kết quả
+          </Button>
+
+        </Link>
+
+        <Button
+          onClick={reset}
+          variant="outline"
+          className="h-14 rounded-2xl"
+        >
+          👤 Đăng ký cho người khác
+        </Button>
+
+      </div>
+
+      {/* Footer */}
+
+      <div className="border-t border-slate-200 pt-5 text-center">
+
+        <p className="text-xs leading-6 text-slate-500">
+          Cảm ơn bạn đã đăng ký làm việc tại
+          <span className="font-bold text-hasfarm-700">
+            {" "}Dalat Hasfarm.
+          </span>
+
+          <br />
+
+          Chúc bạn có một ngày làm việc hiệu quả!
+
+        </p>
+
+      </div>
+
+    </CardContent>
+
+  </Card>
+)}
     </div>
   );
 }
