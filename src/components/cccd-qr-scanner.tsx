@@ -178,26 +178,24 @@ export function CccdQrScanner({ onResult }: { onResult: (data: CccdQrData) => vo
   };
 
   // ---------- Cleanup ----------
-  const stopCamera = () => {
+ const stopCamera = () => {
     try {
       controlsRef.current?.stop();
     } catch {
-      // đã dừng rồi hoặc không còn control hợp lệ — bỏ qua.
+      // đã dừng rồi
     }
-    try {
-      readerRef.current?.reset();
-    } catch {
-      // không có reader đang chạy — bỏ qua.
-    }
-    // Phòng hờ: đảm bảo mọi track của MediaStream đang gắn vào <video> đều
-    // được dừng hẳn, không để camera chạy nền dù ZXing đã tự dọn dẹp.
+  
     const stream = videoRef.current?.srcObject as MediaStream | null;
     stream?.getTracks().forEach((t) => t.stop());
-    if (videoRef.current) videoRef.current.srcObject = null;
-
+  
+    if (videoRef.current) {
+      videoRef.current.srcObject = null;
+    }
+  
     controlsRef.current = null;
     readerRef.current = null;
     torchTrackRef.current = null;
+  
     setScanning(false);
   };
 
