@@ -389,7 +389,7 @@ export default async function ApplicantHomePage() {
         <p className="mt-3 text-sm leading-7 text-slate-600">
           Sau khi gửi thông tin, vui lòng sử dụng chức năng
           <span className="font-bold text-hasfarm-700">
-            {" "}Tra cứu kết quả
+            {" "}Tra cứu kết quả 
           </span>
           để theo dõi quá trình tiếp nhận và phân công bộ phận.
         </p>
