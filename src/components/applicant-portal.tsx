@@ -5,6 +5,7 @@ import { Button, Card, CardContent, Input, Label, SearchableSelect, toast } from
 import { AlertTriangle, CheckCircle2, Loader2, ShieldCheck, Sparkles, UserPlus } from "lucide-react";
 import { CccdQrScanner, type CccdQrData } from "@/components/cccd-qr-scanner";
 import type { FormQuestion } from "@/db/schema";
+import Link from "next/link";
 
 type Stage = "check" | "returning_autofilled" | "already_registered" | "new" | "success";
 
@@ -938,15 +939,7 @@ export default function ApplicantPortal({ questions }: { questions: FormQuestion
   </Card>
 )}
 
-            <Button onClick={handleNewSubmit} disabled={loading} variant="gold" size="xl" className="w-full rounded-[14px] shadow-[0_10px_24px_rgba(217,163,39,0.35)]">
-              {loading ? <Loader2 className="h-6 w-6 animate-spin" /> : "🚀 Đăng ký hoàn tất"}
-            </Button>
-            <Button onClick={reset} variant="ghost" className="w-full">
-              ← Quay lại
-            </Button>
-          </CardContent>
-        </Card>
-      )}
+          
 
       {stage === "success" && (
   <Card className="overflow-hidden rounded-[32px] border-0 bg-white shadow-[0_25px_80px_rgba(15,23,42,.10)] ring-1 ring-emerald-200">
