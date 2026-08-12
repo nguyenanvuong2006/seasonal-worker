@@ -49,8 +49,8 @@ export default function NotificationsPage() {
     <div className="space-y-5">
       <div className="flex items-center justify-between">
         <div>
-          <h1 className="text-2xl font-black text-hasfarm-900">Hàng đợi thông báo (Notification Foundation)</h1>
-          <p className="text-sm text-gray-500">
+          <h1 className="text-2xl font-black text-fg">Hàng đợi thông báo (Notification Foundation)</h1>
+          <p className="text-sm text-fg-secondary">
             Kênh <b>IN_APP</b> hoạt động thật. Kênh ZALO/SMS/EMAIL hiện chỉ xếp hàng đợi (chưa có tài khoản dịch vụ
             ngoài để gửi thật) — khi có, chỉ cần bổ sung 1 “sender” trong <code>src/lib/notifications.ts</code>.
           </p>
@@ -65,12 +65,12 @@ export default function NotificationsPage() {
         <CardContent className="p-0">
           {loading ? (
             <div className="p-10 text-center">
-              <Loader2 className="mx-auto h-6 w-6 animate-spin text-hasfarm-600" />
+              <Loader2 className="mx-auto h-6 w-6 animate-spin text-primary" />
             </div>
           ) : (
             <div className="overflow-x-auto">
               <table className="grid-sheet w-full text-sm">
-                <thead className="bg-hasfarm-50 text-hasfarm-800">
+                <thead className="bg-primary-tint text-primary">
                   <tr>
                     <th className="px-3 py-2 text-left text-[11px] uppercase">Sự kiện</th>
                     <th className="px-3 py-2 text-left text-[11px] uppercase">Người nhận</th>
@@ -82,13 +82,13 @@ export default function NotificationsPage() {
                 <tbody>
                   {rows.length === 0 && (
                     <tr>
-                      <td colSpan={5} className="p-10 text-center text-gray-400">
+                      <td colSpan={5} className="p-10 text-center text-fg-muted">
                         Chưa có thông báo nào trong hàng đợi.
                       </td>
                     </tr>
                   )}
                   {rows.map((r) => (
-                    <tr key={r.id} className="hover:bg-hasfarm-50/50">
+                    <tr key={r.id} className="hover:bg-primary-tint/50">
                       <td className="px-3 py-2 font-mono text-xs">{r.event}</td>
                       <td className="px-3 py-2 text-xs">
                         {r.recipientType} · {r.recipientRef}
@@ -97,7 +97,7 @@ export default function NotificationsPage() {
                       <td className="px-3 py-2">
                         <Badge tone={r.status === "SENT" ? "green" : r.status === "FAILED" ? "red" : "amber"}>{r.status}</Badge>
                       </td>
-                      <td className="px-3 py-2 text-xs text-gray-500">{new Date(r.createdAt).toLocaleString("vi-VN")}</td>
+                      <td className="px-3 py-2 text-xs text-fg-secondary">{new Date(r.createdAt).toLocaleString("vi-VN")}</td>
                     </tr>
                   ))}
                 </tbody>

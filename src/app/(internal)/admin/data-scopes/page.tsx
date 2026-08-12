@@ -45,8 +45,8 @@ export default function DataScopesPage() {
   return (
     <div className="space-y-5">
       <div>
-        <h1 className="text-2xl font-black text-hasfarm-900">Data Scope — Quản lý theo bộ phận</h1>
-        <p className="text-sm text-gray-500">
+        <h1 className="text-2xl font-black text-fg">Data Scope — Quản lý theo bộ phận</h1>
+        <p className="text-sm text-fg-secondary">
           Chỉ áp dụng cho Role <Badge tone="gray">DEPT_MANAGER</Badge>. 1 Manager có thể quản lý NHIỀU bộ phận cùng
           lúc (vd Packing A + Packing B + Packing C) — tick chọn bên dưới. ADMIN/HR_RECRUITER luôn xem được toàn bộ,
           không cần cấu hình ở đây.
@@ -58,19 +58,19 @@ export default function DataScopesPage() {
         <CardContent className="overflow-x-auto p-0">
           {loading ? (
             <div className="p-10 text-center">
-              <Loader2 className="mx-auto h-6 w-6 animate-spin text-hasfarm-600" />
+              <Loader2 className="mx-auto h-6 w-6 animate-spin text-primary" />
             </div>
           ) : users.length === 0 ? (
-            <p className="p-8 text-center text-sm text-gray-400">Chưa có tài khoản nào có Role DEPT_MANAGER.</p>
+            <p className="p-8 text-center text-sm text-fg-muted">Chưa có tài khoản nào có Role DEPT_MANAGER.</p>
           ) : (
             <table className="w-full text-sm">
-              <thead className="bg-hasfarm-50 text-hasfarm-800">
+              <thead className="bg-primary-tint text-primary">
                 <tr>
                   <th className="px-3 py-2 text-left text-[11px] uppercase">Tài khoản</th>
                   {depts.map((d) => (
                     <th key={d.id} className="px-3 py-2 text-center text-[11px] uppercase">
                       {d.deptName}
-                      {d.groupName ? <span className="block font-normal normal-case text-gray-400">{d.groupName}</span> : null}
+                      {d.groupName ? <span className="block font-normal normal-case text-fg-muted">{d.groupName}</span> : null}
                     </th>
                   ))}
                 </tr>
@@ -79,15 +79,15 @@ export default function DataScopesPage() {
                 {users.map((u) => (
                   <tr key={u.id} className="border-t">
                     <td className="px-3 py-2 font-semibold">
-                      {u.fullName} <span className="text-xs text-gray-400">({u.username})</span>
+                      {u.fullName} <span className="text-xs text-fg-muted">({u.username})</span>
                     </td>
                     {depts.map((d) => (
                       <td key={d.id} className="px-3 py-2 text-center">
                         <button
                           onClick={() => toggle(u.id, d.id)}
-                          className={`h-6 w-11 rounded-full transition ${has(u.id, d.id) ? "bg-emerald-500" : "bg-gray-300"}`}
+                          className={`h-6 w-11 rounded-full transition ${has(u.id, d.id) ? "bg-emerald-500" : "bg-border-strong"}`}
                         >
-                          <span className={`block h-5 w-5 translate-x-0.5 rounded-full bg-white shadow transition ${has(u.id, d.id) ? "translate-x-[22px]" : ""}`} />
+                          <span className={`block h-5 w-5 translate-x-0.5 rounded-full bg-surface shadow transition ${has(u.id, d.id) ? "translate-x-[22px]" : ""}`} />
                         </button>
                       </td>
                     ))}

@@ -3,8 +3,9 @@ import { and, asc, eq, gte, lte } from "drizzle-orm";
 import { db } from "@/db";
 import { dailyApplications, departments } from "@/db/schema";
 import { getSession, getUserScope } from "@/lib/auth";
-import { Badge, Card, CardContent } from "@/components/ui";
+import { Badge, Card, CardContent, EmptyState, KpiCard } from "@/components/ui";
 import { formatDate, todayStr } from "@/lib/helpers";
+import { Download, Percent, Target, UserPlus2, Users } from "lucide-react";
 
 export const dynamic = "force-dynamic";
 
@@ -36,9 +37,11 @@ export default async function DepartmentPage({
   if (!deptId) {
     return (
       <Card>
-        <CardContent className="p-8 text-center text-sm text-gray-500">
-          Tài khoản chưa được gán bộ phận nào. Vui lòng liên hệ Quản trị viên (mục Phân quyền → Data Scope).
-        </CardContent>
+        <EmptyState
+          icon={<Users className="h-5 w-5" aria-hidden />}
+          title="Chưa được gán bộ phận nào"
+          description="Vui lòng liên hệ Quản trị viên (mục Phân quyền → Data Scope) để được gán bộ phận."
+        />
       </Card>
     );
   }
@@ -63,15 +66,13 @@ export default async function DepartmentPage({
 
   return (
     <div className="space-y-5">
-      <div className="rounded-[20px] bg-white p-6 shadow-sm ring-1 ring-black/5">
+      <Card className="p-6">
         <div className="flex flex-wrap items-end justify-between gap-3">
           <div>
-            <span className="rounded-full bg-hasfarm-700 px-3 py-1 text-[10px] font-black uppercase tracking-widest text-white">
-              Cổng bộ phận nhận lao động
-            </span>
-            <h1 className="mt-3 text-[26px] font-black tracking-tight text-hasfarm-900">{label}</h1>
-            <p className="text-sm text-gray-600">
-              {dept?.vnName} · Phụ trách: <b>{dept?.supervisor ?? "—"}</b>
+            <Badge tone="gray">Cổng bộ phận nhận lao động</Badge>
+            <h1 className="mt-3 text-[24px] font-bold tracking-tight text-fg">{label}</h1>
+            <p className="text-sm text-fg-secondary">
+              {dept?.vnName} · Phụ trách: <b className="text-fg">{dept?.supervisor ?? "—"}</b>
               {dept?.supervisorPhone ? ` · ${dept.supervisorPhone}` : ""}
             </p>
           </div>
@@ -81,7 +82,7 @@ export default async function DepartmentPage({
                 <select
                   name="dept"
                   defaultValue={deptId}
-                  className="h-10 max-w-[240px] rounded-xl border-2 border-gray-200 px-2 text-sm font-bold"
+                  className="h-10 max-w-[240px] rounded-[10px] border border-border-strong bg-surface px-3 text-sm font-medium text-fg outline-none focus:border-primary focus:ring-2 focus:ring-primary/15"
                 >
                   {visibleDepts.map((d) => (
                     <option key={d.id} value={d.id}>
@@ -92,105 +93,102 @@ export default async function DepartmentPage({
                 </select>
               )}
               <div>
-                <p className="mb-1 text-[10px] font-black uppercase text-gray-400">Từ ngày</p>
+                <p className="mb-1 text-[11px] font-semibold text-fg-muted">Từ ngày</p>
                 <input
                   type="date"
                   name="from"
                   defaultValue={from}
-                  className="h-10 rounded-xl border-2 border-gray-200 px-2 text-sm font-bold"
+                  className="h-10 rounded-[10px] border border-border-strong bg-surface px-3 text-sm font-medium text-fg outline-none focus:border-primary focus:ring-2 focus:ring-primary/15"
                 />
               </div>
               <div>
-                <p className="mb-1 text-[10px] font-black uppercase text-gray-400">Đến ngày</p>
+                <p className="mb-1 text-[11px] font-semibold text-fg-muted">Đến ngày</p>
                 <input
                   type="date"
                   name="to"
                   defaultValue={to}
-                  className="h-10 rounded-xl border-2 border-gray-200 px-2 text-sm font-bold"
+                  className="h-10 rounded-[10px] border border-border-strong bg-surface px-3 text-sm font-medium text-fg outline-none focus:border-primary focus:ring-2 focus:ring-primary/15"
                 />
               </div>
-              <button className="h-10 rounded-xl bg-hasfarm-700 px-4 text-sm font-black text-white">Xem</button>
+              <button className="h-10 rounded-[10px] bg-primary px-4 text-sm font-semibold text-white shadow-sm transition-colors hover:bg-primary-hover">
+                Xem
+              </button>
             </form>
             <a
               href={`/api/export?from=${from}&to=${to}&deptId=${deptId}`}
-              className="inline-flex h-10 items-center rounded-xl bg-gold-500 px-4 text-sm font-black text-hasfarm-900 shadow-[0_6px_16px_rgba(217,163,39,0.35)] hover:bg-gold-400"
+              className="inline-flex h-10 items-center gap-1.5 rounded-[10px] bg-primary px-4 text-sm font-semibold text-white shadow-sm transition-colors hover:bg-primary-hover"
             >
-              📊 Tải Excel gửi Zalo
+              <Download className="h-4 w-4" /> Tải Excel gửi Zalo
             </a>
           </div>
         </div>
-      </div>
+      </Card>
 
       <div className="grid grid-cols-2 gap-3 lg:grid-cols-4">
-        {[
-          { l: "Lao động nhận", v: rows.length, c: "bg-[#0F3D23] text-white" },
-          { l: "Định mức/ngày", v: dept?.dailyQuota ?? 0, c: "bg-gold-500 text-hasfarm-900" },
-          { l: "Người mới", v: newCount, c: "bg-amber-500 text-amber-950" },
-          {
-            l: "Tỷ lệ lấp đầy",
-            v: dept?.dailyQuota ? `${Math.round((rows.length / dept.dailyQuota) * 100)}%` : "—",
-            c: "bg-emerald-600 text-white",
-          },
-        ].map((k) => (
-          <div key={k.l} className={`rounded-[18px] p-4 shadow ${k.c}`}>
-            <p className="text-[10px] font-black uppercase tracking-widest opacity-70">{k.l}</p>
-            <p className="mt-1 text-[28px] font-black leading-none">{k.v}</p>
-          </div>
-        ))}
+        <KpiCard icon={<Users className="h-4 w-4" />} label="Lao động nhận" value={rows.length} tone="primary" />
+        <KpiCard icon={<Target className="h-4 w-4" />} label="Định mức/ngày" value={dept?.dailyQuota ?? 0} tone="warning" />
+        <KpiCard icon={<UserPlus2 className="h-4 w-4" />} label="Người mới" value={newCount} tone="info" />
+        <KpiCard
+          icon={<Percent className="h-4 w-4" />}
+          label="Tỷ lệ lấp đầy"
+          value={dept?.dailyQuota ? `${Math.round((rows.length / dept.dailyQuota) * 100)}%` : "—"}
+          tone="success"
+        />
       </div>
 
-      <Card className="overflow-hidden rounded-[18px] border border-black/5 p-0 shadow-sm">
-        <div className="border-b bg-hasfarm-50 px-4 py-3">
-          <p className="text-[11px] font-black uppercase tracking-widest text-hasfarm-800">
+      <Card className="overflow-hidden p-0">
+        <div className="border-b border-border px-4 py-3">
+          <p className="text-[13px] font-semibold text-fg">
             Danh sách {formatDate(from)}
             {from !== to ? ` → ${formatDate(to)}` : ""}
           </p>
         </div>
-        <div className="overflow-x-auto">
-          <table className="grid-sheet w-full text-[13px]">
-            <thead className="bg-[#0F3D23] text-white">
-              <tr>
-                {["#", "Ngày", "CCCD", "Họ và tên", "Giới tính", "Tuổi", "SĐT", "Địa chỉ", "Loại"].map((h) => (
-                  <th key={h} className="px-3 py-2.5 text-left text-[10px] font-black uppercase tracking-widest">
-                    {h}
-                  </th>
-                ))}
-              </tr>
-            </thead>
-            <tbody>
-              {rows.length === 0 && (
+        {rows.length === 0 ? (
+          <EmptyState
+            icon={<Users className="h-5 w-5" aria-hidden />}
+            title="Chưa có lao động nào"
+            description="Chưa có lao động nào được xếp cho bộ phận này trong khoảng thời gian đã chọn."
+          />
+        ) : (
+          <div className="overflow-x-auto">
+            <table className="grid-sheet w-full text-[13px]">
+              <thead className="bg-primary text-white">
                 <tr>
-                  <td colSpan={9} className="p-10 text-center text-gray-400">
-                    Chưa có lao động nào được xếp cho bộ phận này.
-                  </td>
+                  {["#", "Ngày", "CCCD", "Họ và tên", "Giới tính", "Tuổi", "SĐT", "Địa chỉ", "Loại"].map((h) => (
+                    <th key={h} className="px-3 py-2.5 text-left text-[10.5px] font-semibold uppercase tracking-wide">
+                      {h}
+                    </th>
+                  ))}
                 </tr>
-              )}
-              {rows.map((r, i) => (
-                <tr key={r.id} className="hover:bg-hasfarm-50/60">
-                  <td className="px-3 py-2">{i + 1}</td>
-                  <td className="px-3 py-2 text-xs text-gray-500">{formatDate(r.regDate)}</td>
-                  <td className="px-3 py-2 font-mono font-bold">{r.cccd}</td>
-                  <td className="px-3 py-2 font-bold text-hasfarm-900">{r.fullName}</td>
-                  <td className="px-3 py-2 text-center">{r.gender ?? "—"}</td>
-                  <td className="px-3 py-2 text-center font-bold">{r.age ?? "—"}</td>
-                  <td className="px-3 py-2">
-                    <a href={`tel:${r.phone}`} className="font-bold text-hasfarm-700 hover:underline">
-                      {r.phone}
-                    </a>
-                  </td>
-                  <td className="max-w-[260px] truncate px-3 py-2 text-gray-600">
-                    {r.residentialAddress ?? r.permanentAddress ?? "—"}
-                  </td>
-                  <td className="px-3 py-2">
-                    <Badge tone={r.dwMatch === "NEW" ? "amber" : "green"}>
-                      {r.dwMatch === "NEW" ? "Mới" : "Cũ"}
-                    </Badge>
-                  </td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
+              </thead>
+              <tbody>
+                {rows.map((r, i) => (
+                  <tr key={r.id} className="border-b border-border transition-colors hover:bg-surface-hover">
+                    <td className="px-3 py-2 text-fg-muted">{i + 1}</td>
+                    <td className="px-3 py-2 text-xs text-fg-muted">{formatDate(r.regDate)}</td>
+                    <td className="px-3 py-2 font-mono font-semibold text-fg">{r.cccd}</td>
+                    <td className="px-3 py-2 font-semibold text-fg">{r.fullName}</td>
+                    <td className="px-3 py-2 text-center text-fg-secondary">{r.gender ?? "—"}</td>
+                    <td className="px-3 py-2 text-center font-semibold text-fg-secondary">{r.age ?? "—"}</td>
+                    <td className="px-3 py-2">
+                      <a href={`tel:${r.phone}`} className="font-semibold text-primary hover:underline">
+                        {r.phone}
+                      </a>
+                    </td>
+                    <td className="max-w-[260px] truncate px-3 py-2 text-fg-secondary">
+                      {r.residentialAddress ?? r.permanentAddress ?? "—"}
+                    </td>
+                    <td className="px-3 py-2">
+                      <Badge tone={r.dwMatch === "NEW" ? "amber" : "green"} dot>
+                        {r.dwMatch === "NEW" ? "Mới" : "Cũ"}
+                      </Badge>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
       </Card>
     </div>
   );

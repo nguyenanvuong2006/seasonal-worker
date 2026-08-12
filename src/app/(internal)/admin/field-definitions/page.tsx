@@ -109,7 +109,7 @@ export default function FieldDefinitionsPage() {
       toast({ title: data.error ?? "Lỗi tạo trường", variant: "destructive" });
       return;
     }
-    toast({ title: "✅ Đã thêm trường dữ liệu mới" });
+    toast({ title: "Đã thêm trường dữ liệu mới" });
     setOpen(false);
     setForm({ fieldKey: "", displayName: "", importColumnName: "", exportColumnName: "", aliasesRaw: "", sortOrder: 100 });
     await load();
@@ -130,15 +130,15 @@ export default function FieldDefinitionsPage() {
     <div className="space-y-5">
       <div className="flex flex-wrap items-center justify-between gap-3">
         <div>
-          <h1 className="text-2xl font-black text-hasfarm-900">Quản lý trường dữ liệu (Metadata Engine)</h1>
-          <p className="text-sm text-gray-500">
+          <h1 className="text-2xl font-black text-fg">Quản lý trường dữ liệu (Metadata Engine)</h1>
+          <p className="text-sm text-fg-secondary">
             Đổi tên cột, thêm alias nhận diện khi Import, bật/tắt Export/Tìm kiếm/Lọc — không cần sửa code.
           </p>
         </div>
         <div className="flex gap-2">
           <a
             href={`/api/admin/field-definitions/template?group=${group}`}
-            className="inline-flex h-10 items-center gap-2 rounded-full border-2 border-hasfarm-700 px-4 text-sm font-bold text-hasfarm-700 hover:bg-hasfarm-50"
+            className="inline-flex h-10 items-center gap-2 rounded-full border-2 border-primary px-4 text-sm font-bold text-primary hover:bg-primary-tint"
           >
             <Download className="h-4 w-4" /> Tải file mẫu
           </a>
@@ -154,7 +154,7 @@ export default function FieldDefinitionsPage() {
             key={g.key}
             onClick={() => setGroup(g.key)}
             className={`rounded-full px-4 py-2 text-sm font-bold transition ${
-              group === g.key ? "bg-hasfarm-800 text-white" : "bg-gray-100 text-gray-600 hover:bg-gray-200"
+              group === g.key ? "bg-primary text-white" : "bg-surface-hover text-fg-secondary hover:bg-border"
             }`}
           >
             {g.label}
@@ -167,12 +167,12 @@ export default function FieldDefinitionsPage() {
         <CardContent className="p-0">
           {loading ? (
             <div className="p-10 text-center">
-              <Loader2 className="mx-auto h-6 w-6 animate-spin text-hasfarm-600" />
+              <Loader2 className="mx-auto h-6 w-6 animate-spin text-primary" />
             </div>
           ) : (
             <ul className="divide-y">
               {visibleRows.length === 0 && (
-                <li className="p-8 text-center text-sm text-gray-400">Chưa có trường nào trong nhóm này.</li>
+                <li className="p-8 text-center text-sm text-fg-muted">Chưa có trường nào trong nhóm này.</li>
               )}
               {visibleRows.map((f) => (
                 <li key={f.id} className="space-y-2 p-4">
@@ -181,9 +181,9 @@ export default function FieldDefinitionsPage() {
                       <input
                         defaultValue={f.displayName}
                         onBlur={(e) => e.target.value !== f.displayName && patch(f.id, { displayName: e.target.value })}
-                        className="w-full rounded border-2 border-gray-200 px-2 py-1 text-sm font-bold text-hasfarm-900"
+                        className="w-full rounded border-2 border-border-strong px-2 py-1 text-sm font-bold text-fg"
                       />
-                      <p className="mt-0.5 text-xs text-gray-400">
+                      <p className="mt-0.5 text-xs text-fg-muted">
                         <span className="font-mono">{f.fieldKey}</span> · cột DB: <span className="font-mono">{f.databaseField}</span>
                         {f.isSystem && " · Trường lõi"}
                       </p>
@@ -202,7 +202,7 @@ export default function FieldDefinitionsPage() {
                         const v = Number(e.target.value);
                         if (v !== f.sortOrder) void patch(f.id, { sortOrder: v });
                       }}
-                      className="w-16 rounded border-2 border-gray-200 px-2 py-1 text-sm"
+                      className="w-16 rounded border-2 border-border-strong px-2 py-1 text-sm"
                     />
                     {!f.isSystem && (
                       <button onClick={() => void remove(f.id)} className="text-xs font-bold text-red-600 hover:underline">
@@ -216,7 +216,7 @@ export default function FieldDefinitionsPage() {
                       <input
                         defaultValue={f.importColumnName ?? ""}
                         onBlur={(e) => e.target.value !== f.importColumnName && patch(f.id, { importColumnName: e.target.value })}
-                        className="w-full rounded border-2 border-gray-200 px-2 py-1 text-xs"
+                        className="w-full rounded border-2 border-border-strong px-2 py-1 text-xs"
                       />
                     </div>
                     <div>
@@ -224,7 +224,7 @@ export default function FieldDefinitionsPage() {
                       <input
                         defaultValue={f.exportColumnName ?? ""}
                         onBlur={(e) => e.target.value !== f.exportColumnName && patch(f.id, { exportColumnName: e.target.value })}
-                        className="w-full rounded border-2 border-gray-200 px-2 py-1 text-xs"
+                        className="w-full rounded border-2 border-border-strong px-2 py-1 text-xs"
                       />
                     </div>
                     <div>
@@ -233,7 +233,7 @@ export default function FieldDefinitionsPage() {
                         defaultValue={(f.aliases ?? []).join(", ")}
                         onBlur={(e) => saveAliases(f, e.target.value)}
                         placeholder="vd: Phone, Mobile, SĐT"
-                        className="w-full rounded border-2 border-gray-200 px-2 py-1 text-xs"
+                        className="w-full rounded border-2 border-border-strong px-2 py-1 text-xs"
                       />
                     </div>
                   </div>
@@ -246,7 +246,7 @@ export default function FieldDefinitionsPage() {
 
       <Modal open={open} onClose={() => setOpen(false)} title="Thêm trường dữ liệu tuỳ chỉnh">
         <div className="space-y-3">
-          <p className="text-xs text-gray-500">
+          <p className="text-xs text-fg-secondary">
             Nhóm: <span className="font-bold">{GROUPS.find((g) => g.key === group)?.label}</span>
           </p>
           <div>
@@ -278,7 +278,7 @@ export default function FieldDefinitionsPage() {
             <Label className="mb-0">Thứ tự</Label>
             <Input type="number" value={form.sortOrder} onChange={(e) => setForm({ ...form, sortOrder: Number(e.target.value) })} className="h-10 w-24" />
           </div>
-          <p className="text-[11px] text-gray-400">
+          <p className="text-[11px] text-fg-muted">
             Lưu ý: trường tuỳ chỉnh này chỉ mô tả metadata cho Import/Export nhận diện cột — không tự tạo cột mới trong
             database. Nếu cần lưu dữ liệu thật cho trường này ở Daily Application, hãy dùng{" "}
             <a href="/admin/form-builder" className="underline">

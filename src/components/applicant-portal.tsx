@@ -2,7 +2,7 @@
 
 import { useState } from "react";
 import { Button, Card, CardContent, Input, Label, SearchableSelect, toast } from "@/components/ui";
-import { AlertTriangle, CheckCircle2, Loader2, ShieldCheck, Sparkles, UserPlus } from "lucide-react";
+import { AlertTriangle, CheckCircle2, Clock, Loader2, Search, ShieldCheck, Sparkles, UserPlus, XCircle } from "lucide-react";
 import { CccdQrScanner, type CccdQrData } from "@/components/cccd-qr-scanner";
 import type { FormQuestion } from "@/db/schema";
 import Link from "next/link";
@@ -393,7 +393,7 @@ export default function ApplicantPortal({ questions }: { questions: FormQuestion
 
       </div>
 
-      <div className="rounded-3xl border border-slate-200 bg-white p-6">
+      <div className="rounded-3xl border border-border bg-surface p-6">
 
         <p className="text-xs font-bold uppercase tracking-[0.2em] text-slate-500">
           Trạng thái hồ sơ
@@ -402,34 +402,34 @@ export default function ApplicantPortal({ questions }: { questions: FormQuestion
         <div className="mt-4">
 
           {workerInfo?.status === "APPROVED" && (
-            <div className="inline-flex rounded-full bg-emerald-100 px-5 py-2 font-bold text-emerald-700">
-              ✅ Đã tiếp nhận
+            <div className="inline-flex items-center gap-2 rounded-full bg-emerald-100 px-5 py-2 font-bold text-emerald-700">
+              <CheckCircle2 className="h-4 w-4" aria-hidden /> Đã tiếp nhận
             </div>
           )}
 
           {workerInfo?.status === "REJECTED" && (
-            <div className="inline-flex rounded-full bg-red-100 px-5 py-2 font-bold text-red-700">
-              ❌ Không tiếp nhận hôm nay
+            <div className="inline-flex items-center gap-2 rounded-full bg-red-100 px-5 py-2 font-bold text-red-700">
+              <XCircle className="h-4 w-4" aria-hidden /> Không tiếp nhận hôm nay
             </div>
           )}
 
           {workerInfo?.status !== "APPROVED" &&
             workerInfo?.status !== "REJECTED" && (
-              <div className="inline-flex rounded-full bg-amber-100 px-5 py-2 font-bold text-amber-700">
-                ⏳ Đang chờ sắp xếp
+              <div className="inline-flex items-center gap-2 rounded-full bg-amber-100 px-5 py-2 font-bold text-amber-700">
+                <Clock className="h-4 w-4" aria-hidden /> Đang chờ sắp xếp
               </div>
             )}
 
         </div>
 
         {workerInfo?.dept_name && (
-          <div className="mt-6 rounded-2xl bg-hasfarm-50 p-4">
+          <div className="mt-6 rounded-2xl bg-primary-tint p-4">
 
             <p className="text-xs uppercase tracking-wider text-slate-500">
               Bộ phận
             </p>
 
-            <p className="mt-2 font-bold text-hasfarm-800">
+            <p className="mt-2 font-bold text-primary">
               {workerInfo.dept_name}
             </p>
 
@@ -516,7 +516,7 @@ export default function ApplicantPortal({ questions }: { questions: FormQuestion
 
       </div>
 
-      <div className="rounded-3xl border border-slate-200 bg-white p-6">
+      <div className="rounded-3xl border border-border bg-surface p-6">
 
         <p className="text-xs uppercase tracking-[0.2em] text-slate-500">
           Địa chỉ hiện tại
@@ -736,7 +736,7 @@ export default function ApplicantPortal({ questions }: { questions: FormQuestion
 
       <div
         key={q.id}
-        className="rounded-3xl border border-slate-200 bg-white p-6 transition-all duration-200 hover:border-hasfarm-300 hover:shadow-md"
+        className="rounded-3xl border border-border bg-surface p-6 transition-all duration-200 hover:border-primary/40 hover:shadow-md"
       >
 
         {/* Question */}
@@ -1003,7 +1003,7 @@ export default function ApplicantPortal({ questions }: { questions: FormQuestion
 
       {/* Timeline */}
 
-      <div className="rounded-3xl border border-slate-200 bg-white p-6">
+      <div className="rounded-3xl border border-border bg-surface p-6">
 
         <h3 className="text-lg font-black text-slate-900">
           Các bước tiếp theo
@@ -1102,7 +1102,7 @@ export default function ApplicantPortal({ questions }: { questions: FormQuestion
             variant="gold"
             className="h-14 w-full rounded-2xl text-base font-black shadow-[0_15px_40px_rgba(217,163,39,.30)]"
           >
-            🔎 Tra cứu kết quả
+            <Search className="h-4 w-4" /> Tra cứu kết quả
           </Button>
 
         </Link>

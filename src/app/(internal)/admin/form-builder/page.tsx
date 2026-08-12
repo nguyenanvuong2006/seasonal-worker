@@ -86,7 +86,7 @@ export default function FormBuilderPage() {
       toast({ title: data.error ?? "Lỗi tạo câu hỏi", variant: "destructive" });
       return;
     }
-    toast({ title: "✅ Đã thêm câu hỏi — form người xin việc sẽ tự hiển thị từ ngày áp dụng" });
+    toast({ title: "Đã thêm câu hỏi — form người xin việc sẽ tự hiển thị từ ngày áp dụng" });
     setOpen(false);
     setForm({
       fieldKey: "",
@@ -130,8 +130,8 @@ export default function FormBuilderPage() {
     <div className="space-y-5">
       <div className="flex items-center justify-between">
         <div>
-          <h1 className="text-2xl font-black text-hasfarm-900">Trình tạo câu hỏi động</h1>
-          <p className="text-sm text-gray-500">
+          <h1 className="text-2xl font-black text-fg">Trình tạo câu hỏi động</h1>
+          <p className="text-sm text-fg-secondary">
             Thêm/sửa câu hỏi cho form đăng ký mà không cần lập trình lại (lưu dạng JSONB).
           </p>
         </div>
@@ -152,18 +152,18 @@ export default function FormBuilderPage() {
         <CardContent className="p-0">
           {loading ? (
             <div className="p-10 text-center">
-              <Loader2 className="mx-auto h-6 w-6 animate-spin text-hasfarm-600" />
+              <Loader2 className="mx-auto h-6 w-6 animate-spin text-primary" />
             </div>
           ) : (
             <ul className="divide-y">
               {rows.length === 0 && (
-                <li className="p-8 text-center text-sm text-gray-400">Chưa có câu hỏi nào.</li>
+                <li className="p-8 text-center text-sm text-fg-muted">Chưa có câu hỏi nào.</li>
               )}
               {rows.map((q) => (
                 <li key={q.id} className="flex flex-wrap items-center gap-3 p-4">
                   <div className="min-w-[240px] flex-1">
-                    <p className="font-bold text-hasfarm-900">{q.questionText}</p>
-                    <p className="text-xs text-gray-500">
+                    <p className="font-bold text-fg">{q.questionText}</p>
+                    <p className="text-xs text-fg-secondary">
                       <span className="font-mono">{q.fieldKey}</span> ·{" "}
                       {TYPES.find((t) => t.value === q.fieldType)?.label ?? q.fieldType}
                       {q.fieldType === "SELECT" && ` · ${q.options?.length ?? 0} lựa chọn`}
@@ -190,7 +190,7 @@ export default function FormBuilderPage() {
                       const v = Number(e.target.value);
                       if (v !== q.sortOrder) void patch(q.id, { sortOrder: v });
                     }}
-                    className="w-16 rounded border-2 border-gray-200 px-2 py-1 text-sm"
+                    className="w-16 rounded border-2 border-border-strong px-2 py-1 text-sm"
                   />
                   <button
                     onClick={() => void remove(q.id)}
@@ -229,7 +229,7 @@ export default function FormBuilderPage() {
             <select
               value={form.fieldType}
               onChange={(e) => setForm({ ...form, fieldType: e.target.value })}
-              className="h-11 w-full rounded-xl border-2 border-gray-200 px-2 font-semibold"
+              className="h-11 w-full rounded-xl border-2 border-border-strong px-2 font-semibold"
             >
               {TYPES.map((t) => (
                 <option key={t.value} value={t.value}>
@@ -274,7 +274,7 @@ export default function FormBuilderPage() {
               onChange={(e) => setForm({ ...form, applyFrom: e.target.value })}
               className="h-11"
             />
-            <p className="mt-1 text-[11px] text-gray-400">
+            <p className="mt-1 text-[11px] text-fg-muted">
               Bỏ trống = áp dụng ngay lập tức. Form của người xin việc tự hiển thị câu hỏi từ ngày này — không cần IT sửa code.
             </p>
           </div>

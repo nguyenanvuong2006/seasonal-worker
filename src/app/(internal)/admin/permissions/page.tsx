@@ -48,8 +48,8 @@ export default function PermissionsPage() {
   return (
     <div className="space-y-5">
       <div>
-        <h1 className="text-2xl font-black text-hasfarm-900">Phân quyền chi tiết (RBAC nâng cao)</h1>
-        <p className="text-sm text-gray-500">
+        <h1 className="text-2xl font-black text-fg">Phân quyền chi tiết (RBAC nâng cao)</h1>
+        <p className="text-sm text-fg-secondary">
           Lớp phân quyền BỔ SUNG, hoạt động song song với 3 Role gốc (không thay thế) — tắt 1 ô ở đây sẽ chặn thêm
           chức năng đó cho Role tương ứng ở những màn hình đã kiểm tra quyền chi tiết. Chưa cấu hình = mặc định vẫn
           theo đúng quyền Role gốc như trước.
@@ -61,11 +61,11 @@ export default function PermissionsPage() {
         <CardContent className="overflow-x-auto p-0">
           {loading ? (
             <div className="p-10 text-center">
-              <Loader2 className="mx-auto h-6 w-6 animate-spin text-hasfarm-600" />
+              <Loader2 className="mx-auto h-6 w-6 animate-spin text-primary" />
             </div>
           ) : (
             <table className="w-full text-sm">
-              <thead className="bg-hasfarm-50 text-hasfarm-800">
+              <thead className="bg-primary-tint text-primary">
                 <tr>
                   <th className="px-3 py-2 text-left text-[11px] uppercase">Chức năng</th>
                   {roles.map((r) => (
@@ -83,10 +83,10 @@ export default function PermissionsPage() {
                       <td key={r} className="px-3 py-2 text-center">
                         <button
                           onClick={() => toggle(r, k.key)}
-                          className={`h-6 w-11 rounded-full transition ${isAllowed(r, k.key) ? "bg-emerald-500" : "bg-gray-300"}`}
+                          className={`h-6 w-11 rounded-full transition ${isAllowed(r, k.key) ? "bg-emerald-500" : "bg-border-strong"}`}
                         >
                           <span
-                            className={`block h-5 w-5 translate-x-0.5 rounded-full bg-white shadow transition ${
+                            className={`block h-5 w-5 translate-x-0.5 rounded-full bg-surface shadow transition ${
                               isAllowed(r, k.key) ? "translate-x-[22px]" : ""
                             }`}
                           />

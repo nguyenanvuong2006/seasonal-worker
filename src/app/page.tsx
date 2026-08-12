@@ -7,6 +7,7 @@ import { BrandLogo } from "@/components/brand-logo";
 import { ensureSeed, tablesReady } from "@/lib/seed";
 import { todayStr } from "@/lib/helpers";
 import type { FormQuestion } from "@/db/schema";
+import { Phone, Search, Sprout } from "lucide-react";
 
 export const dynamic = "force-dynamic";
 
@@ -28,9 +29,10 @@ export default async function ApplicantHomePage() {
   }
 
   return (
-    <main className="min-h-screen bg-[#F8FAFC] text-gray-900">
-      <div className="border-b border-amber-200/60 bg-gold-50 px-4 py-2 text-center text-[11px] font-bold uppercase tracking-widest text-gold-800">
-        🌱 Thu nhập ~15 tháng lương/năm • Xe đưa đón Đà Lạt → Đạ Ròn & Lâm Hà • BHXH/BHYT đầy đủ
+    <main className="min-h-screen bg-bg text-fg">
+      <div className="flex items-center justify-center gap-1.5 border-b border-amber-200/60 bg-gold-50 px-4 py-2 text-center text-[11px] font-bold uppercase tracking-widest text-gold-800">
+        <Sprout className="h-3.5 w-3.5 shrink-0" aria-hidden />
+        Thu nhập ~15 tháng lương/năm • Xe đưa đón Đà Lạt → Đạ Ròn & Lâm Hà • BHXH/BHYT đầy đủ
       </div>
 
       <header className="hasfarm-hero relative z-0 overflow-hidden px-4 pb-28 pt-6 text-white">
@@ -50,9 +52,9 @@ export default async function ApplicantHomePage() {
           <div className="flex items-center gap-2">
             <Link
               href="/lookup"
-              className="hidden rounded-full border border-white/30 bg-white/10 px-4 py-2 text-xs font-bold backdrop-blur hover:bg-white/15 md:block"
+              className="hidden items-center gap-1.5 rounded-full border border-white/30 bg-white/10 px-4 py-2 text-xs font-bold backdrop-blur hover:bg-white/15 md:flex"
             >
-              🔎 Tra cứu kết quả
+              <Search className="h-3.5 w-3.5" /> Tra cứu kết quả
             </Link>
             <Link
               href="/login"
@@ -88,11 +90,11 @@ export default async function ApplicantHomePage() {
                 "HR xếp Bộ phận + Nhóm từ danh sách 71 bộ phận",
                 "Bạn tra cứu buổi chiều để biết bộ phận & người phụ trách",
               ].map((s, i) => (
-                <li key={s} className="flex gap-2.5 rounded-xl bg-gray-50 p-3">
+                <li key={s} className="flex gap-2.5 rounded-xl bg-surface-hover p-3">
                   <span className="flex h-5 w-5 shrink-0 items-center justify-center rounded-full bg-hasfarm-700 text-[10px] font-black text-white">
                     {i + 1}
                   </span>
-                  <span className="text-gray-700">{s}</span>
+                  <span className="text-fg-secondary">{s}</span>
                 </li>
               ))}
             </ol>
@@ -101,23 +103,23 @@ export default async function ApplicantHomePage() {
           <div className="grid grid-cols-2 gap-3">
             <Link
               href="/lookup"
-              className="group rounded-[20px] border-2 border-hasfarm-200 bg-white p-5 shadow-sm transition hover:border-hasfarm-600 hover:shadow-md"
+              className="group rounded-[20px] border-2 border-hasfarm-200 bg-surface p-5 shadow-sm transition hover:border-hasfarm-600 hover:shadow-md"
             >
-              <p className="text-2xl">🔎</p>
-              <p className="mt-2 text-sm font-black text-hasfarm-900">Tra cứu trạng thái</p>
-              <p className="text-[11px] text-gray-500">Xem bộ phận được xếp</p>
+              <Search className="h-6 w-6 text-primary" aria-hidden />
+              <p className="mt-2 text-sm font-black text-fg">Tra cứu trạng thái</p>
+              <p className="text-[11px] text-fg-secondary">Xem bộ phận được xếp</p>
             </Link>
             <a
               href="tel:02633842777"
-              className="rounded-[20px] border-2 border-gold-200 bg-gradient-to-b from-gold-50 to-white p-5 shadow-sm transition hover:border-gold-500"
+              className="rounded-[20px] border-2 border-gold-200 bg-gradient-to-b from-gold-50 to-surface p-5 shadow-sm transition hover:border-gold-500"
             >
-              <p className="text-2xl">☎️</p>
-              <p className="mt-2 text-sm font-black text-hasfarm-900">Hỗ trợ nhân sự</p>
-              <p className="text-[11px] text-gray-500">0263 3842777 • 7h-17h</p>
+              <Phone className="h-6 w-6 text-accent" aria-hidden />
+              <p className="mt-2 text-sm font-black text-fg">Hỗ trợ nhân sự</p>
+              <p className="text-[11px] text-fg-secondary">0263 3842777 • 7h-17h</p>
             </a>
           </div>
 
-          <p className="text-center text-[10px] font-bold uppercase tracking-widest text-gray-400">
+          <p className="text-center text-[10px] font-bold uppercase tracking-widest text-fg-muted">
             © {new Date().getFullYear()} Dalat Hasfarm — Seasonal HR System
           </p>
         </div>

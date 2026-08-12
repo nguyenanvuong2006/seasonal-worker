@@ -40,7 +40,7 @@ export default function RecycleBinPage() {
       toast({ title: "Khôi phục thất bại", variant: "destructive" });
       return;
     }
-    toast({ title: "✅ Đã khôi phục" });
+    toast({ title: "Đã khôi phục" });
     await load();
   };
 
@@ -61,8 +61,8 @@ export default function RecycleBinPage() {
   return (
     <div className="space-y-5">
       <div>
-        <h1 className="text-2xl font-black text-hasfarm-900">Thùng rác (Recycle Bin)</h1>
-        <p className="text-sm text-gray-500">
+        <h1 className="text-2xl font-black text-fg">Thùng rác (Recycle Bin)</h1>
+        <p className="text-sm text-fg-secondary">
           Mọi hồ sơ bị “Xoá” trong hệ thống chỉ bị ẩn (xoá mềm) — dữ liệu vẫn còn ở đây và có thể khôi phục bất cứ lúc
           nào. Chỉ “Xoá vĩnh viễn” mới thật sự xoá khỏi database.
         </p>
@@ -74,7 +74,7 @@ export default function RecycleBinPage() {
             key={t.key}
             onClick={() => setTab(t.key)}
             className={`rounded-full px-4 py-2 text-sm font-bold transition ${
-              tab === t.key ? "bg-hasfarm-800 text-white" : "bg-gray-100 text-gray-600 hover:bg-gray-200"
+              tab === t.key ? "bg-primary text-white" : "bg-surface-hover text-fg-secondary hover:bg-border"
             }`}
           >
             {t.label} ({data[t.key].length})
@@ -87,16 +87,16 @@ export default function RecycleBinPage() {
         <CardContent className="p-0">
           {loading ? (
             <div className="p-10 text-center">
-              <Loader2 className="mx-auto h-6 w-6 animate-spin text-hasfarm-600" />
+              <Loader2 className="mx-auto h-6 w-6 animate-spin text-primary" />
             </div>
           ) : (
             <ul className="divide-y">
-              {items.length === 0 && <li className="p-8 text-center text-sm text-gray-400">Thùng rác trống.</li>}
+              {items.length === 0 && <li className="p-8 text-center text-sm text-fg-muted">Thùng rác trống.</li>}
               {items.map((it) => (
                 <li key={it.id} className="flex flex-wrap items-center gap-3 p-4">
                   <div className="min-w-[200px] flex-1">
-                    <p className="font-bold text-hasfarm-900">{it.label}</p>
-                    <p className="text-xs text-gray-500">
+                    <p className="font-bold text-fg">{it.label}</p>
+                    <p className="text-xs text-fg-secondary">
                       {it.sub} · Xoá bởi <b>{it.deletedBy ?? "—"}</b> lúc {new Date(it.deletedAt).toLocaleString("vi-VN")}
                     </p>
                   </div>

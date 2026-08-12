@@ -10,10 +10,10 @@ export default async function InternalLayout({ children }: { children: ReactNode
   if (!session) redirect("/login");
 
   return (
-    <div className="min-h-screen bg-gray-50">
+    <div className="flex min-h-screen bg-bg">
       <Sidebar session={session} />
-      <div className="lg:pl-[296px]">
-        <main className="p-4 pt-16 lg:p-8">{children}</main>
+      <div className="min-w-0 flex-1">
+        <main className="mx-auto max-w-[1400px] p-4 pt-16 lg:p-8 lg:pt-8">{children}</main>
       </div>
     </div>
   );

@@ -68,7 +68,7 @@ export default function WorkflowPage() {
       toast({ title: data.error ?? "Lỗi tạo bước", variant: "destructive" });
       return;
     }
-    toast({ title: "✅ Đã thêm bước quy trình" });
+    toast({ title: "Đã thêm bước quy trình" });
     setOpen(false);
     setForm({ stageKey: "", label: "", color: "gray", sortOrder: 10 });
     await load();
@@ -90,8 +90,8 @@ export default function WorkflowPage() {
     <div className="space-y-5">
       <div className="flex items-center justify-between">
         <div>
-          <h1 className="text-2xl font-black text-hasfarm-900">Quy trình xử lý hồ sơ (Workflow Engine)</h1>
-          <p className="text-sm text-gray-500">
+          <h1 className="text-2xl font-black text-fg">Quy trình xử lý hồ sơ (Workflow Engine)</h1>
+          <p className="text-sm text-fg-secondary">
             Chọn quy trình bên dưới rồi cấu hình các bước hợp lệ (trạng thái/màu/thứ tự/vai trò được xử lý) — dùng
             chung 1 Workflow Engine cho mọi luồng, không viết state machine riêng cho từng module.
           </p>
@@ -107,7 +107,7 @@ export default function WorkflowPage() {
             key={e.key}
             onClick={() => setEntity(e.key)}
             className={`rounded-full px-4 py-2 text-sm font-bold transition ${
-              entity === e.key ? "bg-hasfarm-800 text-white" : "bg-gray-100 text-gray-600 hover:bg-gray-200"
+              entity === e.key ? "bg-primary text-white" : "bg-surface-hover text-fg-secondary hover:bg-border"
             }`}
           >
             {e.label}
@@ -120,23 +120,23 @@ export default function WorkflowPage() {
         <CardContent className="p-0">
           {loading ? (
             <div className="p-10 text-center">
-              <Loader2 className="mx-auto h-6 w-6 animate-spin text-hasfarm-600" />
+              <Loader2 className="mx-auto h-6 w-6 animate-spin text-primary" />
             </div>
           ) : (
             <ul className="divide-y">
               {rows.filter((s) => s.entityType === entity).length === 0 && (
-                <li className="p-8 text-center text-sm text-gray-400">Chưa có bước nào cho quy trình này.</li>
+                <li className="p-8 text-center text-sm text-fg-muted">Chưa có bước nào cho quy trình này.</li>
               )}
               {rows
                 .filter((s) => s.entityType === entity)
                 .map((s) => (
                 <li key={s.id} className="flex flex-wrap items-center gap-3 p-4">
                   <Badge tone={s.color as "gray" | "green" | "amber" | "red" | "gold" | "blue"}>{s.label}</Badge>
-                  <span className="font-mono text-xs text-gray-400">{s.stageKey}</span>
+                  <span className="font-mono text-xs text-fg-muted">{s.stageKey}</span>
                   <select
                     value={s.color}
                     onChange={(e) => patch(s.id, { color: e.target.value })}
-                    className="rounded border-2 border-gray-200 px-2 py-1 text-xs"
+                    className="rounded border-2 border-border-strong px-2 py-1 text-xs"
                   >
                     {COLORS.map((c) => (
                       <option key={c} value={c}>
@@ -159,7 +159,7 @@ export default function WorkflowPage() {
                           patch(s.id, { allowedRoles: has ? s.allowedRoles.filter((x) => x !== r) : [...s.allowedRoles, r] });
                         }}
                         className={`rounded-full px-2 py-1 text-[10px] font-bold ${
-                          s.allowedRoles.includes(r) ? "bg-hasfarm-700 text-white" : "bg-gray-100 text-gray-400"
+                          s.allowedRoles.includes(r) ? "bg-primary text-white" : "bg-surface-hover text-fg-muted"
                         }`}
                       >
                         {r}
@@ -174,7 +174,7 @@ export default function WorkflowPage() {
                       const v = Number(e.target.value);
                       if (v !== s.sortOrder) patch(s.id, { sortOrder: v });
                     }}
-                    className="w-16 rounded border-2 border-gray-200 px-2 py-1 text-sm"
+                    className="w-16 rounded border-2 border-border-strong px-2 py-1 text-sm"
                   />
                   <button onClick={() => remove(s.id)} className="text-xs font-bold text-red-600 hover:underline">
                     Xoá
@@ -198,7 +198,7 @@ export default function WorkflowPage() {
           </div>
           <div>
             <Label>Màu</Label>
-            <select value={form.color} onChange={(e) => setForm({ ...form, color: e.target.value })} className="h-11 w-full rounded-xl border-2 border-gray-200 px-2 font-semibold">
+            <select value={form.color} onChange={(e) => setForm({ ...form, color: e.target.value })} className="h-11 w-full rounded-xl border-2 border-border-strong px-2 font-semibold">
               {COLORS.map((c) => (
                 <option key={c} value={c}>
                   {c}
