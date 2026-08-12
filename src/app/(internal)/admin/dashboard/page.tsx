@@ -12,11 +12,23 @@ function greeting(hour: number) {
   return "Chào buổi tối";
 }
 
+// Giờ chào phải theo giờ Việt Nam (Asia/Ho_Chi_Minh) chứ không phải giờ của server
+// (Vercel serverless có thể chạy ở bất kỳ region/UTC nào) — dùng Intl.DateTimeFormat
+// với timeZone cố định thay vì new Date().getHours() vốn đọc giờ local của server.
+function hourInVietnam(): number {
+  const hourStr = new Intl.DateTimeFormat("en-US", {
+    timeZone: "Asia/Ho_Chi_Minh",
+    hour: "numeric",
+    hour12: false,
+  }).format(new Date());
+  return Number(hourStr) % 24;
+}
+
 export default async function DashboardPage() {
   const session = await getSession();
   if (!session) redirect("/login");
 
-  const hour = new Date().getHours();
+  const hour = hourInVietnam();
 
   return (
     <div className="space-y-5">
