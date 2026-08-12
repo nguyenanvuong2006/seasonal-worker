@@ -241,8 +241,9 @@ không.
 
 ### `src/app/(internal)/admin/users/page.tsx` 🟢 ⭐
 Trang **quản lý tài khoản đăng nhập** — đổi mật khẩu, thêm tài khoản mới, xoá tài
-khoản. **Nên vào đây đổi ngay mật khẩu mặc định** (xem cảnh báo ở mục seed.ts bên
-dưới) thay vì để nguyên mật khẩu demo.
+khoản. Dùng trang này để tạo các tài khoản HR_RECRUITER/DEPT_MANAGER sau khi đã
+đăng nhập bằng tài khoản ADMIN được bootstrap từ `INITIAL_ADMIN_USERNAME`/
+`INITIAL_ADMIN_PASSWORD` (xem mục seed.ts bên dưới).
 
 ### `src/app/(internal)/admin/worker-profiles/page.tsx` 🟢
 Trang xem **hồ sơ lao động đã đối chiếu với DW Data** (dữ liệu kho lao động cũ) —
@@ -378,7 +379,7 @@ thống hoạt động ra sao (biết mô tả đúng vấn đề cho dev), như
 | `scheduler.ts` | "Người quản lý" chạy các việc nền định kỳ (job import bị kẹt, hàng đợi thông báo) |
 | `import-engine.ts`, `import-jobs.ts` | Toàn bộ quy trình xử lý 1 file Excel bạn tải lên: đọc → kiểm tra từng dòng → ghi vào hệ thống |
 | `dashboard.ts` | Tính số liệu hiển thị ở trang Dashboard, theo đúng quyền xem của từng người |
-| `seed.ts` ⭐ | **Dữ liệu khởi tạo lần đầu** khi CSDL còn trống: 3 tài khoản mẫu (`admin/admin123`, `hr/hr123`, `truongbophan/bophan123`), 5 câu hỏi form mặc định, các giai đoạn workflow mặc định... ⚠️ **Chỉ chạy 1 lần** khi bảng dữ liệu tương ứng còn rỗng — sửa file này sau khi hệ thống đã có dữ liệu sẽ **không** thay đổi gì trên web thật, phải thao tác qua giao diện admin. Và quan trọng: **hãy vào `/admin/users` đổi ngay 3 mật khẩu mẫu này** trước khi dùng thật, vì ai đọc được file này (kể cả trên GitHub công khai) cũng biết được mật khẩu đó. |
+| `seed.ts` ⭐ | **Dữ liệu khởi tạo lần đầu** khi CSDL còn trống: 5 câu hỏi form mặc định, các giai đoạn workflow mặc định... KHÔNG còn tài khoản mẫu hardcode nào trong file này. Tài khoản ADMIN đầu tiên chỉ được tạo nếu bạn đặt sẵn 2 biến môi trường `INITIAL_ADMIN_USERNAME`/`INITIAL_ADMIN_PASSWORD` trên Vercel (xem mục 5, Bước 3 ở `HUONG_DAN_HE_THONG.md`) — nếu không đặt, hệ thống không tự tạo tài khoản nào. ⚠️ Toàn bộ hàm `ensureSeed()` **chỉ chạy khi bảng tương ứng còn rỗng** — sửa file này sau khi hệ thống đã có dữ liệu sẽ **không** thay đổi gì trên web thật, phải thao tác qua giao diện admin. |
 
 ---
 
