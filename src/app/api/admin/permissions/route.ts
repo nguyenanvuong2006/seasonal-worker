@@ -42,6 +42,9 @@ export const PERMISSION_KEYS = [
 export const ROLES = ["ADMIN", "HR_RECRUITER", "DEPT_MANAGER"] as const;
 
 export async function GET() {
+  const guard = await requireRoleAndPermission(["ADMIN"], "permissions.manage");
+  if (!guard.ok) return NextResponse.json({ error: guard.error }, { status: guard.status });
+
   const rows = await db.select().from(rolePermissions);
   return NextResponse.json({ rows, keys: PERMISSION_KEYS, roles: ROLES });
 }

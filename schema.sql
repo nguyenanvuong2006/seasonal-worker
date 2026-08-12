@@ -553,3 +553,29 @@ CREATE INDEX IF NOT EXISTS staging_daily_app_cccd_idx ON staging_daily_applicati
 
 ALTER TABLE staging_daily_application ADD COLUMN IF NOT EXISTS starting_date_parsed text;
 ALTER TABLE staging_daily_application ADD COLUMN IF NOT EXISTS reg_date_parsed text;
+
+-- ============================================================
+-- CẬP NHẬT — PRODUCTION HARDENING AUDIT (P0-6, P1-2, Phase 6)
+-- An toàn chạy lại nhiều lần (ADD COLUMN IF NOT EXISTS / CREATE INDEX IF NOT EXISTS).
+-- KHÔNG xoá/sửa dữ liệu hiện có — chỉ thêm cột mới (có DEFAULT, tự backfill an toàn) và thêm
+-- unique index. TRƯỚC KHI chạy 2 khối CREATE UNIQUE INDEX bên dưới trên 1 database ĐÃ CÓ dữ
+-- liệu thật, hãy chạy 2 câu SELECT kiểm tra tương ứng — nếu trả về 0 dòng thì chạy migration an
+-- toàn tuyệt đối; nếu có dòng nào trả về (dữ liệu trùng lặp có sẵn từ trước), phải xử lý dữ liệu
+-- đó trước (không tự động xoá gì ở đây) rồi mới chạy CREATE UNIQUE INDEX.
+-- ============================================================
+
+-- P0-6 — SESSION REVOCATION: cột mới, có DEFAULT 1, không ảnh hưởng session đang đăng nhập
+-- (JWT cũ không có claim sessionVersion → getSession() so `undefined !== 1` → coi như hết hạn,
+-- người dùng chỉ cần đăng nhập lại 1 lần sau khi deploy bản này).
+ALTER TABLE users ADD COLUMN IF NOT EXISTS session_version integer NOT NULL DEFAULT 1;
+
+-- Kiểm tra TRƯỚC khi chạy unique index bên dưới (planning_targets) — kỳ vọng 0 dòng:
+--   SELECT planning_period_id, count(*) FROM planning_targets GROUP BY planning_period_id HAVING count(*) > 1;
+CREATE UNIQUE INDEX IF NOT EXISTS planning_target_period_uq ON planning_targets (planning_period_id);
+
+-- Kiểm tra TRƯỚC khi chạy unique index bên dưới (workforce_movements) — kỳ vọng 0 dòng:
+--   SELECT related_movement_id, count(*) FROM workforce_movements
+--   WHERE movement_type = 'resignation' AND related_movement_id IS NOT NULL
+--   GROUP BY related_movement_id HAVING count(*) > 1;
+CREATE UNIQUE INDEX IF NOT EXISTS workforce_movement_spawn_resignation_uq ON workforce_movements (related_movement_id)
+  WHERE movement_type = 'resignation' AND related_movement_id IS NOT NULL;

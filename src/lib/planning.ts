@@ -3,6 +3,8 @@ import { and, eq, isNull, ne, notInArray, sql } from "drizzle-orm";
 import { db } from "@/db";
 import { departments, employmentSessions, planningAllocations, planningPeriods, planningTargets, workerProfiles } from "@/db/schema";
 
+type Executor = typeof db | Parameters<Parameters<typeof db.transaction>[0]>[0];
+
 /**
  * PLANNING (Phase 2, Step 4) — thay departments.dailyQuota (deprecated, xem Bước A ở #7
  * "dọn dẹp") bằng kế hoạch theo GIAI ĐOẠN, có version, không cho overlap.
@@ -11,7 +13,14 @@ import { departments, employmentSessions, planningAllocations, planningPeriods, 
  */
 
 /** Kiểm tra chồng lấn ngày với các kế hoạch ACTIVE cùng Department+Section. */
-export async function checkOverlap(departmentId: string, section: string | null, startDate: string, endDate: string, excludePeriodId?: string) {
+export async function checkOverlap(
+  departmentId: string,
+  section: string | null,
+  startDate: string,
+  endDate: string,
+  excludePeriodId?: string,
+  executor: Executor = db,
+) {
   const filters = [
     eq(planningPeriods.departmentId, departmentId),
     eq(planningPeriods.status, "ACTIVE"),
@@ -22,7 +31,7 @@ export async function checkOverlap(departmentId: string, section: string | null,
   else filters.push(isNull(planningPeriods.section));
   if (excludePeriodId) filters.push(ne(planningPeriods.id, excludePeriodId));
 
-  return db.select().from(planningPeriods).where(and(...filters));
+  return executor.select().from(planningPeriods).where(and(...filters));
 }
 
 export async function createPeriod(input: {
@@ -79,51 +88,66 @@ export async function activatePeriod(periodId: string) {
 /**
  * Sửa 1 kế hoạch ACTIVE = tạo bản ghi VERSION MỚI (giữ nguyên bản cũ, không UPDATE đè —
  * đúng yêu cầu "Không được mất lịch sử"). Bản cũ được đánh dấu supersededBy trỏ tới bản mới.
+ *
+ * P0-5 (Production Hardening Audit) — TRƯỚC ĐÂY: (1) insert bản mới ACTIVE trong khi bản cũ
+ * VẪN ACTIVE → đụng thẳng unique partial index `planning_active_dept_section_uq`
+ * (departmentId, section) WHERE status='ACTIVE' (2 bản ACTIVE cùng dept+section cùng lúc);
+ * (2) các bước insert/update rời rạc không transaction — 1 bước fail giữa chừng để lại DB ở
+ * trạng thái dở dang (có thể 0 hoặc 2 bản ACTIVE, allocations trỏ sai version). Nay: toàn bộ
+ * chạy trong 1 transaction (rollback hết nếu bất kỳ bước nào lỗi), và LUÔN hết hạn bản cũ
+ * TRƯỚC khi insert bản mới ACTIVE (giải phóng đúng "chỗ trống" mà unique index yêu cầu) — khoá
+ * dòng bản cũ bằng SELECT ... FOR UPDATE để chặn 2 lần revise cùng lúc trên cùng 1 kế hoạch.
  */
 export async function reviseActivePeriod(
   periodId: string,
   input: { startDate?: string; endDate?: string; targetCount?: number; note?: string },
   revisedBy: string,
 ) {
-  const [old] = await db.select().from(planningPeriods).where(eq(planningPeriods.id, periodId));
-  if (!old) throw new Error("Không tìm thấy kế hoạch.");
-  if (old.status !== "ACTIVE") throw new Error("Chỉ sửa được kế hoạch đang ACTIVE (kế hoạch Draft có thể sửa trực tiếp, Expired thì tạo kế hoạch mới).");
+  return db.transaction(async (tx) => {
+    const [old] = await tx.select().from(planningPeriods).where(eq(planningPeriods.id, periodId)).for("update");
+    if (!old) throw new Error("Không tìm thấy kế hoạch.");
+    if (old.status !== "ACTIVE") throw new Error("Chỉ sửa được kế hoạch đang ACTIVE (kế hoạch Draft có thể sửa trực tiếp, Expired thì tạo kế hoạch mới).");
 
-  const newStartDate = input.startDate ?? old.startDate;
-  const newEndDate = input.endDate ?? old.endDate;
+    const newStartDate = input.startDate ?? old.startDate;
+    const newEndDate = input.endDate ?? old.endDate;
 
-  const overlaps = await checkOverlap(old.departmentId, old.section, newStartDate, newEndDate, old.id);
-  if (overlaps.length > 0) {
-    throw new Error(`Khoảng ngày mới chồng lấn với kế hoạch ACTIVE khác.`);
-  }
+    const overlaps = await checkOverlap(old.departmentId, old.section, newStartDate, newEndDate, old.id, tx);
+    if (overlaps.length > 0) {
+      throw new Error(`Khoảng ngày mới chồng lấn với kế hoạch ACTIVE khác.`);
+    }
 
-  const [oldTarget] = await db.select().from(planningTargets).where(eq(planningTargets.planningPeriodId, old.id));
+    const [oldTarget] = await tx.select().from(planningTargets).where(eq(planningTargets.planningPeriodId, old.id));
 
-  const [newVersion] = await db
-    .insert(planningPeriods)
-    .values({
-      departmentId: old.departmentId,
-      section: old.section,
-      startDate: newStartDate,
-      endDate: newEndDate,
-      status: "ACTIVE",
-      version: old.version + 1,
-      createdBy: revisedBy,
-    })
-    .returning();
+    // BƯỚC 1 — hết hạn bản cũ TRƯỚC, giải phóng "chỗ trống" ACTIVE cho dept+section này.
+    await tx.update(planningPeriods).set({ status: "EXPIRED", updatedAt: new Date() }).where(eq(planningPeriods.id, old.id));
 
-  await db.insert(planningTargets).values({
-    planningPeriodId: newVersion.id,
-    targetCount: input.targetCount ?? oldTarget?.targetCount ?? 0,
-    note: input.note ?? oldTarget?.note ?? null,
+    // BƯỚC 2 — tạo bản mới ACTIVE (an toàn với unique index vì bản cũ đã EXPIRED ở trên, CÙNG transaction).
+    const [newVersion] = await tx
+      .insert(planningPeriods)
+      .values({
+        departmentId: old.departmentId,
+        section: old.section,
+        startDate: newStartDate,
+        endDate: newEndDate,
+        status: "ACTIVE",
+        version: old.version + 1,
+        createdBy: revisedBy,
+      })
+      .returning();
+
+    // BƯỚC 3 — gắn supersededBy trên bản cũ trỏ đúng sang bản mới vừa tạo.
+    await tx.update(planningPeriods).set({ supersededBy: newVersion.id }).where(eq(planningPeriods.id, old.id));
+
+    // BƯỚC 4 — target mới + chuyển toàn bộ phân bổ (allocations) sang version mới, không mất liên kết lao động đã gán.
+    await tx.insert(planningTargets).values({
+      planningPeriodId: newVersion.id,
+      targetCount: input.targetCount ?? oldTarget?.targetCount ?? 0,
+      note: input.note ?? oldTarget?.note ?? null,
+    });
+    await tx.update(planningAllocations).set({ planningPeriodId: newVersion.id }).where(eq(planningAllocations.planningPeriodId, old.id));
+
+    return newVersion;
   });
-
-  // Chuyển toàn bộ phân bổ (allocations) sang version mới — không mất liên kết lao động đã gán.
-  await db.update(planningAllocations).set({ planningPeriodId: newVersion.id }).where(eq(planningAllocations.planningPeriodId, old.id));
-
-  await db.update(planningPeriods).set({ status: "EXPIRED", supersededBy: newVersion.id, updatedAt: new Date() }).where(eq(planningPeriods.id, old.id));
-
-  return newVersion;
 }
 
 /** Danh sách employment_sessions ĐANG LÀM (chưa kết thúc) nhưng chưa được phân bổ vào kế hoạch ACTIVE nào. */

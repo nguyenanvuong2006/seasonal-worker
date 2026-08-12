@@ -208,6 +208,12 @@ export const users = pgTable("users", {
   role: varchar("role", { length: 32 }).notNull().default("DEPT_MANAGER"),
   deptId: uuid("dept_id").references(() => departments.id, { onDelete: "set null" }),
   isActive: boolean("is_active").notNull().default(true),
+  // P0-6 (Production Hardening Audit) — SESSION REVOCATION: JWT sống 12h, ký sẵn role/deptId,
+  // trước đây không có cách vô hiệu hoá sớm khi user bị khoá/đổi role/đổi mật khẩu. Mỗi request
+  // bảo vệ giờ đọc lại role/isActive TRỰC TIẾP từ DB (không tin theo JWT), và so khớp
+  // `sessionVersion` — bất kỳ hành động cần "đăng xuất mọi phiên cũ" (đổi mật khẩu/đổi
+  // role/khoá tài khoản) đều tăng số này lên, làm mọi JWT ký trước đó hết hiệu lực ngay lập tức.
+  sessionVersion: integer("session_version").notNull().default(1),
   createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
 });
 
@@ -431,21 +437,33 @@ export const userDepartmentScopes = pgTable(
    `status` là 1 stageKey tham chiếu workflow_stages(entityType='resignation'
    hoặc 'transfer') — dùng chung Workflow Engine, không viết state machine riêng.
    ============================================================ */
-export const workforceMovements = pgTable("workforce_movements", {
-  id: uuid("id").defaultRandom().primaryKey(),
-  movementType: varchar("movement_type", { length: 24 }).notNull(), // RESIGNATION | TRANSFER
-  workerId: uuid("worker_id").notNull(), // -> worker_profiles.id
-  fromDeptId: uuid("from_dept_id"),
-  toDeptId: uuid("to_dept_id"), // null nếu RESIGNATION
-  effectiveDate: date("effective_date").notNull(),
-  reason: text("reason"),
-  note: text("note"),
-  status: varchar("status", { length: 40 }).notNull().default("PENDING_HR"),
-  relatedMovementId: uuid("related_movement_id"), // liên kết Transfer "Không đến" -> Resignation được sinh ra
-  requestedBy: varchar("requested_by", { length: 64 }).notNull(),
-  createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
-  updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
-});
+export const workforceMovements = pgTable(
+  "workforce_movements",
+  {
+    id: uuid("id").defaultRandom().primaryKey(),
+    movementType: varchar("movement_type", { length: 24 }).notNull(), // RESIGNATION | TRANSFER
+    workerId: uuid("worker_id").notNull(), // -> worker_profiles.id
+    fromDeptId: uuid("from_dept_id"),
+    toDeptId: uuid("to_dept_id"), // null nếu RESIGNATION
+    effectiveDate: date("effective_date").notNull(),
+    reason: text("reason"),
+    note: text("note"),
+    status: varchar("status", { length: 40 }).notNull().default("PENDING_HR"),
+    relatedMovementId: uuid("related_movement_id"), // liên kết Transfer "Không đến" -> Resignation được sinh ra
+    requestedBy: varchar("requested_by", { length: 64 }).notNull(),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+    updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [
+    // P1-2 (Production Hardening Audit) — lưới an toàn cấp DB chống SPAWN_RESIGNATION sinh
+    // trùng (double-click/retry/race) — 1 movement (`relatedMovementId`) chỉ được sinh ra ĐÚNG
+    // 1 resignation liên kết. Kiểm tra idempotent ở tầng transaction (lib/workforce-movements.ts)
+    // là lớp chính; index này là lớp chốt cuối cho race thật giữa 2 request đồng thời.
+    uniqueIndex("workforce_movement_spawn_resignation_uq")
+      .on(t.relatedMovementId)
+      .where(sql`movement_type = 'resignation' and related_movement_id is not null`),
+  ],
+);
 
 /* ============================================================
    PLANNING (Phase 2, Step 4) — thay cho departments.dailyQuota (deprecated,
@@ -473,12 +491,20 @@ export const planningPeriods = pgTable(
   (t) => [uniqueIndex("planning_active_dept_section_uq").on(t.departmentId, t.section).where(sql`status = 'ACTIVE'`)],
 );
 
-export const planningTargets = pgTable("planning_targets", {
-  id: uuid("id").defaultRandom().primaryKey(),
-  planningPeriodId: uuid("planning_period_id").notNull(),
-  targetCount: integer("target_count").notNull().default(0),
-  note: text("note"),
-});
+export const planningTargets = pgTable(
+  "planning_targets",
+  {
+    id: uuid("id").defaultRandom().primaryKey(),
+    planningPeriodId: uuid("planning_period_id").notNull(),
+    targetCount: integer("target_count").notNull().default(0),
+    note: text("note"),
+  },
+  // Phase 6 (Production Hardening Audit) — mỗi kế hoạch (kể cả mỗi VERSION mới do
+  // reviseActivePeriod() tạo ra — planningPeriodId khác nhau cho mỗi version) chỉ có ĐÚNG 1
+  // target (createPeriod()/reviseActivePeriod() luôn insert đúng 1 dòng target/period, không có
+  // chỗ nào insert dòng thứ 2 cho cùng 1 planningPeriodId) — enforce ở DB, không chỉ dựa vào code.
+  (t) => [uniqueIndex("planning_target_period_uq").on(t.planningPeriodId)],
+);
 
 export const planningAllocations = pgTable(
   "planning_allocations",

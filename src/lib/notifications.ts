@@ -33,8 +33,11 @@ export async function queueNotification(input: {
       payload: input.payload ?? {},
       status: "QUEUED",
     });
-  } catch {
-    /* thông báo không bao giờ được làm hỏng request nghiệp vụ chính */
+  } catch (error) {
+    // P1-1 (Production Hardening Audit) — notification là side-effect KHÔNG bắt buộc atomic với
+    // transaction nghiệp vụ chính (đã commit xong mới gọi tới đây) — lỗi ở đây không được rollback
+    // gì cả, nhưng vẫn phải log lại để không mất dấu vết (trước đây nuốt lỗi hoàn toàn im lặng).
+    console.error("[notifications] queueNotification failed", { event: input.event, error });
   }
 }
 

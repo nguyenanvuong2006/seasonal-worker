@@ -7,14 +7,15 @@ import { BrandLogo } from "@/components/brand-logo";
 import { formatDate, STATUS_META, todayStr } from "@/lib/helpers";
 import { Loader2 } from "lucide-react";
 
-type HistoryRow = { id: string; regDate: string; status: string; deptName: string | null; deptLocation: string | null; hrNote: string | null };
+type HistoryRow = { id: string; regDate: string; status: string; deptName: string | null; startingDate: string | null };
 type LookupResult = {
-  worker: { fullName: string; phone?: string | null; isVerified: boolean };
+  worker: { fullName: string; isVerified: boolean };
   history: HistoryRow[];
 };
 
 export default function LookupPage() {
   const [cccd, setCccd] = useState("");
+  const [phone, setPhone] = useState("");
   const [loading, setLoading] = useState(false);
   const [data, setData] = useState<LookupResult | null>(null);
 
@@ -23,10 +24,18 @@ export default function LookupPage() {
       toast({ title: "CCCD phải chứa 9 - 12 chữ số", variant: "destructive" });
       return;
     }
+    if (!/^0\d{8,10}$/.test(phone)) {
+      toast({ title: "Vui lòng nhập đúng số điện thoại đã đăng ký", variant: "destructive" });
+      return;
+    }
     setLoading(true);
     setData(null);
     try {
-      const res = await fetch(`/api/lookup?cccd=${cccd}`);
+      const res = await fetch("/api/lookup", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ cccd, phone }),
+      });
       const json = await res.json();
       if (!res.ok) {
         toast({ title: json.error ?? "Không tìm thấy", variant: "destructive" });
@@ -66,14 +75,24 @@ export default function LookupPage() {
         <Card className="rounded-[20px] border-0 shadow-[0_16px_40px_rgba(8,50,27,0.14)]">
           <CardContent className="space-y-4 p-6">
             <Label className="text-[12px] font-black uppercase tracking-widest">Số CCCD / CMND để tra cứu</Label>
+            <Input
+              type="tel"
+              inputMode="numeric"
+              maxLength={12}
+              value={cccd}
+              onChange={(e) => setCccd(e.target.value.replace(/\D/g, ""))}
+              placeholder="VD: 0790..."
+              className="h-[56px] rounded-[14px] text-[18px] font-black tracking-widest"
+            />
+            <Label className="text-[12px] font-black uppercase tracking-widest">Số điện thoại đã đăng ký</Label>
             <div className="flex gap-2">
               <Input
                 type="tel"
                 inputMode="numeric"
-                maxLength={12}
-                value={cccd}
-                onChange={(e) => setCccd(e.target.value.replace(/\D/g, ""))}
-                placeholder="VD: 0790..."
+                maxLength={11}
+                value={phone}
+                onChange={(e) => setPhone(e.target.value.replace(/\D/g, ""))}
+                placeholder="VD: 0901234567"
                 className="h-[56px] rounded-[14px] text-[18px] font-black tracking-widest"
                 onKeyDown={(e) => e.key === "Enter" && search()}
               />
@@ -82,7 +101,7 @@ export default function LookupPage() {
               </Button>
             </div>
             <p className="text-[11px] text-gray-400">
-              Hệ thống cho phép người xin việc tự kiểm tra: đã đăng ký thành công chưa, đã được xác nhận là người mới & xếp việc chưa.
+              Cần đúng cả CCCD và số điện thoại đã đăng ký để tra cứu — bảo vệ thông tin cá nhân của bạn khỏi người khác.
             </p>
           </CardContent>
         </Card>
@@ -121,7 +140,6 @@ export default function LookupPage() {
                       <p className="text-sm font-bold text-emerald-900">
                         Bộ phận: {todayRow.deptName ?? "Chờ HR thông báo"}
                       </p>
-                      <p className="text-xs text-gray-600">{todayRow.deptLocation ?? ""}</p>
                       <p className="mt-1 rounded-lg bg-white px-2 py-1 text-[11px] font-bold text-emerald-700">
                         Vui lòng có mặt lúc 07h00 sáng mai
                       </p>
@@ -133,7 +151,6 @@ export default function LookupPage() {
                       ⏳ {STATUS_META[todayRow.status]?.label ?? todayRow.status}...
                     </p>
                   )}
-                  {todayRow?.hrNote && <p className="mt-2 rounded-lg bg-white px-3 py-2 text-xs text-gray-600">📝 {todayRow.hrNote}</p>}
                 </CardContent>
               </Card>
             </div>

@@ -1,7 +1,7 @@
 import { NextResponse } from "next/server";
 import { and, desc, eq, inArray } from "drizzle-orm";
 import { db } from "@/db";
-import { workerProfiles, workforceMovements } from "@/db/schema";
+import { employmentSessions, workerProfiles, workforceMovements } from "@/db/schema";
 import { getUserScope, requireRoleAndPermission, writeAudit } from "@/lib/auth";
 import { queueNotification } from "@/lib/notifications";
 import { todayStr } from "@/lib/helpers";
@@ -62,7 +62,6 @@ export async function POST(req: Request) {
   const body = (await req.json()) as {
     movementType?: "resignation" | "transfer";
     workerId?: string;
-    fromDeptId?: string;
     toDeptId?: string;
     effectiveDate?: string;
     reason?: string;
@@ -76,12 +75,33 @@ export async function POST(req: Request) {
     return NextResponse.json({ error: "Thuyên chuyển cần chọn Bộ phận mới." }, { status: 400 });
   }
 
+  // P0-4 (Production Hardening Audit) — TRƯỚC ĐÂY `fromDeptId` lấy thẳng từ request body (client
+  // có thể gửi bất kỳ giá trị nào) — authorization bypass: 1 DEPT_MANAGER có thể tự khai
+  // `fromDeptId` trùng bộ phận mình quản lý dù lao động thật KHÔNG thuộc bộ phận đó. Server giờ
+  // tự xác định bộ phận HIỆN TẠI của lao động từ employment_sessions gần nhất (nguồn dữ liệu
+  // nghiệp vụ chuẩn — cùng cách applyMovementAction() xác định bộ phận thật ở lib/workforce-movements.ts),
+  // KHÔNG tin giá trị `fromDeptId` do client gửi lên.
+  const [latestSession] = await db
+    .select({ deptId: employmentSessions.deptId })
+    .from(employmentSessions)
+    .where(eq(employmentSessions.workerId, body.workerId))
+    .orderBy(desc(employmentSessions.regDate))
+    .limit(1);
+  const actualFromDeptId = latestSession?.deptId ?? null;
+
+  if (guard.session.role === "DEPT_MANAGER") {
+    const scope = await getUserScope(guard.session);
+    if (!actualFromDeptId || !scope || !scope.includes(actualFromDeptId)) {
+      return NextResponse.json({ error: "Lao động này không thuộc bộ phận bạn quản lý." }, { status: 403 });
+    }
+  }
+
   const [row] = await db
     .insert(workforceMovements)
     .values({
       movementType: body.movementType,
       workerId: body.workerId,
-      fromDeptId: body.fromDeptId || null,
+      fromDeptId: actualFromDeptId,
       toDeptId: body.movementType === "transfer" ? body.toDeptId : null,
       effectiveDate: body.effectiveDate,
       reason: body.reason || null,

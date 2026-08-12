@@ -4,7 +4,7 @@ import { SignJWT, jwtVerify } from "jose";
 import { randomBytes, scryptSync, timingSafeEqual } from "crypto";
 import { and, eq } from "drizzle-orm";
 import { db } from "@/db";
-import { auditLogs, rolePermissions, userDepartmentScopes, type RolePermission } from "@/db/schema";
+import { auditLogs, rolePermissions, userDepartmentScopes, users, type RolePermission } from "@/db/schema";
 
 export type Role = "ADMIN" | "HR_RECRUITER" | "DEPT_MANAGER";
 
@@ -15,6 +15,9 @@ export type Session = {
   role: Role;
   deptId: string | null;
 };
+
+/** Session đầy đủ trước khi ký JWT — cần thêm sessionVersion tại thời điểm login (xem P0-6). */
+export type SessionInput = Session & { sessionVersion: number };
 
 const COOKIE_NAME = "hasfarm_session";
 
@@ -45,7 +48,7 @@ export function verifyPassword(plain: string, stored: string): boolean {
   }
 }
 
-export async function createSession(session: Session) {
+export async function createSession(session: SessionInput) {
   const token = await new SignJWT({ ...session })
     .setProtectedHeader({ alg: "HS256" })
     .setIssuedAt()
@@ -67,19 +70,50 @@ export async function destroySession() {
   store.delete(COOKIE_NAME);
 }
 
+/**
+ * P0-6 (Production Hardening Audit) — SESSION REVOCATION. JWT chỉ chứng minh "đã đăng nhập
+ * đúng lúc ký" — không tự động phản ánh việc tài khoản bị khoá/xoá/đổi vai trò SAU đó (JWT vẫn
+ * hợp lệ cho tới khi hết hạn 12h dù DB đã đổi). Mỗi lần gọi getSession() giờ đọc lại 1 dòng
+ * `users` từ DB (theo id, có index PK) để xác nhận: (1) user còn tồn tại + `isActive`; (2)
+ * `sessionVersion` trong token khớp với DB — nếu đổi mật khẩu/đổi role/khoá tài khoản đều tăng
+ * `sessionVersion` (xem POST/PATCH /api/users), làm mọi JWT ký trước đó vô hiệu ngay, không cần
+ * đợi hết hạn. role/deptId/fullName trả về LUÔN LẤY TỪ DB (không lấy từ payload JWT) — đổi role
+ * có hiệu lực ngay ở request kế tiếp, không phải đợi bump version.
+ * TRADEOFF: thêm 1 query (PK lookup, rẻ) cho MỌI request có gọi getSession() — chấp nhận được
+ * ở quy mô hiện tại (vài trăm lượt/ngày) và đúng tinh thần "production-safe, ít phá kiến trúc"
+ * (không cần thêm Redis/session store ngoài để cache việc này).
+ */
 export async function getSession(): Promise<Session | null> {
   try {
     const store = await cookies();
     const token = store.get(COOKIE_NAME)?.value;
     if (!token) return null;
     const { payload } = await jwtVerify(token, secretKey());
-    if (!payload || typeof payload.username !== "string") return null;
+    if (!payload || typeof payload.id !== "string") return null;
+
+    const [user] = await db
+      .select({
+        id: users.id,
+        username: users.username,
+        fullName: users.fullName,
+        role: users.role,
+        deptId: users.deptId,
+        isActive: users.isActive,
+        sessionVersion: users.sessionVersion,
+      })
+      .from(users)
+      .where(eq(users.id, payload.id))
+      .limit(1);
+
+    if (!user || !user.isActive) return null;
+    if (typeof payload.sessionVersion !== "number" || payload.sessionVersion !== user.sessionVersion) return null;
+
     return {
-      id: String(payload.id),
-      username: String(payload.username),
-      fullName: String(payload.fullName),
-      role: payload.role as Role,
-      deptId: (payload.deptId as string | null) ?? null,
+      id: user.id,
+      username: user.username,
+      fullName: user.fullName,
+      role: user.role as Role,
+      deptId: user.deptId,
     };
   } catch {
     return null;
