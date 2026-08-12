@@ -11,8 +11,6 @@ type Stage = "check" | "returning_autofilled" | "already_registered" | "new" | "
 
 type WorkerInfo = {
   full_name?: string;
-  phone?: string | null;
-  dob?: string | null;
   address_current?: string | null;
   status?: string;
   dept_name?: string | null;

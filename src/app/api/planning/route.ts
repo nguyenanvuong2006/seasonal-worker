@@ -1,9 +1,9 @@
 import { NextResponse } from "next/server";
-import { and, desc, eq, inArray } from "drizzle-orm";
+import { and, desc, eq, inArray, isNull, sql } from "drizzle-orm";
 import { db } from "@/db";
-import { departments, planningPeriods, planningTargets } from "@/db/schema";
+import { departments, employmentSessions, planningAllocations, planningPeriods, planningTargets } from "@/db/schema";
 import { getUserScope, requireRoleAndPermission, writeAudit } from "@/lib/auth";
-import { computeFillRate, createPeriod } from "@/lib/planning";
+import { createPeriod } from "@/lib/planning";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -47,9 +47,39 @@ export async function GET(req: Request) {
     .orderBy(desc(planningPeriods.createdAt))
     .limit(300);
 
-  const withFillRate = await Promise.all(
-    rows.map(async (r) => ({ ...r, fillRate: r.status === "ACTIVE" ? await computeFillRate(r.id) : null })),
-  );
+  // Phase 4 (Production Hardening Audit) — TRƯỚC ĐÂY gọi computeFillRate() cho TỪNG dòng ACTIVE
+  // (Promise.all(rows.map(...))), mỗi lần lại tự query lại targetCount (đã có sẵn từ JOIN ở trên)
+  // + đếm allocations riêng — N+1 query tăng tuyến tính theo số kế hoạch ACTIVE. Nay: `demand`
+  // lấy thẳng từ `targetCount` đã JOIN sẵn (không query lại), và `active` (số đã phân bổ) tổng
+  // hợp bằng ĐÚNG 1 query GROUP BY cho toàn bộ period ACTIVE đang hiển thị — tổng số query không
+  // tăng theo N nữa. Response shape giữ nguyên (`fillRate: {demand,active,missing,percent}|null`).
+  const activeIds = rows.filter((r) => r.status === "ACTIVE").map((r) => r.id);
+  const allocatedCounts =
+    activeIds.length > 0
+      ? await db
+          .select({ planningPeriodId: planningAllocations.planningPeriodId, active: sql<number>`count(*)::int` })
+          .from(planningAllocations)
+          .innerJoin(employmentSessions, eq(planningAllocations.employmentSessionId, employmentSessions.id))
+          .where(
+            and(
+              inArray(planningAllocations.planningPeriodId, activeIds),
+              eq(employmentSessions.status, "APPROVED"),
+              isNull(employmentSessions.endDate),
+            ),
+          )
+          .groupBy(planningAllocations.planningPeriodId)
+      : [];
+  const activeByPeriod = new Map(allocatedCounts.map((r) => [r.planningPeriodId, r.active]));
+
+  const withFillRate = rows.map((r) => {
+    if (r.status !== "ACTIVE") return { ...r, fillRate: null };
+    const demand = r.targetCount ?? 0;
+    const active = activeByPeriod.get(r.id) ?? 0;
+    return {
+      ...r,
+      fillRate: { demand, active, missing: Math.max(0, demand - active), percent: demand > 0 ? Math.round((active / demand) * 100) : 0 },
+    };
+  });
 
   return NextResponse.json({ rows: withFillRate });
 }

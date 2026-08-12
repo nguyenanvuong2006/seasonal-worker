@@ -1,5 +1,5 @@
 import { NextResponse } from "next/server";
-import { asc, eq } from "drizzle-orm";
+import { asc, eq, sql } from "drizzle-orm";
 import { db } from "@/db";
 import { departments, users } from "@/db/schema";
 import { hashPassword, requireRoleAndPermission, writeAudit } from "@/lib/auth";
@@ -8,6 +8,10 @@ export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
 const ROLES = ["ADMIN", "HR_RECRUITER", "DEPT_MANAGER"];
+// P1-5 (Production Hardening Audit) — chuẩn hoá 1 policy mật khẩu duy nhất cho create/reset,
+// khớp với mức tối thiểu đã dùng ở bootstrap INITIAL_ADMIN_PASSWORD (trước đây route này cho
+// phép 6 ký tự, thấp hơn bootstrap — không nhất quán).
+const MIN_PASSWORD_LENGTH = 8;
 
 export async function GET() {
   const guard = await requireRoleAndPermission(["ADMIN"], "users.manage");
@@ -46,8 +50,8 @@ export async function POST(req: Request) {
         { status: 400 },
       );
     }
-    if (password.length < 6) {
-      return NextResponse.json({ error: "Mật khẩu tối thiểu 6 ký tự." }, { status: 400 });
+    if (password.length < MIN_PASSWORD_LENGTH) {
+      return NextResponse.json({ error: `Mật khẩu tối thiểu ${MIN_PASSWORD_LENGTH} ký tự.` }, { status: 400 });
     }
     if (!ROLES.includes(body.role)) {
       return NextResponse.json({ error: "Vai trò không hợp lệ." }, { status: 400 });
@@ -87,10 +91,17 @@ export async function PATCH(req: Request) {
   if ("deptId" in body) patch.deptId = body.deptId || null;
   if ("isActive" in body) patch.isActive = Boolean(body.isActive);
   if (body.password) {
-    if (String(body.password).length < 6) {
-      return NextResponse.json({ error: "Mật khẩu tối thiểu 6 ký tự." }, { status: 400 });
+    if (String(body.password).length < MIN_PASSWORD_LENGTH) {
+      return NextResponse.json({ error: `Mật khẩu tối thiểu ${MIN_PASSWORD_LENGTH} ký tự.` }, { status: 400 });
     }
     patch.passwordHash = hashPassword(String(body.password));
+  }
+
+  // P0-6 (Production Hardening Audit) — đổi role/khoá tài khoản/đổi mật khẩu đều phải làm mọi
+  // JWT đã ký trước đó (session cũ) hết hiệu lực NGAY, không đợi hết hạn 12h — tăng
+  // `sessionVersion` để getSession() (đọc DB mỗi request) từ chối token cũ ở lần gọi kế tiếp.
+  if ("role" in patch || "isActive" in patch || "passwordHash" in patch) {
+    patch.sessionVersion = sql`${users.sessionVersion} + 1`;
   }
 
   const [row] = await db

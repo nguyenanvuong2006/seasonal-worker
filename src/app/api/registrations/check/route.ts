@@ -27,6 +27,9 @@ export async function POST(req: Request) {
     const today = todayStr();
 
     // 1. Chặn trùng trong ngày
+    // P0-3 (Production Hardening Audit) — chỉ trả field frontend (applicant-portal.tsx) thực sự
+    // hiển thị: họ tên/trạng thái/tên bộ phận/địa điểm. KHÔNG trả `supervisor`/`supervisor_phone`
+    // (SĐT cá nhân người phụ trách bộ phận — không cần thiết cho luồng tự tra cứu công khai).
     const [app] = await db
       .select({
         fullName: dailyApplications.fullName,
@@ -34,8 +37,6 @@ export async function POST(req: Request) {
         deptName: departments.deptName,
         groupName: departments.groupName,
         vnName: departments.vnName,
-        supervisor: departments.supervisor,
-        supervisorPhone: departments.supervisorPhone,
       })
       .from(dailyApplications)
       .leftJoin(departments, eq(dailyApplications.deptId, departments.id))
@@ -51,9 +52,7 @@ export async function POST(req: Request) {
           dept_name: app.deptName
             ? `${app.deptName}${app.groupName ? " — " + app.groupName : ""}`
             : null,
-          vn_name: app.vnName,
-          supervisor: app.supervisor,
-          supervisor_phone: app.supervisorPhone,
+          dept_location: app.vnName,
         },
       });
     }
@@ -67,17 +66,15 @@ export async function POST(req: Request) {
     });
 
     if (match.status === "MATCHED" && match.confidence === "CCCD") {
+      // Chỉ trả field frontend dùng để auto-fill xác nhận (họ tên + địa chỉ hiện tại) — KHÔNG
+      // trả gender/DOB/SĐT/mã nhân viên/địa chỉ thô: /api/registrations (bước xác nhận cuối)
+      // tự đối chiếu lại DW Data từ server, không phụ thuộc dữ liệu client echo lại.
       return NextResponse.json({
         status: "RETURNING_VERIFIED",
         confidence: match.confidence,
         worker: {
           full_name: match.worker!.fullName,
-          code: match.worker!.code,
-          gender: match.worker!.gender,
-          bod: match.worker!.bod,
-          phone: match.worker!.phone,
-          permanent_address: match.worker!.permanentAddress,
-          residential_address: match.worker!.residentialAddress,
+          address_current: match.worker!.residentialAddress || match.worker!.permanentAddress || null,
         },
       });
     }

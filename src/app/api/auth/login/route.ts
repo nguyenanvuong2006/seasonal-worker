@@ -1,12 +1,61 @@
 import { NextResponse } from "next/server";
-import { eq } from "drizzle-orm";
+import { and, eq, gte, sql } from "drizzle-orm";
 import { db } from "@/db";
-import { users } from "@/db/schema";
+import { auditLogs, users } from "@/db/schema";
 import { createSession, verifyPassword, writeAudit, type Role } from "@/lib/auth";
 import { ensureSeed } from "@/lib/seed";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
+
+const MAX_FAILED_ATTEMPTS = 5;
+const WINDOW_MINUTES = 15;
+
+function clientIp(req: Request): string {
+  const fwd = req.headers.get("x-forwarded-for");
+  if (fwd) return fwd.split(",")[0].trim();
+  return req.headers.get("x-real-ip") ?? "unknown";
+}
+
+/**
+ * P1-6 (Production Hardening Audit) — chống brute-force theo (IP + username), sliding window
+ * 15 phút. Đếm/lưu vào `audit_logs` (bảng đã có sẵn) thay vì thêm bảng/dịch vụ ngoài mới.
+ * GIỚI HẠN CẦN BIẾT: Vercel serverless không có bộ nhớ dùng chung giữa các instance — 1 bộ đếm
+ * in-memory sẽ gần như vô nghĩa (mỗi cold start / mỗi instance có bộ nhớ riêng, request có thể
+ * rơi vào instance khác nhau). Postgres (đã dùng cho toàn bộ app) LÀ state dùng chung thật sự
+ * duy nhất hiện có mà không cần thêm Redis/dịch vụ trả phí — đánh đổi là 1 query nhỏ thêm cho
+ * MỖI lần login (rẻ, có thể lọc theo index `action`/`created_at` nếu cần tối ưu thêm sau này).
+ * Đếm theo (IP + username) — KHÔNG khoá theo IP một mình (tránh 1 mạng NAT/wifi công cộng khoá
+ * nhầm người khác đang đăng nhập đúng username của họ — "dễ gây global lockout").
+ */
+async function recentFailedAttempts(ip: string, username: string): Promise<number> {
+  const since = new Date(Date.now() - WINDOW_MINUTES * 60000);
+  const [row] = await db
+    .select({ c: sql<number>`count(*)::int` })
+    .from(auditLogs)
+    .where(
+      and(
+        eq(auditLogs.action, "LOGIN_FAILED"),
+        gte(auditLogs.createdAt, since),
+        sql`${auditLogs.details}->>'ip' = ${ip}`,
+        sql`${auditLogs.details}->>'username' = ${username}`,
+      ),
+    );
+  return row?.c ?? 0;
+}
+
+async function recordFailedAttempt(ip: string, username: string) {
+  try {
+    await db.insert(auditLogs).values({
+      action: "LOGIN_FAILED",
+      targetType: "users",
+      category: "AUTH",
+      details: { ip, username },
+    });
+  } catch {
+    /* bookkeeping chống brute-force không bao giờ được làm hỏng luồng đăng nhập chính */
+  }
+}
 
 export async function POST(req: Request) {
   try {
@@ -15,14 +64,27 @@ export async function POST(req: Request) {
     if (!username || !password) {
       return NextResponse.json({ error: "Vui lòng nhập đủ thông tin." }, { status: 400 });
     }
+    const normalizedUsername = String(username).trim().toLowerCase();
+    const ip = clientIp(req);
+
+    const failedCount = await recentFailedAttempts(ip, normalizedUsername);
+    if (failedCount >= MAX_FAILED_ATTEMPTS) {
+      return NextResponse.json(
+        { error: "Quá nhiều lần đăng nhập sai. Vui lòng thử lại sau ít phút." },
+        { status: 429 },
+      );
+    }
 
     const [user] = await db
       .select()
       .from(users)
-      .where(eq(users.username, String(username).trim().toLowerCase()))
+      .where(eq(users.username, normalizedUsername))
       .limit(1);
 
+    // Thông báo GIỐNG HỆT nhau dù sai username hay sai password hay tài khoản bị khoá — không
+    // để lộ username có tồn tại trong hệ thống hay không.
     if (!user || !user.isActive || !verifyPassword(String(password), user.passwordHash)) {
+      await recordFailedAttempt(ip, normalizedUsername);
       return NextResponse.json(
         { error: "Sai tên đăng nhập hoặc mật khẩu." },
         { status: 401 },
@@ -35,6 +97,7 @@ export async function POST(req: Request) {
       fullName: user.fullName,
       role: user.role as Role,
       deptId: user.deptId,
+      sessionVersion: user.sessionVersion,
     });
 
     await writeAudit(
