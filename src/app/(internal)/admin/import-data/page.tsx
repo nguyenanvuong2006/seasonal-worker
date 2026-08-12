@@ -85,11 +85,11 @@ function CountUp({ value, className }: { value: number; className?: string }) {
 
 function StatCard({ label, value, tone }: { label: string; value: number; tone: "green" | "gold" | "red" | "amber" | "gray" }) {
   const toneMap = {
-    green: "from-hasfarm-600 to-hasfarm-800 text-white",
-    gold: "from-gold-400 to-gold-600 text-hasfarm-900",
+    green: "bg-primary text-white",
+    gold: "from-gold-400 to-gold-600 text-fg",
     red: "from-red-500 to-red-700 text-white",
     amber: "from-amber-400 to-amber-600 text-white",
-    gray: "from-gray-200 to-gray-300 text-gray-700",
+    gray: "bg-surface-hover text-fg-secondary",
   }[tone];
   return (
     <div className={`hasfarm-card animate-fade-in-scale overflow-hidden rounded-[18px] bg-gradient-to-br p-4 ${toneMap}`}>
@@ -106,12 +106,12 @@ function fmtEta(sec: number | null) {
 }
 
 const STATUS_BADGE: Record<string, string> = {
-  QUEUED: "bg-gray-100 text-gray-600",
+  QUEUED: "bg-surface-hover text-fg-secondary",
   RUNNING: "bg-blue-100 text-blue-700",
   PAUSED: "bg-amber-100 text-amber-700",
   DONE: "bg-emerald-100 text-emerald-700",
   FAILED: "bg-red-100 text-red-700",
-  CANCELLED: "bg-gray-200 text-gray-500",
+  CANCELLED: "bg-surface-hover text-fg-secondary",
 };
 const STATUS_LABEL: Record<string, string> = {
   QUEUED: "Đang chờ",
@@ -194,7 +194,7 @@ export default function ImportDataPage() {
           } else if ("jobId" in d) {
             setMappingInfo(null);
             setActiveJobId(d.jobId);
-            toast({ title: "✅ Đã tạo Job — xử lý chạy nền, có thể đóng trang này" });
+            toast({ title: "Đã tạo Job — xử lý chạy nền, có thể đóng trang này" });
           }
         } else {
           toast({ title: (d as { error?: string }).error ?? "Lỗi upload", variant: "destructive" });
@@ -219,7 +219,7 @@ export default function ImportDataPage() {
   };
   const resumeJob = async (id: string) => {
     await fetch(`/api/import/job/${id}/retry`, { method: "POST" });
-    toast({ title: "✅ Đã tiếp tục Job — chạy nền" });
+    toast({ title: "Đã tiếp tục Job — chạy nền" });
     setActiveJobId(id);
     void loadHistory();
   };
@@ -242,7 +242,7 @@ export default function ImportDataPage() {
       <div className="hasfarm-hero animate-slide-up overflow-hidden rounded-[24px] p-6 text-white shadow-[0_20px_50px_rgba(8,50,27,0.35)] sm:p-8">
         <div className="flex flex-wrap items-center justify-between gap-4">
           <div className="flex items-center gap-4">
-            <div className="flex h-14 w-14 items-center justify-center rounded-2xl bg-white/10 backdrop-blur-md ring-1 ring-white/20">
+            <div className="flex h-14 w-14 items-center justify-center rounded-2xl bg-surface/10 backdrop-blur-md ring-1 ring-white/20">
               <Sparkles className="h-7 w-7 text-gold-300" />
             </div>
             <div>
@@ -255,16 +255,16 @@ export default function ImportDataPage() {
               href="/help/import/IMPORT_GUIDE.md"
               target="_blank"
               rel="noreferrer"
-              className="flex items-center gap-2 rounded-full bg-white/10 px-4 py-2.5 text-sm font-bold backdrop-blur-md ring-1 ring-white/20 transition hover:bg-white/20"
+              className="flex items-center gap-2 rounded-full bg-surface/10 px-4 py-2.5 text-sm font-bold backdrop-blur-md ring-1 ring-white/20 transition hover:bg-surface/20"
             >
               <HelpCircle className="h-4 w-4" /> Hướng dẫn Import
             </a>
             <button
               onClick={() => setHistoryOpen((v) => !v)}
-              className="flex items-center gap-2 rounded-full bg-white/10 px-4 py-2.5 text-sm font-bold backdrop-blur-md ring-1 ring-white/20 transition hover:bg-white/20"
+              className="flex items-center gap-2 rounded-full bg-surface/10 px-4 py-2.5 text-sm font-bold backdrop-blur-md ring-1 ring-white/20 transition hover:bg-surface/20"
             >
               <History className="h-4 w-4" /> Job Queue
-              {activeIncomplete.length > 0 && <span className="rounded-full bg-gold-400 px-2 py-0.5 text-[10px] font-black text-hasfarm-900">{activeIncomplete.length} đang xử lý</span>}
+              {activeIncomplete.length > 0 && <span className="rounded-full bg-gold-400 px-2 py-0.5 text-[10px] font-black text-fg">{activeIncomplete.length} đang xử lý</span>}
             </button>
           </div>
         </div>
@@ -274,24 +274,24 @@ export default function ImportDataPage() {
       {historyOpen && (
         <Card className="hasfarm-card animate-fade-in-scale rounded-[20px] border-0 p-0">
           <CardContent className="max-h-80 overflow-y-auto p-3">
-            {history.length === 0 && <p className="p-6 text-center text-sm text-gray-400">Chưa có Job nào.</p>}
+            {history.length === 0 && <p className="p-6 text-center text-sm text-fg-muted">Chưa có Job nào.</p>}
             {history.map((j) => (
-              <div key={j.id} className="flex flex-wrap items-center gap-3 rounded-xl px-3 py-2.5 hover:bg-hasfarm-50/60">
+              <div key={j.id} className="flex flex-wrap items-center gap-3 rounded-xl px-3 py-2.5 hover:bg-primary-tint/60">
                 <div className="min-w-0 flex-1">
-                  <p className="truncate text-sm font-bold text-hasfarm-900">{j.fileName}</p>
-                  <p className="text-xs text-gray-500">
+                  <p className="truncate text-sm font-bold text-fg">{j.fileName}</p>
+                  <p className="text-xs text-fg-secondary">
                     {TYPES.find((t) => t.key === j.jobType)?.title} · {j.processedRows.toLocaleString("vi-VN")}/{j.totalRows.toLocaleString("vi-VN")} dòng · {new Date(j.createdAt).toLocaleString("vi-VN")}
                   </p>
                 </div>
                 <span className={`shrink-0 rounded-full px-3 py-1 text-[10px] font-black uppercase ${STATUS_BADGE[j.status]}`}>{STATUS_LABEL[j.status]}</span>
                 <div className="flex shrink-0 gap-1">
                   {(j.status === "RUNNING" || j.status === "QUEUED") && (
-                    <button onClick={() => setActiveJobId(j.id)} className="rounded-full bg-hasfarm-100 px-3 py-1.5 text-[11px] font-bold text-hasfarm-700 hover:bg-hasfarm-200">
+                    <button onClick={() => setActiveJobId(j.id)} className="rounded-full bg-primary-tint px-3 py-1.5 text-[11px] font-bold text-primary hover:bg-primary/15">
                       Theo dõi
                     </button>
                   )}
                   {(j.status === "FAILED" || j.status === "PAUSED") && (
-                    <button onClick={() => resumeJob(j.id)} className="flex items-center gap-1 rounded-full bg-hasfarm-700 px-3 py-1.5 text-[11px] font-bold text-white hover:bg-hasfarm-800">
+                    <button onClick={() => resumeJob(j.id)} className="flex items-center gap-1 rounded-full bg-primary px-3 py-1.5 text-[11px] font-bold text-white hover:bg-primary">
                       <RotateCcw className="h-3 w-3" /> {j.status === "FAILED" ? "Retry" : "Resume"}
                     </button>
                   )}
@@ -301,7 +301,7 @@ export default function ImportDataPage() {
                     </button>
                   )}
                   {j.errorRows + j.warningRows > 0 && (
-                    <a href={`/api/import/job/${j.id}/log`} className="flex items-center gap-1 rounded-full bg-gray-100 px-3 py-1.5 text-[11px] font-bold text-gray-600 hover:bg-gray-200">
+                    <a href={`/api/import/job/${j.id}/log`} className="flex items-center gap-1 rounded-full bg-surface-hover px-3 py-1.5 text-[11px] font-bold text-fg-secondary hover:bg-border">
                       <Download className="h-3 w-3" /> Log
                     </a>
                   )}
@@ -317,27 +317,27 @@ export default function ImportDataPage() {
         <Card className="hasfarm-card animate-slide-up rounded-[22px] border-0 p-1">
           <CardContent className="space-y-5 p-6">
             <div>
-              <Label className="mb-2 block text-xs font-black uppercase tracking-widest text-gray-400">Loại dữ liệu</Label>
+              <Label className="mb-2 block text-xs font-black uppercase tracking-widest text-fg-muted">Loại dữ liệu</Label>
               <div className="grid gap-3 sm:grid-cols-3">
                 {TYPES.map((t) => (
                   <button
                     key={t.key}
                     onClick={() => setJobType(t.key)}
-                    className={`rounded-2xl border-2 p-4 text-left transition-all ${jobType === t.key ? "border-hasfarm-700 bg-hasfarm-50 shadow-[0_8px_20px_rgba(17,88,48,0.12)]" : "border-gray-100 hover:border-hasfarm-200"}`}
+                    className={`rounded-2xl border-2 p-4 text-left transition-all ${jobType === t.key ? "border-primary bg-primary-tint shadow-[0_8px_20px_rgba(17,88,48,0.12)]" : "border-border hover:border-primary/40"}`}
                   >
-                    <p className="font-black text-hasfarm-900">{t.title}</p>
+                    <p className="font-black text-fg">{t.title}</p>
                   </button>
                 ))}
               </div>
             </div>
 
             <div className="flex justify-end">
-              <a href={`/api/admin/field-definitions/template?group=${jobType}`} className="inline-flex items-center gap-1 text-xs font-bold text-hasfarm-700 hover:underline">
+              <a href={`/api/admin/field-definitions/template?group=${jobType}`} className="inline-flex items-center gap-1 text-xs font-bold text-primary hover:underline">
                 <Download className="h-3 w-3" /> Tải file mẫu
               </a>
             </div>
 
-            <label className={`flex flex-col items-center justify-center gap-3 rounded-[20px] border-2 border-dashed p-10 text-center transition-colors ${file ? "border-hasfarm-400 bg-hasfarm-50/50" : "border-gray-200 hover:border-hasfarm-300 hover:bg-hasfarm-50/30"}`}>
+            <label className={`flex flex-col items-center justify-center gap-3 rounded-[20px] border-2 border-dashed p-10 text-center transition-colors ${file ? "border-primary/50 bg-primary-tint/50" : "border-border-strong hover:border-primary/40 hover:bg-primary-tint/30"}`}>
               <input
                 type="file"
                 className="hidden"
@@ -346,17 +346,17 @@ export default function ImportDataPage() {
               />
               {file ? (
                 <>
-                  <FileSpreadsheet className="h-10 w-10 text-hasfarm-600" />
+                  <FileSpreadsheet className="h-10 w-10 text-primary" />
                   <div>
-                    <p className="font-bold text-hasfarm-900">{file.name}</p>
-                    <p className="text-xs text-gray-500">{(file.size / 1024).toFixed(0)} KB — bấm để chọn file khác</p>
+                    <p className="font-bold text-fg">{file.name}</p>
+                    <p className="text-xs text-fg-secondary">{(file.size / 1024).toFixed(0)} KB — bấm để chọn file khác</p>
                   </div>
                 </>
               ) : (
                 <>
-                  <UploadCloud className="h-10 w-10 text-gray-300" />
+                  <UploadCloud className="h-10 w-10 text-fg-muted" />
                   <div>
-                    <p className="font-bold text-gray-600">Kéo thả hoặc bấm để chọn file CSV / XLSX / XLS</p>
+                    <p className="font-bold text-fg-secondary">Kéo thả hoặc bấm để chọn file CSV / XLSX / XLS</p>
                   </div>
                 </>
               )}
@@ -364,10 +364,10 @@ export default function ImportDataPage() {
 
             {uploading && (
               <div className="space-y-1.5">
-                <div className="h-2.5 w-full overflow-hidden rounded-full bg-gray-100">
-                  <div className="progress-glow h-full rounded-full bg-gradient-to-r from-hasfarm-600 to-hasfarm-800 transition-all duration-300" style={{ width: `${uploadPct}%` }} />
+                <div className="h-2.5 w-full overflow-hidden rounded-full bg-surface-hover">
+                  <div className="progress-glow h-full rounded-full bg-primary transition-all duration-300" style={{ width: `${uploadPct}%` }} />
                 </div>
-                <p className="text-center text-xs font-bold text-hasfarm-700">Đang tải lên… {uploadPct}%</p>
+                <p className="text-center text-xs font-bold text-primary">Đang tải lên… {uploadPct}%</p>
               </div>
             )}
 
@@ -390,8 +390,8 @@ export default function ImportDataPage() {
               {mappingInfo.unmatchedRequiredFields.map((f) => (
                 <div key={f.fieldKey} className="mb-2 flex items-center gap-2">
                   <span className="w-40 shrink-0 text-sm font-semibold">{f.displayName}</span>
-                  <span className="text-gray-400">←</span>
-                  <select value={mapping[f.fieldKey] ?? ""} onChange={(e) => setMapping((m) => ({ ...m, [f.fieldKey]: e.target.value }))} className="h-9 flex-1 rounded-lg border-2 border-gray-200 px-2 text-sm">
+                  <span className="text-fg-muted">←</span>
+                  <select value={mapping[f.fieldKey] ?? ""} onChange={(e) => setMapping((m) => ({ ...m, [f.fieldKey]: e.target.value }))} className="h-9 flex-1 rounded-lg border-2 border-border-strong px-2 text-sm">
                     <option value="">— Chọn cột trong file —</option>
                     {mappingInfo.headers.map((h) => (
                       <option key={h} value={h}>
@@ -421,8 +421,8 @@ export default function ImportDataPage() {
             <CardContent className="space-y-4 p-6">
               <div className="flex items-center justify-between">
                 <div>
-                  <p className="text-sm font-black text-hasfarm-900">{job.fileName}</p>
-                  <p className="text-xs text-gray-500">{jobStatus?.stageLabel}</p>
+                  <p className="text-sm font-black text-fg">{job.fileName}</p>
+                  <p className="text-xs text-fg-secondary">{jobStatus?.stageLabel}</p>
                 </div>
                 <span className={`rounded-full px-3 py-1 text-[11px] font-black uppercase ${STATUS_BADGE[job.status]}`}>{STATUS_LABEL[job.status]}</span>
               </div>
@@ -430,18 +430,18 @@ export default function ImportDataPage() {
               {/* Stage timeline */}
               <div className="flex items-center gap-1 overflow-x-auto pb-1">
                 {STAGES.map((s, i) => (
-                  <div key={s} className={`shrink-0 rounded-full px-3 py-1.5 text-[11px] font-bold ${i < stageIdx ? "bg-hasfarm-50 text-hasfarm-700 ring-1 ring-hasfarm-200" : i === stageIdx ? "bg-gradient-to-r from-hasfarm-700 to-hasfarm-800 text-white" : "bg-gray-100 text-gray-400"}`}>
+                  <div key={s} className={`shrink-0 rounded-full px-3 py-1.5 text-[11px] font-bold ${i < stageIdx ? "bg-primary-tint text-primary ring-1 ring-primary/20" : i === stageIdx ? "bg-primary text-white" : "bg-surface-hover text-fg-muted"}`}>
                     {i < stageIdx ? <CheckCircle2 className="mr-1 inline h-3 w-3" /> : null}
                     {STAGE_LABEL[s]}
                   </div>
                 ))}
               </div>
 
-              <div className="h-3 w-full overflow-hidden rounded-full bg-gray-100">
-                <div className={`h-full rounded-full bg-gradient-to-r from-hasfarm-600 via-hasfarm-700 to-gold-500 transition-all duration-500 ${job.status === "RUNNING" ? "progress-glow" : ""}`} style={{ width: `${job.progress}%` }} />
+              <div className="h-3 w-full overflow-hidden rounded-full bg-surface-hover">
+                <div className={`h-full rounded-full bg-primary transition-all duration-500 ${job.status === "RUNNING" ? "progress-glow" : ""}`} style={{ width: `${job.progress}%` }} />
               </div>
 
-              <div className="flex flex-wrap items-center justify-between gap-2 text-xs text-gray-500">
+              <div className="flex flex-wrap items-center justify-between gap-2 text-xs text-fg-secondary">
                 <span>
                   {job.processedRows.toLocaleString("vi-VN")} / {job.totalRows.toLocaleString("vi-VN")} dòng ({job.progress}%)
                 </span>
@@ -479,7 +479,7 @@ export default function ImportDataPage() {
                     <CheckCircle2 className="h-5 w-5" /> Hoàn tất
                   </p>
                   {job.errorRows + job.warningRows > 0 && (
-                    <a href={`/api/import/job/${job.id}/log`} className="flex w-full items-center justify-center gap-2 rounded-full bg-hasfarm-800 py-2.5 text-sm font-bold text-white hover:bg-hasfarm-900">
+                    <a href={`/api/import/job/${job.id}/log`} className="flex w-full items-center justify-center gap-2 rounded-full bg-primary py-2.5 text-sm font-bold text-white hover:bg-primary-hover">
                       <Download className="h-4 w-4" /> Download Log ({job.errorRows} lỗi, {job.warningRows} cảnh báo)
                     </a>
                   )}

@@ -93,13 +93,13 @@ export default function DwDataPage() {
   return (
     <div className="space-y-5">
       <div className="rounded-[20px] bg-white p-6 shadow-sm ring-1 ring-black/5">
-        <span className="rounded-full bg-hasfarm-700 px-3 py-1 text-[10px] font-black uppercase tracking-widest text-white">
+        <span className="rounded-full bg-primary px-3 py-1 text-[10px] font-black uppercase tracking-widest text-white">
           Sheet: DW Data
         </span>
-        <h1 className="mt-3 text-[26px] font-black tracking-tight text-hasfarm-900">
+        <h1 className="mt-3 text-[26px] font-black tracking-tight text-fg">
           Kho hồ sơ lao động — {total.toLocaleString("vi-VN")} người
         </h1>
-        <p className="mt-1 max-w-[85ch] text-sm text-gray-600">
+        <p className="mt-1 max-w-[85ch] text-sm text-fg-secondary">
           Đây là nguồn sự thật để đối chiếu <b>người cũ / người mới</b>. Ai không có trong bảng này là lao động MỚI.
           Nếu người mới nhập sai CCCD, sửa CCCD tại đây — hệ thống tự đồng bộ toàn bộ đơn đăng ký sang CCCD đúng.
         </p>
@@ -114,15 +114,15 @@ export default function DwDataPage() {
             placeholder="🔎 Tìm theo CCCD / Họ tên / SĐT / Mã CODE (VD: DR0001-D)"
             className="h-11 flex-1 rounded-xl"
           />
-          <Button onClick={search} className="h-11 rounded-xl bg-hasfarm-800 text-white">
+          <Button onClick={search} className="h-11 rounded-xl bg-primary text-white">
             Tìm kiếm
           </Button>
         </div>
       </Card>
 
       <Card className="overflow-hidden rounded-[18px] border border-black/5 p-0 shadow-sm">
-        <div className="flex items-center justify-between border-b bg-hasfarm-50 px-4 py-3">
-          <p className="text-[11px] font-black uppercase tracking-widest text-hasfarm-800">
+        <div className="flex items-center justify-between border-b bg-primary-tint px-4 py-3">
+          <p className="text-[11px] font-black uppercase tracking-widest text-primary">
             Trang {page}/{totalPages}
           </p>
           <div className="flex gap-2">
@@ -171,27 +171,27 @@ export default function DwDataPage() {
               {loading && (
                 <tr>
                   <td colSpan={10} className="p-12 text-center">
-                    <Loader2 className="mx-auto h-6 w-6 animate-spin text-hasfarm-600" />
+                    <Loader2 className="mx-auto h-6 w-6 animate-spin text-primary" />
                   </td>
                 </tr>
               )}
               {!loading && rows.length === 0 && (
                 <tr>
-                  <td colSpan={10} className="p-10 text-center text-gray-400">
+                  <td colSpan={10} className="p-10 text-center text-fg-muted">
                     Không tìm thấy hồ sơ nào.
                   </td>
                 </tr>
               )}
               {!loading &&
                 rows.map((r) => (
-                  <tr key={r.id} className="hover:bg-hasfarm-50/60">
-                    <td className="px-3 py-2 font-mono text-[11px] font-bold text-hasfarm-700">{r.code ?? "—"}</td>
+                  <tr key={r.id} className="hover:bg-primary-tint">
+                    <td className="px-3 py-2 font-mono text-[11px] font-bold text-primary">{r.code ?? "—"}</td>
                     <td className="px-3 py-2 font-mono font-bold">{r.cccd ?? <span className="text-red-400">thiếu</span>}</td>
-                    <td className="px-3 py-2 font-bold text-hasfarm-900">{r.fullName}</td>
+                    <td className="px-3 py-2 font-bold text-fg">{r.fullName}</td>
                     <td className="px-3 py-2 text-center">{r.gender ?? "—"}</td>
                     <td className="px-3 py-2 text-xs">{r.bod ?? "—"}</td>
                     <td className="px-3 py-2">{r.phone ?? "—"}</td>
-                    <td className="max-w-[240px] truncate px-3 py-2 text-gray-600">
+                    <td className="max-w-[240px] truncate px-3 py-2 text-fg-secondary">
                       {r.residentialAddress ?? r.permanentAddress ?? "—"}
                     </td>
                     <td className="px-3 py-2 text-right">
@@ -201,7 +201,7 @@ export default function DwDataPage() {
                           setForm({ ...r });
                           setOldCccd(r.cccd ?? "");
                         }}
-                        className="rounded-full bg-hasfarm-50 px-3 py-1 text-[11px] font-bold text-hasfarm-700 hover:bg-hasfarm-100"
+                        className="rounded-full bg-primary-tint px-3 py-1 text-[11px] font-bold text-primary hover:bg-primary/15"
                       >
                         Sửa
                       </button>

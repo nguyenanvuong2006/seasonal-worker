@@ -65,7 +65,7 @@ export default function SystemHealthPage() {
     <div className="space-y-6">
       <div className="hasfarm-hero animate-slide-up overflow-hidden rounded-[24px] p-6 text-white shadow-[0_20px_50px_rgba(8,50,27,0.35)] sm:p-8">
         <div className="flex items-center gap-4">
-          <div className="flex h-14 w-14 items-center justify-center rounded-2xl bg-white/10 backdrop-blur-md ring-1 ring-white/20">
+          <div className="flex h-14 w-14 items-center justify-center rounded-2xl bg-surface/10 backdrop-blur-md ring-1 ring-white/20">
             <Sparkles className="h-7 w-7 text-gold-300" />
           </div>
           <div>
@@ -80,7 +80,7 @@ export default function SystemHealthPage() {
             <Link
               key={a.href}
               href={a.href}
-              className="group flex flex-col gap-2 rounded-2xl bg-white/10 p-4 backdrop-blur-md ring-1 ring-white/20 transition hover:bg-white/20"
+              className="group flex flex-col gap-2 rounded-2xl bg-surface/10 p-4 backdrop-blur-md ring-1 ring-white/20 transition hover:bg-surface/20"
             >
               <a.icon className="h-5 w-5 text-gold-300 transition group-hover:scale-110" />
               <span className="text-sm font-black">{a.label}</span>
@@ -91,8 +91,8 @@ export default function SystemHealthPage() {
       </div>
 
       <div>
-        <h2 className="text-lg font-black text-hasfarm-900">Health Monitor</h2>
-        <p className="text-sm text-gray-500">
+        <h2 className="text-lg font-black text-fg">Health Monitor</h2>
+        <p className="text-sm text-fg-secondary">
           Số liệu lấy trực tiếp từ database. CPU/RAM/uptime của máy chủ không hiển thị ở đây vì Vercel (serverless)
           không cấp quyền đọc chỉ số phần cứng — xem trực tiếp trên dashboard Neon/Vercel bên dưới.
         </p>
@@ -100,7 +100,7 @@ export default function SystemHealthPage() {
 
       {loading && (
         <div className="p-10 text-center">
-          <Loader2 className="mx-auto h-6 w-6 animate-spin text-hasfarm-600" />
+          <Loader2 className="mx-auto h-6 w-6 animate-spin text-primary" />
         </div>
       )}
 
@@ -141,7 +141,7 @@ export default function SystemHealthPage() {
                   href="https://console.neon.tech"
                   target="_blank"
                   rel="noreferrer"
-                  className="inline-flex items-center gap-1 text-hasfarm-700 hover:underline"
+                  className="inline-flex items-center gap-1 text-primary hover:underline"
                 >
                   Mở Neon Dashboard <ExternalLink className="h-3 w-3" />
                 </a>
@@ -182,7 +182,7 @@ export default function SystemHealthPage() {
                   <Badge tone="green">{stats.notificationQueue.sent} đã gửi</Badge>{" "}
                   {stats.notificationQueue.failed > 0 && <Badge tone="red">{stats.notificationQueue.failed} lỗi</Badge>}
                 </p>
-                <a href="/admin/notifications" className="inline-block text-hasfarm-700 hover:underline">
+                <a href="/admin/notifications" className="inline-block text-primary hover:underline">
                   Xem hàng đợi →
                 </a>
               </CardContent>
@@ -226,7 +226,7 @@ export default function SystemHealthPage() {
                   href="https://vercel.com/dashboard"
                   target="_blank"
                   rel="noreferrer"
-                  className="inline-flex items-center gap-1 text-hasfarm-700 hover:underline"
+                  className="inline-flex items-center gap-1 text-primary hover:underline"
                 >
                   Mở Vercel Dashboard <ExternalLink className="h-3 w-3" />
                 </a>
@@ -256,7 +256,7 @@ export default function SystemHealthPage() {
                   Backup gần nhất: <b>{fmt(stats.lastBackup?.created_at)}</b>
                   {stats.lastBackup ? ` (${stats.lastBackup.username})` : ""}
                 </p>
-                <a href="/admin/audit" className="inline-block text-hasfarm-700 hover:underline">
+                <a href="/admin/audit" className="inline-block text-primary hover:underline">
                   Xem toàn bộ nhật ký →
                 </a>
               </CardContent>
@@ -264,10 +264,10 @@ export default function SystemHealthPage() {
 
             <Card>
               <CardHeader title="Backup" />
-              <CardContent className="space-y-2 text-sm text-gray-600">
+              <CardContent className="space-y-2 text-sm text-fg-secondary">
                 <a
                   href="/api/admin/backup"
-                  className="inline-flex h-10 items-center gap-2 rounded-full bg-hasfarm-800 px-4 text-sm font-bold text-white hover:bg-hasfarm-900"
+                  className="inline-flex h-10 items-center gap-2 rounded-full bg-primary px-4 text-sm font-bold text-white hover:bg-primary-hover"
                 >
                   <Download className="h-4 w-4" /> Export Database (JSON)
                 </a>

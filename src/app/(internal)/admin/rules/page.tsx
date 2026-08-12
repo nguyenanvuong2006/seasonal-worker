@@ -92,7 +92,7 @@ export default function RulesPage() {
       toast({ title: data.error ?? "Lỗi tạo rule", variant: "destructive" });
       return;
     }
-    toast({ title: "✅ Đã thêm rule" });
+    toast({ title: "Đã thêm rule" });
     setOpen(false);
     setForm({ name: "", trigger: "ON_REGISTER", conditions: [{ field: "age", op: "gt", value: "60" }], actions: [{ type: "SET_STATUS", value: "WAITLIST" }] });
     await load();
@@ -102,8 +102,8 @@ export default function RulesPage() {
     <div className="space-y-5">
       <div className="flex items-center justify-between">
         <div>
-          <h1 className="text-2xl font-black text-hasfarm-900">Rule Engine (IF → THEN)</h1>
-          <p className="text-sm text-gray-500">
+          <h1 className="text-2xl font-black text-fg">Rule Engine (IF → THEN)</h1>
+          <p className="text-sm text-fg-secondary">
             1 rule = nhiều điều kiện nối bằng AND. Cần hiệu ứng OR → tạo nhiều rule riêng cùng “Thời điểm áp dụng”.
             Chạy khi lao động đăng ký hoặc khi HR duyệt — không cần sửa code.
           </p>
@@ -117,15 +117,15 @@ export default function RulesPage() {
         <CardContent className="p-0">
           {loading ? (
             <div className="p-10 text-center">
-              <Loader2 className="mx-auto h-6 w-6 animate-spin text-hasfarm-600" />
+              <Loader2 className="mx-auto h-6 w-6 animate-spin text-primary" />
             </div>
           ) : (
             <ul className="divide-y">
-              {rows.length === 0 && <li className="p-8 text-center text-sm text-gray-400">Chưa có rule nào.</li>}
+              {rows.length === 0 && <li className="p-8 text-center text-sm text-fg-muted">Chưa có rule nào.</li>}
               {rows.map((r) => (
                 <li key={r.id} className="p-4">
                   <div className="flex flex-wrap items-center gap-2">
-                    <p className="font-bold text-hasfarm-900">{r.name}</p>
+                    <p className="font-bold text-fg">{r.name}</p>
                     <Badge tone="gray">{TRIGGERS.find((t) => t.key === r.trigger)?.label ?? r.trigger}</Badge>
                     <button onClick={() => toggle(r.id, !r.isActive)}>
                       <Badge tone={r.isActive ? "green" : "gray"}>{r.isActive ? "Đang bật" : "Đã tắt"}</Badge>
@@ -134,7 +134,7 @@ export default function RulesPage() {
                       Xoá
                     </button>
                   </div>
-                  <p className="mt-1 text-xs text-gray-500">
+                  <p className="mt-1 text-xs text-fg-secondary">
                     NẾU {r.conditions.map((c) => `${FIELDS.find((f) => f.key === c.field)?.label ?? c.field} ${OPS.find((o) => o.key === c.op)?.label ?? c.op} "${c.value}"`).join(" VÀ ")}
                     {" → "}
                     {r.actions.map((a) => `${ACTIONS.find((x) => x.key === a.type)?.label ?? a.type} = "${a.value}"`).join(", ")}
@@ -154,7 +154,7 @@ export default function RulesPage() {
           </div>
           <div>
             <Label>Thời điểm áp dụng</Label>
-            <select value={form.trigger} onChange={(e) => setForm({ ...form, trigger: e.target.value })} className="h-11 w-full rounded-xl border-2 border-gray-200 px-2 font-semibold">
+            <select value={form.trigger} onChange={(e) => setForm({ ...form, trigger: e.target.value })} className="h-11 w-full rounded-xl border-2 border-border-strong px-2 font-semibold">
               {TRIGGERS.map((t) => (
                 <option key={t.key} value={t.key}>
                   {t.label}
@@ -174,7 +174,7 @@ export default function RulesPage() {
                     next[i] = { ...c, field: e.target.value };
                     setForm({ ...form, conditions: next });
                   }}
-                  className="h-10 flex-1 rounded-lg border-2 border-gray-200 px-2 text-sm"
+                  className="h-10 flex-1 rounded-lg border-2 border-border-strong px-2 text-sm"
                 >
                   {FIELDS.map((f) => (
                     <option key={f.key} value={f.key}>
@@ -189,7 +189,7 @@ export default function RulesPage() {
                     next[i] = { ...c, op: e.target.value };
                     setForm({ ...form, conditions: next });
                   }}
-                  className="h-10 w-20 rounded-lg border-2 border-gray-200 px-2 text-sm"
+                  className="h-10 w-20 rounded-lg border-2 border-border-strong px-2 text-sm"
                 >
                   {OPS.map((o) => (
                     <option key={o.key} value={o.key}>
@@ -204,7 +204,7 @@ export default function RulesPage() {
                     next[i] = { ...c, value: e.target.value };
                     setForm({ ...form, conditions: next });
                   }}
-                  className="h-10 flex-1 rounded-lg border-2 border-gray-200 px-2 text-sm"
+                  className="h-10 flex-1 rounded-lg border-2 border-border-strong px-2 text-sm"
                 />
                 <button
                   onClick={() => setForm({ ...form, conditions: form.conditions.filter((_, idx) => idx !== i) })}
@@ -216,7 +216,7 @@ export default function RulesPage() {
             ))}
             <button
               onClick={() => setForm({ ...form, conditions: [...form.conditions, { field: "age", op: "eq", value: "" }] })}
-              className="text-xs font-bold text-hasfarm-700 hover:underline"
+              className="text-xs font-bold text-primary hover:underline"
             >
               + Thêm điều kiện
             </button>
@@ -233,7 +233,7 @@ export default function RulesPage() {
                     next[i] = { ...a, type: e.target.value };
                     setForm({ ...form, actions: next });
                   }}
-                  className="h-10 flex-1 rounded-lg border-2 border-gray-200 px-2 text-sm"
+                  className="h-10 flex-1 rounded-lg border-2 border-border-strong px-2 text-sm"
                 >
                   {ACTIONS.map((x) => (
                     <option key={x.key} value={x.key}>
@@ -249,7 +249,7 @@ export default function RulesPage() {
                     setForm({ ...form, actions: next });
                   }}
                   placeholder="giá trị"
-                  className="h-10 flex-1 rounded-lg border-2 border-gray-200 px-2 text-sm"
+                  className="h-10 flex-1 rounded-lg border-2 border-border-strong px-2 text-sm"
                 />
                 <button
                   onClick={() => setForm({ ...form, actions: form.actions.filter((_, idx) => idx !== i) })}
@@ -261,7 +261,7 @@ export default function RulesPage() {
             ))}
             <button
               onClick={() => setForm({ ...form, actions: [...form.actions, { type: "SET_STATUS", value: "" }] })}
-              className="text-xs font-bold text-hasfarm-700 hover:underline"
+              className="text-xs font-bold text-primary hover:underline"
             >
               + Thêm hành động
             </button>

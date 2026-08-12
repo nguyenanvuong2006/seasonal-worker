@@ -1,8 +1,21 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { Badge, Button, Card, CardContent, Input, Label, Modal, toast } from "@/components/ui";
-import { Loader2 } from "lucide-react";
+import {
+  Badge,
+  Button,
+  Card,
+  CardContent,
+  EmptyState,
+  FormField,
+  Input,
+  Modal,
+  PageHeader,
+  SearchBar,
+  SkeletonTable,
+  toast,
+} from "@/components/ui";
+import { Building2, Plus } from "lucide-react";
 
 type Dept = {
   id: string;
@@ -23,6 +36,7 @@ export default function DepartmentsAdminPage() {
   const [rows, setRows] = useState<Dept[]>([]);
   const [loading, setLoading] = useState(true);
   const [open, setOpen] = useState(false);
+  const [saving, setSaving] = useState(false);
   const [q, setQ] = useState("");
   const [form, setForm] = useState({
     deptName: "",
@@ -59,20 +73,25 @@ export default function DepartmentsAdminPage() {
   }, [rows, q]);
 
   const create = async () => {
-    const res = await fetch("/api/departments", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(form),
-    });
-    const d = await res.json();
-    if (!res.ok) {
-      toast({ title: d.error ?? "Lỗi tạo bộ phận", variant: "destructive" });
-      return;
+    setSaving(true);
+    try {
+      const res = await fetch("/api/departments", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(form),
+      });
+      const d = await res.json();
+      if (!res.ok) {
+        toast({ title: d.error ?? "Lỗi tạo bộ phận", variant: "destructive" });
+        return;
+      }
+      toast({ title: "Đã thêm bộ phận — tự động vào dropdown Daily Application" });
+      setOpen(false);
+      setForm({ deptName: "", groupName: "", vnName: "", supervisor: "", supervisorPhone: "", sheetLink: "", dailyQuota: 0 });
+      await load();
+    } finally {
+      setSaving(false);
     }
-    toast({ title: "✅ Đã thêm bộ phận — tự động vào dropdown Daily Application" });
-    setOpen(false);
-    setForm({ deptName: "", groupName: "", vnName: "", supervisor: "", supervisorPhone: "", sheetLink: "", dailyQuota: 0 });
-    await load();
   };
 
   const patch = async (id: string, body: Partial<Dept>) => {
@@ -101,55 +120,47 @@ export default function DepartmentsAdminPage() {
 
   return (
     <div className="space-y-5">
-      <div className="rounded-[20px] bg-white p-6 shadow-sm ring-1 ring-black/5">
-        <div className="flex flex-wrap items-start justify-between gap-3">
-          <div>
-            <span className="rounded-full bg-hasfarm-700 px-3 py-1 text-[10px] font-black uppercase tracking-widest text-white">
-              Sheet: Department
-            </span>
-            <h1 className="mt-3 text-[26px] font-black tracking-tight text-hasfarm-900">
-              Bộ phận &amp; Nhóm ({rows.length})
-            </h1>
-            <p className="mt-1 max-w-[75ch] text-sm text-gray-600">
-              Cấu trúc <b>Dept. + Group</b> giống hệt sheet gốc. Thêm bộ phận mới ở đây sẽ{" "}
-              <b>tự động xuất hiện trong dropdown</b> của Daily Application.
-            </p>
-          </div>
-          <Button variant="gold" onClick={() => setOpen(true)} className="rounded-xl">
-            + Thêm bộ phận
+      <PageHeader
+        title={`Bộ phận & Nhóm (${rows.length})`}
+        description={
+          <>
+            Cấu trúc <b>Dept. + Group</b> giống hệt sheet gốc. Thêm bộ phận mới ở đây sẽ <b>tự động xuất hiện trong dropdown</b>{" "}
+            của Daily Application.
+          </>
+        }
+        actions={
+          <Button variant="primary" onClick={() => setOpen(true)}>
+            <Plus className="h-4 w-4" /> Thêm bộ phận
           </Button>
-        </div>
-      </div>
+        }
+      />
 
-      <Card className="rounded-[18px] p-3">
-        <Input
-          value={q}
-          onChange={(e) => setQ(e.target.value)}
-          placeholder="🔎 Tìm Dept / Group / Tên tiếng Việt / Người phụ trách..."
-          className="h-11 rounded-xl"
-        />
-      </Card>
+      <SearchBar value={q} onChange={setQ} placeholder="Tìm Dept / Group / Tên tiếng Việt / Người phụ trách..." className="max-w-md" />
 
-      <Card className="overflow-hidden rounded-[18px] border border-black/5 p-0 shadow-sm">
-        <div className="flex items-center justify-between border-b bg-hasfarm-50 px-4 py-3">
-          <p className="text-[11px] font-black uppercase tracking-widest text-hasfarm-800">
-            Danh sách bộ phận
-          </p>
-          <Badge tone="gold">{filtered.length} dòng</Badge>
+      <Card className="overflow-hidden p-0">
+        <div className="flex items-center justify-between border-b border-border px-4 py-3">
+          <p className="text-[13px] font-semibold text-fg">Danh sách bộ phận</p>
+          <Badge tone="gray">{filtered.length} dòng</Badge>
         </div>
         <CardContent className="p-0">
           {loading ? (
-            <div className="p-12 text-center">
-              <Loader2 className="mx-auto h-6 w-6 animate-spin text-hasfarm-600" />
+            <div className="p-4">
+              <SkeletonTable rows={6} cols={8} />
             </div>
+          ) : filtered.length === 0 ? (
+            <EmptyState
+              icon={<Building2 className="h-5 w-5" aria-hidden />}
+              title="Không có bộ phận nào"
+              description={q ? `Không tìm thấy kết quả khớp với "${q}".` : "Chưa có bộ phận nào được tạo."}
+            />
           ) : (
             <div className="max-h-[64vh] overflow-auto">
               <table className="grid-sheet w-full text-[13px]">
-                <thead className="sticky top-0 bg-[#0F3D23] text-white">
+                <thead className="sticky top-0 bg-primary text-white">
                   <tr>
                     {["STT", "Dept.", "Group", "Tên Tiếng Việt", "Phụ trách", "SĐT", "Quota", "Hôm nay", "Tổng", "TT", ""].map(
                       (h) => (
-                        <th key={h} className="px-3 py-2.5 text-left text-[10px] font-black uppercase tracking-widest">
+                        <th key={h} className="px-3 py-2.5 text-left text-[10.5px] font-semibold uppercase tracking-wide">
                           {h}
                         </th>
                       ),
@@ -158,21 +169,13 @@ export default function DepartmentsAdminPage() {
                 </thead>
                 <tbody>
                   {filtered.map((d) => (
-                    <tr key={d.id} className="hover:bg-hasfarm-50/50">
-                      <td className="px-3 py-2 text-gray-400">{d.stt}</td>
-                      <td className="px-3 py-2 font-black text-hasfarm-900">{d.deptName}</td>
-                      <td className="px-3 py-2">
-                        {d.groupName ? (
-                          <span className="rounded-full bg-sky-100 px-2 py-0.5 text-[11px] font-bold text-sky-800">
-                            {d.groupName}
-                          </span>
-                        ) : (
-                          <span className="text-gray-300">—</span>
-                        )}
-                      </td>
-                      <td className="px-3 py-2 text-gray-700">{d.vnName ?? "—"}</td>
-                      <td className="px-3 py-2">{d.supervisor ?? "—"}</td>
-                      <td className="px-3 py-2 text-xs">{d.supervisorPhone ?? "—"}</td>
+                    <tr key={d.id} className="border-b border-border transition-colors hover:bg-surface-hover">
+                      <td className="px-3 py-2 text-fg-muted">{d.stt}</td>
+                      <td className="px-3 py-2 font-semibold text-fg">{d.deptName}</td>
+                      <td className="px-3 py-2">{d.groupName ? <Badge tone="blue">{d.groupName}</Badge> : <span className="text-fg-muted">—</span>}</td>
+                      <td className="px-3 py-2 text-fg-secondary">{d.vnName ?? "—"}</td>
+                      <td className="px-3 py-2 text-fg-secondary">{d.supervisor ?? "—"}</td>
+                      <td className="px-3 py-2 text-xs text-fg-secondary">{d.supervisorPhone ?? "—"}</td>
                       <td className="px-3 py-2">
                         <input
                           type="number"
@@ -181,20 +184,20 @@ export default function DepartmentsAdminPage() {
                             const v = Number(e.target.value);
                             if (v !== d.dailyQuota) void patch(d.id, { dailyQuota: v });
                           }}
-                          className="w-16 rounded border-2 border-gray-200 px-2 py-1"
+                          className="w-16 rounded-[6px] border border-border-strong bg-surface px-2 py-1 text-fg outline-none focus:border-primary focus:ring-2 focus:ring-primary/15"
                         />
                       </td>
-                      <td className="px-3 py-2 text-center font-black text-hasfarm-700">{d.assignedToday}</td>
-                      <td className="px-3 py-2 text-center text-gray-500">{d.totalAssigned}</td>
+                      <td className="px-3 py-2 text-center font-semibold text-primary">{d.assignedToday}</td>
+                      <td className="px-3 py-2 text-center text-fg-secondary">{d.totalAssigned}</td>
                       <td className="px-3 py-2">
                         <button onClick={() => void patch(d.id, { isActive: !d.isActive })}>
-                          <Badge tone={d.isActive ? "green" : "gray"}>{d.isActive ? "Bật" : "Khoá"}</Badge>
+                          <Badge tone={d.isActive ? "green" : "gray"} dot>{d.isActive ? "Bật" : "Khoá"}</Badge>
                         </button>
                       </td>
                       <td className="px-3 py-2 text-right">
                         <button
                           onClick={() => void remove(d.id)}
-                          className="text-xs font-bold text-red-600 hover:underline"
+                          className="text-xs font-semibold text-danger hover:underline"
                         >
                           Xoá
                         </button>
@@ -209,73 +212,54 @@ export default function DepartmentsAdminPage() {
       </Card>
 
       <Modal open={open} onClose={() => setOpen(false)} title="Thêm bộ phận mới" width="max-w-xl">
-        <div className="space-y-3">
-          <div className="grid gap-3 md:grid-cols-2">
-            <div>
-              <Label>Dept. (tên bộ phận) *</Label>
+        <div className="space-y-4">
+          <div className="grid gap-4 md:grid-cols-2">
+            <FormField label="Dept. (tên bộ phận)" required>
               <Input
                 value={form.deptName}
                 onChange={(e) => setForm({ ...form, deptName: e.target.value })}
                 placeholder="VD: Chrysanth Spray"
-                className="h-11 rounded-xl"
               />
-            </div>
-            <div>
-              <Label>Group (nhóm — có thể để trống)</Label>
+            </FormField>
+            <FormField label="Group (nhóm — có thể để trống)">
               <Input
                 value={form.groupName}
                 onChange={(e) => setForm({ ...form, groupName: e.target.value })}
                 placeholder="VD: Fast H"
-                className="h-11 rounded-xl"
               />
-            </div>
+            </FormField>
           </div>
-          <div>
-            <Label>Tên Tiếng Việt</Label>
+          <FormField label="Tên Tiếng Việt">
             <Input
               value={form.vnName}
               onChange={(e) => setForm({ ...form, vnName: e.target.value })}
               placeholder="VD: Cúc Fast nhóm thu hoạch"
-              className="h-11 rounded-xl"
             />
+          </FormField>
+          <div className="grid gap-4 md:grid-cols-2">
+            <FormField label="Phụ trách lao động">
+              <Input value={form.supervisor} onChange={(e) => setForm({ ...form, supervisor: e.target.value })} />
+            </FormField>
+            <FormField label="SĐT phụ trách">
+              <Input value={form.supervisorPhone} onChange={(e) => setForm({ ...form, supervisorPhone: e.target.value })} />
+            </FormField>
           </div>
-          <div className="grid gap-3 md:grid-cols-2">
-            <div>
-              <Label>Phụ trách lao động</Label>
-              <Input
-                value={form.supervisor}
-                onChange={(e) => setForm({ ...form, supervisor: e.target.value })}
-                className="h-11 rounded-xl"
-              />
-            </div>
-            <div>
-              <Label>SĐT phụ trách</Label>
-              <Input
-                value={form.supervisorPhone}
-                onChange={(e) => setForm({ ...form, supervisorPhone: e.target.value })}
-                className="h-11 rounded-xl"
-              />
-            </div>
-          </div>
-          <div>
-            <Label>Link sheet riêng (nếu có)</Label>
+          <FormField label="Link sheet riêng (nếu có)">
             <Input
               value={form.sheetLink}
               onChange={(e) => setForm({ ...form, sheetLink: e.target.value })}
               placeholder="https://docs.google.com/..."
-              className="h-11 rounded-xl"
             />
-          </div>
-          <div>
-            <Label>Định mức lao động / ngày</Label>
+          </FormField>
+          <FormField label="Định mức lao động / ngày">
             <Input
               type="number"
               value={form.dailyQuota}
               onChange={(e) => setForm({ ...form, dailyQuota: Number(e.target.value) })}
-              className="h-11 w-32 rounded-xl"
+              className="w-32"
             />
-          </div>
-          <Button variant="gold" size="lg" className="w-full rounded-xl" onClick={create}>
+          </FormField>
+          <Button variant="primary" size="lg" className="w-full" loading={saving} disabled={!form.deptName.trim()} onClick={create}>
             Tạo bộ phận
           </Button>
         </div>

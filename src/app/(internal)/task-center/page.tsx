@@ -2,8 +2,25 @@
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
-import { Badge, Card, CardContent, CardHeader, Input, Button } from "@/components/ui";
-import { Loader2, UserPlus, LogOut, Repeat, CalendarClock, TriangleAlert, RotateCcw } from "lucide-react";
+import {
+  Badge,
+  Card,
+  CardContent,
+  EmptyState,
+  ErrorState,
+  PageHeader,
+  SearchBar,
+  Skeleton,
+} from "@/components/ui";
+import {
+  CalendarClock,
+  CheckCircle2,
+  ChevronRight,
+  LogOut,
+  Repeat,
+  UserPlus,
+  type LucideIcon,
+} from "lucide-react";
 
 type Section<T> = { rows: T[]; total: number };
 type TaskData = {
@@ -21,9 +38,104 @@ function ageDays(iso: string) {
   return Math.floor((Date.now() - new Date(iso).getTime()) / 86400000);
 }
 function priorityBadge(days: number) {
-  if (days >= 3) return <Badge tone="red">Ưu tiên cao — {days} ngày</Badge>;
-  if (days >= 1) return <Badge tone="amber">{days} ngày</Badge>;
-  return <Badge tone="green">Mới</Badge>;
+  if (days >= 3) return <Badge tone="red" dot>Ưu tiên cao · {days} ngày</Badge>;
+  if (days >= 1) return <Badge tone="amber" dot>{days} ngày</Badge>;
+  return <Badge tone="green" dot>Mới</Badge>;
+}
+
+function TaskGroup({
+  icon: Icon,
+  title,
+  total,
+  emptyLabel,
+  moreHref,
+  children,
+}: {
+  icon: LucideIcon;
+  title: string;
+  total: number;
+  emptyLabel: string;
+  moreHref: string;
+  visibleCount: number;
+  children: React.ReactNode;
+}) {
+  return (
+    <Card>
+      <div className="flex items-center gap-2.5 border-b border-border px-5 py-3.5">
+        <div className="flex h-7 w-7 shrink-0 items-center justify-center rounded-[8px] bg-primary-tint text-primary">
+          <Icon className="h-4 w-4" aria-hidden />
+        </div>
+        <h3 className="text-[14px] font-semibold text-fg">
+          {title} <span className="text-fg-muted">({total})</span>
+        </h3>
+      </div>
+      <CardContent className="space-y-1 p-2.5">
+        {total === 0 ? (
+          <p className="px-2.5 py-4 text-center text-[13px] text-fg-muted">{emptyLabel}</p>
+        ) : (
+          <>
+            {children}
+            {total > 0 && (
+              <a
+                href={moreHref}
+                className="mt-1 block rounded-[8px] px-2.5 py-2 text-center text-[12px] font-semibold text-primary transition-colors hover:bg-primary-tint"
+              >
+                Xem tất cả {total} →
+              </a>
+            )}
+          </>
+        )}
+      </CardContent>
+    </Card>
+  );
+}
+
+function TaskRow({
+  href,
+  title,
+  meta,
+  badge,
+}: {
+  href: string;
+  title: React.ReactNode;
+  meta: React.ReactNode;
+  badge: React.ReactNode;
+}) {
+  return (
+    <a
+      href={href}
+      className="group flex items-center justify-between gap-3 rounded-[10px] px-3 py-2.5 transition-colors hover:bg-surface-hover"
+    >
+      <div className="min-w-0">
+        <p className="truncate text-[13.5px] font-semibold text-fg">{title}</p>
+        <p className="mt-0.5 truncate text-[12px] text-fg-muted">{meta}</p>
+      </div>
+      <div className="flex shrink-0 items-center gap-2">
+        {badge}
+        <ChevronRight className="h-4 w-4 text-fg-muted opacity-0 transition-opacity group-hover:opacity-100" aria-hidden />
+      </div>
+    </a>
+  );
+}
+
+function TaskCenterSkeleton() {
+  return (
+    <div className="grid gap-4 lg:grid-cols-2">
+      {Array.from({ length: 4 }).map((_, i) => (
+        <div key={i} className="rounded-[14px] border border-border bg-surface p-5" role="status" aria-label="Đang tải">
+          <div className="flex items-center gap-2.5">
+            <Skeleton className="h-7 w-7 rounded-[8px]" />
+            <Skeleton className="h-4 w-40" />
+          </div>
+          <div className="mt-4 space-y-3">
+            <Skeleton className="h-3.5 w-full" />
+            <Skeleton className="h-3.5 w-4/5" />
+            <Skeleton className="h-3.5 w-3/5" />
+          </div>
+        </div>
+      ))}
+    </div>
+  );
 }
 
 export default function TaskCenterPage() {
@@ -83,178 +195,125 @@ export default function TaskCenterPage() {
 
   const retry = () => void load(q);
 
-  if (state === "forbidden") {
-    return (
-      <div className="space-y-5">
-        <h1 className="text-2xl font-black text-hasfarm-900">Task Center</h1>
-        <Card>
-          <CardContent className="flex flex-col items-center gap-4 p-10 text-center">
-            <TriangleAlert className="h-8 w-8 text-amber-500" />
-            <p className="text-sm text-gray-600">{errorMsg}</p>
-            {errorMsg.includes("đăng nhập") ? (
-              <Button onClick={() => router.push("/login")}>Đăng nhập lại</Button>
-            ) : null}
-          </CardContent>
-        </Card>
-      </div>
-    );
-  }
-
-  if (state === "error") {
-    return (
-      <div className="space-y-5">
-        <h1 className="text-2xl font-black text-hasfarm-900">Task Center</h1>
-        <Card>
-          <CardContent className="flex flex-col items-center gap-4 p-10 text-center">
-            <TriangleAlert className="h-8 w-8 text-red-500" />
-            <p className="text-sm text-gray-600">{errorMsg}</p>
-            <Button onClick={retry} variant="outline">
-              <RotateCcw className="mr-2 h-4 w-4" /> Thử lại
-            </Button>
-          </CardContent>
-        </Card>
-      </div>
-    );
-  }
-
   const hidden = new Set(data?.hiddenSections ?? []);
 
   return (
     <div className="space-y-5">
-      <div>
-        <h1 className="text-2xl font-black text-hasfarm-900">Task Center</h1>
-        <p className="text-sm text-gray-500">Toàn bộ việc cần xử lý — không cần mở từng màn hình riêng.</p>
-      </div>
+      <PageHeader title="Task Center" description="Các công việc cần bạn xử lý và theo dõi." />
 
-      <Input placeholder="Tìm theo tên hoặc CCCD trong tất cả các việc bên dưới..." value={q} onChange={(e) => onSearchChange(e.target.value)} className="h-12" />
+      <SearchBar
+        value={q}
+        onChange={onSearchChange}
+        placeholder="Tìm theo tên hoặc CCCD trong tất cả các việc bên dưới..."
+        className="max-w-xl"
+      />
 
-      {state === "loading" && !data ? (
-        <div className="p-10 text-center">
-          <Loader2 className="mx-auto h-6 w-6 animate-spin text-hasfarm-600" />
-        </div>
+      {state === "forbidden" ? (
+        <Card>
+          <ErrorState
+            title="Không có quyền truy cập"
+            description={errorMsg}
+            onRetry={errorMsg.includes("đăng nhập") ? () => router.push("/login") : undefined}
+          />
+        </Card>
+      ) : state === "error" ? (
+        <Card>
+          <ErrorState description={errorMsg} onRetry={retry} />
+        </Card>
+      ) : state === "loading" && !data ? (
+        <TaskCenterSkeleton />
       ) : state === "empty" ? (
         <Card>
-          <CardContent className="p-10 text-center text-sm text-gray-400">
-            {q ? `Không có việc nào khớp với "${q}".` : "Không có việc nào cần xử lý."}
-          </CardContent>
+          <EmptyState
+            icon={<CheckCircle2 className="h-5 w-5" aria-hidden />}
+            title="Không còn công việc cần xử lý"
+            description={q ? `Không có việc nào khớp với "${q}".` : "Bạn đã xử lý hết các task hiện tại."}
+          />
         </Card>
       ) : data ? (
         <div className="grid gap-4 lg:grid-cols-2">
           {!hidden.has("newApplicants") && (
-            <Card>
-              <CardHeader
-                title={
-                  <span className="flex items-center gap-2">
-                    <UserPlus className="h-4 w-4" /> Người mới chờ duyệt ({data.newApplicants.total})
-                  </span>
-                }
-              />
-              <CardContent className="space-y-2">
-                {data.newApplicants.rows.length === 0 && <p className="text-sm text-gray-400">Không có.</p>}
-                {data.newApplicants.rows.map((r) => (
-                  <a key={r.id} href="/hr/registrations" className="flex items-center justify-between rounded-xl bg-gray-50 p-3 text-sm hover:bg-hasfarm-50">
-                    <span>
-                      <b>{r.fullName}</b> <span className="text-xs text-gray-400">({r.cccd})</span>
-                    </span>
-                    {priorityBadge(ageDays(r.submittedAt))}
-                  </a>
-                ))}
-                {data.newApplicants.total > data.newApplicants.rows.length && (
-                  <a href="/hr/registrations" className="block pt-1 text-center text-xs font-bold text-hasfarm-700 hover:underline">
-                    Xem tất cả {data.newApplicants.total} hồ sơ →
-                  </a>
-                )}
-              </CardContent>
-            </Card>
+            <TaskGroup
+              icon={UserPlus}
+              title="Người mới chờ duyệt"
+              total={data.newApplicants.total}
+              visibleCount={data.newApplicants.rows.length}
+              emptyLabel="Không có."
+              moreHref="/hr/registrations"
+            >
+              {data.newApplicants.rows.map((r) => (
+                <TaskRow
+                  key={r.id}
+                  href="/hr/registrations"
+                  title={r.fullName}
+                  meta={r.cccd}
+                  badge={priorityBadge(ageDays(r.submittedAt))}
+                />
+              ))}
+            </TaskGroup>
           )}
 
           {!hidden.has("resignations") && (
-            <Card>
-              <CardHeader
-                title={
-                  <span className="flex items-center gap-2">
-                    <LogOut className="h-4 w-4" /> Nghỉ việc chờ duyệt ({data.resignations.total})
-                  </span>
-                }
-              />
-              <CardContent className="space-y-2">
-                {data.resignations.rows.length === 0 && <p className="text-sm text-gray-400">Không có.</p>}
-                {data.resignations.rows.map((r) => (
-                  <a key={r.id} href="/admin/workforce-movements" className="flex items-center justify-between rounded-xl bg-gray-50 p-3 text-sm hover:bg-hasfarm-50">
-                    <span>
-                      <b>{r.workerName}</b> <span className="text-xs text-gray-400">({r.workerCccd})</span> · hiệu lực {r.effectiveDate}
-                    </span>
-                    {priorityBadge(ageDays(r.createdAt))}
-                  </a>
-                ))}
-                {data.resignations.total > data.resignations.rows.length && (
-                  <a href="/admin/workforce-movements" className="block pt-1 text-center text-xs font-bold text-hasfarm-700 hover:underline">
-                    Xem tất cả {data.resignations.total} yêu cầu →
-                  </a>
-                )}
-              </CardContent>
-            </Card>
+            <TaskGroup
+              icon={LogOut}
+              title="Nghỉ việc chờ duyệt"
+              total={data.resignations.total}
+              visibleCount={data.resignations.rows.length}
+              emptyLabel="Không có."
+              moreHref="/admin/workforce-movements"
+            >
+              {data.resignations.rows.map((r) => (
+                <TaskRow
+                  key={r.id}
+                  href="/admin/workforce-movements"
+                  title={r.workerName}
+                  meta={`${r.workerCccd} · hiệu lực ${r.effectiveDate}`}
+                  badge={priorityBadge(ageDays(r.createdAt))}
+                />
+              ))}
+            </TaskGroup>
           )}
 
           {!hidden.has("transfers") && (
-            <Card>
-              <CardHeader
-                title={
-                  <span className="flex items-center gap-2">
-                    <Repeat className="h-4 w-4" /> Thuyên chuyển chờ xử lý ({data.transfers.total})
-                  </span>
-                }
-              />
-              <CardContent className="space-y-2">
-                {data.transfers.rows.length === 0 && <p className="text-sm text-gray-400">Không có.</p>}
-                {data.transfers.rows.map((r) => (
-                  <a key={r.id} href="/admin/workforce-movements" className="flex items-center justify-between rounded-xl bg-gray-50 p-3 text-sm hover:bg-hasfarm-50">
-                    <span>
-                      <b>{r.workerName}</b> <span className="text-xs text-gray-400">({r.workerCccd})</span> ·{" "}
-                      {r.status === "WAITING_DECISION" ? "Không đến — chờ quyết định" : "Chờ xác nhận"}
-                    </span>
-                    {priorityBadge(ageDays(r.createdAt))}
-                  </a>
-                ))}
-                {data.transfers.total > data.transfers.rows.length && (
-                  <a href="/admin/workforce-movements" className="block pt-1 text-center text-xs font-bold text-hasfarm-700 hover:underline">
-                    Xem tất cả {data.transfers.total} yêu cầu →
-                  </a>
-                )}
-              </CardContent>
-            </Card>
+            <TaskGroup
+              icon={Repeat}
+              title="Thuyên chuyển chờ xử lý"
+              total={data.transfers.total}
+              visibleCount={data.transfers.rows.length}
+              emptyLabel="Không có."
+              moreHref="/admin/workforce-movements"
+            >
+              {data.transfers.rows.map((r) => (
+                <TaskRow
+                  key={r.id}
+                  href="/admin/workforce-movements"
+                  title={r.workerName}
+                  meta={`${r.workerCccd} · ${r.status === "WAITING_DECISION" ? "Không đến — chờ quyết định" : "Chờ xác nhận"}`}
+                  badge={priorityBadge(ageDays(r.createdAt))}
+                />
+              ))}
+            </TaskGroup>
           )}
 
           {!hidden.has("expiringPlans") && (
-            <Card>
-              <CardHeader
-                title={
-                  <span className="flex items-center gap-2">
-                    <CalendarClock className="h-4 w-4" /> Planning sắp hết hạn ({data.expiringPlans.total})
-                  </span>
-                }
-              />
-              <CardContent className="space-y-2">
-                {data.expiringPlans.rows.length === 0 && <p className="text-sm text-gray-400">Không có.</p>}
-                {data.expiringPlans.rows.map((r) => (
-                  <a key={r.id} href="/admin/planning" className="flex items-center justify-between rounded-xl bg-gray-50 p-3 text-sm hover:bg-hasfarm-50">
-                    <span>
-                      <b>
-                        {r.deptName}
-                        {r.section ? ` — ${r.section}` : ""}
-                      </b>{" "}
-                      · nhu cầu {r.targetCount ?? 0}
-                    </span>
-                    <Badge tone="amber">Hết hạn {r.endDate}</Badge>
-                  </a>
-                ))}
-                {data.expiringPlans.total > data.expiringPlans.rows.length && (
-                  <a href="/admin/planning" className="block pt-1 text-center text-xs font-bold text-hasfarm-700 hover:underline">
-                    Xem tất cả {data.expiringPlans.total} kế hoạch →
-                  </a>
-                )}
-              </CardContent>
-            </Card>
+            <TaskGroup
+              icon={CalendarClock}
+              title="Planning sắp hết hạn"
+              total={data.expiringPlans.total}
+              visibleCount={data.expiringPlans.rows.length}
+              emptyLabel="Không có."
+              moreHref="/admin/planning"
+            >
+              {data.expiringPlans.rows.map((r) => (
+                <TaskRow
+                  key={r.id}
+                  href="/admin/planning"
+                  title={`${r.deptName}${r.section ? ` — ${r.section}` : ""}`}
+                  meta={`Nhu cầu ${r.targetCount ?? 0}`}
+                  badge={<Badge tone="amber" dot>Hết hạn {r.endDate}</Badge>}
+                />
+              ))}
+            </TaskGroup>
           )}
         </div>
       ) : null}

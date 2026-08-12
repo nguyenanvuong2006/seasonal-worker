@@ -20,6 +20,46 @@
   --color-gold-500: #d9a327;
   --color-gold-600: #b8841c;
   --color-gold-700: #8a5f16;
+
+  /* ============================================================
+     SEMANTIC DESIGN TOKENS (Professional UI Redesign)
+     ------------------------------------------------------------
+     Single source of truth for the "background / surface / border / text /
+     primary / success / warning / danger / info" tokens used across every
+     redesigned component — replaces ad-hoc hex/tailwind-class choices
+     scattered per file. `fg*` = the audit's "text-primary/secondary/muted"
+     (named `fg` instead to avoid the awkward `text-text-primary` utility
+     Tailwind would otherwise generate for `--color-text-primary`).
+     Brand green stays `--color-primary` (kept identical to hasfarm-700) —
+     this is a working HR/agriculture ops tool with an established
+     identity, not a generic SaaS palette. `success` is a DIFFERENT green
+     (emerald) so "active nav" and "approved application" never collide.
+     ============================================================ */
+  --color-bg: #f7f8f5;
+  --color-surface: #ffffff;
+  --color-surface-hover: #f0f2ee;
+  --color-border: #e3e7e0;
+  --color-border-strong: #cdd4c8;
+
+  --color-fg: #16231a;
+  --color-fg-secondary: #576358;
+  --color-fg-muted: #8b968a;
+
+  --color-primary: #115830;
+  --color-primary-hover: #0d4626;
+  --color-primary-tint: #eaf3ec;
+
+  --color-accent: #b8841c;
+  --color-accent-tint: #fbf3e1;
+
+  --color-success: #059669;
+  --color-success-tint: #e7f6ef;
+  --color-warning: #b45309;
+  --color-warning-tint: #fdf3e1;
+  --color-danger: #b91c1c;
+  --color-danger-tint: #fbeaea;
+  --color-info: #1d4ed8;
+  --color-info-tint: #eaf0fd;
 }
 
 html,
@@ -34,7 +74,8 @@ body {
     Roboto,
     Helvetica,
     Arial;
-  background: #f8fafc;
+  background: var(--color-bg);
+  color: var(--color-fg);
 }
 
 @keyframes slide-up {
@@ -141,4 +182,76 @@ table.grid-sheet td {
 }
 .animate-fade-in-scale {
   animation: fade-in-scale 0.35s cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+/* ============================================================
+   MOTION PRIMITIVES (Professional UI Redesign)
+   ------------------------------------------------------------
+   150–300ms, opacity/transform only — no new animation dependency.
+   Every animation here is disabled under prefers-reduced-motion below,
+   so the app stays fully usable with motion off (functionality never
+   depends on an animation completing).
+   ============================================================ */
+@keyframes menu-in {
+  from {
+    opacity: 0;
+    transform: translateY(-4px) scale(0.98);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
+}
+.animate-menu-in {
+  animation: menu-in 0.15s cubic-bezier(0.16, 1, 0.3, 1);
+  transform-origin: top;
+}
+
+@keyframes drawer-in {
+  from {
+    transform: translateX(-100%);
+  }
+  to {
+    transform: translateX(0);
+  }
+}
+.animate-drawer-in {
+  animation: drawer-in 0.25s cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+@keyframes overlay-in {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
+.animate-overlay-in {
+  animation: overlay-in 0.2s ease-out;
+}
+
+@keyframes row-in {
+  from {
+    opacity: 0;
+    transform: translateY(4px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+.animate-row-in {
+  animation: row-in 0.2s ease-out both;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.001ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.001ms !important;
+    scroll-behavior: auto !important;
+  }
 }

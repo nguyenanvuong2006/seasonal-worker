@@ -10,9 +10,23 @@ import {
   useReactTable,
   type SortingState,
 } from "@tanstack/react-table";
-import { Badge, Button, Card, Input, Modal, toast, cn } from "@/components/ui";
+import { Badge, Button, Card, Input, KpiCard, Modal, toast, cn } from "@/components/ui";
 import { formatDate, STATUS_META, todayStr } from "@/lib/helpers";
-import { Loader2, RefreshCw, ShieldCheck, UserPlus2 } from "lucide-react";
+import {
+  AlertTriangle,
+  Calendar,
+  CheckCircle2,
+  Clock,
+  Download,
+  FileText,
+  History,
+  Loader2,
+  RefreshCw,
+  ShieldCheck,
+  UserPlus2,
+  X,
+  Zap,
+} from "lucide-react";
 
 export type AppRow = {
   id: string;
@@ -75,8 +89,8 @@ function EditableCell({
       <button
         onClick={() => setEditing(true)}
         className={cn(
-          "block w-full truncate px-2 py-1.5 text-left text-[13px] hover:bg-gold-50 hover:ring-1 hover:ring-gold-200",
-          !value && "text-gray-300",
+          "block w-full truncate rounded-[6px] px-2 py-1.5 text-left text-[13px] hover:bg-primary-tint hover:ring-1 hover:ring-primary/25",
+          !value && "text-fg-muted",
           className,
         )}
         title="Nhấp để sửa như Google Sheet — Enter để lưu"
@@ -104,7 +118,7 @@ function EditableCell({
           setEditing(false);
         }
       }}
-      className="w-full rounded-lg border-2 border-hasfarm-600 bg-white px-2 py-1 text-[13px] shadow outline-none"
+      className="w-full rounded-[6px] border-2 border-primary bg-surface px-2 py-1 text-[13px] shadow-sm outline-none"
     />
   );
 }
@@ -140,7 +154,7 @@ function HistoryPanel({ row, canRestore, onClose, onRestored }: { row: AppRow; c
         toast({ title: d.error ?? "Khôi phục thất bại", variant: "destructive" });
         return;
       }
-      toast({ title: "✅ Đã khôi phục về phiên bản này" });
+      toast({ title: "Đã khôi phục về phiên bản này" });
       onRestored();
       onClose();
     } finally {
@@ -152,10 +166,10 @@ function HistoryPanel({ row, canRestore, onClose, onRestored }: { row: AppRow; c
     <Modal open onClose={onClose} title={`Lịch sử chỉnh sửa: ${row.fullName}`} width="max-w-2xl">
       {logs === null ? (
         <div className="p-6 text-center">
-          <Loader2 className="mx-auto h-5 w-5 animate-spin text-hasfarm-600" />
+          <Loader2 className="mx-auto h-5 w-5 animate-spin text-primary" />
         </div>
       ) : logs.length === 0 ? (
-        <p className="p-6 text-center text-sm text-gray-400">Chưa có lịch sử chỉnh sửa nào cho hồ sơ này.</p>
+        <p className="p-6 text-center text-sm text-fg-muted">Chưa có lịch sử chỉnh sửa nào cho hồ sơ này.</p>
       ) : (
         <ul className="max-h-[60vh] space-y-3 overflow-y-auto">
           {logs.map((l) => {
@@ -163,22 +177,22 @@ function HistoryPanel({ row, canRestore, onClose, onRestored }: { row: AppRow; c
             const after = l.details?.after ?? {};
             const changedKeys = Object.keys(after).filter((k) => k !== "updatedAt");
             return (
-              <li key={l.id} className="rounded-xl border p-3">
+              <li key={l.id} className="rounded-[10px] border border-border p-3">
                 <div className="flex flex-wrap items-center justify-between gap-2">
-                  <p className="text-[12px] font-bold text-hasfarm-900">
+                  <p className="text-[12px] font-semibold text-fg">
                     {l.action} · {l.username ?? "—"}
                   </p>
-                  <p className="text-[11px] text-gray-400">{new Date(l.createdAt).toLocaleString("vi-VN")}</p>
+                  <p className="text-[11px] text-fg-muted">{new Date(l.createdAt).toLocaleString("vi-VN")}</p>
                 </div>
-                {l.details?.reason && <p className="mt-1 text-[12px] italic text-gray-500">Lý do: {l.details.reason}</p>}
+                {l.details?.reason && <p className="mt-1 text-[12px] italic text-fg-secondary">Lý do: {l.details.reason}</p>}
                 {changedKeys.length > 0 && (
                   <table className="mt-2 w-full text-[12px]">
                     <tbody>
                       {changedKeys.map((k) => (
-                        <tr key={k} className="border-t">
-                          <td className="py-1 pr-2 font-mono text-gray-400">{k}</td>
-                          <td className="py-1 pr-2 text-red-500 line-through">{String(before[k] ?? "—")}</td>
-                          <td className="py-1 text-emerald-700">{String(after[k] ?? "—")}</td>
+                        <tr key={k} className="border-t border-border">
+                          <td className="py-1 pr-2 font-mono text-fg-muted">{k}</td>
+                          <td className="py-1 pr-2 text-danger line-through">{String(before[k] ?? "—")}</td>
+                          <td className="py-1 text-success">{String(after[k] ?? "—")}</td>
                         </tr>
                       ))}
                     </tbody>
@@ -188,9 +202,9 @@ function HistoryPanel({ row, canRestore, onClose, onRestored }: { row: AppRow; c
                   <button
                     onClick={() => restore(l.id)}
                     disabled={busyId === l.id}
-                    className="mt-2 rounded-full bg-gray-100 px-3 py-1 text-[11px] font-bold text-gray-700 hover:bg-gray-200"
+                    className="mt-2 rounded-full bg-surface-hover px-3 py-1 text-[11px] font-semibold text-fg-secondary hover:bg-border disabled:opacity-50"
                   >
-                    {busyId === l.id ? "Đang khôi phục…" : "↺ Khôi phục về trước lần sửa này"}
+                    {busyId === l.id ? "Đang khôi phục…" : "Khôi phục về trước lần sửa này"}
                   </button>
                 )}
               </li>
@@ -329,7 +343,7 @@ export default function RegistrationsGrid({
         header: ({ table }) => (
           <input
             type="checkbox"
-            className="h-4 w-4 accent-gold-500"
+            className="h-4 w-4 accent-primary"
             checked={table.getIsAllRowsSelected()}
             onChange={table.getToggleAllRowsSelectedHandler()}
           />
@@ -337,7 +351,7 @@ export default function RegistrationsGrid({
         cell: ({ row }) => (
           <input
             type="checkbox"
-            className="h-4 w-4 accent-gold-500"
+            className="h-4 w-4 accent-primary"
             checked={row.getIsSelected()}
             onChange={row.getToggleSelectedHandler()}
           />
@@ -346,7 +360,7 @@ export default function RegistrationsGrid({
       ch.accessor("regDate", {
         header: "Ngày",
         cell: (i) => (
-          <span className="block px-2 text-center text-[12px] font-bold text-gray-600">
+          <span className="block px-2 text-center text-[12px] font-semibold text-fg-secondary">
             {formatDate(i.getValue()).slice(0, 5)}
           </span>
         ),
@@ -358,7 +372,7 @@ export default function RegistrationsGrid({
             <EditableCell
               value={i.getValue()}
               onCommit={(v) => patchRow(i.row.original.id, { cccd: v })}
-              className="font-mono font-bold"
+              className="font-mono font-semibold"
             />
           ) : (
             <span className="px-2 font-mono text-[13px]">{i.getValue()}</span>
@@ -372,10 +386,10 @@ export default function RegistrationsGrid({
               <EditableCell
                 value={i.getValue()}
                 onCommit={(v) => patchRow(i.row.original.id, { fullName: v })}
-                className="font-bold text-hasfarm-900"
+                className="font-semibold text-fg"
               />
             ) : (
-              <span className="px-2 text-[13px] font-bold">{i.getValue()}</span>
+              <span className="px-2 text-[13px] font-semibold text-fg">{i.getValue()}</span>
             )}
           </div>
         ),
@@ -389,17 +403,17 @@ export default function RegistrationsGrid({
           return (
             <span className="flex items-center gap-1 px-1">
               {matched ? (
-                <span className="inline-flex items-center gap-1 rounded-full bg-emerald-100 px-2 py-0.5 text-[10px] font-black text-emerald-800">
+                <Badge tone="green">
                   <ShieldCheck className="h-3 w-3" /> CŨ
-                </span>
+                </Badge>
               ) : (
-                <span className="inline-flex items-center gap-1 rounded-full bg-amber-100 px-2 py-0.5 text-[10px] font-black text-amber-800">
+                <Badge tone="amber">
                   <UserPlus2 className="h-3 w-3" /> MỚI
-                </span>
+                </Badge>
               )}
               {lie && (
-                <span title="Tự khai là CŨ nhưng không có trong DW Data" className="text-[13px]">
-                  ⚠️
+                <span title="Tự khai là CŨ nhưng không có trong DW Data" className="text-danger">
+                  <AlertTriangle className="h-3.5 w-3.5" aria-hidden />
                 </span>
               )}
             </span>
@@ -417,11 +431,11 @@ export default function RegistrationsGrid({
       }),
       ch.accessor("gender", {
         header: "Giới tính",
-        cell: (i) => <span className="block px-1 text-center text-[12px]">{i.getValue() ?? "—"}</span>,
+        cell: (i) => <span className="block px-1 text-center text-[12px] text-fg-secondary">{i.getValue() ?? "—"}</span>,
       }),
       ch.accessor("age", {
         header: "Tuổi",
-        cell: (i) => <span className="block px-1 text-center text-[12px] font-bold">{i.getValue() ?? "—"}</span>,
+        cell: (i) => <span className="block px-1 text-center text-[12px] font-semibold text-fg-secondary">{i.getValue() ?? "—"}</span>,
       }),
       ch.accessor("deptId", {
         header: "Bộ phận + Nhóm",
@@ -437,7 +451,7 @@ export default function RegistrationsGrid({
                   groupName: d?.groupName ?? null,
                 });
               }}
-              className="w-full max-w-[210px] rounded-lg border border-transparent bg-transparent px-1 py-1.5 text-[12px] font-semibold hover:border-gray-300"
+              className="w-full max-w-[210px] rounded-[6px] border border-transparent bg-transparent px-1 py-1.5 text-[12px] font-semibold text-fg hover:border-border-strong"
             >
               <option value="">— Chưa xếp —</option>
               {departments.map((d) => (
@@ -448,7 +462,7 @@ export default function RegistrationsGrid({
               ))}
             </select>
           ) : (
-            <span className="px-2 text-[12px]">
+            <span className="px-2 text-[12px] text-fg-secondary">
               {i.row.original.deptName ?? "—"}
               {i.row.original.groupName ? ` — ${i.row.original.groupName}` : ""}
             </span>
@@ -462,12 +476,12 @@ export default function RegistrationsGrid({
               value={i.getValue()}
               onChange={(e) => patchRow(i.row.original.id, { status: e.target.value })}
               className={cn(
-                "w-full rounded-full border px-2 py-1.5 text-[11px] font-black",
+                "w-full rounded-full border px-2 py-1.5 text-[11px] font-semibold",
                 i.getValue() === "APPROVED"
-                  ? "border-emerald-300 bg-emerald-50 text-emerald-800"
+                  ? "border-success/25 bg-success-tint text-success"
                   : i.getValue() === "REJECTED"
-                    ? "border-red-300 bg-red-50 text-red-700"
-                    : "border-amber-300 bg-amber-50 text-amber-800",
+                    ? "border-danger/25 bg-danger-tint text-danger"
+                    : "border-warning/25 bg-warning-tint text-warning",
               )}
             >
               {statusOptions.map((s) => (
@@ -500,16 +514,16 @@ export default function RegistrationsGrid({
           <div className="flex gap-1">
             <button
               onClick={() => setDetail(row.original)}
-              className="rounded-full bg-hasfarm-50 px-2 py-1 text-[11px] font-bold text-hasfarm-700 hover:bg-hasfarm-100"
+              className="rounded-full bg-primary-tint px-2 py-1 text-[11px] font-semibold text-primary hover:bg-primary/15"
             >
               Chi tiết
             </button>
             <button
               onClick={() => setHistoryRow(row.original)}
-              className="rounded-full bg-gray-100 px-2 py-1 text-[11px] font-bold text-gray-600 hover:bg-gray-200"
+              className="flex items-center gap-1 rounded-full bg-surface-hover px-2 py-1 text-[11px] font-semibold text-fg-secondary hover:bg-border"
               title="Xem lịch sử chỉnh sửa"
             >
-              Lịch sử
+              <History className="h-3 w-3" /> Lịch sử
             </button>
           </div>
         ),
@@ -615,26 +629,18 @@ export default function RegistrationsGrid({
   return (
     <div className="space-y-4">
       <div className="grid grid-cols-2 gap-3 lg:grid-cols-5">
-        {[
-          { l: "Tổng đơn", v: stats.total, s: rangeMode ? "Khoảng ngày" : "Hôm nay", c: "bg-[#0F3D23] text-white" },
-          { l: "Đã xếp việc", v: stats.approved, s: "Đã duyệt", c: "bg-emerald-600 text-white" },
-          { l: "Chờ xếp", v: stats.pending, s: "Cần xử lý", c: "bg-amber-500 text-amber-950" },
-          { l: "Chưa có DW", v: stats.fresh, s: "Người mới", c: "bg-gold-500 text-hasfarm-900" },
-          { l: "Khai sai", v: stats.mismatch, s: "Nói cũ nhưng mới", c: "bg-rose-600 text-white" },
-        ].map((k) => (
-          <div key={k.l} className={`rounded-[18px] p-4 shadow ${k.c}`}>
-            <p className="text-[10px] font-black uppercase tracking-widest opacity-70">{k.l}</p>
-            <p className="mt-1 text-[26px] font-black leading-none">{k.v}</p>
-            <p className="mt-1 text-[10px] opacity-70">{k.s}</p>
-          </div>
-        ))}
+        <KpiCard icon={<FileText className="h-4 w-4" />} label="Tổng đơn" value={stats.total} context={rangeMode ? "Khoảng ngày" : "Hôm nay"} tone="primary" />
+        <KpiCard icon={<CheckCircle2 className="h-4 w-4" />} label="Đã xếp việc" value={stats.approved} context="Đã duyệt" tone="success" />
+        <KpiCard icon={<Clock className="h-4 w-4" />} label="Chờ xếp" value={stats.pending} context="Cần xử lý" tone="warning" />
+        <KpiCard icon={<UserPlus2 className="h-4 w-4" />} label="Chưa có DW" value={stats.fresh} context="Người mới" tone="info" />
+        <KpiCard icon={<AlertTriangle className="h-4 w-4" />} label="Khai sai" value={stats.mismatch} context="Nói cũ nhưng mới" tone="danger" />
       </div>
 
       {/* BOX CHỌN NGÀY */}
-      <Card className="rounded-[18px] border border-black/5 bg-white p-3 shadow-sm">
-        <div className="flex flex-wrap items-end gap-2">
-          <div className="rounded-xl bg-hasfarm-50 p-2 ring-1 ring-hasfarm-100">
-            <label className="flex cursor-pointer items-center gap-2 text-[12px] font-black text-hasfarm-800">
+      <Card className="p-3">
+        <div className="flex flex-wrap items-end gap-2.5">
+          <div className="rounded-[10px] bg-primary-tint px-3 py-2">
+            <label className="flex cursor-pointer items-center gap-2 text-[12px] font-semibold text-primary">
               <input
                 type="checkbox"
                 checked={rangeMode}
@@ -642,41 +648,41 @@ export default function RegistrationsGrid({
                   setRangeMode(e.target.checked);
                   if (!e.target.checked) setTo(from);
                 }}
-                className="h-4 w-4 accent-hasfarm-700"
+                className="h-4 w-4 accent-primary"
               />
               Xem khoảng ngày (tham khảo lịch sử)
             </label>
           </div>
           <div>
-            <p className="mb-1 text-[10px] font-black uppercase tracking-widest text-gray-400">
+            <p className="mb-1 text-[11px] font-semibold text-fg-muted">
               {rangeMode ? "Từ ngày" : "Ngày"}
             </p>
-            <Input type="date" value={from} onChange={(e) => setFrom(e.target.value)} className="h-10 w-40 rounded-xl font-bold" />
+            <Input type="date" value={from} onChange={(e) => setFrom(e.target.value)} className="h-10 w-40" />
           </div>
           {rangeMode && (
             <div>
-              <p className="mb-1 text-[10px] font-black uppercase tracking-widest text-gray-400">Đến ngày</p>
-              <Input type="date" value={to} onChange={(e) => setTo(e.target.value)} className="h-10 w-40 rounded-xl font-bold" />
+              <p className="mb-1 text-[11px] font-semibold text-fg-muted">Đến ngày</p>
+              <Input type="date" value={to} onChange={(e) => setTo(e.target.value)} className="h-10 w-40" />
             </div>
           )}
           {!rangeMode && (
             <Button
-              variant="subtle"
-              className="h-10 rounded-xl"
+              variant="outline"
+              className="h-10"
               onClick={() => {
                 setFrom(todayStr());
                 setTo(todayStr());
               }}
             >
-              📅 Về hôm nay
+              <Calendar className="h-4 w-4" /> Về hôm nay
             </Button>
           )}
           <div>
-            <p className="mb-1 text-[10px] font-black uppercase tracking-widest text-gray-400">Trạng thái</p>
+            <p className="mb-1 text-[11px] font-semibold text-fg-muted">Trạng thái</p>
             <select
               value={statusFilter}
               onChange={(e) => setStatusFilter(e.target.value)}
-              className="h-10 rounded-xl border-2 border-gray-200 bg-white px-3 text-[13px] font-bold"
+              className="h-10 rounded-[10px] border border-border-strong bg-surface px-3 text-[13px] font-medium text-fg outline-none focus:border-primary focus:ring-2 focus:ring-primary/15"
             >
               <option value="ALL">Tất cả</option>
               {statusOptions.map((s) => (
@@ -687,11 +693,11 @@ export default function RegistrationsGrid({
             </select>
           </div>
           <div>
-            <p className="mb-1 text-[10px] font-black uppercase tracking-widest text-gray-400">DW Data</p>
+            <p className="mb-1 text-[11px] font-semibold text-fg-muted">DW Data</p>
             <select
               value={matchFilter}
               onChange={(e) => setMatchFilter(e.target.value)}
-              className="h-10 rounded-xl border-2 border-gray-200 bg-white px-3 text-[13px] font-bold"
+              className="h-10 rounded-[10px] border border-border-strong bg-surface px-3 text-[13px] font-medium text-fg outline-none focus:border-primary focus:ring-2 focus:ring-primary/15"
             >
               <option value="ALL">Tất cả</option>
               <option value="MATCHED">Lao động CŨ</option>
@@ -699,11 +705,11 @@ export default function RegistrationsGrid({
             </select>
           </div>
           <div>
-            <p className="mb-1 text-[10px] font-black uppercase tracking-widest text-gray-400">Bộ phận</p>
+            <p className="mb-1 text-[11px] font-semibold text-fg-muted">Bộ phận</p>
             <select
               value={deptFilter}
               onChange={(e) => setDeptFilter(e.target.value)}
-              className="h-10 max-w-[220px] rounded-xl border-2 border-gray-200 bg-white px-3 text-[13px] font-bold"
+              className="h-10 max-w-[220px] rounded-[10px] border border-border-strong bg-surface px-3 text-[13px] font-medium text-fg outline-none focus:border-primary focus:ring-2 focus:ring-primary/15"
             >
               <option value="ALL">Tất cả bộ phận</option>
               {departments.map((d) => (
@@ -715,76 +721,76 @@ export default function RegistrationsGrid({
             </select>
           </div>
           <div className="min-w-[180px] flex-1">
-            <p className="mb-1 text-[10px] font-black uppercase tracking-widest text-gray-400">Tìm nhanh</p>
+            <p className="mb-1 text-[11px] font-semibold text-fg-muted">Tìm nhanh</p>
             <Input
               value={globalFilter}
               onChange={(e) => setGlobalFilter(e.target.value)}
               placeholder="Tên / CCCD / SĐT"
-              className="h-10 rounded-xl"
+              className="h-10"
             />
           </div>
-          <Button variant="outline" onClick={() => void load()} className="h-10 rounded-xl">
+          <Button variant="outline" onClick={() => void load()} className="h-10">
             <RefreshCw className={cn("h-4 w-4", loading && "animate-spin")} /> Tải lại
           </Button>
           <a
             href={exportUrl}
-            className="inline-flex h-10 items-center rounded-xl bg-[#0F3D23] px-4 text-[13px] font-black text-white shadow hover:bg-hasfarm-800"
+            className="inline-flex h-10 items-center gap-1.5 rounded-[10px] bg-primary px-4 text-[13px] font-semibold text-white shadow-sm transition-colors hover:bg-primary-hover"
           >
-            📊 Xuất Excel
+            <Download className="h-4 w-4" /> Xuất Excel
           </a>
           {canEdit && (
             <Button
-              variant="gold"
+              variant="primary"
               disabled={newApplicants.length === 0}
               onClick={() => {
                 setNewSel(Object.fromEntries(newApplicants.map((r) => [r.id, true])));
                 setNewModalOpen(true);
               }}
-              className="h-10 rounded-xl shadow-[0_6px_16px_rgba(217,163,39,0.4)]"
+              className="h-10"
             >
-              ⚡ Duyệt Người Mới → DW Data ({newApplicants.length})
+              <Zap className="h-4 w-4" /> Duyệt Người Mới → DW Data ({newApplicants.length})
             </Button>
           )}
         </div>
       </Card>
 
       {canEdit && selIds.length > 0 && (
-        <div className="sticky top-2 z-20 flex flex-wrap items-center gap-3 rounded-[18px] border-2 border-gold-400 bg-gradient-to-r from-gold-50 to-white p-3 shadow-lg">
-          <span className="flex h-8 w-8 items-center justify-center rounded-full bg-hasfarm-800 text-sm font-black text-white">
+        <div className="animate-slide-up sticky top-2 z-20 flex flex-wrap items-center gap-3 rounded-[14px] border border-primary/25 bg-primary-tint p-3 shadow-md">
+          <span className="flex h-8 w-8 items-center justify-center rounded-full bg-primary text-sm font-bold text-white">
             {selIds.length}
           </span>
-          <span className="text-[13px] font-black text-hasfarm-900">
+          <span className="text-[13px] font-semibold text-fg">
             Đã chọn {selIds.length} (mới: {newInSel}, cũ: {selIds.length - newInSel})
           </span>
-          <Button variant="gold" onClick={() => runBulk(selIds, "APPROVED")} disabled={busy} className="rounded-full">
-            ✅ Duyệt & Nhập DW Data
+          <Button variant="primary" onClick={() => runBulk(selIds, "APPROVED")} disabled={busy} loading={busy} size="sm">
+            Duyệt &amp; Nhập DW Data
           </Button>
-          <Button variant="destructive" onClick={() => runBulk(selIds, "REJECTED")} disabled={busy} className="rounded-full">
-            ✕ Từ chối
+          <Button variant="destructive" onClick={() => runBulk(selIds, "REJECTED")} disabled={busy} size="sm">
+            <X className="h-3.5 w-3.5" /> Từ chối
           </Button>
-          <Button variant="ghost" onClick={() => setRowSelection({})} className="rounded-full">
+          <Button variant="ghost" onClick={() => setRowSelection({})} size="sm">
             Bỏ chọn
           </Button>
         </div>
       )}
 
-      <Card className="overflow-hidden rounded-[18px] border border-black/5 bg-white p-0 shadow-sm">
-        <div className="flex items-center justify-between border-b px-4 py-3">
-          <p className="text-[12px] font-black uppercase tracking-widest text-hasfarm-800">
+      <Card className="overflow-hidden p-0">
+        <div className="flex items-center justify-between border-b border-border px-4 py-3">
+          <p className="text-[13px] font-semibold text-fg">
             Daily Application — sửa trực tiếp như Google Sheet
           </p>
-          <Badge tone="gold">{rows.length} đơn</Badge>
+          <Badge tone="gray">{rows.length} đơn</Badge>
         </div>
         <div className="max-h-[62vh] overflow-auto">
           <table className="grid-sheet w-full border-collapse">
-            <thead className="sticky top-0 z-10 bg-[#0F3D23] text-white">
+            <thead className="sticky top-0 z-10 bg-primary text-white">
               {table.getHeaderGroups().map((hg) => (
                 <tr key={hg.id}>
                   {hg.headers.map((h) => (
                     <th
                       key={h.id}
                       onClick={h.column.getToggleSortingHandler()}
-                      className="cursor-pointer whitespace-nowrap px-2 py-3 text-left text-[10px] font-black uppercase tracking-widest"
+                      className="cursor-pointer whitespace-nowrap px-2 py-3 text-left text-[10.5px] font-semibold uppercase tracking-wide"
                     >
                       {flexRender(h.column.columnDef.header, h.getContext())}
                       {{ asc: " ▲", desc: " ▼" }[h.column.getIsSorted() as string] ?? ""}
@@ -797,20 +803,20 @@ export default function RegistrationsGrid({
               {loading && (
                 <tr>
                   <td colSpan={columns.length} className="p-12 text-center">
-                    <Loader2 className="mx-auto h-6 w-6 animate-spin text-hasfarm-600" />
+                    <Loader2 className="mx-auto h-6 w-6 animate-spin text-primary" />
                   </td>
                 </tr>
               )}
               {!loading && table.getRowModel().rows.length === 0 && (
                 <tr>
-                  <td colSpan={columns.length} className="p-12 text-center text-sm text-gray-400">
+                  <td colSpan={columns.length} className="p-12 text-center text-sm text-fg-muted">
                     Chưa có đơn nào {rangeMode ? "trong khoảng ngày này" : `ngày ${formatDate(from)}`}.
                   </td>
                 </tr>
               )}
               {!loading &&
                 table.getRowModel().rows.map((row) => (
-                  <tr key={row.id} className={cn("hover:bg-gold-50/60", row.getIsSelected() && "bg-gold-50")}>
+                  <tr key={row.id} className={cn("border-b border-border transition-colors hover:bg-surface-hover", row.getIsSelected() && "bg-primary-tint")}>
                     {row.getVisibleCells().map((cell) => (
                       <td key={cell.id} className="px-1 py-1 align-middle">
                         {flexRender(cell.column.columnDef.cell, cell.getContext())}
@@ -824,42 +830,42 @@ export default function RegistrationsGrid({
       </Card>
 
       {/* MODAL DUYỆT NGƯỜI MỚI */}
-      <Modal open={newModalOpen} onClose={() => setNewModalOpen(false)} title="⚡ Duyệt Người Mới & Thêm vào DW Data" width="max-w-3xl">
+      <Modal open={newModalOpen} onClose={() => setNewModalOpen(false)} title="Duyệt Người Mới & Thêm vào DW Data" width="max-w-3xl">
         <div className="space-y-4">
-          <div className="flex flex-wrap items-center justify-between gap-3 rounded-2xl bg-gold-50 p-3 ring-1 ring-gold-200">
-            <p className="text-sm font-bold text-hasfarm-900">
+          <div className="flex flex-wrap items-center justify-between gap-3 rounded-[12px] bg-primary-tint p-3">
+            <p className="text-sm font-semibold text-fg">
               {newApplicants.length} người chưa có trong DW Data — tick chọn để import 1 lần.
             </p>
             <div className="flex gap-2">
               <button
                 onClick={() => setNewSel(Object.fromEntries(newApplicants.map((r) => [r.id, true])))}
-                className="rounded-full bg-hasfarm-700 px-3 py-1.5 text-[11px] font-black text-white"
+                className="rounded-full bg-primary px-3 py-1.5 text-[11px] font-semibold text-white"
               >
                 Chọn tất cả
               </button>
-              <button onClick={() => setNewSel({})} className="rounded-full bg-gray-200 px-3 py-1.5 text-[11px] font-black text-gray-700">
+              <button onClick={() => setNewSel({})} className="rounded-full bg-surface-hover px-3 py-1.5 text-[11px] font-semibold text-fg-secondary">
                 Bỏ chọn
               </button>
             </div>
           </div>
 
-          <div className="max-h-[44vh] overflow-y-auto rounded-2xl border">
+          <div className="max-h-[44vh] overflow-y-auto rounded-[12px] border border-border">
             <table className="grid-sheet w-full text-[13px]">
-              <thead className="sticky top-0 bg-[#0F3D23] text-white">
+              <thead className="sticky top-0 bg-primary text-white">
                 <tr>
-                  <th className="w-10 px-2 py-2.5 text-center text-[10px] font-black">✓</th>
-                  <th className="px-3 py-2.5 text-left text-[10px] font-black uppercase">CCCD</th>
-                  <th className="px-3 py-2.5 text-left text-[10px] font-black uppercase">Họ và tên</th>
-                  <th className="px-3 py-2.5 text-left text-[10px] font-black uppercase">SĐT</th>
-                  <th className="px-3 py-2.5 text-left text-[10px] font-black uppercase">Tự khai</th>
-                  <th className="px-3 py-2.5 text-left text-[10px] font-black uppercase">Bộ phận</th>
+                  <th className="w-10 px-2 py-2.5 text-center text-[10px] font-semibold">✓</th>
+                  <th className="px-3 py-2.5 text-left text-[10px] font-semibold uppercase">CCCD</th>
+                  <th className="px-3 py-2.5 text-left text-[10px] font-semibold uppercase">Họ và tên</th>
+                  <th className="px-3 py-2.5 text-left text-[10px] font-semibold uppercase">SĐT</th>
+                  <th className="px-3 py-2.5 text-left text-[10px] font-semibold uppercase">Tự khai</th>
+                  <th className="px-3 py-2.5 text-left text-[10px] font-semibold uppercase">Bộ phận</th>
                 </tr>
               </thead>
               <tbody>
                 {newApplicants.length === 0 && (
                   <tr>
-                    <td colSpan={6} className="p-8 text-center text-gray-400">
-                      🎉 Không còn người mới nào chờ duyệt.
+                    <td colSpan={6} className="p-8 text-center text-fg-muted">
+                      Không còn người mới nào chờ duyệt.
                     </td>
                   </tr>
                 )}
@@ -867,7 +873,7 @@ export default function RegistrationsGrid({
                   <tr
                     key={r.id}
                     onClick={() => setNewSel((s) => ({ ...s, [r.id]: !s[r.id] }))}
-                    className={cn("cursor-pointer hover:bg-gold-50", newSel[r.id] && "bg-gold-50")}
+                    className={cn("cursor-pointer border-t border-border hover:bg-surface-hover", newSel[r.id] && "bg-primary-tint")}
                   >
                     <td className="px-2 py-2 text-center">
                       <input
@@ -875,23 +881,21 @@ export default function RegistrationsGrid({
                         checked={!!newSel[r.id]}
                         onChange={() => setNewSel((s) => ({ ...s, [r.id]: !s[r.id] }))}
                         onClick={(e) => e.stopPropagation()}
-                        className="h-4 w-4 accent-gold-500"
+                        className="h-4 w-4 accent-primary"
                       />
                     </td>
-                    <td className="px-3 py-2 font-mono font-bold">{r.cccd}</td>
-                    <td className="px-3 py-2 font-bold text-hasfarm-900">{r.fullName}</td>
+                    <td className="px-3 py-2 font-mono font-semibold">{r.cccd}</td>
+                    <td className="px-3 py-2 font-semibold text-fg">{r.fullName}</td>
                     <td className="px-3 py-2">{r.phone}</td>
                     <td className="px-3 py-2">
                       {r.declaredType === "OLD" ? (
-                        <span className="rounded-full bg-rose-100 px-2 py-0.5 text-[10px] font-black text-rose-700">
-                          Khai CŨ ⚠️
-                        </span>
+                        <Badge tone="red" dot>Khai CŨ</Badge>
                       ) : (
-                        <span className="rounded-full bg-gray-100 px-2 py-0.5 text-[10px] font-bold text-gray-600">Khai MỚI</span>
+                        <Badge tone="gray">Khai MỚI</Badge>
                       )}
                     </td>
                     <td className="px-3 py-2 text-[12px]">
-                      {r.deptName ?? <span className="font-bold text-amber-600">Chưa xếp</span>}
+                      {r.deptName ?? <span className="font-semibold text-warning">Chưa xếp</span>}
                     </td>
                   </tr>
                 ))}
@@ -900,13 +904,13 @@ export default function RegistrationsGrid({
           </div>
 
           <div>
-            <p className="mb-1 text-[11px] font-black uppercase tracking-widest text-gray-500">
+            <p className="mb-1 text-[11px] font-semibold text-fg-muted">
               Xếp cả nhóm vào bộ phận (tuỳ chọn)
             </p>
             <select
               value={newDept}
               onChange={(e) => setNewDept(e.target.value)}
-              className="h-12 w-full rounded-xl border-2 border-gray-200 bg-white px-3 text-sm font-bold"
+              className="h-12 w-full rounded-[10px] border border-border-strong bg-surface px-3 text-sm font-medium text-fg outline-none focus:border-primary focus:ring-2 focus:ring-primary/15"
             >
               <option value="">— Giữ nguyên bộ phận từng người —</option>
               {departments.map((d) => (
@@ -919,13 +923,14 @@ export default function RegistrationsGrid({
           </div>
 
           <Button
-            variant="gold"
+            variant="primary"
             size="xl"
-            className="w-full rounded-[14px]"
+            className="w-full"
             disabled={busy || newSelIds.length === 0}
+            loading={busy}
             onClick={() => runBulk(newSelIds, "APPROVED", newDept)}
           >
-            {busy ? <Loader2 className="h-6 w-6 animate-spin" /> : `✓ Xác nhận Import (${newSelIds.length} người) vào DW Data`}
+            Xác nhận Import ({newSelIds.length} người) vào DW Data
           </Button>
         </div>
       </Modal>
@@ -944,22 +949,22 @@ export default function RegistrationsGrid({
                 ["Thời gian ĐK làm", detail.workDuration ?? "—"],
                 ["Kênh giới thiệu", detail.referralChannel ?? "—"],
               ].map(([k, v]) => (
-                <div key={k} className="rounded-xl bg-gray-50 p-3">
-                  <p className="text-[10px] font-bold uppercase text-gray-400">{k}</p>
-                  <p className="font-bold">{v}</p>
+                <div key={k} className="rounded-[10px] bg-surface-hover p-3">
+                  <p className="text-[10px] font-semibold uppercase text-fg-muted">{k}</p>
+                  <p className="font-semibold text-fg">{v}</p>
                 </div>
               ))}
-              <div className="col-span-2 rounded-xl bg-gray-50 p-3">
-                <p className="text-[10px] font-bold uppercase text-gray-400">Địa chỉ hiện tại</p>
-                <p className="text-sm">{detail.residentialAddress ?? detail.permanentAddress ?? "—"}</p>
+              <div className="col-span-2 rounded-[10px] bg-surface-hover p-3">
+                <p className="text-[10px] font-semibold uppercase text-fg-muted">Địa chỉ hiện tại</p>
+                <p className="text-sm text-fg">{detail.residentialAddress ?? detail.permanentAddress ?? "—"}</p>
               </div>
             </div>
             <div
               className={cn(
-                "rounded-xl p-3 text-sm ring-1",
+                "rounded-[10px] p-3 text-sm ring-1",
                 detail.dwMatch === "MATCHED"
-                  ? "bg-emerald-50 text-emerald-900 ring-emerald-200"
-                  : "bg-amber-50 text-amber-900 ring-amber-200",
+                  ? "bg-success-tint text-success ring-success/20"
+                  : "bg-warning-tint text-warning ring-warning/20",
               )}
             >
               <b>Đối chiếu DW Data:</b>{" "}
@@ -967,17 +972,19 @@ export default function RegistrationsGrid({
                 ? `Lao động CŨ — đã có hồ sơ trong DW Data (${detail.dwCode ?? "no code"})`
                 : "Lao động MỚI — chưa có trong DW Data, cần duyệt để thêm vào"}
               {detail.declaredType === "OLD" && detail.dwMatch === "NEW" && (
-                <p className="mt-1 font-bold">⚠️ Người này TỰ KHAI là đã từng làm nhưng không tìm thấy trong DW Data.</p>
+                <p className="mt-1 flex items-center gap-1.5 font-semibold">
+                  <AlertTriangle className="h-3.5 w-3.5 shrink-0" aria-hidden /> Người này TỰ KHAI là đã từng làm nhưng không tìm thấy trong DW Data.
+                </p>
               )}
             </div>
             {Object.entries(detail.customAnswers ?? {}).length > 0 && (
-              <div className="rounded-2xl border bg-white p-4">
-                <p className="mb-2 text-[11px] font-black uppercase tracking-widest text-hasfarm-700">Câu hỏi khảo sát</p>
+              <div className="rounded-[14px] border border-border bg-surface p-4">
+                <p className="mb-2 text-[11px] font-semibold uppercase tracking-wide text-fg-secondary">Câu hỏi khảo sát</p>
                 <ul className="space-y-1.5">
                   {Object.entries(detail.customAnswers ?? {}).map(([k, v]) => (
-                    <li key={k} className="flex gap-2 rounded-lg bg-gray-50 px-3 py-2 text-sm">
-                      <b className="shrink-0 text-hasfarm-800">{k}:</b>
-                      <span>{v}</span>
+                    <li key={k} className="flex gap-2 rounded-[8px] bg-surface-hover px-3 py-2 text-sm">
+                      <b className="shrink-0 text-fg">{k}:</b>
+                      <span className="text-fg-secondary">{v}</span>
                     </li>
                   ))}
                 </ul>
@@ -1000,19 +1007,19 @@ export default function RegistrationsGrid({
         <Modal open onClose={() => setBulkResult(null)} title="Kết quả xử lý" width="max-w-xl">
           <div className="space-y-4">
             <div className="grid grid-cols-3 gap-2 text-center">
-              <div className="rounded-xl bg-emerald-50 p-3">
-                <p className="text-2xl font-black text-emerald-700">{bulkResult.imported}</p>
-                <p className="text-[11px] font-bold uppercase text-emerald-700">Đã duyệt</p>
+              <div className="rounded-[10px] bg-success-tint p-3">
+                <p className="text-2xl font-bold text-success">{bulkResult.imported}</p>
+                <p className="text-[11px] font-semibold uppercase text-success">Đã duyệt</p>
               </div>
-              <div className="rounded-xl bg-hasfarm-50 p-3">
-                <p className="text-2xl font-black text-hasfarm-800">{bulkResult.newToDw}</p>
-                <p className="text-[11px] font-bold uppercase text-hasfarm-800">Đã thêm (DW Data)</p>
+              <div className="rounded-[10px] bg-primary-tint p-3">
+                <p className="text-2xl font-bold text-primary">{bulkResult.newToDw}</p>
+                <p className="text-[11px] font-semibold uppercase text-primary">Đã thêm (DW Data)</p>
               </div>
-              <div className={cn("rounded-xl p-3", bulkResult.skipped > 0 ? "bg-red-50" : "bg-gray-50")}>
-                <p className={cn("text-2xl font-black", bulkResult.skipped > 0 ? "text-red-600" : "text-gray-400")}>
+              <div className={cn("rounded-[10px] p-3", bulkResult.skipped > 0 ? "bg-danger-tint" : "bg-surface-hover")}>
+                <p className={cn("text-2xl font-bold", bulkResult.skipped > 0 ? "text-danger" : "text-fg-muted")}>
                   {bulkResult.skipped}
                 </p>
-                <p className={cn("text-[11px] font-bold uppercase", bulkResult.skipped > 0 ? "text-red-600" : "text-gray-400")}>
+                <p className={cn("text-[11px] font-semibold uppercase", bulkResult.skipped > 0 ? "text-danger" : "text-fg-muted")}>
                   Không thành công
                 </p>
               </div>
@@ -1020,20 +1027,20 @@ export default function RegistrationsGrid({
 
             {bulkResult.skipped > 0 && (
               <div>
-                <p className="mb-1 text-[11px] font-black uppercase tracking-widest text-gray-400">Nguyên nhân</p>
-                <ul className="max-h-64 space-y-1 overflow-y-auto rounded-xl border p-2">
+                <p className="mb-1 text-[11px] font-semibold uppercase tracking-wide text-fg-muted">Nguyên nhân</p>
+                <ul className="max-h-64 space-y-1 overflow-y-auto rounded-[10px] border border-border p-2">
                   {bulkResult.results
                     .filter((r) => !r.ok)
                     .map((r) => (
-                      <li key={r.id} className="rounded-lg bg-red-50 px-2 py-1.5 text-xs">
-                        <span className="font-bold">{r.fullName ?? r.cccd ?? r.id}</span>
+                      <li key={r.id} className="rounded-[8px] bg-danger-tint px-2 py-1.5 text-xs text-danger">
+                        <span className="font-semibold">{r.fullName ?? r.cccd ?? r.id}</span>
                         {r.cccd ? ` (${r.cccd})` : ""} — {r.reason}
                       </li>
                     ))}
                 </ul>
               </div>
             )}
-            <Button variant="gold" className="w-full" onClick={() => setBulkResult(null)}>
+            <Button variant="primary" className="w-full" onClick={() => setBulkResult(null)}>
               Đóng
             </Button>
           </div>

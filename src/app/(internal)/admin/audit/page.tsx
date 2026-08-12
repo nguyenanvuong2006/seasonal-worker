@@ -21,8 +21,8 @@ export default async function AuditPage() {
   return (
     <div className="space-y-5">
       <div>
-        <h1 className="text-2xl font-black text-hasfarm-900">Nhật ký hệ thống (Audit Log)</h1>
-        <p className="text-sm text-gray-500">
+        <h1 className="text-2xl font-black text-fg">Nhật ký hệ thống (Audit Log)</h1>
+        <p className="text-sm text-fg-secondary">
           Ghi nhận mọi thao tác duyệt, sửa và gộp hồ sơ của nhân sự nội bộ.
         </p>
       </div>
@@ -32,7 +32,7 @@ export default async function AuditPage() {
         <CardContent className="p-0">
           <div className="overflow-x-auto">
             <table className="grid-sheet w-full text-sm">
-              <thead className="bg-hasfarm-50 text-hasfarm-800">
+              <thead className="bg-primary-tint text-primary">
                 <tr>
                   <th className="px-3 py-2 text-left text-[11px] uppercase">Thời gian</th>
                   <th className="px-3 py-2 text-left text-[11px] uppercase">Người thực hiện</th>
@@ -44,20 +44,20 @@ export default async function AuditPage() {
               <tbody>
                 {rows.length === 0 && (
                   <tr>
-                    <td colSpan={5} className="p-10 text-center text-gray-400">
+                    <td colSpan={5} className="p-10 text-center text-fg-muted">
                       Chưa có hoạt động nào được ghi nhận.
                     </td>
                   </tr>
                 )}
                 {rows.map((r) => (
-                  <tr key={r.id} className="hover:bg-hasfarm-50/50">
-                    <td className="whitespace-nowrap px-3 py-2 text-xs text-gray-500">
+                  <tr key={r.id} className="hover:bg-primary-tint/50">
+                    <td className="whitespace-nowrap px-3 py-2 text-xs text-fg-secondary">
                       {new Date(r.createdAt).toLocaleString("vi-VN")}
                     </td>
                     <td className="px-3 py-2 font-bold">{r.username ?? "—"}</td>
-                    <td className="px-3 py-2 font-mono text-xs text-hasfarm-800">{r.action}</td>
+                    <td className="px-3 py-2 font-mono text-xs text-primary">{r.action}</td>
                     <td className="px-3 py-2 text-xs">{r.targetType}</td>
-                    <td className="max-w-[380px] truncate px-3 py-2 text-xs text-gray-500">
+                    <td className="max-w-[380px] truncate px-3 py-2 text-xs text-fg-secondary">
                       {JSON.stringify(r.details)}
                     </td>
                   </tr>

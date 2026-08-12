@@ -73,7 +73,7 @@ export default function UsersAdminPage() {
       toast({ title: data.error ?? "Lỗi tạo tài khoản", variant: "destructive" });
       return;
     }
-    toast({ title: "✅ Đã tạo tài khoản" });
+    toast({ title: "Đã tạo tài khoản" });
     setOpen(false);
     setForm({ username: "", password: "", fullName: "", role: "DEPT_MANAGER", deptId: "" });
     await load();
@@ -106,8 +106,8 @@ export default function UsersAdminPage() {
     <div className="space-y-5">
       <div className="flex items-center justify-between">
         <div>
-          <h1 className="text-2xl font-black text-hasfarm-900">Tài khoản & phân quyền (RBAC)</h1>
-          <p className="text-sm text-gray-500">
+          <h1 className="text-2xl font-black text-fg">Tài khoản & phân quyền (RBAC)</h1>
+          <p className="text-sm text-fg-secondary">
             Cấp quyền cho HR tuyển dụng và quản đốc từng xưởng.
           </p>
         </div>
@@ -121,12 +121,12 @@ export default function UsersAdminPage() {
         <CardContent className="p-0">
           {loading ? (
             <div className="p-10 text-center">
-              <Loader2 className="mx-auto h-6 w-6 animate-spin text-hasfarm-600" />
+              <Loader2 className="mx-auto h-6 w-6 animate-spin text-primary" />
             </div>
           ) : (
             <div className="overflow-x-auto">
               <table className="grid-sheet w-full text-sm">
-                <thead className="bg-hasfarm-50 text-hasfarm-800">
+                <thead className="bg-primary-tint text-primary">
                   <tr>
                     <th className="px-3 py-2 text-left text-[11px] uppercase">Tài khoản</th>
                     <th className="px-3 py-2 text-left text-[11px] uppercase">Họ tên</th>
@@ -138,14 +138,14 @@ export default function UsersAdminPage() {
                 </thead>
                 <tbody>
                   {rows.map((u) => (
-                    <tr key={u.id} className="hover:bg-hasfarm-50/50">
+                    <tr key={u.id} className="hover:bg-primary-tint/50">
                       <td className="px-3 py-2 font-mono font-bold">{u.username}</td>
                       <td className="px-3 py-2">{u.fullName}</td>
                       <td className="px-3 py-2">
                         <select
                           value={u.role}
                           onChange={(e) => void patch(u.id, { role: e.target.value })}
-                          className="rounded border-2 border-gray-200 px-2 py-1 text-xs font-bold"
+                          className="rounded border-2 border-border-strong px-2 py-1 text-xs font-bold"
                         >
                           {Object.entries(ROLE_LABEL).map(([k, v]) => (
                             <option key={k} value={k}>
@@ -158,7 +158,7 @@ export default function UsersAdminPage() {
                         <select
                           value={u.deptId ?? ""}
                           onChange={(e) => void patch(u.id, { deptId: e.target.value || null })}
-                          className="rounded border-2 border-gray-200 px-2 py-1 text-xs"
+                          className="rounded border-2 border-border-strong px-2 py-1 text-xs"
                         >
                           <option value="">—</option>
                           {depts.map((d) => (
@@ -181,7 +181,7 @@ export default function UsersAdminPage() {
                             setPwUser(u);
                             setNewPw("");
                           }}
-                          className="text-xs font-bold text-hasfarm-700 hover:underline"
+                          className="text-xs font-bold text-primary hover:underline"
                         >
                           Đổi mật khẩu
                         </button>
@@ -228,7 +228,7 @@ export default function UsersAdminPage() {
             <select
               value={form.role}
               onChange={(e) => setForm({ ...form, role: e.target.value })}
-              className="h-11 w-full rounded-xl border-2 border-gray-200 px-2 font-semibold"
+              className="h-11 w-full rounded-xl border-2 border-border-strong px-2 font-semibold"
             >
               {Object.entries(ROLE_LABEL).map(([k, v]) => (
                 <option key={k} value={k}>
@@ -243,7 +243,7 @@ export default function UsersAdminPage() {
               <select
                 value={form.deptId}
                 onChange={(e) => setForm({ ...form, deptId: e.target.value })}
-                className="h-11 w-full rounded-xl border-2 border-gray-200 px-2 font-semibold"
+                className="h-11 w-full rounded-xl border-2 border-border-strong px-2 font-semibold"
               >
                 <option value="">— Chọn bộ phận —</option>
                 {depts.map((d) => (
