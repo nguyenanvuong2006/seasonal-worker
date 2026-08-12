@@ -19,8 +19,10 @@ export type Session = {
 const COOKIE_NAME = "hasfarm_session";
 
 function secretKey() {
-  const secret =
-    process.env.AUTH_SECRET || "DalatHasfarm2026SuperSecretKeySecurityHRM_fallback";
+  const secret = process.env.AUTH_SECRET;
+  if (!secret) {
+    throw new Error("AUTH_SECRET is required");
+  }
   return new TextEncoder().encode(secret);
 }
 

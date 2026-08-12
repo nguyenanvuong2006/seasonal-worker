@@ -57,14 +57,9 @@ Công nghệ: **Next.js 16 (React 19) + PostgreSQL + Drizzle ORM**, chạy đư�
 - `/lookup`: trang cho lao động tự tra cứu trạng thái hồ sơ của mình.
 
 ### 2.6 Phân quyền & bảo mật (RBAC)
-Có 3 vai trò, đăng nhập bằng cookie JWT (12 giờ):
-| Vai trò | Username mặc định | Mật khẩu mặc định | Quyền |
-|---|---|---|---|
-| Quản trị viên | `admin` | `admin123` | Toàn quyền: users, departments, form-builder, audit log |
-| Nhân sự tuyển dụng | `hr` | `hr123` | Xem/duyệt Daily Application, xuất báo cáo, tra cứu DW Data |
-| Phụ trách bộ phận | `truongbophan` | `bophan123` | Chỉ xem/sắp xếp lao động thuộc bộ phận mình |
+Có 3 vai trò, đăng nhập bằng cookie JWT (12 giờ): Quản trị viên (ADMIN), Nhân sự tuyển dụng (HR_RECRUITER), Phụ trách bộ phận (DEPT_MANAGER).
 
-> ⚠️ **BẮT BUỘC đổi 3 mật khẩu mặc định này ngay sau khi triển khai thật** (vào `/admin/users`).
+> ⚠️ **KHÔNG còn tài khoản mặc định hardcode trong source.** Tài khoản ADMIN đầu tiên được tạo từ 2 biến môi trường `INITIAL_ADMIN_USERNAME`/`INITIAL_ADMIN_PASSWORD` (xem mục 5, Bước 3) — hệ thống chỉ tạo tài khoản này đúng 1 lần, khi bảng `users` còn trống. Tài khoản HR_RECRUITER/DEPT_MANAGER không còn được seed sẵn — sau khi đăng nhập bằng ADMIN, tự tạo thêm tại `/admin/users`.
 
 ### 2.7 Audit log (`/admin/audit`)
 Ghi lại mọi hành động duyệt/sửa/xoá quan trọng kèm người thực hiện — phục vụ truy vết khi có sai sót.
@@ -155,16 +150,19 @@ Chi tiết đầy đủ từng cột: xem `src/db/schema.ts`.
 ### Bước 3 — Deploy lên Vercel, qua website
 1. Vào https://vercel.com → Sign up bằng tài khoản GitHub vừa tạo → cấp quyền truy cập repo.
 2. Bấm **Add New… > Project** → chọn repo vừa upload → **Import**.
-3. Ở mục **Environment Variables**, thêm 3 biến (gõ trực tiếp trên web):
-   - `DATABASE_URL` = chuỗi kết nối Neon ở Bước 1
-   - `AUTH_SECRET` = một chuỗi ngẫu nhiên dài — có thể mở https://generate-secret.vercel.app/32 để lấy, copy-dán vào
+3. Ở mục **Environment Variables**, thêm các biến sau (gõ trực tiếp trên web):
+   - `DATABASE_URL` = chuỗi kết nối Neon ở Bước 1 — **bắt buộc**
+   - `AUTH_SECRET` = một chuỗi ngẫu nhiên dài — có thể mở https://generate-secret.vercel.app/32 để lấy, copy-dán vào — **bắt buộc**
+   - `CRON_SECRET` = một chuỗi ngẫu nhiên khác (dùng trang generate-secret ở trên) — **bắt buộc** nếu muốn dùng `/api/cron/run` (Vercel Cron trong `vercel.json`); nếu để trống, endpoint cron sẽ **từ chối mọi request** ở production (fail-closed), không chạy công khai
+   - `INITIAL_ADMIN_USERNAME` và `INITIAL_ADMIN_PASSWORD` = tên đăng nhập/mật khẩu bạn tự chọn cho tài khoản ADMIN đầu tiên (mật khẩu tối thiểu 8 ký tự) — **chỉ cần cho lần deploy đầu tiên**, có thể xoá khỏi Vercel ngay sau khi đăng nhập thành công lần đầu (xem Bước 4)
    - `NODE_ENV` = `production`
 4. Bấm **Deploy**. Vercel tự tải code, tự `npm install` và `next build` trên máy chủ của họ — bạn không cần cài gì. Chờ 2–5 phút tới khi thấy "Congratulations".
 5. Bấm vào link dạng `https://<tên-app>.vercel.app` để mở app.
 
 ### Bước 4 — Tạo tài khoản đăng nhập đầu tiên
-1. Mở link app vừa deploy — lần tải trang đầu tiên tự gọi `/api/health`, tự tạo 3 tài khoản mặc định (mục 2.6) và câu hỏi mặc định vì DB đang trống.
-2. Đăng nhập bằng `admin` / `admin123` → vào **Phân quyền RBAC** (`/admin/users`) → đổi ngay mật khẩu cả 3 tài khoản.
+1. Mở link app vừa deploy — lần tải trang đầu tiên tự gọi `/api/health`, DB đang trống nên hệ thống tự tạo **đúng 1 tài khoản ADMIN** từ `INITIAL_ADMIN_USERNAME`/`INITIAL_ADMIN_PASSWORD` bạn đã đặt ở Bước 3 (không có tài khoản mặc định nào khác), cùng câu hỏi mặc định.
+2. Đăng nhập bằng username/password vừa đặt → vào **Phân quyền RBAC** (`/admin/users`) → tạo thêm tài khoản HR_RECRUITER/DEPT_MANAGER nếu cần.
+3. Xoá `INITIAL_ADMIN_USERNAME`/`INITIAL_ADMIN_PASSWORD` khỏi Vercel Environment Variables (không bắt buộc, nhưng nên làm — 2 biến này không còn tác dụng gì sau khi `users` đã có dữ liệu, vì hệ thống chỉ bootstrap khi bảng còn trống).
 
 ### Bước 5 — Nhập dữ liệu gốc từ Google Sheet, qua website
 1. Mở Google Sheet hiện tại → từng tab (Department, DW Data, Daily Application) → **File → Download → Comma-separated values (.csv)** → tải về máy/điện thoại.
@@ -320,7 +318,7 @@ Tiêu chí chọn: an toàn với dữ liệu đang chạy thật, không cần 
 - [ ] Thử xoá 1 hồ sơ test → vào `/admin/recycle-bin` → Khôi phục → xác nhận hồ sơ trở lại bình thường.
 - [ ] Vào `/admin/rules` tạo 1 rule test đơn giản (vd Tuổi > 60 → Đặt trạng thái WAITLIST) → đăng ký test với tuổi > 60 → xác nhận trạng thái tự động là WAITLIST.
 - [ ] Vào `/admin/system` → xác nhận số liệu hiển thị đúng, không lỗi.
-- [ ] Đặt biến môi trường `CRON_SECRET` trên Vercel nếu muốn dùng `/api/cron/run` (không bắt buộc — nếu bỏ trống, endpoint vẫn chạy nhưng không có lớp bảo vệ bằng secret).
+- [ ] Đặt biến môi trường `CRON_SECRET` trên Vercel — **bắt buộc ở production**, nếu bỏ trống `/api/cron/run` sẽ từ chối mọi request (fail-closed) thay vì chạy công khai.
 
 ---
 

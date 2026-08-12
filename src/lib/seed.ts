@@ -1,50 +1,63 @@
 import "server-only";
 import { db } from "@/db";
-import { departments, fieldDefinitions, formQuestions, scheduledJobs, userDepartmentScopes, users, workflowStages } from "@/db/schema";
+import { fieldDefinitions, formQuestions, scheduledJobs, userDepartmentScopes, users, workflowStages } from "@/db/schema";
 import { hashPassword } from "@/lib/auth";
 import { DEFAULT_FIELD_DEFINITIONS } from "@/lib/metadata";
 import { DEFAULT_WORKFLOW_STAGES, DEFAULT_MOVEMENT_WORKFLOW_STAGES } from "@/lib/workflow";
 import { DEFAULT_SCHEDULED_JOBS } from "@/lib/scheduler";
-import { asc, eq, isNotNull, sql } from "drizzle-orm";
+import { eq, isNotNull, sql } from "drizzle-orm";
 
 let seeded = false;
+const MIN_INITIAL_ADMIN_PASSWORD_LENGTH = 8;
 
-/** Bootstrap tài khoản + câu hỏi mặc định. Dữ liệu Department/DW Data nạp từ sheet. */
+/**
+ * BOOTSTRAP ADMIN — KHÔNG có tài khoản mặc định hardcode trong source (đây là hệ thống chạy
+ * thật, không phải demo). Chỉ tạo đúng 1 tài khoản ADMIN đầu tiên, và chỉ khi cả
+ * `INITIAL_ADMIN_USERNAME` + `INITIAL_ADMIN_PASSWORD` được cấu hình sẵn ở biến môi trường
+ * (Vercel) — 2 biến này chỉ cần thiết cho LẦN BOOTSTRAP ĐẦU TIÊN (khi bảng `users` còn trống),
+ * có thể xoá khỏi Vercel sau khi đã đăng nhập lần đầu. Nếu chưa cấu hình, hệ thống KHÔNG tự
+ * tạo tài khoản nào — chỉ ghi cảnh báo (không log password) — tránh việc 1 request public
+ * (`/`, `/api/health`) vô tình tạo ra tài khoản ADMIN với mật khẩu đoán được. Các tài khoản
+ * khác (HR_RECRUITER/DEPT_MANAGER) không còn được seed sẵn — admin tự tạo tại `/admin/users`
+ * sau khi đăng nhập.
+ */
+async function bootstrapInitialAdmin() {
+  const username = process.env.INITIAL_ADMIN_USERNAME?.trim();
+  const password = process.env.INITIAL_ADMIN_PASSWORD;
+
+  if (!username || !password) {
+    console.warn(
+      "[seed] Chưa có tài khoản nào trong hệ thống. Đặt INITIAL_ADMIN_USERNAME và " +
+        "INITIAL_ADMIN_PASSWORD trên Vercel rồi mở lại app để tạo tài khoản ADMIN đầu tiên " +
+        "(có thể xoá 2 biến này sau khi đã đăng nhập lần đầu).",
+    );
+    return;
+  }
+  if (password.length < MIN_INITIAL_ADMIN_PASSWORD_LENGTH) {
+    console.warn(
+      `[seed] INITIAL_ADMIN_PASSWORD phải tối thiểu ${MIN_INITIAL_ADMIN_PASSWORD_LENGTH} ký tự — bỏ qua bootstrap admin.`,
+    );
+    return;
+  }
+
+  await db
+    .insert(users)
+    .values({
+      username,
+      passwordHash: hashPassword(password),
+      fullName: "Quản Trị Viên Hệ Thống",
+      role: "ADMIN",
+    })
+    .onConflictDoNothing();
+}
+
+/** Bootstrap tài khoản admin (nếu đã cấu hình) + câu hỏi mặc định. Dữ liệu Department/DW Data nạp từ sheet. */
 export async function ensureSeed() {
   if (seeded) return;
   try {
     const existing = await db.select({ id: users.id }).from(users).limit(1);
     if (existing.length === 0) {
-      const [firstDept] = await db
-        .select({ id: departments.id })
-        .from(departments)
-        .orderBy(asc(departments.deptName))
-        .limit(1);
-
-      await db
-        .insert(users)
-        .values([
-          {
-            username: "admin",
-            passwordHash: hashPassword("admin123"),
-            fullName: "Quản Trị Viên Hệ Thống",
-            role: "ADMIN",
-          },
-          {
-            username: "hr",
-            passwordHash: hashPassword("hr123"),
-            fullName: "Nhân Sự Tuyển Dụng",
-            role: "HR_RECRUITER",
-          },
-          {
-            username: "truongbophan",
-            passwordHash: hashPassword("bophan123"),
-            fullName: "Phụ Trách Lao Động Bộ Phận",
-            role: "DEPT_MANAGER",
-            deptId: firstDept?.id ?? null,
-          },
-        ])
-        .onConflictDoNothing();
+      await bootstrapInitialAdmin();
     }
 
     const q = await db.select({ id: formQuestions.id }).from(formQuestions).limit(1);
