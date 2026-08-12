@@ -102,21 +102,6 @@ export default function LoginPage() {
             </Button>
           </form>
 
-          <div className="mt-6 rounded-2xl border border-dashed border-gold-300 bg-gold-50 p-4">
-            <p className="text-xs font-black uppercase tracking-widest text-gold-800">Tài khoản demo phân quyền</p>
-            <div className="mt-2 space-y-1.5 text-[12px] leading-relaxed text-gold-900">
-              <p className="rounded-lg bg-white px-3 py-2 ring-1 ring-gold-200">
-                <b>admin / admin123</b> — Quản trị viên: toàn quyền, phân quyền RBAC, quota, audit
-              </p>
-              <p className="rounded-lg bg-white px-3 py-2 ring-1 ring-gold-200">
-                <b>hr / hr123</b> — Nhân sự tuyển dụng: điều phối, xác nhận người mới, sửa lỗi CCCD, gộp hồ sơ
-              </p>
-              <p className="rounded-lg bg-white px-3 py-2 ring-1 ring-gold-200">
-                <b>xuonga / xuonga123</b> — Quản đốc Xưởng A: xem danh sách hôm nay & xuất Excel
-              </p>
-            </div>
-          </div>
-
           <Link href="/" className="mt-6 block text-center text-xs font-bold text-hasfarm-700 hover:underline">
             ← Về cổng đăng ký lao động thời vụ (public)
           </Link>
