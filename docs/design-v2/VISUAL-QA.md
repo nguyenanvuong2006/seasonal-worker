@@ -166,7 +166,7 @@ tokens/components).
   `README.md` documenting that the logo slot is intentionally empty
   (`public/brand/dalat-hasfarm-logo.png`), and `git log --all` shows the brand folder
   never contained a logo. The Chrysanthemum hero and greenhouse-operations photos
-  required at `public/brand/dalat-hasfarm-chrysanthemum-hero.jpg` /
+  required at `public/brand/dalat-hasfarm-chrysanthemum-hero.png` /
   `public/brand/dalat-hasfarm-greenhouse-operations.jpg` **do not exist**.
 - Per the task rules we did **not** fabricate an AI logo or substitute text/"DH"
   marks, and we **did not** keep the previous external Google Drive photo URL.
@@ -174,9 +174,14 @@ tokens/components).
   - `BrandLogo` keeps probing the exact official path `/brand/dalat-hasfarm-logo.png`
     and renders the documented empty-slot fallback (ImageOff) when absent — no
     "DH" text anywhere (verified `hasDH=false` on all pilot pages).
-  - The public hero uses a designed botanical/greenhouse composition (gradients +
-    field-rows texture + orange accent) instead of the approved photos; dropping the
-    official files into `public/brand/` later requires **no code change**.
+  - The public hero references the official approved hero
+    `public/brand/dalat-hasfarm-chrysanthemum-hero.png` as a decorative cover layer
+    (`background-size: cover` + `background-position`, aspect ratio preserved) layered
+    over the designed botanical/greenhouse composition (gradients + field-rows
+    texture + orange accent). While the file is absent, the missing background
+    renders nothing — the composition still carries the hero, so there is **never a
+    broken image**; dropping the official files into `public/brand/` later requires
+    **no code change**.
 - **Claim:** "branding hoàn tất" is **not** declared — brand recognition is scored
   8/10 pending the official assets.
 

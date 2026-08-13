@@ -37,8 +37,25 @@ export default async function ApplicantHomePage() {
         Thu nhập ~15 tháng lương/năm • Xe đưa đón Đà Lạt → Đạ Ròn & Lâm Hà • BHXH/BHYT đầy đủ
       </div>
 
-      {/* BRAND HERO — deep-green greenhouse band, no external imagery */}
+      {/* BRAND HERO — deep-green greenhouse band.
+          Official approved hero: public/brand/dalat-hasfarm-chrysanthemum-hero.png
+          (PNG — do not convert to JPG). Rendered as a decorative cover background:
+          background-size: cover + background-position keep the original aspect ratio
+          (never squashed/stretched) while filling the band. When the file is absent
+          (asset slot not yet supplied) a missing background renders nothing — the
+          deep-green gradient + field-rows texture carry the hero, so there is never
+          a broken image. */}
       <header className="hasfarm-hero field-rows relative z-0 overflow-hidden px-4 pb-24 pt-6 text-white md:pb-28">
+        <div
+          className="pointer-events-none absolute inset-0 opacity-[0.16] mix-blend-screen"
+          style={{
+            backgroundImage: "url(/brand/dalat-hasfarm-chrysanthemum-hero.png)",
+            backgroundSize: "cover",
+            backgroundPosition: "center 62%",
+            backgroundRepeat: "no-repeat",
+          }}
+          aria-hidden
+        />
         <div className="relative mx-auto max-w-6xl">
           <div className="flex items-center justify-between">
             <BrandLogo light size="lg" />
