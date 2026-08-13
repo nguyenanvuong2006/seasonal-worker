@@ -46,15 +46,18 @@ type ButtonVariant =
 type ButtonSize = "sm" | "md" | "lg" | "xl" | "icon";
 
 const variantMap: Record<ButtonVariant, string> = {
-  default: "bg-primary text-white hover:bg-primary-hover shadow-sm",
-  primary: "bg-primary text-white hover:bg-primary-hover shadow-sm",
-  gold: "bg-primary text-white hover:bg-primary-hover shadow-sm",
-  outline: "border border-border-strong bg-surface text-fg hover:bg-surface-hover",
-  secondary: "border border-border-strong bg-surface text-fg hover:bg-surface-hover",
+  // V2: Hasfarm orange is THE primary CTA. `gold` (warm yellow) is retired as a
+  // button fill — it stays as a rare highlight color — and now maps to the same
+  // orange primary so every existing `variant="gold"` call site renders the CTA.
+  default: "bg-accent text-white hover:bg-accent-hover shadow-[0_1px_2px_rgba(198,90,15,0.35),0_6px_16px_rgba(226,109,28,0.18)]",
+  primary: "bg-accent text-white hover:bg-accent-hover shadow-[0_1px_2px_rgba(198,90,15,0.35),0_6px_16px_rgba(226,109,28,0.18)]",
+  gold: "bg-accent text-white hover:bg-accent-hover shadow-[0_1px_2px_rgba(198,90,15,0.35),0_6px_16px_rgba(226,109,28,0.18)]",
+  outline: "border border-border-strong bg-surface-raised text-fg hover:border-primary/40 hover:bg-surface-hover",
+  secondary: "border border-border-strong bg-surface-raised text-fg hover:border-primary/40 hover:bg-surface-hover",
   subtle: "bg-surface-hover text-fg hover:bg-border/60",
   ghost: "text-fg-secondary hover:bg-surface-hover hover:text-fg",
-  destructive: "border border-danger/40 bg-surface text-danger hover:bg-danger-tint",
-  danger: "border border-danger/40 bg-surface text-danger hover:bg-danger-tint",
+  destructive: "border border-danger/40 bg-surface-raised text-danger hover:bg-danger-tint",
+  danger: "border border-danger/40 bg-surface-raised text-danger hover:bg-danger-tint",
   success: "bg-success text-white hover:brightness-95 shadow-sm",
 };
 
@@ -85,7 +88,7 @@ export function Button({
       aria-busy={loading || undefined}
       className={cn(
         "inline-flex items-center justify-center gap-2 rounded-[10px] font-semibold transition-[background-color,border-color,color,box-shadow,transform] duration-150 active:scale-[0.98] disabled:pointer-events-none disabled:opacity-50",
-        "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/30 focus-visible:ring-offset-2 focus-visible:ring-offset-surface",
+        "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/35 focus-visible:ring-offset-2 focus-visible:ring-offset-surface",
         variantMap[variant],
         sizeMap[size],
         className,
@@ -124,7 +127,7 @@ export const Input = React.forwardRef<
     <input
       ref={ref}
       className={cn(
-        "h-10 w-full rounded-[10px] border border-border-strong bg-surface px-3 text-[14px] text-fg outline-none transition-colors placeholder:text-fg-muted focus:border-primary focus:ring-2 focus:ring-primary/15 disabled:cursor-not-allowed disabled:bg-surface-hover disabled:text-fg-muted",
+        "h-10 w-full rounded-[10px] border border-border-strong bg-surface-raised px-3 text-[14px] text-fg outline-none transition-colors placeholder:text-fg-muted focus:border-accent focus:ring-2 focus:ring-accent/15 disabled:cursor-not-allowed disabled:bg-surface-hover disabled:text-fg-muted",
         className,
       )}
       {...props}
@@ -139,7 +142,7 @@ export function Textarea({
   return (
     <textarea
       className={cn(
-        "w-full rounded-[10px] border border-border-strong bg-surface px-3 py-2 text-[14px] text-fg outline-none transition-colors placeholder:text-fg-muted focus:border-primary focus:ring-2 focus:ring-primary/15 disabled:cursor-not-allowed disabled:bg-surface-hover disabled:text-fg-muted",
+        "w-full rounded-[10px] border border-border-strong bg-surface-raised px-3 py-2 text-[14px] text-fg outline-none transition-colors placeholder:text-fg-muted focus:border-accent focus:ring-2 focus:ring-accent/15 disabled:cursor-not-allowed disabled:bg-surface-hover disabled:text-fg-muted",
         className,
       )}
       {...props}
@@ -207,7 +210,10 @@ export function Card({
 }: React.HTMLAttributes<HTMLDivElement>) {
   return (
     <div
-      className={cn("rounded-[14px] border border-border bg-surface shadow-sm", className)}
+      className={cn(
+        "rounded-[16px] border border-border bg-surface shadow-[0_1px_2px_rgba(23,32,18,0.04),0_8px_24px_rgba(23,32,18,0.05)]",
+        className,
+      )}
       {...props}
     />
   );
@@ -230,10 +236,10 @@ export function CardHeader({
   right?: React.ReactNode;
 }) {
   return (
-    <div className="flex items-start justify-between gap-3 border-b border-border px-6 py-4">
+    <div className="flex items-start justify-between gap-3 border-b border-border px-5 py-4">
       <div className="min-w-0">
-        <h2 className="text-[15px] font-semibold text-fg">{title}</h2>
-        {subtitle ? <p className="mt-0.5 text-[12.5px] text-fg-muted">{subtitle}</p> : null}
+        <h2 className="text-[15px] font-semibold tracking-[-0.01em] text-fg">{title}</h2>
+        {subtitle ? <p className="mt-0.5 text-[12.5px] leading-relaxed text-fg-muted">{subtitle}</p> : null}
       </div>
       {right}
     </div>
@@ -250,7 +256,7 @@ export function Breadcrumb({ items }: { items: { label: string; href?: string }[
           <React.Fragment key={item.label + i}>
             {i > 0 ? <span aria-hidden>/</span> : null}
             {item.href && !last ? (
-              <a href={item.href} className="rounded transition-colors hover:text-fg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/30">
+              <a href={item.href} className="rounded transition-colors hover:text-fg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/30">
                 {item.label}
               </a>
             ) : (
@@ -265,25 +271,52 @@ export function Breadcrumb({ items }: { items: { label: string; href?: string }[
   );
 }
 
+/** Eyebrow label above a page title — small caps with an orange rule. */
+export function SectionLabel({
+  children,
+  className,
+  tone = "accent",
+}: {
+  children: React.ReactNode;
+  className?: string;
+  tone?: "accent" | "green" | "muted";
+}) {
+  return (
+    <p
+      className={cn(
+        "flex items-center gap-2 text-[10.5px] font-bold uppercase tracking-[0.14em]",
+        tone === "accent" ? "text-accent" : tone === "green" ? "text-primary" : "text-fg-muted",
+        className,
+      )}
+    >
+      <span aria-hidden className={cn("h-[3px] w-4 rounded-full", tone === "accent" ? "bg-accent" : tone === "green" ? "bg-primary" : "bg-fg-muted")} />
+      {children}
+    </p>
+  );
+}
+
 export function PageHeader({
   title,
   description,
   breadcrumb,
   actions,
+  eyebrow,
 }: {
   title: React.ReactNode;
   description?: React.ReactNode;
   breadcrumb?: { label: string; href?: string }[];
   actions?: React.ReactNode;
+  eyebrow?: React.ReactNode;
 }) {
   return (
-    <div className="mb-6 flex flex-wrap items-start justify-between gap-4">
+    <div className="mb-6 flex flex-wrap items-end justify-between gap-4">
       <div className="min-w-0">
         {breadcrumb ? <Breadcrumb items={breadcrumb} /> : null}
-        <h1 className="text-[26px] font-bold tracking-tight text-fg text-balance">{title}</h1>
-        {description ? <p className="mt-1.5 max-w-[62ch] text-[14px] leading-relaxed text-fg-secondary">{description}</p> : null}
+        {eyebrow ? <div className="mb-1.5">{eyebrow}</div> : null}
+        <h1 className="text-[24px] font-bold leading-tight tracking-[-0.015em] text-fg text-balance md:text-[27px]">{title}</h1>
+        {description ? <p className="mt-1.5 max-w-[66ch] text-[13.5px] leading-relaxed text-fg-secondary">{description}</p> : null}
       </div>
-      {actions ? <div className="flex shrink-0 flex-wrap items-center gap-2">{actions}</div> : null}
+      {actions ? <div className="flex min-w-0 flex-wrap items-center gap-2">{actions}</div> : null}
     </div>
   );
 }
@@ -323,7 +356,7 @@ export function Badge({
   return (
     <span
       className={cn(
-        "inline-flex items-center gap-1.5 rounded-md px-2 py-0.5 text-[11px] font-semibold uppercase tracking-wide",
+        "inline-flex items-center gap-1.5 rounded-md border border-transparent px-2 py-0.5 text-[11px] font-semibold uppercase tracking-wide",
         badgeTones[tone],
         className,
       )}
@@ -472,9 +505,9 @@ export function SearchableSelect({
         aria-haspopup="listbox"
         aria-expanded={open}
         className={cn(
-          "flex h-10 w-full items-center justify-between rounded-[10px] border bg-surface px-3 text-left text-[14px] font-medium transition-colors",
-          "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/20",
-          open ? "border-primary" : "border-border-strong",
+          "flex h-10 w-full items-center justify-between rounded-[10px] border bg-surface-raised px-3 text-left text-[14px] font-medium transition-colors",
+          "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/20",
+          open ? "border-accent" : "border-border-strong",
           selected ? "text-fg" : "text-fg-muted",
         )}
       >
@@ -493,7 +526,7 @@ export function SearchableSelect({
                   value={query}
                   onChange={(e) => setQuery(e.target.value)}
                   placeholder="Gõ để tìm nhanh..."
-                  className="h-9 w-full rounded-[8px] border border-border bg-surface pl-8 pr-3 text-[13px] outline-none focus:border-primary"
+                  className="h-9 w-full rounded-[8px] border border-border bg-surface-raised pl-8 pr-3 text-[13px] outline-none focus:border-accent"
                 />
               </div>
             </div>
@@ -513,7 +546,7 @@ export function SearchableSelect({
                 }}
                 className={cn(
                   "block w-full px-3 py-2 text-left text-[13.5px] font-medium hover:bg-surface-hover",
-                  o.value === value && "bg-primary-tint text-primary",
+                  o.value === value && "bg-accent-tint text-accent",
                 )}
               >
                 {o.label}
@@ -660,13 +693,13 @@ export function KpiCard({
   };
   const clickable = Boolean(href || onClick);
   const cardClass = cn(
-    "block rounded-[14px] border border-border bg-surface p-[18px] shadow-sm transition-[box-shadow,transform] duration-150",
-    clickable && "cursor-pointer hover:-translate-y-[1px] hover:shadow-md focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/30",
+    "block rounded-[16px] border border-border bg-surface p-[18px] shadow-[0_1px_2px_rgba(23,32,18,0.04),0_8px_24px_rgba(23,32,18,0.05)] transition-[box-shadow,transform] duration-150",
+    clickable && "cursor-pointer hover:-translate-y-[1px] hover:shadow-md focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/30",
   );
   const inner = (
     <>
-      <div className={cn("flex h-8 w-8 items-center justify-center rounded-[8px]", toneClass[tone])}>{icon}</div>
-      <p className="mt-2.5 text-[30px] font-bold leading-none tracking-tight tabular-nums text-fg">{value}</p>
+      <div className={cn("flex h-8 w-8 items-center justify-center rounded-[9px] ring-1 ring-black/[0.03]", toneClass[tone])}>{icon}</div>
+      <p className="mt-2.5 text-[28px] font-bold leading-none tracking-tight tabular-nums text-fg">{value}</p>
       <p className="mt-1.5 text-[12.5px] font-semibold text-fg-secondary">{label}</p>
       {context ? <p className="mt-0.5 text-[11.5px] text-fg-muted">{context}</p> : null}
     </>
@@ -682,6 +715,249 @@ export function KpiCard({
   return (
     <div onClick={onClick} className={cardClass}>
       {inner}
+    </div>
+  );
+}
+
+/* ============================================================
+   V2 OPERATIONAL PRIMITIVES
+   Compact metric strip / number tile / progress / alert panel /
+   gender split / period bar — shared building blocks for the four
+   pilot workspaces (dashboard, daily application, planning).
+   ============================================================ */
+
+export type Tone = "primary" | "success" | "warning" | "danger" | "info" | "accent";
+
+const TONE_ICON: Record<Tone, string> = {
+  primary: "bg-primary-tint text-primary",
+  success: "bg-success-tint text-success",
+  warning: "bg-warning-tint text-warning",
+  danger: "bg-danger-tint text-danger",
+  info: "bg-info-tint text-info",
+  accent: "bg-accent-tint text-accent",
+};
+
+const TONE_TEXT: Record<Tone, string> = {
+  primary: "text-primary",
+  success: "text-success",
+  warning: "text-warning",
+  danger: "text-danger",
+  info: "text-info",
+  accent: "text-accent",
+};
+
+const TONE_FILL: Record<Tone, string> = {
+  primary: "bg-primary",
+  success: "bg-success",
+  warning: "bg-warning",
+  danger: "bg-danger",
+  info: "bg-info",
+  accent: "bg-accent",
+};
+
+/** Compact inline metric: icon · value · label · context. Replaces the
+ *  row of identical white KPI cards on operational screens. */
+export function MetricStripItem({
+  icon,
+  value,
+  label,
+  context,
+  tone = "primary",
+}: {
+  icon: React.ReactNode;
+  value: React.ReactNode;
+  label: string;
+  context?: React.ReactNode;
+  tone?: Tone;
+}) {
+  return (
+    <div className="flex min-w-0 items-center gap-3 px-4 py-2.5">
+      <div className={cn("flex h-9 w-9 shrink-0 items-center justify-center rounded-[10px] ring-1 ring-black/[0.03]", TONE_ICON[tone])}>{icon}</div>
+      <div className="min-w-0">
+        <p className="text-[20px] font-bold leading-none tracking-tight tabular-nums text-fg">{value}</p>
+        <p className="mt-1 truncate text-[11.5px] font-semibold text-fg-secondary">{label}</p>
+        {context ? <p className="mt-0.5 truncate text-[10.5px] text-fg-muted">{context}</p> : null}
+      </div>
+    </div>
+  );
+}
+
+export function MetricStrip({ items, className }: { items: React.ReactElement<typeof MetricStripItem>[]; className?: string }) {
+  return (
+    <div className={cn("flex flex-wrap divide-y divide-border rounded-[16px] border border-border bg-surface shadow-[0_1px_2px_rgba(23,32,18,0.04),0_8px_24px_rgba(23,32,18,0.05)] sm:divide-x sm:divide-y-0", className)}>
+      {items}
+    </div>
+  );
+}
+
+/** Big-number tile for dashboard snapshots (progress + context). */
+export function NumberTile({
+  icon,
+  label,
+  value,
+  context,
+  tone = "primary",
+  progress,
+  progressLabel,
+}: {
+  icon?: React.ReactNode;
+  label: string;
+  value: React.ReactNode;
+  context?: React.ReactNode;
+  tone?: Tone;
+  progress?: number;
+  progressLabel?: string;
+}) {
+  return (
+    <div className="rounded-[16px] border border-border bg-surface p-4 shadow-[0_1px_2px_rgba(23,32,18,0.04),0_8px_24px_rgba(23,32,18,0.05)]">
+      <div className="flex items-center justify-between gap-2">
+        <p className="text-[10.5px] font-bold uppercase tracking-[0.12em] text-fg-muted">{label}</p>
+        {icon ? <div className={cn("flex h-7 w-7 items-center justify-center rounded-[8px]", TONE_ICON[tone])}>{icon}</div> : null}
+      </div>
+      <p className={cn("mt-2 text-[30px] font-bold leading-none tracking-tight tabular-nums", TONE_TEXT[tone])}>{value}</p>
+      {context ? <p className="mt-1.5 text-[11.5px] leading-relaxed text-fg-secondary">{context}</p> : null}
+      {typeof progress === "number" ? (
+        <div className="mt-3">
+          <div className="h-1.5 w-full overflow-hidden rounded-full bg-surface-hover" role="presentation">
+            <div className={cn("h-full rounded-full transition-[width] duration-500", TONE_FILL[tone])} style={{ width: `${Math.min(100, Math.max(0, progress))}%` }} />
+          </div>
+          {progressLabel ? <p className="mt-1 text-[10.5px] font-semibold text-fg-muted">{progressLabel}</p> : null}
+        </div>
+      ) : null}
+    </div>
+  );
+}
+
+/** Thin progress bar with optional label. */
+export function ProgressBar({
+  value,
+  tone = "primary",
+  trackClassName,
+  barClassName,
+  className,
+}: {
+  value: number;
+  tone?: Tone;
+  trackClassName?: string;
+  barClassName?: string;
+  className?: string;
+}) {
+  return (
+    <div className={cn("h-1.5 w-full overflow-hidden rounded-full bg-surface-hover", trackClassName, className)} role="presentation" aria-hidden>
+      <div
+        className={cn("h-full rounded-full transition-[width] duration-500", TONE_FILL[tone], barClassName)}
+        style={{ width: `${Math.min(100, Math.max(0, value))}%` }}
+      />
+    </div>
+  );
+}
+
+/** Two-segment gender bar (Nam = deep green, Nữ = orange). */
+export function GenderSplit({
+  male,
+  female,
+  height = 8,
+  className,
+}: {
+  male: number;
+  female: number;
+  height?: number;
+  className?: string;
+}) {
+  const total = Math.max(1, male + female);
+  const malePct = (male / total) * 100;
+  return (
+    <div
+      className={cn("flex w-full overflow-hidden rounded-full bg-surface-hover", className)}
+      style={{ height }}
+      role="presentation"
+      aria-label={`Nam ${male}, Nữ ${female}`}
+    >
+      {male > 0 ? <div className="h-full bg-primary transition-[width] duration-500" style={{ width: `${malePct}%` }} /> : null}
+      {female > 0 ? <div className="h-full bg-accent transition-[width] duration-500" style={{ width: `${100 - malePct}%` }} /> : null}
+    </div>
+  );
+}
+
+export function GenderLegend({ male, female }: { male: number; female: number }) {
+  return (
+    <div className="flex flex-wrap items-center gap-x-4 gap-y-1 text-[11.5px] font-medium text-fg-secondary">
+      <span className="inline-flex items-center gap-1.5">
+        <span className="h-2 w-2 rounded-full bg-primary" aria-hidden /> Nam {male}
+      </span>
+      <span className="inline-flex items-center gap-1.5">
+        <span className="h-2 w-2 rounded-full bg-accent" aria-hidden /> Nữ {female}
+      </span>
+    </div>
+  );
+}
+
+/** "Needs attention" alert panel — used for the dashboard focus strip. */
+export function AlertPanel({
+  tone = "warning",
+  icon,
+  title,
+  children,
+  action,
+  className,
+}: {
+  tone?: Tone;
+  icon?: React.ReactNode;
+  title: React.ReactNode;
+  children?: React.ReactNode;
+  action?: React.ReactNode;
+  className?: string;
+}) {
+  return (
+    <div
+      className={cn(
+        "flex flex-col gap-3 rounded-[16px] border p-4 sm:flex-row sm:items-center sm:gap-4",
+        tone === "warning" && "border-warning/25 bg-warning-tint/70",
+        tone === "danger" && "border-danger/25 bg-danger-tint/70",
+        tone === "info" && "border-info/25 bg-info-tint/70",
+        tone === "accent" && "border-accent/25 bg-accent-tint/70",
+        tone === "success" && "border-success/25 bg-success-tint/70",
+        tone === "primary" && "border-primary/20 bg-primary-tint/70",
+        className,
+      )}
+    >
+      <div className={cn("flex h-9 w-9 shrink-0 items-center justify-center rounded-[10px] ring-1 ring-black/[0.03]", TONE_ICON[tone])}>{icon}</div>
+      <div className="min-w-0 flex-1">
+        <p className="text-[13.5px] font-bold text-fg">{title}</p>
+        {children ? <div className="mt-1 text-[12.5px] leading-relaxed text-fg-secondary">{children}</div> : null}
+      </div>
+      {action ? <div className="shrink-0">{action}</div> : null}
+    </div>
+  );
+}
+
+/** Horizontal timeline bar for a planning period (start → end, today marker). */
+export function PeriodBar({
+  startDate,
+  endDate,
+  today = new Date().toISOString().slice(0, 10),
+  tone = "primary",
+  className,
+}: {
+  startDate: string;
+  endDate: string;
+  today?: string;
+  tone?: "primary" | "success" | "warning";
+  className?: string;
+}) {
+  const start = new Date(startDate + "T00:00:00").getTime();
+  const end = new Date(endDate + "T00:00:00").getTime();
+  const now = new Date(today + "T00:00:00").getTime();
+  const span = Math.max(1, end - start);
+  const pct = ((now - start) / span) * 100;
+  const todayInside = now >= start && now <= end;
+  const barColor = tone === "success" ? "bg-success" : tone === "warning" ? "bg-warning" : "bg-primary";
+  return (
+    <div className={cn("relative h-1.5 w-full overflow-visible rounded-full bg-surface-hover", className)} aria-hidden>
+      <div className={cn("h-full rounded-full", barColor)} style={{ width: `${Math.min(100, Math.max(0, pct))}%` }} />
+      {todayInside ? (
+        <span className="absolute top-1/2 h-[9px] w-[2px] -translate-y-1/2 rounded-full bg-accent shadow-[0_0_0_2px_rgba(226,109,28,0.25)]" style={{ left: `${pct}%` }} />
+      ) : null}
     </div>
   );
 }
@@ -845,7 +1121,7 @@ export function SearchBar({
         value={value}
         onChange={(e) => onChange(e.target.value)}
         placeholder={placeholder}
-        className="h-10 w-full rounded-[10px] border border-border-strong bg-surface pl-9 pr-3 text-[14px] text-fg outline-none transition-colors placeholder:text-fg-muted focus:border-primary focus:ring-2 focus:ring-primary/15"
+        className="h-10 w-full rounded-[10px] border border-border-strong bg-surface-raised pl-9 pr-3 text-[14px] text-fg outline-none transition-colors placeholder:text-fg-muted focus:border-accent focus:ring-2 focus:ring-accent/15"
       />
     </div>
   );
@@ -871,7 +1147,7 @@ export function FilterSelect({
       value={value}
       onChange={(e) => onChange(e.target.value)}
       className={cn(
-        "h-9 rounded-[9px] border border-border-strong bg-surface px-2.5 text-[13px] font-medium text-fg outline-none transition-colors focus:border-primary focus:ring-2 focus:ring-primary/15",
+        "h-9 rounded-[9px] border border-border-strong bg-surface-raised px-2.5 text-[13px] font-medium text-fg outline-none transition-colors focus:border-accent focus:ring-2 focus:ring-accent/15",
         className,
       )}
     >

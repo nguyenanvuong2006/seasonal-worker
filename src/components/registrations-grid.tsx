@@ -11,7 +11,7 @@ import {
   useReactTable,
   type SortingState,
 } from "@tanstack/react-table";
-import { Badge, Button, Card, Input, KpiCard, Modal, toast, cn } from "@/components/ui";
+import { Badge, Button, Card, Input, MetricStrip, MetricStripItem, Modal, toast, cn } from "@/components/ui";
 import { formatDate, STATUS_META, todayStr } from "@/lib/helpers";
 import { CCCD_ERROR_MESSAGE, isValidCccd, normalizeCccd } from "@/lib/validators";
 import {
@@ -652,16 +652,18 @@ export default function RegistrationsGrid({
 
   return (
     <div className="space-y-4">
-      <div className="grid grid-cols-2 gap-3 lg:grid-cols-5">
-        <KpiCard icon={<FileText className="h-4 w-4" />} label="Tổng đơn" value={stats.total} context={rangeMode ? "Khoảng ngày" : "Hôm nay"} tone="primary" />
-        <KpiCard icon={<CheckCircle2 className="h-4 w-4" />} label="Đã xếp việc" value={stats.approved} context="Đã duyệt" tone="success" />
-        <KpiCard icon={<Clock className="h-4 w-4" />} label="Chờ xếp" value={stats.pending} context="Cần xử lý" tone="warning" />
-        <KpiCard icon={<UserPlus2 className="h-4 w-4" />} label="Chưa có DW" value={stats.fresh} context="Người mới" tone="info" />
-        <KpiCard icon={<AlertTriangle className="h-4 w-4" />} label="Khai sai" value={stats.mismatch} context="Nói cũ nhưng mới" tone="danger" />
-      </div>
+      <MetricStrip
+        items={[
+          <MetricStripItem key="total" icon={<FileText className="h-4 w-4" />} value={stats.total} label="Tổng đơn" context={rangeMode ? "Khoảng ngày" : "Hôm nay"} tone="primary" />,
+          <MetricStripItem key="approved" icon={<CheckCircle2 className="h-4 w-4" />} value={stats.approved} label="Đã xếp việc" context="Đã duyệt" tone="success" />,
+          <MetricStripItem key="pending" icon={<Clock className="h-4 w-4" />} value={stats.pending} label="Chờ xếp" context="Cần xử lý" tone="warning" />,
+          <MetricStripItem key="fresh" icon={<UserPlus2 className="h-4 w-4" />} value={stats.fresh} label="Chưa có DW" context="Người mới" tone="accent" />,
+          <MetricStripItem key="mismatch" icon={<AlertTriangle className="h-4 w-4" />} value={stats.mismatch} label="Khai sai" context="Nói cũ nhưng mới" tone="danger" />,
+        ]}
+      />
 
       {/* BOX CHỌN NGÀY */}
-      <Card className="p-3">
+      <Card className="p-3 shadow-[0_1px_2px_rgba(23,32,18,0.04),0_8px_24px_rgba(23,32,18,0.05)]">
         <div className="flex flex-wrap items-end gap-2.5">
           <div className="rounded-[10px] bg-primary-tint px-3 py-2">
             <label className="flex cursor-pointer items-center gap-2 text-[12px] font-semibold text-primary">
@@ -779,11 +781,11 @@ export default function RegistrationsGrid({
       </Card>
 
       {canEdit && selIds.length > 0 && (
-        <div className="animate-slide-up sticky top-2 z-20 flex flex-wrap items-center gap-3 rounded-[14px] border border-primary/25 bg-primary-tint p-3 shadow-md">
-          <span className="flex h-8 w-8 items-center justify-center rounded-full bg-primary text-sm font-bold text-white">
+        <div className="animate-slide-up sticky top-2 z-20 flex flex-wrap items-center gap-3 rounded-[14px] border border-primary/30 bg-primary p-3 shadow-[0_10px_24px_rgba(15,68,36,0.35)]">
+          <span className="flex h-8 w-8 items-center justify-center rounded-full bg-accent text-sm font-bold text-white shadow-[0_0_0_3px_rgba(226,109,28,0.25)]">
             {selIds.length}
           </span>
-          <span className="text-[13px] font-semibold text-fg">
+          <span className="text-[13px] font-semibold text-white/90">
             Đã chọn {selIds.length} (mới: {newInSel}, cũ: {selIds.length - newInSel})
           </span>
           <Button variant="primary" onClick={() => runBulk(selIds, "APPROVED")} disabled={busy} loading={busy} size="sm">
@@ -792,7 +794,7 @@ export default function RegistrationsGrid({
           <Button variant="destructive" onClick={() => runBulk(selIds, "REJECTED")} disabled={busy} size="sm">
             <X className="h-3.5 w-3.5" /> Từ chối
           </Button>
-          <Button variant="ghost" onClick={() => setRowSelection({})} size="sm">
+          <Button variant="ghost" onClick={() => setRowSelection({})} size="sm" className="text-white/80 hover:bg-white/10 hover:text-white">
             Bỏ chọn
           </Button>
         </div>
@@ -805,16 +807,16 @@ export default function RegistrationsGrid({
           </p>
           <Badge tone="gray">{rows.length} đơn</Badge>
         </div>
-        <div className="max-h-[62vh] overflow-auto">
+        <div className="v2-scroll max-h-[62vh] overflow-auto">
           <table className="grid-sheet w-full border-collapse">
-            <thead className="sticky top-0 z-10 bg-primary text-white">
+            <thead className="sticky top-0 z-10 bg-primary-tint/95 shadow-[inset_0_-1px_0_var(--color-border)] backdrop-blur">
               {table.getHeaderGroups().map((hg) => (
                 <tr key={hg.id}>
                   {hg.headers.map((h) => (
                     <th
                       key={h.id}
                       onClick={h.column.getToggleSortingHandler()}
-                      className="cursor-pointer whitespace-nowrap px-2 py-3 text-left text-[10.5px] font-semibold uppercase tracking-wide"
+                      className="cursor-pointer whitespace-nowrap px-2 py-2.5 text-left text-[10.5px] font-bold uppercase tracking-wider text-primary"
                     >
                       {flexRender(h.column.columnDef.header, h.getContext())}
                       {{ asc: " ▲", desc: " ▼" }[h.column.getIsSorted() as string] ?? ""}
@@ -840,9 +842,22 @@ export default function RegistrationsGrid({
               )}
               {!loading &&
                 table.getRowModel().rows.map((row) => (
-                  <tr key={row.id} className={cn("border-b border-border transition-colors hover:bg-surface-hover", row.getIsSelected() && "bg-primary-tint")}>
+                  <tr
+                    key={row.id}
+                    className={cn(
+                      "border-b border-border/70 bg-surface transition-colors hover:bg-botanical-50",
+                      row.getIsSelected() && "bg-accent-tint shadow-[inset_3px_0_0_0_#e26d1c] hover:bg-accent-tint",
+                    )}
+                  >
                     {row.getVisibleCells().map((cell) => (
-                      <td key={cell.id} className="px-1 py-1 align-middle">
+                      <td
+                        key={cell.id}
+                        className={cn(
+                          "px-1 py-1 align-middle",
+                          ["dwMatch", "phone", "deptId"].includes(cell.column.id) && "hidden md:table-cell",
+                          ["gender", "age", "noteWorker"].includes(cell.column.id) && "hidden lg:table-cell",
+                        )}
+                      >
                         {flexRender(cell.column.columnDef.cell, cell.getContext())}
                       </td>
                     ))}
@@ -875,7 +890,7 @@ export default function RegistrationsGrid({
 
           <div className="max-h-[44vh] overflow-y-auto rounded-[12px] border border-border">
             <table className="grid-sheet w-full text-[13px]">
-              <thead className="sticky top-0 bg-primary text-white">
+              <thead className="sticky top-0 bg-primary-tint text-primary">
                 <tr>
                   <th className="w-10 px-2 py-2.5 text-center text-[10px] font-semibold">✓</th>
                   <th className="px-3 py-2.5 text-left text-[10px] font-semibold uppercase">CCCD</th>

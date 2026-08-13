@@ -1,16 +1,22 @@
 @import "tailwindcss";
 
 @theme {
-  --color-hasfarm-50: #eef6f0;
-  --color-hasfarm-100: #d6ecda;
-  --color-hasfarm-200: #b0d8b8;
-  --color-hasfarm-300: #86c095;
-  --color-hasfarm-400: #46a065;
-  --color-hasfarm-500: #1e7a3e;
-  --color-hasfarm-600: #16693a;
-  --color-hasfarm-700: #115830;
-  --color-hasfarm-800: #0d4626;
-  --color-hasfarm-900: #08321b;
+  /* ============================================================
+     BRAND PALETTE — Hasfarm "greenhouse" identity
+     Deep green = brand/navigation anchor; Hasfarm orange = CTA &
+     selected accent; warm yellow = rare highlight; botanical light
+     green = secondary surfaces; blue/purple/red = semantic only.
+     ============================================================ */
+  --color-hasfarm-50: #eef5ea;
+  --color-hasfarm-100: #dcebd2;
+  --color-hasfarm-200: #bad7a7;
+  --color-hasfarm-300: #8fbc77;
+  --color-hasfarm-400: #5c9e47;
+  --color-hasfarm-500: #3c7d2e;
+  --color-hasfarm-600: #2a6120;
+  --color-hasfarm-700: #1d4a17;
+  --color-hasfarm-800: #143912;
+  --color-hasfarm-900: #0c260c;
 
   --color-gold-50: #fdf8ec;
   --color-gold-100: #faedcd;
@@ -22,62 +28,153 @@
   --color-gold-700: #8a5f16;
 
   /* ============================================================
-     SEMANTIC DESIGN TOKENS (Professional UI Redesign)
+     SEMANTIC DESIGN TOKENS (Visual Redesign V2)
      ------------------------------------------------------------
-     Single source of truth for the "background / surface / border / text /
-     primary / success / warning / danger / info" tokens used across every
-     redesigned component — replaces ad-hoc hex/tailwind-class choices
-     scattered per file. `fg*` = the audit's "text-primary/secondary/muted"
-     (named `fg` instead to avoid the awkward `text-text-primary` utility
-     Tailwind would otherwise generate for `--color-text-primary`).
-     Brand green stays `--color-primary` (kept identical to hasfarm-700) —
-     this is a working HR/agriculture ops tool with an established
-     identity, not a generic SaaS palette. `success` is a DIFFERENT green
-     (emerald) so "active nav" and "approved application" never collide.
+     V2 language: warm cream/ivory surfaces dominate; deep green is
+     reserved for the navigation anchor + brand moments; Hasfarm
+     orange (accent) drives CTAs and selection. `fg*` = text ramp.
      ============================================================ */
-  --color-bg: #f7f8f5;
-  --color-surface: #ffffff;
-  --color-surface-hover: #f0f2ee;
-  --color-border: #e3e7e0;
-  --color-border-strong: #cdd4c8;
+  --color-bg: #f6f2e9;
+  --color-surface: #fffcf6;
+  --color-surface-raised: #ffffff;
+  --color-surface-hover: #f2ecdf;
+  --color-border: #e8e0ce;
+  --color-border-strong: #d2c8af;
 
-  --color-fg: #16231a;
-  --color-fg-secondary: #576358;
-  --color-fg-muted: #8b968a;
+  --color-fg: #1c2418;
+  --color-fg-secondary: #5c6354;
+  --color-fg-muted: #8b917f;
 
-  --color-primary: #115830;
-  --color-primary-hover: #0d4626;
-  --color-primary-tint: #eaf3ec;
+  --color-primary: #0f4424;
+  --color-primary-hover: #0b371c;
+  --color-primary-tint: #e8f0e3;
+  --color-primary-soft: #f1f5ec;
 
-  --color-accent: #b8841c;
-  --color-accent-tint: #fbf3e1;
+  --color-accent: #e26d1c;
+  --color-accent-hover: #c65a0f;
+  --color-accent-tint: #fceae0;
+  --color-accent-soft: #fdf1e6;
 
-  --color-success: #059669;
-  --color-success-tint: #e7f6ef;
+  --color-botanical-50: #f2f6ee;
+  --color-botanical-100: #e4ecdb;
+  --color-botanical-200: #d2e0c4;
+  --color-botanical-300: #b6cba2;
+
+  --color-success: #0e8a4d;
+  --color-success-tint: #e5f4ec;
   --color-warning: #b45309;
-  --color-warning-tint: #fdf3e1;
+  --color-warning-tint: #fbf0e0;
   --color-danger: #b91c1c;
   --color-danger-tint: #fbeaea;
   --color-info: #1d4ed8;
   --color-info-tint: #eaf0fd;
+
+  --font-sans:
+    "Be Vietnam Pro", "Inter", ui-sans-serif, system-ui, -apple-system,
+    "Segoe UI", Roboto, "Noto Sans", "Helvetica Neue", Arial, sans-serif;
 }
 
 html,
 body {
   -webkit-tap-highlight-color: transparent;
-  font-family:
-    Inter,
-    ui-sans-serif,
-    system-ui,
-    -apple-system,
-    Segoe UI,
-    Roboto,
-    Helvetica,
-    Arial;
+  font-family: var(--font-sans);
   background: var(--color-bg);
   color: var(--color-fg);
+  font-feature-settings: "kern", "liga", "calt";
+  text-rendering: optimizeLegibility;
 }
 
+/* ============================================================
+   BRAND MOMENTS
+   ------------------------------------------------------------
+   hasfarm-hero — deep-green greenhouse gradient with soft sunlight
+   (warm yellow) and botanical light glows. Used as navigation/brand
+   anchor surfaces only (sidebar, public hero, login panel).
+   ============================================================ */
+.hasfarm-hero {
+  position: relative;
+  background:
+    radial-gradient(1000px 460px at 12% -12%, rgba(244, 220, 156, 0.28), transparent 62%),
+    radial-gradient(900px 480px at 96% 2%, rgba(92, 158, 71, 0.35), transparent 58%),
+    linear-gradient(150deg, #08290f 0%, #0d3a1d 34%, #0f4424 62%, #145a2d 100%);
+}
+.hasfarm-hero::after {
+  content: "";
+  position: absolute;
+  inset: auto 0 0 0;
+  height: 1px;
+  background: linear-gradient(90deg, transparent, rgba(226, 109, 28, 0.55), transparent);
+}
+
+/* Field-row texture — subtle horizontal "planting rows" pattern used on
+   brand surfaces (sidebar, hero) so the identity reads as an agricultural
+   operations brand without a single photo. */
+.field-rows {
+  background-image:
+    repeating-linear-gradient(
+      0deg,
+      rgba(255, 255, 255, 0.045) 0px,
+      rgba(255, 255, 255, 0.045) 1px,
+      transparent 1px,
+      transparent 26px
+    ),
+    repeating-linear-gradient(
+      90deg,
+      rgba(255, 255, 255, 0.02) 0px,
+      rgba(255, 255, 255, 0.02) 1px,
+      transparent 1px,
+      transparent 64px
+    );
+}
+.field-rows-light {
+  background-image:
+    repeating-linear-gradient(
+      0deg,
+      rgba(15, 68, 36, 0.03) 0px,
+      rgba(15, 68, 36, 0.03) 1px,
+      transparent 1px,
+      transparent 26px
+    ),
+    repeating-linear-gradient(
+      90deg,
+      rgba(15, 68, 36, 0.02) 0px,
+      rgba(15, 68, 36, 0.02) 1px,
+      transparent 1px,
+      transparent 64px
+    );
+}
+
+/* Petal arch — a soft "petal curvature" corner treatment for key brand
+   cards (hero cards, CTA panels). */
+.petal-arch {
+  border-radius: 2rem 2rem 2rem 0.75rem;
+}
+
+/* Standard surface card in V2 language (ivory, warm hairline, soft shadow). */
+.hasfarm-card {
+  border-radius: 1.25rem;
+  border: 1px solid rgba(15, 68, 36, 0.09);
+  background: rgba(255, 252, 246, 0.94);
+  box-shadow:
+    0 1px 1px rgba(23, 32, 18, 0.04),
+    0 10px 28px rgba(23, 32, 18, 0.06);
+}
+
+table.grid-sheet th,
+table.grid-sheet td {
+  border-right: 1px solid #f0eadb;
+  border-bottom: 1px solid #f0eadb;
+}
+
+.hasfarm-focus:focus-within {
+  border-color: #e26d1c !important;
+  box-shadow: 0 0 0 3px rgba(226, 109, 28, 0.14);
+}
+
+/* ============================================================
+   MOTION PRIMITIVES — 150–300ms, opacity/transform only.
+   All disabled under prefers-reduced-motion below.
+   ============================================================ */
 @keyframes slide-up {
   from {
     opacity: 0;
@@ -105,42 +202,6 @@ body {
   animation: soft-pulse 2.4s ease-in-out infinite;
 }
 
-.hasfarm-hero {
-  position: relative;
-  background:
-    radial-gradient(900px 420px at 15% -10%, rgba(244, 220, 156, 0.35), transparent 60%),
-    radial-gradient(900px 460px at 95% 0%, rgba(70, 160, 101, 0.35), transparent 55%),
-    linear-gradient(135deg, #071a0e 0%, #0f4a26 28%, #115830 58%, #1a6d3a 100%);
-}
-.hasfarm-hero::after {
-  content: "";
-  position: absolute;
-  inset: auto 0 0 0;
-  height: 1px;
-  background: linear-gradient(90deg, transparent, rgba(217, 163, 39, 0.45), transparent);
-}
-
-.hasfarm-card {
-  border-radius: 1.25rem;
-  border: 1px solid rgba(17, 88, 48, 0.08);
-  background: rgba(255, 255, 255, 0.92);
-  box-shadow:
-    0 1px 1px rgba(8, 50, 27, 0.04),
-    0 8px 24px rgba(8, 50, 27, 0.06);
-  backdrop-filter: blur(6px);
-}
-
-table.grid-sheet th,
-table.grid-sheet td {
-  border-right: 1px solid #eef2ee;
-  border-bottom: 1px solid #eef2ee;
-}
-
-.hasfarm-focus:focus-within {
-  border-color: #115830 !important;
-  box-shadow: 0 0 0 3px rgba(17, 88, 48, 0.12);
-}
-
 @keyframes shimmer {
   0% {
     background-position: -400px 0;
@@ -150,7 +211,7 @@ table.grid-sheet td {
   }
 }
 .skeleton {
-  background: linear-gradient(90deg, #eef2ee 25%, #f7faf7 37%, #eef2ee 63%);
+  background: linear-gradient(90deg, #eae4d5 25%, #f6f2e7 37%, #eae4d5 63%);
   background-size: 800px 100%;
   animation: shimmer 1.4s linear infinite;
   border-radius: 0.75rem;
@@ -184,14 +245,6 @@ table.grid-sheet td {
   animation: fade-in-scale 0.35s cubic-bezier(0.16, 1, 0.3, 1);
 }
 
-/* ============================================================
-   MOTION PRIMITIVES (Professional UI Redesign)
-   ------------------------------------------------------------
-   150–300ms, opacity/transform only — no new animation dependency.
-   Every animation here is disabled under prefers-reduced-motion below,
-   so the app stays fully usable with motion off (functionality never
-   depends on an animation completing).
-   ============================================================ */
 @keyframes menu-in {
   from {
     opacity: 0;
@@ -243,6 +296,22 @@ table.grid-sheet td {
 }
 .animate-row-in {
   animation: row-in 0.2s ease-out both;
+}
+
+/* Slim, warm scrollbars for dense operational tables */
+.v2-scroll::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+.v2-scroll::-webkit-scrollbar-track {
+  background: transparent;
+}
+.v2-scroll::-webkit-scrollbar-thumb {
+  background: #d8d0ba;
+  border-radius: 999px;
+}
+.v2-scroll::-webkit-scrollbar-thumb:hover {
+  background: #c3b99d;
 }
 
 @media (prefers-reduced-motion: reduce) {
