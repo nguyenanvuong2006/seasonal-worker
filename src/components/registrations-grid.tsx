@@ -1,6 +1,7 @@
 "use client";
 
 import * as React from "react";
+import { useSearchParams } from "next/navigation";
 import {
   createColumnHelper,
   flexRender,
@@ -223,14 +224,16 @@ export default function RegistrationsGrid({
   departments: DeptOption[];
   canEdit: boolean;
 }) {
-  // MẶC ĐỊNH CHỈ HÔM NAY (màn hình tinh gọn)
-  const [from, setFrom] = React.useState(todayStr());
-  const [to, setTo] = React.useState(todayStr());
-  const [rangeMode, setRangeMode] = React.useState(false);
+  // MẶC ĐỊNH CHỈ HÔM NAY (màn hình tinh gọn) — trừ khi đến từ Tìm kiếm toàn hệ thống
+  // (?q=&from=&to=&rangeMode=1), lúc đó mở đúng khoảng ngày + từ khoá của kết quả đã bấm.
+  const searchParams = useSearchParams();
+  const [from, setFrom] = React.useState(() => searchParams.get("from") || todayStr());
+  const [to, setTo] = React.useState(() => searchParams.get("to") || todayStr());
+  const [rangeMode, setRangeMode] = React.useState(() => searchParams.get("rangeMode") === "1");
   const [statusFilter, setStatusFilter] = React.useState("ALL");
   const [deptFilter, setDeptFilter] = React.useState("ALL");
   const [matchFilter, setMatchFilter] = React.useState("ALL");
-  const [globalFilter, setGlobalFilter] = React.useState("");
+  const [globalFilter, setGlobalFilter] = React.useState(() => searchParams.get("q") ?? "");
   const [rows, setRows] = React.useState<AppRow[]>([]);
   const [loading, setLoading] = React.useState(true);
   const [sorting, setSorting] = React.useState<SortingState>([]);

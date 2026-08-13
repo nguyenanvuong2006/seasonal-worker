@@ -1,6 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useState } from "react";
+import { useSearchParams } from "next/navigation";
 import {
   Badge,
   Button,
@@ -33,11 +34,12 @@ type Dept = {
 };
 
 export default function DepartmentsAdminPage() {
+  const searchParams = useSearchParams();
   const [rows, setRows] = useState<Dept[]>([]);
   const [loading, setLoading] = useState(true);
   const [open, setOpen] = useState(false);
   const [saving, setSaving] = useState(false);
-  const [q, setQ] = useState("");
+  const [q, setQ] = useState(() => searchParams.get("q") ?? "");
   const [form, setForm] = useState({
     deptName: "",
     groupName: "",

@@ -37,6 +37,8 @@ export const PERMISSION_KEYS = [
   { key: "workforce_movements.manage", label: "HR xử lý yêu cầu Nghỉ việc/Thuyên chuyển" },
   { key: "planning.view", label: "Xem Planning" },
   { key: "planning.manage", label: "Quản lý Planning (tạo/sửa/kích hoạt)" },
+  { key: "branding.manage", label: "Quản lý Thương hiệu & Chủ đề năm" },
+  { key: "global_search.use", label: "Sử dụng Tìm kiếm toàn hệ thống" },
 ] as const;
 
 export const ROLES = ["ADMIN", "HR_RECRUITER", "DEPT_MANAGER"] as const;
