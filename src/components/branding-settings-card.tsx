@@ -112,10 +112,10 @@ export function BrandingSettingsCard() {
         title={
           <span className="flex items-center gap-2">
             <Sparkles className="h-4 w-4 text-accent" aria-hidden />
-            Thương hiệu &amp; Chủ đề năm
+            Thương hiệu &amp; Giao diện đăng ký
           </span>
         }
-        subtitle="Cấu hình ảnh chủ đề và slogan hiển thị trên trang đăng nhập, sidebar và Dashboard. Không ảnh hưởng logo chính thức của Dalat Hasfarm."
+        subtitle="Ảnh được cấu hình tại đây là ảnh Hero người lao động trên trang Đăng ký tập nghề; Admin có thể thay bằng ảnh thật của công ty. Slogan/năm chủ đề vẫn dùng cho các brand surface nội bộ."
       />
       <CardContent className="space-y-6">
         {loading ? (
@@ -125,16 +125,16 @@ export function BrandingSettingsCard() {
         ) : (
           <>
             <div>
-              <p className="mb-2 text-[13px] font-semibold text-fg">Ảnh chủ đề năm (Year Theme Image)</p>
+              <p className="mb-2 text-[13px] font-semibold text-fg">Ảnh Hero trang Đăng ký tập nghề</p>
               <div className="flex flex-wrap items-start gap-4">
-                <div className="flex h-28 w-48 shrink-0 items-center justify-center overflow-hidden rounded-[12px] border border-dashed border-border-strong bg-surface-hover">
+                <div className="flex h-32 w-56 shrink-0 items-center justify-center overflow-hidden rounded-[12px] border border-dashed border-border-strong bg-surface-hover">
                   {imagePreview ? (
                     // eslint-disable-next-line @next/next/no-img-element
-                    <img src={imagePreview} alt="Xem trước ảnh chủ đề năm" className="h-full w-full object-contain" />
+                    <img src={imagePreview} alt="Xem trước ảnh Hero trang đăng ký" className="h-full w-full object-cover" />
                   ) : (
-                    <div className="flex flex-col items-center gap-1 text-fg-muted">
+                    <div className="flex flex-col items-center gap-1 px-3 text-center text-fg-muted">
                       <ImageOff className="h-6 w-6" aria-hidden />
-                      <span className="text-[11px]">Chưa cấu hình</span>
+                      <span className="text-[11px]">Đang dùng ảnh mặc định trong repo</span>
                     </div>
                   )}
                 </div>
@@ -145,25 +145,24 @@ export function BrandingSettingsCard() {
                     accept="image/png,image/jpeg,image/webp"
                     className="hidden"
                     onChange={onPickImage}
-                    aria-label="Chọn ảnh chủ đề năm"
+                    aria-label="Chọn ảnh Hero trang đăng ký"
                   />
                   <Button variant="outline" size="sm" onClick={() => fileInputRef.current?.click()}>
                     <UploadCloud className="h-4 w-4" aria-hidden />
-                    {row?.yearThemeImage || imagePreview ? "Thay ảnh khác" : "Tải ảnh lên"}
+                    {row?.yearThemeImage || imagePreview ? "Thay hình người lao động" : "Tải ảnh công ty lên"}
                   </Button>
                   {imagePreview ? (
                     <Button variant="ghost" size="sm" onClick={removeImage} disabled={saving}>
-                      <Trash2 className="h-4 w-4" aria-hidden /> Gỡ ảnh
+                      <Trash2 className="h-4 w-4" aria-hidden /> Dùng lại ảnh mặc định
                     </Button>
                   ) : null}
                   {imageChanged ? (
                     <Button size="sm" onClick={saveImage} loading={saving}>
-                      Lưu ảnh
+                      Lưu ảnh Hero
                     </Button>
                   ) : null}
-                  <p className="max-w-[32ch] text-[11.5px] text-fg-muted">
-                    PNG/JPEG/WEBP, tối đa 2MB. Nếu không cấu hình, giao diện vẫn hiển thị bình thường (không có
-                    khung ảnh vỡ).
+                  <p className="max-w-[36ch] text-[11.5px] text-fg-muted">
+                    Khuyến nghị ảnh ngang 16:9 (ví dụ 1920×1080), PNG/JPEG/WEBP, tối đa 2MB. Ảnh được kiểm tra loại file và dung lượng ở cả giao diện lẫn API trước khi lưu.
                   </p>
                 </div>
               </div>
@@ -187,7 +186,7 @@ export function BrandingSettingsCard() {
                 value={slogan}
                 onChange={(e) => setSlogan(e.target.value.slice(0, MAX_SLOGAN_LENGTH))}
                 rows={2}
-                placeholder="Ví dụ: Cùng Dalat Hasfarm vun đắp mùa vụ bội thu 2026"
+                placeholder="Ví dụ: Cùng Dalat Hasfarm phát triển bền vững 2026"
               />
             </FormField>
 
