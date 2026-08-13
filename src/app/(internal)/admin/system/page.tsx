@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useState } from "react";
 import Link from "next/link";
 import { Card, CardContent, CardHeader, Badge } from "@/components/ui";
+import { BrandingSettingsCard } from "@/components/branding-settings-card";
 import {
   Loader2,
   ExternalLink,
@@ -281,6 +282,8 @@ export default function SystemHealthPage() {
           </div>
         </>
       )}
+
+      <BrandingSettingsCard />
     </div>
   );
 }

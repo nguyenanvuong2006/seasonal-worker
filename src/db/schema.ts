@@ -312,6 +312,26 @@ export const notifications = pgTable("notifications", {
 });
 
 /* ============================================================
+   BRANDING SETTINGS (UI Follow-up: Branding/Profile/Global Search)
+   ---------------------------------------------------------------
+   1 dòng duy nhất (id cố định 'default') lưu Year Theme + Year Slogan do
+   Admin tự cấu hình tại /admin/system — không hard-code trong code. Ảnh
+   Year Theme lưu dạng data URL (base64) ngay trong cột text: hệ thống
+   chưa có blob storage nào (Vercel Blob/S3...) và ảnh chỉ 1 cái/lúc, quy
+   mô nhỏ (nội bộ, không phải nơi lưu file người dùng hàng loạt) — dùng
+   thẳng Postgres tránh phải thêm 1 dịch vụ ngoài trả phí chỉ để lưu 1 ảnh.
+   ============================================================ */
+export const brandingSettings = pgTable("branding_settings", {
+  id: varchar("id", { length: 32 }).primaryKey().default("default"),
+  yearThemeImage: text("year_theme_image"), // data URL (base64), null = chưa cấu hình
+  yearSlogan: varchar("year_slogan", { length: 160 }),
+  themeYear: varchar("theme_year", { length: 8 }),
+  themeSubtitle: varchar("theme_subtitle", { length: 160 }),
+  updatedBy: varchar("updated_by", { length: 64 }),
+  updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
+});
+
+/* ============================================================
    DASHBOARD FOUNDATION — widget đọc metadata (field_definitions),
    chưa có trình kéo-thả, chỉ có cấu hình dạng danh sách tại
    /admin/dashboard.

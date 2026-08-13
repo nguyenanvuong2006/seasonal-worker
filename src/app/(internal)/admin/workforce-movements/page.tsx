@@ -1,6 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useState } from "react";
+import { useSearchParams } from "next/navigation";
 import {
   Badge,
   Button,
@@ -13,6 +14,7 @@ import {
   Modal,
   PageHeader,
   Skeleton,
+  cn,
   toast,
 } from "@/components/ui";
 import { ArrowLeftRight, Check, Clock, Search, X, type LucideIcon } from "lucide-react";
@@ -83,6 +85,8 @@ function MovementListSkeleton() {
 }
 
 export default function WorkforceMovementsPage() {
+  const searchParams = useSearchParams();
+  const highlightId = searchParams.get("highlight");
   const [rows, setRows] = useState<Movement[]>([]);
   const [depts, setDepts] = useState<Dept[]>([]);
   const [stages, setStages] = useState<Stage[]>([]);
@@ -234,7 +238,13 @@ export default function WorkforceMovementsPage() {
               {rows.map((m) => {
                 const actions = STATUS_ACTIONS[`${m.movementType}_${m.status}`] ?? [];
                 return (
-                  <li key={m.id} className="flex flex-wrap items-center gap-3 p-4 transition-colors hover:bg-surface-hover">
+                  <li
+                    key={m.id}
+                    className={cn(
+                      "flex flex-wrap items-center gap-3 p-4 transition-colors hover:bg-surface-hover",
+                      m.id === highlightId && "bg-primary-tint ring-1 ring-inset ring-primary/30",
+                    )}
+                  >
                     <Badge tone={m.movementType === "resignation" ? "red" : "blue"}>{m.movementType === "resignation" ? "Nghỉ việc" : "Thuyên chuyển"}</Badge>
                     <div className="min-w-[160px]">
                       <p className="font-semibold text-fg">{m.workerName ?? m.workerCccd}</p>

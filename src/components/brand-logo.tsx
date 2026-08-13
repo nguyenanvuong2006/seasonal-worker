@@ -1,8 +1,19 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
+import { ImageOff } from "lucide-react";
 
-const REAL_LOGO_URL = "https://datax-talent.basecdn.net/dalathasfarm/logo-footer.png";
+/**
+ * Chỗ trống (asset slot) cho logo chính thức của Dalat Hasfarm — xem public/brand/README.md.
+ * Repo hiện CHƯA có file logo chính thức nào; ảnh này sẽ 404 cho tới khi có file thật được đặt
+ * đúng đường dẫn. Cố tình KHÔNG dùng CDN ngoài, KHÔNG vẽ logo giả (SVG/CSS), KHÔNG dùng chữ
+ * "Dalat Hasfarm" thay cho logo — khi ảnh chưa có, hiển thị khung trống rõ ràng (ImageOff) thay
+ * vì mô phỏng một logo không có thật.
+ */
+const LOGO_SRC = "/brand/dalat-hasfarm-logo.png";
+
+/** "checking" = SSR + trước khi client kiểm tra xong; "ok"/"failed" = kết quả đã biết. */
+let cachedLogoStatus: "checking" | "ok" | "failed" = "checking";
 
 export function BrandLogo({
   size = "md",
@@ -13,7 +24,28 @@ export function BrandLogo({
   light?: boolean;
   withText?: boolean;
 }) {
-  const [imgFailed, setImgFailed] = useState(false);
+  // KHÔNG render <img src=...> lạc quan rồi bắt onError: ảnh 404 cục bộ thường load/lỗi NHANH
+  // HƠN thời điểm React gắn xong sự kiện sau hydration (sự kiện "error" trên <img> không bubble
+  // nên React không delegate/replay được) — onError bị bỏ lỡ, trình duyệt hiện icon ảnh vỡ mặc
+  // định. Thay vào đó: kiểm tra ảnh hoàn toàn phía client bằng `Image()` sau mount, chỉ render
+  // <img> thật khi ĐÃ CHẮC CHẮN tải được (lúc đó trình duyệt đã cache sẵn, không thể lỗi nữa).
+  const [status, setStatus] = useState(cachedLogoStatus);
+  useEffect(() => {
+    if (cachedLogoStatus !== "checking") {
+      setStatus(cachedLogoStatus);
+      return;
+    }
+    const probe = new Image();
+    probe.onload = () => {
+      cachedLogoStatus = "ok";
+      setStatus("ok");
+    };
+    probe.onerror = () => {
+      cachedLogoStatus = "failed";
+      setStatus("failed");
+    };
+    probe.src = LOGO_SRC;
+  }, []);
   const box =
     size === "sm"
       ? "h-9 w-9"
@@ -23,54 +55,30 @@ export function BrandLogo({
           ? "h-16 w-16 md:h-20 md:w-20"
           : "h-11 w-11";
   const titleSize =
-    size === "sm" ? "text-[13px]" : size === "lg" || size === "xl" ? "text-[22px]" : "text-[16px]";
+    size === "sm" ? "text-[13px]" : size === "lg" || size === "xl" ? "text-[19px]" : "text-[15px]";
   const subSize = size === "sm" ? "text-[8px]" : "text-[10px]";
 
   return (
     <div className="flex items-center gap-3">
       <div
-        className={`${box} relative flex shrink-0 items-center justify-center overflow-hidden rounded-[12px] bg-white shadow-[0_4px_14px_rgba(0,0,0,0.12)] ring-1 ring-black/5`}
+        className={`${box} relative flex shrink-0 items-center justify-center overflow-hidden rounded-[12px] ${
+          light ? "bg-white/10 ring-1 ring-white/15" : "bg-white shadow-[0_4px_14px_rgba(0,0,0,0.12)] ring-1 ring-black/5"
+        }`}
       >
-        {!imgFailed ? (
-          // Logo thật của Dalat Hasfarm (từ trang tuyển dụng chính thức) — dự phòng bằng
-          // biểu tượng hoa vẽ tay bên dưới nếu ảnh không tải được (CDN ngoài, không kiểm soát được).
+        {status === "ok" ? (
           // eslint-disable-next-line @next/next/no-img-element
-          <img
-            src={REAL_LOGO_URL}
-            alt="Dalat Hasfarm"
-            className="h-[80%] w-[80%] object-contain"
-            onError={() => setImgFailed(true)}
-          />
-        ) : (
-          <svg viewBox="0 0 40 40" className="h-[70%] w-[70%]" aria-hidden>
-            <circle cx="20" cy="19" r="5" fill="#D9A327" />
-            <ellipse cx="20" cy="8" rx="6" ry="7" fill="#115830" opacity={0.95} />
-            <ellipse cx="20" cy="31" rx="6" ry="7" fill="#115830" opacity={0.95} />
-            <ellipse cx="8.5" cy="19" rx="7" ry="6" fill="#16693A" />
-            <ellipse cx="31.5" cy="19" rx="7" ry="6" fill="#16693A" />
-            <ellipse cx="11.5" cy="10.5" rx="5" ry="5.5" fill="#22824B" opacity={0.9} />
-            <ellipse cx="28.5" cy="10.5" rx="5" ry="5.5" fill="#22824B" opacity={0.9} />
-            <ellipse cx="11.5" cy="27.5" rx="5" ry="5.5" fill="#22824B" opacity={0.9} />
-            <ellipse cx="28.5" cy="27.5" rx="5" ry="5.5" fill="#22824B" opacity={0.9} />
-          </svg>
-        )}
+          <img src={LOGO_SRC} alt="Dalat Hasfarm" className="h-[80%] w-[80%] object-contain" />
+        ) : status === "failed" ? (
+          <ImageOff className={light ? "h-[42%] w-[42%] text-white/35" : "h-[42%] w-[42%] text-fg-muted"} aria-hidden />
+        ) : null}
       </div>
       {withText && (
-        <div className="leading-[0.95]">
-          <p
-            className={`${titleSize} font-black tracking-[-0.02em] ${
-              light ? "text-white" : "text-[#0E3A1F]"
-            }`}
-            style={{ fontFamily: "Inter, ui-sans-serif, system-ui" }}
-          >
-            DALAT <span className={light ? "text-[#F6D785]" : "text-[#9A6B12]"}>HASFARM</span>
+        <div className="leading-[1.15]">
+          <p className={`${titleSize} font-bold tracking-[-0.01em] ${light ? "text-white" : "text-fg"}`}>
+            Seasonal Worker
           </p>
-          <p
-            className={`${subSize} mt-[2px] font-bold uppercase tracking-[0.22em] ${
-              light ? "text-white/70" : "text-[#6B7F72]"
-            }`}
-          >
-            Seasonal HR • Đà Lạt
+          <p className={`${subSize} mt-[1px] font-medium uppercase tracking-[0.14em] ${light ? "text-white/55" : "text-fg-muted"}`}>
+            Dalat Hasfarm
           </p>
         </div>
       )}

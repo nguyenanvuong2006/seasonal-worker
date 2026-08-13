@@ -1,6 +1,7 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
+import { useSearchParams } from "next/navigation";
 import {
   Badge,
   Button,
@@ -41,7 +42,8 @@ type Profile = {
 };
 
 export default function WorkerProfilesPage() {
-  const [cccd, setCccd] = useState("");
+  const searchParams = useSearchParams();
+  const [cccd, setCccd] = useState(() => searchParams.get("cccd") ?? "");
   const [profile, setProfile] = useState<Profile | null>(null);
   const [sessions, setSessions] = useState<Session[]>([]);
   const [loading, setLoading] = useState(false);
@@ -69,6 +71,13 @@ export default function WorkerProfilesPage() {
       setLoading(false);
     }
   };
+
+  // Deep-link từ Tìm kiếm toàn hệ thống (?cccd=...) — tự tra cứu ngay khi vào trang, không bắt
+  // người dùng gõ lại CCCD lần nữa.
+  useEffect(() => {
+    if (searchParams.get("cccd")) void search();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   const saveFingerprint = async () => {
     if (!profile) return;

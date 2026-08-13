@@ -1,7 +1,7 @@
 "use client";
 
 import Link from "next/link";
-import { usePathname, useRouter } from "next/navigation";
+import { usePathname } from "next/navigation";
 import { useEffect, useRef, useState } from "react";
 import {
   LayoutDashboard,
@@ -29,13 +29,12 @@ import {
   X,
   ChevronsLeft,
   ChevronsRight,
-  LogOut,
   type LucideIcon,
 } from "lucide-react";
 import { BrandLogo } from "@/components/brand-logo";
 import { cn } from "@/components/ui";
-import { ROLE_LABEL } from "@/lib/helpers";
 import type { Session } from "@/lib/auth";
+import type { PublicBranding } from "@/lib/branding";
 
 type NavItem = { href: string; label: string; icon: LucideIcon; roles: string[] };
 type NavGroup = { group: string; items: NavItem[] };
@@ -102,9 +101,8 @@ function filterGroups(role: string): NavGroup[] {
   return NAV_GROUPS.map((g) => ({ ...g, items: g.items.filter((i) => i.roles.includes(role)) })).filter((g) => g.items.length > 0);
 }
 
-export function Sidebar({ session }: { session: Session }) {
+export function Sidebar({ session, branding }: { session: Session; branding?: PublicBranding }) {
   const pathname = usePathname();
-  const router = useRouter();
   const [mobileOpen, setMobileOpen] = useState(false);
   const [collapsed, setCollapsed] = useState(false);
   const navRef = useRef<HTMLElement>(null);
@@ -146,13 +144,7 @@ export function Sidebar({ session }: { session: Session }) {
     return () => document.removeEventListener("keydown", onKeyDown);
   }, [mobileOpen]);
 
-  const logout = async () => {
-    await fetch("/api/auth/logout", { method: "POST" });
-    router.push("/login");
-    router.refresh();
-  };
-
-  const initial = (session.fullName || session.username).slice(0, 1).toUpperCase();
+  const themeLabel = branding?.themeYear ? `Mùa vụ ${branding.themeYear}` : branding?.themeSubtitle || null;
 
   const navContent = (
     <>
@@ -164,17 +156,15 @@ export function Sidebar({ session }: { session: Session }) {
             </div>
           </div>
         ) : (
-          <BrandLogo light size="sm" />
+          <>
+            <BrandLogo light size="sm" />
+            {/* Year Theme — chỉ 1 dòng chữ nhỏ, không cạnh tranh với logo/tên hệ thống ở trên;
+                không hiển thị gì nếu Admin chưa cấu hình (không để lại khoảng trống xấu). */}
+            {themeLabel ? (
+              <p className="mt-2 truncate text-[10.5px] font-semibold uppercase tracking-wider text-accent">{themeLabel}</p>
+            ) : null}
+          </>
         )}
-        <div className={cn("mt-4 flex items-center gap-2.5 rounded-[10px] bg-white/[0.07] px-2.5 py-2", collapsed && "justify-center px-0")}>
-          <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-accent text-[13px] font-bold text-[#2A1E05]">{initial}</div>
-          {!collapsed && (
-            <div className="min-w-0">
-              <p className="truncate text-[13px] font-semibold text-white">{session.fullName}</p>
-              <p className="text-[10.5px] font-medium uppercase tracking-wider text-accent">{ROLE_LABEL[session.role]}</p>
-            </div>
-          )}
-        </div>
       </div>
 
       <div className="min-h-0 flex-1 space-y-0.5 overflow-y-auto px-2.5 py-3">
@@ -210,24 +200,13 @@ export function Sidebar({ session }: { session: Session }) {
         ))}
       </div>
 
-      <div className={cn("border-t border-white/10 p-2.5", collapsed && "flex flex-col items-center gap-2")}>
-        <button
-          onClick={logout}
-          title="Đăng xuất"
-          className={cn(
-            "flex items-center gap-2.5 rounded-[9px] text-[13px] font-medium text-white/65 transition-colors hover:bg-white/[0.06] hover:text-white",
-            collapsed ? "h-9 w-9 justify-center" : "w-full px-2.5 py-2",
-          )}
-        >
-          <LogOut className="h-[17px] w-[17px] shrink-0" aria-hidden />
-          {!collapsed && "Đăng xuất"}
-        </button>
-        {!collapsed && (
-          <Link href="/" className="mt-1.5 block rounded-[9px] bg-white/[0.06] px-2.5 py-2 text-center text-[12px] font-medium text-white/70 hover:bg-white/[0.1] hover:text-white">
+      {!collapsed && (
+        <div className="border-t border-white/10 p-2.5">
+          <Link href="/" className="block rounded-[9px] bg-white/[0.06] px-2.5 py-2 text-center text-[12px] font-medium text-white/70 hover:bg-white/[0.1] hover:text-white">
             ← Về cổng đăng ký lao động
           </Link>
-        )}
-      </div>
+        </div>
+      )}
     </>
   );
 

@@ -1,6 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useState } from "react";
+import { useSearchParams } from "next/navigation";
 import {
   Badge,
   Button,
@@ -12,6 +13,7 @@ import {
   Modal,
   PageHeader,
   Skeleton,
+  cn,
   toast,
 } from "@/components/ui";
 import { CalendarRange, Plus, Users } from "lucide-react";
@@ -56,10 +58,12 @@ function PlanningListSkeleton() {
 }
 
 export default function PlanningPage() {
+  const searchParams = useSearchParams();
+  const highlightId = searchParams.get("highlight");
   const [rows, setRows] = useState<Period[]>([]);
   const [depts, setDepts] = useState<Dept[]>([]);
   const [loading, setLoading] = useState(true);
-  const [statusFilter, setStatusFilter] = useState("ACTIVE");
+  const [statusFilter, setStatusFilter] = useState(() => searchParams.get("status") || "ACTIVE");
   const [createOpen, setCreateOpen] = useState(false);
   const [reviseTarget, setReviseTarget] = useState<Period | null>(null);
   const [allocateTarget, setAllocateTarget] = useState<Period | null>(null);
@@ -227,7 +231,13 @@ export default function PlanningPage() {
           ) : (
             <ul className="divide-y divide-border">
               {rows.map((p) => (
-                <li key={p.id} className="flex flex-wrap items-center gap-3 p-4 transition-colors hover:bg-surface-hover">
+                <li
+                  key={p.id}
+                  className={cn(
+                    "flex flex-wrap items-center gap-3 p-4 transition-colors hover:bg-surface-hover",
+                    p.id === highlightId && "bg-primary-tint ring-1 ring-inset ring-primary/30",
+                  )}
+                >
                   <div className="min-w-[160px]">
                     <p className="font-semibold text-fg">
                       {p.deptName} {p.section ? `— ${p.section}` : ""}
