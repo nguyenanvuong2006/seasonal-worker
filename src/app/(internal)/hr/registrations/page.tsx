@@ -5,8 +5,8 @@ import { dailyApplications, departments, dwData } from "@/db/schema";
 import { getSession } from "@/lib/auth";
 import { todayStr } from "@/lib/helpers";
 import RegistrationsGrid from "@/components/registrations-grid";
-import { Badge, KpiCard, PageHeader } from "@/components/ui";
-import { CheckCircle2, Clock, UserPlus2 } from "lucide-react";
+import { Badge, MetricStrip, MetricStripItem, PageHeader, SectionLabel } from "@/components/ui";
+import { CheckCircle2, Clock, Database, ShieldCheck, UserPlus2, Zap } from "lucide-react";
 
 export const dynamic = "force-dynamic";
 
@@ -35,35 +35,35 @@ export default async function HrRegistrationsPage() {
       pending: sql<number>`count(*) filter (where ${dailyApplications.status} = 'PENDING')::int`,
       approved: sql<number>`count(*) filter (where ${dailyApplications.status} = 'APPROVED')::int`,
       newToDw: sql<number>`count(*) filter (where ${dailyApplications.dwMatch} = 'NEW')::int`,
+      total: sql<number>`count(*)::int`,
     })
     .from(dailyApplications)
     .where(and(eq(dailyApplications.regDate, todayStr()), sql`${dailyApplications.deletedAt} is null`));
 
   return (
-    <div className="space-y-5">
+    <div className="space-y-4">
       <PageHeader
-        title="Tiếp nhận & Xếp việc Tập nghề theo ngày"
-        description={
-          <>
-            Màn hình mặc định <b>chỉ hiện đơn hôm nay</b>. Tick ô <b>&ldquo;Xem khoảng ngày&rdquo;</b> để tra cứu &amp; xuất
-            kết quả các ngày trước làm tham khảo. Cột <b>DW Data</b> tự động đối chiếu 3 tầng (CCCD → Tên+Năm sinh →
-            Tên+SĐT) để xác định người tập nghề CŨ hay MỚI, không phụ thuộc vào lời tự khai.
-          </>
-        }
+        eyebrow={<SectionLabel>Recruitment Operations</SectionLabel>}
+        title="Daily Application — Tiếp nhận & Xếp việc Tập nghề"
+        description="Mặc định chỉ hiện đơn hôm nay. Tick ô “Xem khoảng ngày” để tra cứu & xuất kết quả các ngày trước. Cột DW Data tự động đối chiếu 3 tầng (CCCD → Tên+Năm sinh → Tên+SĐT)."
         actions={
           <>
             <Badge tone="gray">Sheet: Daily Application</Badge>
-            <Badge tone="gold">Inline edit như Google Sheet</Badge>
-            <Badge tone="green">Đối chiếu {dw.c.toLocaleString("vi-VN")} DW Data</Badge>
+            <Badge tone="gold" dot>Inline edit như Google Sheet</Badge>
+            <Badge tone="green" dot>Đối chiếu {dw.c.toLocaleString("vi-VN")} DW Data</Badge>
           </>
         }
       />
 
-      <div className="grid grid-cols-3 gap-3">
-        <KpiCard icon={<Clock className="h-4 w-4" />} label="Chờ duyệt hôm nay" value={pipeline?.pending ?? 0} tone="warning" />
-        <KpiCard icon={<CheckCircle2 className="h-4 w-4" />} label="Đã nhận việc hôm nay" value={pipeline?.approved ?? 0} tone="success" />
-        <KpiCard icon={<UserPlus2 className="h-4 w-4" />} label="Người tập nghề mới" value={pipeline?.newToDw ?? 0} tone="info" />
-      </div>
+      <MetricStrip
+        items={[
+          <MetricStripItem key="total" icon={<Zap className="h-4 w-4" aria-hidden />} value={pipeline?.total ?? 0} label="Tổng đơn hôm nay" tone="primary" />,
+          <MetricStripItem key="pending" icon={<Clock className="h-4 w-4" aria-hidden />} value={pipeline?.pending ?? 0} label="Chờ duyệt" tone="warning" />,
+          <MetricStripItem key="approved" icon={<CheckCircle2 className="h-4 w-4" aria-hidden />} value={pipeline?.approved ?? 0} label="Đã nhận việc" tone="success" />,
+          <MetricStripItem key="new" icon={<UserPlus2 className="h-4 w-4" aria-hidden />} value={pipeline?.newToDw ?? 0} label="Người mới (chưa có DW)" tone="accent" />,
+          <MetricStripItem key="dw" icon={<Database className="h-4 w-4" aria-hidden />} value={dw.c.toLocaleString("vi-VN")} label="Hồ sơ DW Data" tone="info" />,
+        ]}
+      />
 
       <RegistrationsGrid departments={depts} canEdit />
     </div>

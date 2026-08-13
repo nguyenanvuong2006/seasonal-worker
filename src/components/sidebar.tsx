@@ -101,6 +101,9 @@ function filterGroups(role: string): NavGroup[] {
   return NAV_GROUPS.map((g) => ({ ...g, items: g.items.filter((i) => i.roles.includes(role)) })).filter((g) => g.items.length > 0);
 }
 
+/** Deep-green greenhouse gradient used as the sidebar canvas. */
+const SIDEBAR_BG = "bg-[linear-gradient(160deg,#08260f_0%,#0c341a_45%,#0f4424_100%)]";
+
 export function Sidebar({ session, branding }: { session: Session; branding?: PublicBranding }) {
   const pathname = usePathname();
   const [mobileOpen, setMobileOpen] = useState(false);
@@ -148,29 +151,37 @@ export function Sidebar({ session, branding }: { session: Session; branding?: Pu
 
   const navContent = (
     <>
-      <div className={cn("border-b border-white/10 px-4 py-4", collapsed && "px-3")}>
+      {/* BRAND ZONE — strong but not a generic dark-green admin template:
+          deep green + botanical field-rows texture + ivory logo tile + orange theme chip. */}
+      <div className={cn("relative border-b border-white/10", collapsed ? "px-3 py-4" : "px-4 pb-4 pt-5")}>
         {collapsed ? (
           <div className="flex justify-center">
-            <div className="flex h-9 w-9 items-center justify-center rounded-[10px] bg-white shadow-sm">
-              <span className="text-[13px] font-black text-primary">DH</span>
-            </div>
+            <BrandLogo light size="sm" withText={false} />
           </div>
         ) : (
           <>
-            <BrandLogo light size="sm" />
-            {/* Year Theme — chỉ 1 dòng chữ nhỏ, không cạnh tranh với logo/tên hệ thống ở trên;
-                không hiển thị gì nếu Admin chưa cấu hình (không để lại khoảng trống xấu). */}
+            <div className="flex items-center gap-3">
+              <BrandLogo light size="sm" />
+            </div>
             {themeLabel ? (
-              <p className="mt-2 truncate text-[10.5px] font-semibold uppercase tracking-wider text-accent">{themeLabel}</p>
+              <span className="mt-3 inline-flex items-center gap-1.5 rounded-full border border-accent/40 bg-accent/15 px-2.5 py-1 text-[10.5px] font-bold uppercase tracking-[0.1em] text-accent">
+                <span className="h-1.5 w-1.5 rounded-full bg-accent" aria-hidden />
+                {themeLabel}
+              </span>
             ) : null}
           </>
         )}
       </div>
 
+      {/* NAVIGATION — group labels + items, active = green structure + orange accent */}
       <div className="min-h-0 flex-1 space-y-0.5 overflow-y-auto px-2.5 py-3">
         {groups.map((g) => (
           <div key={g.group} className="mb-1">
-            {!collapsed && <p className="px-2.5 pb-1.5 pt-3 text-[10px] font-bold uppercase tracking-[0.08em] text-white/35 first:pt-0">{g.group}</p>}
+            {!collapsed && (
+              <p className="px-2.5 pb-1.5 pt-3.5 text-[10px] font-bold uppercase tracking-[0.14em] text-white/35 first:pt-1">
+                {g.group}
+              </p>
+            )}
             {g.items.map((item) => {
               const active = pathname === item.href || pathname.startsWith(item.href + "/");
               const Icon = item.icon;
@@ -178,18 +189,26 @@ export function Sidebar({ session, branding }: { session: Session; branding?: Pu
                 <div key={item.href} className="group relative">
                   <Link
                     href={item.href}
+                    aria-current={active ? "page" : undefined}
                     className={cn(
-                      "relative flex items-center gap-2.5 rounded-[9px] py-2 text-[13px] font-medium transition-colors duration-150",
+                      "relative flex items-center gap-2.5 rounded-[9px] py-[7px] text-[13px] font-medium transition-colors duration-150",
                       collapsed ? "justify-center px-0" : "px-2.5",
-                      active ? "bg-white/[0.08] text-white" : "text-white/65 hover:bg-white/[0.05] hover:text-white",
+                      active
+                        ? "bg-white/[0.09] text-white shadow-[inset_0_0_0_1px_rgba(255,255,255,0.06)]"
+                        : "text-white/60 hover:bg-white/[0.05] hover:text-white/95",
                     )}
                   >
-                    {active && <span className="absolute left-0 top-1.5 bottom-1.5 w-[3px] rounded-full bg-accent" aria-hidden />}
-                    <Icon className="h-[17px] w-[17px] shrink-0" aria-hidden />
+                    {active && (
+                      <span className="absolute left-0 top-1/2 h-[18px] w-[3px] -translate-y-1/2 rounded-full bg-accent shadow-[0_0_8px_rgba(226,109,28,0.6)]" aria-hidden />
+                    )}
+                    <Icon
+                      className={cn("h-[17px] w-[17px] shrink-0", active ? "text-accent" : "text-white/50 group-hover:text-white/80")}
+                      aria-hidden
+                    />
                     {!collapsed && <span className="truncate">{item.label}</span>}
                   </Link>
                   {collapsed && (
-                    <span className="animate-fade-in-scale pointer-events-none absolute left-full top-1/2 z-50 ml-2 -translate-y-1/2 whitespace-nowrap rounded-[7px] bg-[#0B2E19] px-2.5 py-1.5 text-[12px] font-medium text-white opacity-0 shadow-lg ring-1 ring-white/10 group-hover:opacity-100">
+                    <span className="animate-fade-in-scale pointer-events-none absolute left-full top-1/2 z-50 ml-2 -translate-y-1/2 whitespace-nowrap rounded-[7px] bg-[#0a2a14] px-2.5 py-1.5 text-[12px] font-medium text-white opacity-0 shadow-lg ring-1 ring-white/10 group-hover:opacity-100">
                       {item.label}
                     </span>
                   )}
@@ -200,9 +219,13 @@ export function Sidebar({ session, branding }: { session: Session; branding?: Pu
         ))}
       </div>
 
+      {/* USER UTILITIES — separated from navigation by a hairline */}
       {!collapsed && (
         <div className="border-t border-white/10 p-2.5">
-          <Link href="/" className="block rounded-[9px] bg-white/[0.06] px-2.5 py-2 text-center text-[12px] font-medium text-white/70 hover:bg-white/[0.1] hover:text-white">
+          <Link
+            href="/"
+            className="block rounded-[9px] border border-white/10 bg-white/[0.05] px-2.5 py-2 text-center text-[12px] font-medium text-white/70 transition-colors hover:border-accent/40 hover:bg-white/[0.09] hover:text-white"
+          >
             ← Về cổng đăng ký Tập nghề
           </Link>
         </div>
@@ -217,7 +240,7 @@ export function Sidebar({ session, branding }: { session: Session; branding?: Pu
         ref={menuButtonRef}
         onClick={() => setMobileOpen(true)}
         aria-label="Mở menu điều hướng"
-        className="fixed left-3 top-3 z-[80] flex h-10 w-10 items-center justify-center rounded-[10px] bg-[#0B2E19] text-white shadow-md ring-1 ring-white/10 lg:hidden"
+        className={cn("fixed left-3 top-3 z-[80] flex h-10 w-10 items-center justify-center rounded-[10px] text-white shadow-md ring-1 ring-white/10 lg:hidden", SIDEBAR_BG)}
       >
         <Menu className="h-5 w-5" aria-hidden />
       </button>
@@ -225,15 +248,17 @@ export function Sidebar({ session, branding }: { session: Session; branding?: Pu
       {/* Desktop sidebar */}
       <aside
         className={cn(
-          "fixed inset-y-0 left-0 z-[70] hidden flex-col bg-[#0B2E19] transition-[width] duration-200 lg:flex",
+          "fixed inset-y-0 left-0 z-[70] hidden flex-col transition-[width] duration-200 lg:flex",
+          SIDEBAR_BG,
           collapsed ? "w-[76px]" : "w-[264px]",
         )}
       >
-        {navContent}
+        <div className="field-rows pointer-events-none absolute inset-0" aria-hidden />
+        <div className="relative flex min-h-0 flex-1 flex-col">{navContent}</div>
         <button
           onClick={() => setCollapsed((v) => !v)}
           aria-label={collapsed ? "Mở rộng sidebar" : "Thu gọn sidebar"}
-          className="absolute -right-3 top-16 flex h-6 w-6 items-center justify-center rounded-full border border-white/10 bg-[#0B2E19] text-white/70 shadow-md hover:text-white"
+          className="absolute -right-3 top-16 z-10 flex h-6 w-6 items-center justify-center rounded-full border border-white/10 bg-[#0d3a1d] text-white/70 shadow-md transition-colors hover:text-white"
         >
           {collapsed ? <ChevronsRight className="h-3.5 w-3.5" aria-hidden /> : <ChevronsLeft className="h-3.5 w-3.5" aria-hidden />}
         </button>
@@ -249,16 +274,17 @@ export function Sidebar({ session, branding }: { session: Session; branding?: Pu
             ref={navRef}
             tabIndex={-1}
             aria-label="Điều hướng chính"
-            className="animate-drawer-in absolute inset-y-0 left-0 flex w-[280px] flex-col bg-[#0B2E19] outline-none"
+            className={cn("animate-drawer-in absolute inset-y-0 left-0 flex w-[280px] flex-col outline-none", SIDEBAR_BG)}
           >
+            <div className="field-rows pointer-events-none absolute inset-0" aria-hidden />
             <button
               onClick={() => setMobileOpen(false)}
               aria-label="Đóng menu"
-              className="absolute right-3 top-3 flex h-8 w-8 items-center justify-center rounded-full bg-white/10 text-white"
+              className="absolute right-3 top-3 z-10 flex h-8 w-8 items-center justify-center rounded-full bg-white/10 text-white"
             >
               <X className="h-4 w-4" aria-hidden />
             </button>
-            {navContent}
+            <div className="relative flex min-h-0 flex-1 flex-col">{navContent}</div>
           </nav>
         </div>
       )}

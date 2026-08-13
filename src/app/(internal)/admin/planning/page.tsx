@@ -9,22 +9,26 @@ import {
   CardContent,
   EmptyState,
   FormField,
+  GenderSplit,
   Input,
-  KpiCard,
   Modal,
   PageHeader,
+  PeriodBar,
+  ProgressBar,
+  SectionLabel,
   cn,
   toast,
 } from "@/components/ui";
 import {
   CalendarRange,
   Plus,
-  Users,
   Search,
+  TrendingUp,
   UserCheck,
   UserMinus,
   UserPlus2,
   FilePlus2,
+  Users,
 } from "lucide-react";
 import { formatDate } from "@/lib/helpers";
 
@@ -375,6 +379,7 @@ export default function PlanningPage() {
   return (
     <div className="space-y-5">
       <PageHeader
+        eyebrow={<SectionLabel>Workforce Demand Planning</SectionLabel>}
         title="Planning — Kế hoạch Nhu cầu Tập nghề"
         description="Quản lý nhu cầu tuyển dụng theo giai đoạn & phân tách Nam/Nữ. Hỗ trợ kế hoạch gốc và nhiều yêu cầu bổ sung trùng khoảng thời gian."
         actions={
@@ -389,63 +394,150 @@ export default function PlanningPage() {
         }
       />
 
-      {/* KPI Cards Summary */}
-      <div className="grid grid-cols-2 gap-3 lg:grid-cols-4">
-        <KpiCard
-          icon={<Users className="h-4 w-4" />}
-          label="Tổng nhu cầu cần"
-          value={totals.demandTotal}
-          context={`Nam: ${totals.demandMale} · Nữ: ${totals.demandFemale}`}
-          tone="primary"
-        />
-        <KpiCard
-          icon={<UserCheck className="h-4 w-4" />}
-          label="Đã phân bổ"
-          value={totals.allocatedTotal}
-          context={`Nam: ${totals.allocatedMale} · Nữ: ${totals.allocatedFemale}`}
-          tone="success"
-        />
-        <KpiCard
-          icon={<UserMinus className="h-4 w-4" />}
-          label="Nghỉ việc"
-          value={totals.resignedTotal}
-          context={`Nam: ${totals.resignedMale} · Nữ: ${totals.resignedFemale}`}
-          tone="warning"
-        />
-        <KpiCard
-          icon={<UserPlus2 className="h-4 w-4" />}
-          label="Cần tuyển thêm"
-          value={totals.recruitmentNeededTotal}
-          context={`Nam: ${totals.recruitmentNeededMale} · Nữ: ${totals.recruitmentNeededFemale}`}
-          tone={totals.recruitmentNeededTotal > 0 ? "info" : "primary"}
-        />
-      </div>
+      {/* Demand Summary — hierarchy: shortage hero + fill rate + gender demand/allocation */}
+      <Card className="overflow-hidden p-0">
+        <div className="flex flex-wrap items-center justify-between gap-3 border-b border-border px-5 py-4">
+          <div>
+            <SectionLabel tone="green">Demand Summary</SectionLabel>
+            <h2 className="mt-1 text-[16px] font-bold tracking-[-0.01em] text-fg">Tổng hợp theo bộ lọc hiện tại</h2>
+          </div>
+          <div className="flex flex-wrap items-center gap-2">
+            <Badge tone="green" dot>
+              Nhu cầu {totals.demandTotal}
+            </Badge>
+            <Badge tone="blue">Đã phân bổ {totals.allocatedTotal}</Badge>
+            <Badge tone="amber">Nghỉ việc {totals.resignedTotal}</Badge>
+          </div>
+        </div>
+        <div className="grid gap-5 p-5 lg:grid-cols-[230px_1fr_1fr]">
+          {/* Shortage hero */}
+          <div className="flex flex-col justify-between rounded-[16px] border border-accent/20 bg-accent-tint/60 p-5">
+            <div>
+              <p className="flex items-center gap-1.5 text-[10.5px] font-bold uppercase tracking-[0.14em] text-accent">
+                <TrendingUp className="h-3.5 w-3.5" aria-hidden /> Cần tuyển thêm
+              </p>
+              <p className="mt-2 text-[42px] font-bold leading-none tracking-tight tabular-nums text-accent">{totals.recruitmentNeededTotal}</p>
+              <p className="mt-2 text-[12px] font-medium leading-relaxed text-fg-secondary">
+                Nam {totals.recruitmentNeededMale} · Nữ {totals.recruitmentNeededFemale}
+              </p>
+            </div>
+            <div className="mt-4">
+              <div className="flex items-center justify-between text-[11px] font-semibold text-fg-secondary">
+                <span>Tỷ lệ đáp ứng</span>
+                <span className="tabular-nums text-fg">
+                  {totals.demandTotal > 0 ? Math.round((totals.allocatedTotal / totals.demandTotal) * 100) : 100}%
+                </span>
+              </div>
+              <ProgressBar
+                value={totals.demandTotal > 0 ? (totals.allocatedTotal / totals.demandTotal) * 100 : 100}
+                tone={totals.demandTotal > 0 && totals.allocatedTotal >= totals.demandTotal ? "success" : "accent"}
+                className="mt-2 h-2"
+              />
+            </div>
+          </div>
+
+          {/* Gender demand vs allocation */}
+          <div className="rounded-[16px] border border-border bg-surface-raised p-5">
+            <p className="text-[10.5px] font-bold uppercase tracking-[0.14em] text-fg-muted">Nhu cầu theo giới tính</p>
+            <div className="mt-4 space-y-4">
+              <div>
+                <div className="flex items-center justify-between text-[13px] font-semibold">
+                  <span className="inline-flex items-center gap-1.5 text-fg">
+                    <span className="h-2 w-2 rounded-full bg-primary" aria-hidden /> Nam
+                  </span>
+                  <span className="tabular-nums text-fg-secondary">
+                    {totals.demandMale} cần · {totals.allocatedMale} đã bố trí
+                  </span>
+                </div>
+                <ProgressBar
+                  value={totals.demandMale > 0 ? (totals.allocatedMale / totals.demandMale) * 100 : 100}
+                  tone="primary"
+                  className="mt-1.5 h-2"
+                />
+              </div>
+              <div>
+                <div className="flex items-center justify-between text-[13px] font-semibold">
+                  <span className="inline-flex items-center gap-1.5 text-fg">
+                    <span className="h-2 w-2 rounded-full bg-accent" aria-hidden /> Nữ
+                  </span>
+                  <span className="tabular-nums text-fg-secondary">
+                    {totals.demandFemale} cần · {totals.allocatedFemale} đã bố trí
+                  </span>
+                </div>
+                <ProgressBar
+                  value={totals.demandFemale > 0 ? (totals.allocatedFemale / totals.demandFemale) * 100 : 100}
+                  tone="accent"
+                  className="mt-1.5 h-2"
+                />
+              </div>
+            </div>
+            <div className="mt-4 border-t border-border pt-3">
+              <GenderSplit male={totals.demandMale} female={totals.demandFemale} className="h-2" />
+              <p className="mt-2 text-[11px] text-fg-muted">Cơ cấu nhu cầu — xanh: Nam · cam: Nữ</p>
+            </div>
+          </div>
+
+          {/* Allocation snapshot */}
+          <div className="rounded-[16px] border border-border bg-surface-raised p-5">
+            <p className="text-[10.5px] font-bold uppercase tracking-[0.14em] text-fg-muted">Tình hình phân bổ & nghỉ việc</p>
+            <div className="mt-4 grid grid-cols-2 gap-3">
+              <div className="rounded-[14px] bg-primary-tint p-4">
+                <UserCheck className="h-4 w-4 text-primary" aria-hidden />
+                <p className="mt-2 text-[26px] font-bold leading-none tabular-nums text-primary">{totals.allocatedTotal}</p>
+                <p className="mt-1 text-[11px] font-semibold text-fg-secondary">Đã phân bổ</p>
+                <p className="text-[10.5px] text-fg-muted">Nam {totals.allocatedMale} · Nữ {totals.allocatedFemale}</p>
+              </div>
+              <div className="rounded-[14px] bg-warning-tint p-4">
+                <UserMinus className="h-4 w-4 text-warning" aria-hidden />
+                <p className="mt-2 text-[26px] font-bold leading-none tabular-nums text-warning">{totals.resignedTotal}</p>
+                <p className="mt-1 text-[11px] font-semibold text-fg-secondary">Nghỉ việc</p>
+                <p className="text-[10.5px] text-fg-muted">Nam {totals.resignedMale} · Nữ {totals.resignedFemale}</p>
+              </div>
+            </div>
+            <p className="mt-3 text-[11.5px] leading-relaxed text-fg-muted">
+              Cần tuyển thêm = max(0, nhu cầu − đã phân bổ + nghỉ việc), tính riêng cho từng kế hoạch.
+            </p>
+          </div>
+        </div>
+      </Card>
 
       {/* Filter Toolbar */}
-      <Card className="p-4">
+      <Card className="p-4 shadow-[0_1px_2px_rgba(23,32,18,0.04),0_8px_24px_rgba(23,32,18,0.05)]">
         <div className="flex flex-wrap items-center justify-between gap-3">
           <div className="flex flex-wrap items-center gap-2">
             {/* Status tabs */}
-            <div className="flex gap-1 rounded-[10px] bg-surface-hover p-1">
-              {STATUS_TABS.map((t) => (
-                <button
-                  key={t.key}
-                  onClick={() => setStatusFilter(t.key)}
-                  className={cn(
-                    "rounded-[8px] px-3 py-1.5 text-[12px] font-semibold transition-colors",
-                    statusFilter === t.key ? "bg-surface text-primary shadow-sm" : "text-fg-secondary hover:text-fg",
-                  )}
-                >
-                  {t.label}
-                </button>
-              ))}
+            <div className="flex gap-1 rounded-[10px] border border-border bg-surface-hover/80 p-1">
+              {STATUS_TABS.map((t) => {
+                const active = statusFilter === t.key;
+                const activeCls =
+                  t.key === "ACTIVE"
+                    ? "bg-primary text-white shadow-sm"
+                    : t.key === "DRAFT"
+                      ? "bg-warning-tint text-warning"
+                      : t.key === "EXPIRED"
+                        ? "bg-surface-hover text-fg-secondary"
+                        : "bg-surface text-primary shadow-sm";
+                return (
+                  <button
+                    key={t.key}
+                    onClick={() => setStatusFilter(t.key)}
+                    aria-pressed={active}
+                    className={cn(
+                      "rounded-[8px] px-3 py-1.5 text-[12px] font-semibold transition-colors",
+                      active ? activeCls : "text-fg-secondary hover:text-fg",
+                    )}
+                  >
+                    {t.label}
+                  </button>
+                );
+              })}
             </div>
 
             {/* Request Type filter */}
             <select
               value={requestTypeFilter}
               onChange={(e) => setRequestTypeFilter(e.target.value)}
-              className="h-9 rounded-[8px] border border-border bg-surface px-2.5 text-xs font-medium text-fg outline-none focus:border-primary"
+              className="h-9 rounded-[8px] border border-border-strong bg-surface-raised px-2.5 text-xs font-medium text-fg outline-none focus:border-accent"
             >
               <option value="ALL">Mọi loại yêu cầu</option>
               <option value="ORIGINAL">Kế hoạch gốc</option>
@@ -456,7 +548,7 @@ export default function PlanningPage() {
             <select
               value={deptFilter}
               onChange={(e) => setDeptFilter(e.target.value)}
-              className="h-9 max-w-[220px] rounded-[8px] border border-border bg-surface px-2.5 text-xs font-medium text-fg outline-none focus:border-primary"
+              className="h-9 max-w-[220px] rounded-[8px] border border-border-strong bg-surface-raised px-2.5 text-xs font-medium text-fg outline-none focus:border-accent"
             >
               <option value="ALL">Tất cả bộ phận</option>
               {depts.map((d) => (
@@ -475,7 +567,7 @@ export default function PlanningPage() {
               placeholder="Tìm theo cơ cấu / bộ phận..."
               value={searchQuery}
               onChange={(e) => setSearchQuery(e.target.value)}
-              className="h-9 w-full rounded-[8px] border border-border bg-surface pl-8 pr-3 text-xs text-fg placeholder:text-fg-muted outline-none focus:border-primary"
+              className="h-9 w-full rounded-[8px] border border-border-strong bg-surface-raised pl-8 pr-3 text-xs text-fg placeholder:text-fg-muted outline-none focus:border-accent"
             />
           </div>
         </div>
@@ -485,27 +577,43 @@ export default function PlanningPage() {
       <Card className="overflow-hidden p-0">
         <CardContent className="p-0">
           {loading ? (
-            <div className="p-8 text-center text-sm text-fg-muted">Đang tải kế hoạch nhu cầu...</div>
+            <div className="v2-scroll overflow-x-auto p-6">
+              {Array.from({ length: 5 }).map((_, i) => (
+                <div key={i} className="flex items-center gap-4 border-b border-border py-3.5">
+                  <div className="skeleton h-4 w-44" />
+                  <div className="skeleton h-4 w-28" />
+                  <div className="skeleton h-4 w-24" />
+                  <div className="skeleton h-4 w-20" />
+                  <div className="skeleton ml-auto h-6 w-16 rounded-full" />
+                </div>
+              ))}
+              <p className="mt-4 text-center text-[12.5px] text-fg-muted">Đang tải kế hoạch nhu cầu...</p>
+            </div>
           ) : filteredRows.length === 0 ? (
             <EmptyState
               icon={<CalendarRange className="h-5 w-5" aria-hidden />}
-              title="Không tìm thấy kế hoạch nào"
-              description="Không có kế hoạch nhu cầu nào phù hợp với bộ lọc hiện tại. Bấm nút phía trên để tạo kế hoạch mới."
+              title="Chưa có kế hoạch nhu cầu nào"
+              description="Không có kế hoạch nhu cầu nào phù hợp với bộ lọc hiện tại. Tạo kế hoạch gốc hoặc yêu cầu bổ sung để bắt đầu lập kế hoạch nhân lực."
+              action={
+                <Button variant="primary" size="sm" onClick={() => openCreateModal("ORIGINAL")}>
+                  <Plus className="h-4 w-4" /> Tạo kế hoạch gốc mới
+                </Button>
+              }
             />
           ) : (
-            <div className="overflow-x-auto">
+            <div className="v2-scroll overflow-x-auto">
               <table className="grid-sheet w-full text-[13px]">
-                <thead className="bg-primary text-white">
+                <thead className="sticky top-0 z-10 bg-primary-tint/95 shadow-[inset_0_-1px_0_var(--color-border)] backdrop-blur">
                   <tr>
-                    <th className="px-3 py-2.5 text-left text-[10.5px] font-semibold uppercase tracking-wider">Cơ cấu tổ chức</th>
-                    <th className="px-3 py-2.5 text-left text-[10.5px] font-semibold uppercase tracking-wider">Thời gian & Loại</th>
-                    <th className="px-3 py-2.5 text-center text-[10.5px] font-semibold uppercase tracking-wider">Nhu cầu (Nam / Nữ / Tổng)</th>
-                    <th className="px-3 py-2.5 text-center text-[10.5px] font-semibold uppercase tracking-wider">Phân bổ</th>
-                    <th className="px-3 py-2.5 text-center text-[10.5px] font-semibold uppercase tracking-wider">Nghỉ việc</th>
-                    <th className="px-3 py-2.5 text-center text-[10.5px] font-semibold uppercase tracking-wider">Cần tuyển</th>
-                    <th className="px-3 py-2.5 text-center text-[10.5px] font-semibold uppercase tracking-wider">Đáp ứng</th>
-                    <th className="px-3 py-2.5 text-center text-[10.5px] font-semibold uppercase tracking-wider">Trạng thái</th>
-                    <th className="px-3 py-2.5 text-right text-[10.5px] font-semibold uppercase tracking-wider">Thao tác</th>
+                    <th className="px-3 py-2.5 text-left text-[10.5px] font-bold uppercase tracking-wider text-primary">Cơ cấu tổ chức</th>
+                    <th className="px-3 py-2.5 text-left text-[10.5px] font-bold uppercase tracking-wider text-primary">Thời gian & Loại</th>
+                    <th className="px-3 py-2.5 text-center text-[10.5px] font-bold uppercase tracking-wider text-primary">Nhu cầu (Nam / Nữ / Tổng)</th>
+                    <th className="px-3 py-2.5 text-center text-[10.5px] font-bold uppercase tracking-wider text-primary">Phân bổ</th>
+                    <th className="px-3 py-2.5 text-center text-[10.5px] font-bold uppercase tracking-wider text-primary">Nghỉ việc</th>
+                    <th className="px-3 py-2.5 text-center text-[10.5px] font-bold uppercase tracking-wider text-primary">Cần tuyển</th>
+                    <th className="px-3 py-2.5 text-center text-[10.5px] font-bold uppercase tracking-wider text-primary">Đáp ứng</th>
+                    <th className="px-3 py-2.5 text-center text-[10.5px] font-bold uppercase tracking-wider text-primary">Trạng thái</th>
+                    <th className="px-3 py-2.5 text-right text-[10.5px] font-bold uppercase tracking-wider text-primary">Thao tác</th>
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-border">
@@ -519,8 +627,8 @@ export default function PlanningPage() {
                       <tr
                         key={p.id}
                         className={cn(
-                          "transition-colors hover:bg-surface-hover",
-                          p.id === highlightId && "bg-primary-tint/60 ring-1 ring-inset ring-primary/30",
+                          "border-b border-border/70 bg-surface transition-colors hover:bg-botanical-50",
+                          p.id === highlightId && "bg-accent-tint/60 ring-1 ring-inset ring-accent/30 hover:bg-accent-tint/70",
                         )}
                       >
                         {/* Org Hierarchy */}
@@ -535,7 +643,7 @@ export default function PlanningPage() {
                         </td>
 
                         {/* Date & Request Type */}
-                        <td className="px-3 py-3">
+                        <td className="min-w-[210px] px-3 py-3">
                           <div className="font-medium text-fg">
                             {formatDate(p.startDate)} → {formatDate(p.endDate)}
                           </div>
@@ -545,6 +653,12 @@ export default function PlanningPage() {
                             </Badge>
                             <span className="text-[11px] text-fg-muted font-mono">v{p.version}</span>
                           </div>
+                          <PeriodBar
+                            startDate={p.startDate}
+                            endDate={p.endDate}
+                            tone={p.status === "ACTIVE" ? "primary" : p.status === "DRAFT" ? "warning" : "success"}
+                            className="mt-2 max-w-[190px]"
+                          />
                         </td>
 
                         {/* Demand: Male / Female / Total */}
@@ -553,8 +667,9 @@ export default function PlanningPage() {
                             {p.metrics.demandTotal}
                           </div>
                           <div className="text-[11px] text-fg-muted">
-                            <span className="text-blue-600 font-semibold">{p.metrics.demandMale} Nam</span> · <span className="text-pink-600 font-semibold">{p.metrics.demandFemale} Nữ</span>
+                            <span className="font-semibold text-primary">{p.metrics.demandMale} Nam</span> · <span className="font-semibold text-accent">{p.metrics.demandFemale} Nữ</span>
                           </div>
+                          <GenderSplit male={p.metrics.demandMale} female={p.metrics.demandFemale} className="mx-auto mt-1.5 h-1.5 max-w-[110px]" />
                         </td>
 
                         {/* Allocated: Male / Female / Total */}
@@ -565,6 +680,7 @@ export default function PlanningPage() {
                           <div className="text-[11px] text-fg-muted">
                             {p.metrics.allocatedMale} Nam · {p.metrics.allocatedFemale} Nữ
                           </div>
+                          <GenderSplit male={p.metrics.allocatedMale} female={p.metrics.allocatedFemale} className="mx-auto mt-1.5 h-1.5 max-w-[110px]" />
                         </td>
 
                         {/* Resigned: Male / Female / Total */}
@@ -583,7 +699,7 @@ export default function PlanningPage() {
                             {p.metrics.recruitmentNeededTotal}
                           </div>
                           <div className="text-[11px] text-fg-muted">
-                            <span className={p.metrics.recruitmentNeededMale > 0 ? "font-semibold text-blue-600" : ""}>{p.metrics.recruitmentNeededMale} Nam</span> · <span className={p.metrics.recruitmentNeededFemale > 0 ? "font-semibold text-pink-600" : ""}>{p.metrics.recruitmentNeededFemale} Nữ</span>
+                            <span className={p.metrics.recruitmentNeededMale > 0 ? "font-semibold text-primary" : ""}>{p.metrics.recruitmentNeededMale} Nam</span> · <span className={p.metrics.recruitmentNeededFemale > 0 ? "font-semibold text-accent" : ""}>{p.metrics.recruitmentNeededFemale} Nữ</span>
                           </div>
                         </td>
 
@@ -592,6 +708,11 @@ export default function PlanningPage() {
                           <span className={cn("inline-block rounded-full px-2 py-0.5 text-xs font-semibold", p.metrics.fillRatePercent >= 100 ? "bg-success-tint text-success" : "bg-primary-tint text-primary")}>
                             {p.metrics.fillRatePercent}%
                           </span>
+                          <ProgressBar
+                            value={p.metrics.fillRatePercent}
+                            tone={p.metrics.fillRatePercent >= 100 ? "success" : "primary"}
+                            className="mx-auto mt-1.5 h-1.5 max-w-[110px]"
+                          />
                         </td>
 
                         {/* Status */}
