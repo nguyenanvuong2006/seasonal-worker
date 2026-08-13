@@ -60,7 +60,7 @@ VALIDATING đánh dấu dòng invalid nếu `reg_date_parsed IS NULL` (bắt bu�
 
 ### 3.3 Validate trước khi Merge — `src/lib/validators.ts` (mới)
 
-Validate **trước** khi bất kỳ dòng nào chạm tới câu lệnh INSERT chính: CCCD (regex 9-12 số), SĐT Việt Nam, Số (tuổi), Ngày/Timestamp, Required. Dòng lỗi bị loại khỏi `WHERE valid = true` của câu MERGE — **1 dòng lỗi không còn làm hỏng cả lô 8.000 dòng**.
+Validate **trước** khi bất kỳ dòng nào chạm tới câu lệnh INSERT chính: CCCD (bắt buộc đúng 12 chữ số), SĐT Việt Nam, Số (tuổi), Ngày/Timestamp, Required. Dòng lỗi bị loại khỏi `WHERE valid = true` của câu MERGE — **1 dòng lỗi không còn làm hỏng cả lô 8.000 dòng**.
 
 Pattern regex (CCCD/SĐT/Số) export dưới dạng **hằng số chuỗi** trong `validators.ts` và SQL tham chiếu lại đúng pattern đó (qua tham số hoá) — 1 nguồn sự thật dù chạy ở tầng TypeScript hay SQL.
 

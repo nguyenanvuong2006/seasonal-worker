@@ -2,6 +2,7 @@ import "server-only";
 import { db } from "@/db";
 import { dwData } from "@/db/schema";
 import { and, eq, isNull, sql } from "drizzle-orm";
+import { isValidCccd } from "@/lib/validators";
 
 export type DwMatchResult = {
   status: "MATCHED" | "NEW";
@@ -39,7 +40,7 @@ const EMPTY: DwMatchResult = { status: "NEW", confidence: "NONE", worker: null }
 
 /**
  * Đối chiếu 3 tầng với sheet "DW Data" để xác định lao động CŨ hay MỚI.
- * Cần thiết vì DW Data lưu nhiều số CMND 9 số cũ, còn form nhập CCCD 12 số mới.
+ * CCCD phải đúng 12 chữ số trước khi thực hiện bất kỳ tầng đối chiếu nào.
  *  1. Khớp CCCD tuyệt đối          → confidence CCCD
  *  2. Khớp Họ tên + Năm sinh       → confidence NAME_DOB
  *  3. Khớp Họ tên + Số điện thoại  → confidence NAME_PHONE
@@ -50,8 +51,8 @@ export async function matchDwWorker(input: {
   dob?: string | null;
   phone?: string | null;
 }): Promise<DwMatchResult> {
-  const cccd = String(input.cccd ?? "").replace(/\D/g, "");
-  if (!cccd) return EMPTY;
+  const cccd = String(input.cccd ?? "").trim();
+  if (!isValidCccd(cccd)) return EMPTY;
 
   const pick = (r: typeof dwData.$inferSelect) => ({
     id: r.id,

@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useState } from "react";
 import { Badge, Button, Card, Input, Label, Modal, toast } from "@/components/ui";
 import { Loader2 } from "lucide-react";
+import { CCCD_ERROR_MESSAGE, isValidCccd } from "@/lib/validators";
 
 type W = {
   id: string;
@@ -65,6 +66,10 @@ export default function DwDataPage() {
   const save = async () => {
     if (!form.fullName?.trim()) {
       toast({ title: "Thiếu họ tên", variant: "destructive" });
+      return;
+    }
+    if (!isValidCccd(form.cccd)) {
+      toast({ title: CCCD_ERROR_MESSAGE, variant: "destructive" });
       return;
     }
     const res = await fetch("/api/workers", {
@@ -225,6 +230,8 @@ export default function DwDataPage() {
                 <Label>CCCD / ID No</Label>
                 <Input
                   value={form.cccd ?? ""}
+                  inputMode="numeric"
+                  maxLength={12}
                   onChange={(e) => setForm({ ...form, cccd: e.target.value.replace(/\D/g, "") })}
                   className="h-11 rounded-xl font-mono font-bold"
                 />

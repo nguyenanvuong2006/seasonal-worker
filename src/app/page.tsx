@@ -22,6 +22,7 @@ export default async function ApplicantHomePage() {
       .where(
         and(
           eq(formQuestions.isActive, true),
+          eq(formQuestions.visibleToApplicants, true),
           sql`(${formQuestions.applyFrom} IS NULL OR ${formQuestions.applyFrom} <= ${todayStr()}::date)`,
         ),
       )

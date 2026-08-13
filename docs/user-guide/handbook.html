@@ -731,7 +731,7 @@ Hai lệnh `npm install --no-save` ở trên **không đụng tới** `package.j
 <h1 id="06-department-6-cơ-cấu-tổ-chức-bộ-phận-của-tôi">6. Cơ cấu tổ chức &amp; &quot;Bộ phận của tôi&quot;</h1>
 <p>Hệ thống quản lý cơ cấu tổ chức Dalat Hasfarm theo chuẩn 5 tầng:</p>
 <p>$$\text{Location} \longrightarrow \text{Division} \longrightarrow \text{Department} \longrightarrow \text{Section} \longrightarrow \text{Group}$$</p>
-<p>Không sử dụng các thuật ngữ không chuẩn như &quot;Xưởng&quot;, &quot;Workshop&quot; khi diễn đạt cơ cấu phòng ban.</p>
+<p>Sử dụng nhất quán tên gọi chuẩn khi diễn đạt cơ cấu phòng ban.</p>
 <p>Có <strong>2 màn hình khác nhau</strong> tuỳ vai trò:</p>
 <table>
 <thead>
@@ -754,7 +754,7 @@ Hai lệnh `npm install --no-save` ở trên **không đụng tới** `package.j
 </tbody></table>
 <h2 id="06-department-61-cơ-cấu-tổ-chức-dành-cho-admin-hr">6.1 Cơ cấu tổ chức (dành cho Admin / HR)</h2>
 <img src="images/desktop/department-admin.png" width="720" alt="Quản lý Cơ cấu tổ chức"><ul>
-<li>Phân cấp chuẩn: <strong>Location</strong> (Vùng/Trại) → <strong>Division</strong> (Khối) → <strong>Department</strong> (Tên bộ phận) → <strong>Section</strong> (Phân xưởng/Mảng) → <strong>Group</strong> (Tổ/Nhóm).</li>
+<li>Phân cấp chuẩn: <strong>Location</strong> (Vùng/Trại) → <strong>Division</strong> (Khối) → <strong>Department</strong> (Tên bộ phận) → <strong>Section</strong> (Phân khu/Mảng) → <strong>Group</strong> (Tổ/Nhóm).</li>
 <li>Bấm <strong>&quot;+ Thêm bộ phận&quot;</strong> để tạo bộ phận mới — bộ phận vừa tạo <strong>sẽ tự động xuất hiện trong dropdown xếp việc</strong> ở Daily Application và Data Scope ngay lập tức.</li>
 <li>Có thể sửa trực tiếp trên bảng: <strong>Nhu cầu nhân lực dự kiến/ngày</strong>, bật/khoá bộ phận (nút <strong>Bật/Khoá</strong> ở cột trạng thái — khoá một bộ phận sẽ ẩn nó khỏi dropdown xếp việc mới nhưng không xoá dữ liệu cũ), và <strong>Xoá</strong> (xoá mềm — đưa vào Thùng rác).</li>
 <li>Các cột &quot;Hôm nay&quot; / &quot;Tổng&quot; cho biết số người tập nghề đã được xếp vào bộ phận đó.</li>
@@ -769,7 +769,7 @@ Hai lệnh `npm install --no-save` ở trên **không đụng tới** `package.j
 <li><strong>Location</strong> (Địa điểm / Trại)</li>
 <li><strong>Division</strong> (Khối)</li>
 <li><strong>Department</strong> (Bộ phận)</li>
-<li><strong>Section</strong> (Phân xưởng / Mảng)</li>
+<li><strong>Section</strong> (Phân khu / Mảng)</li>
 <li><strong>Group</strong> (Tổ / Nhóm)</li>
 <li><strong>Khoảng ngày</strong> (Từ ngày → Đến ngày)</li>
 <li><strong>Tìm kiếm nhanh</strong> theo Họ tên, CCCD, Số điện thoại.</li>
@@ -1105,7 +1105,7 @@ Hai lệnh `npm install --no-save` ở trên **không đụng tới** `package.j
 <li><strong>Location</strong> (Vùng / Trại)</li>
 <li><strong>Division</strong> (Khối)</li>
 <li><strong>Department</strong> (Bộ phận)</li>
-<li><strong>Section</strong> (Phân xưởng / Mảng)</li>
+<li><strong>Section</strong> (Phân khu / Mảng)</li>
 <li><strong>Group</strong> (Tổ / Nhóm)</li>
 <li>Tên Tiếng Việt &amp; Phụ trách tiếp nhận</li>
 </ul>
@@ -1252,7 +1252,7 @@ Hai lệnh `npm install --no-save` ở trên **không đụng tới** `package.j
 <h2 id="13-public-lookup-131-trang-đăng-ký">13.1 Trang đăng ký</h2>
 <p>Trang chủ hệ thống (<code>/</code>) — nơi người lao động tự đăng ký thông tin tập nghề.</p>
 <img src="images/desktop/public-registration-form.png" width="720" alt="Trang đăng ký công khai"><ol>
-<li>Nhập <strong>Số CCCD/CMND</strong> (bắt buộc, 9 hoặc 12 số) và <strong>Số điện thoại</strong>.</li>
+<li>Nhập <strong>Số CCCD</strong> (bắt buộc, đúng 12 chữ số) và <strong>Số điện thoại</strong>.</li>
 <li>Có thể bấm <strong>&quot;Quét QR CCCD&quot;</strong> để tự động điền thông tin từ mã QR trên thẻ CCCD, hạn chế gõ tay sai sót.</li>
 <li>Hệ thống tự kiểm tra: nếu bạn đã từng làm việc tại Dalat Hasfarm, thông tin sẽ <strong>tự động nhận diện và điền lại hồ sơ cũ</strong> — không phải khai lại từ đầu; nếu là lần đầu, bạn cần khai đầy đủ các câu hỏi bắt buộc (Giới tính, Dân tộc, Thời gian đăng ký làm, Kênh giới thiệu, và cam kết thông tin chính xác).</li>
 <li>Nộp đơn.</li>
@@ -1263,7 +1263,7 @@ Hai lệnh `npm install --no-save` ở trên **không đụng tới** `package.j
 <h2 id="13-public-lookup-132-trang-tra-cứu-kết-quả">13.2 Trang tra cứu kết quả</h2>
 <p>Vào <code>/lookup</code> (hoặc bấm <strong>&quot;Tra cứu kết quả&quot;</strong> từ trang đăng ký).</p>
 <img src="images/desktop/public-lookup-empty.png" width="720" alt="Trang tra cứu — trống"><ol>
-<li>Nhập <strong>Số CCCD/CMND</strong> đã dùng để đăng ký.</li>
+<li>Nhập <strong>Số CCCD</strong> đã dùng để đăng ký.</li>
 <li>Nhập <strong>Số điện thoại đã đăng ký</strong>.</li>
 <li>Bấm <strong>Tra cứu</strong>.</li>
 </ol>
@@ -1337,7 +1337,7 @@ Hai lệnh `npm install --no-save` ở trên **không đụng tới** `package.j
 </tr>
 <tr>
 <td><strong>Nhập sai CCCD</strong></td>
-<td>Gõ tay thay vì quét QR, hoặc nhầm giữa CCCD 9 số (CMND cũ) và 12 số</td>
+<td>Gõ tay thay vì quét QR, nhập thiếu hoặc không đúng 12 chữ số</td>
 <td>Sửa trực tiếp tại DW Data hoặc Daily Application nếu phát hiện sớm — hệ thống sẽ tự đồng bộ lại các hồ sơ liên quan sang CCCD đúng. Luôn kiểm tra kỹ trước khi duyệt hàng loạt</td>
 </tr>
 <tr>
@@ -1489,7 +1489,7 @@ Không, kể cả Admin. Mật khẩu chỉ lưu dưới dạng đã mã hoá m�
 </tr>
 <tr>
 <td><strong>Cơ cấu tổ chức (Org Hierarchy)</strong></td>
-<td>Cấu trúc phân cấp 5 tầng chuẩn của Dalat Hasfarm: <strong>Location → Division → Department → Section → Group</strong> (không dùng từ &quot;Xưởng/Workshop&quot;).</td>
+<td>Cấu trúc phân cấp 5 tầng chuẩn của Dalat Hasfarm: <strong>Location → Division → Department → Section → Group</strong>.</td>
 </tr>
 <tr>
 <td><strong>Planning (Kế hoạch nhu cầu)</strong></td>

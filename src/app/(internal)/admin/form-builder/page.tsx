@@ -14,6 +14,7 @@ import {
   toast,
 } from "@/components/ui";
 import { Loader2 } from "lucide-react";
+import { TARGET_AUDIENCES, type TargetAudience } from "@/lib/form-targeting";
 
 type Question = {
   id: string;
@@ -24,6 +25,9 @@ type Question = {
   isRequired: boolean;
   sortOrder: number;
   isActive: boolean;
+  visibleToApplicants: boolean;
+  targetAudience: TargetAudience;
+  skipForReturning: boolean;
   applyFrom: string | null;
   aliases: string[] | null;
   exportColumnName: string | null;
@@ -34,7 +38,16 @@ const TYPES = [
   { value: "NUMBER", label: "Nhập số" },
   { value: "SELECT", label: "Chọn từ danh sách (có tìm kiếm)" },
   { value: "BOOLEAN", label: "Có / Không" },
+  { value: "DATE", label: "Chọn ngày" },
 ];
+
+const AUDIENCE_LABELS: Record<TargetAudience, string> = {
+  ALL: "Tất cả ứng viên",
+  NEW_ONLY: "Chỉ ứng viên mới",
+  RETURNING_ONLY: "Chỉ người quay lại",
+};
+
+const AUDIENCES = TARGET_AUDIENCES.map((value) => ({ value, label: AUDIENCE_LABELS[value] }));
 
 export default function FormBuilderPage() {
   const [rows, setRows] = useState<Question[]>([]);
@@ -47,6 +60,9 @@ export default function FormBuilderPage() {
     optionsRaw: "",
     isRequired: false,
     sortOrder: 10,
+    visibleToApplicants: true,
+    targetAudience: "ALL" as TargetAudience,
+    skipForReturning: false,
     applyFrom: "",
     aliasesRaw: "",
     exportColumnName: "",
@@ -56,7 +72,12 @@ export default function FormBuilderPage() {
     setLoading(true);
     const res = await fetch("/api/questions");
     const data = await res.json();
-    setRows(data.rows ?? []);
+    if (!res.ok) {
+      toast({ title: data.error ?? "Không thể tải danh sách câu hỏi", variant: "destructive" });
+      setRows([]);
+    } else {
+      setRows(Array.isArray(data) ? data : (data.rows ?? []));
+    }
     setLoading(false);
   }, []);
 
@@ -95,6 +116,9 @@ export default function FormBuilderPage() {
       optionsRaw: "",
       isRequired: false,
       sortOrder: 0,
+      visibleToApplicants: true,
+      targetAudience: "ALL",
+      skipForReturning: false,
       applyFrom: "",
       aliasesRaw: "",
       exportColumnName: "",
@@ -148,7 +172,7 @@ export default function FormBuilderPage() {
       </div>
 
       <Card className="p-0">
-        <CardHeader title="Câu hỏi hiện có" subtitle="Bật/tắt hiển thị và bắt buộc trả lời" />
+        <CardHeader title="Câu hỏi hiện có" subtitle="Cấu hình trạng thái, form ứng viên, nhóm mục tiêu và bắt buộc trả lời" />
         <CardContent className="p-0">
           {loading ? (
             <div className="p-10 text-center">
@@ -179,7 +203,27 @@ export default function FormBuilderPage() {
                   </button>
                   <button onClick={() => void patch(q.id, { isActive: !q.isActive })}>
                     <Badge tone={q.isActive ? "green" : "gray"}>
-                      {q.isActive ? "Đang hiển thị" : "Đã ẩn"}
+                      {q.isActive ? "Đang hoạt động" : "Đã tắt"}
+                    </Badge>
+                  </button>
+                  <button onClick={() => void patch(q.id, { visibleToApplicants: !q.visibleToApplicants })}>
+                    <Badge tone={q.visibleToApplicants ? "blue" : "gray"}>
+                      {q.visibleToApplicants ? "Form ứng viên" : "Chỉ nội bộ"}
+                    </Badge>
+                  </button>
+                  <select
+                    value={q.targetAudience}
+                    onChange={(e) => void patch(q.id, { targetAudience: e.target.value as TargetAudience })}
+                    aria-label={`Nhóm ứng viên cho ${q.questionText}`}
+                    className="h-8 rounded-lg border border-border-strong bg-white px-2 text-xs font-semibold"
+                  >
+                    {AUDIENCES.map((audience) => (
+                      <option key={audience.value} value={audience.value}>{audience.label}</option>
+                    ))}
+                  </select>
+                  <button onClick={() => void patch(q.id, { skipForReturning: !q.skipForReturning })}>
+                    <Badge tone={q.skipForReturning ? "amber" : "gray"}>
+                      {q.skipForReturning ? "Bỏ qua khi quay lại" : "Hỏi khi quay lại"}
                     </Badge>
                   </button>
                   <input
@@ -265,6 +309,42 @@ export default function FormBuilderPage() {
               onChange={(e) => setForm({ ...form, exportColumnName: e.target.value })}
               placeholder="vd: Chiều cao"
             />
+          </div>
+          <div className="space-y-3 rounded-xl border border-border bg-surface-subtle p-3">
+            <p className="text-sm font-bold text-fg">Phạm vi hiển thị</p>
+            <label className="flex items-center gap-2 text-sm font-semibold">
+              <input
+                type="checkbox"
+                checked={form.visibleToApplicants}
+                onChange={(e) => setForm({ ...form, visibleToApplicants: e.target.checked })}
+                className="h-4 w-4 accent-primary"
+              />
+              Hiển thị trên form ứng viên
+            </label>
+            <div>
+              <Label>Nhóm ứng viên</Label>
+              <select
+                value={form.targetAudience}
+                onChange={(e) => setForm({ ...form, targetAudience: e.target.value as TargetAudience })}
+                className="h-11 w-full rounded-xl border-2 border-border-strong bg-white px-2 font-semibold"
+              >
+                {AUDIENCES.map((audience) => (
+                  <option key={audience.value} value={audience.value}>{audience.label}</option>
+                ))}
+              </select>
+            </div>
+            <label className="flex items-center gap-2 text-sm font-semibold">
+              <input
+                type="checkbox"
+                checked={form.skipForReturning}
+                onChange={(e) => setForm({ ...form, skipForReturning: e.target.checked })}
+                className="h-4 w-4 accent-primary"
+              />
+              Luôn bỏ qua câu hỏi này khi người quay lại đăng ký
+            </label>
+            <p className="text-[11px] leading-relaxed text-fg-muted">
+              Công tắc bỏ qua có ưu tiên cao hơn nhóm mục tiêu. Câu hỏi chỉ nội bộ vẫn dùng được cho import/export nhưng không hiển thị và không bắt buộc trên form công khai.
+            </p>
           </div>
           <div>
             <Label>Ngày bắt đầu áp dụng</Label>

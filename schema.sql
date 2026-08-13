@@ -38,7 +38,7 @@ CREATE TABLE IF NOT EXISTS dw_data (
   bod varchar(20),
   profile varchar(120),
   dktn varchar(40),
-  cccd varchar(20),
+  cccd varchar(20) NOT NULL,
   date_of_issue varchar(20),
   place_of_issue varchar(160),
   permanent_address text,
@@ -107,6 +107,9 @@ CREATE TABLE IF NOT EXISTS form_questions (
   is_required boolean NOT NULL DEFAULT false,
   sort_order integer NOT NULL DEFAULT 0,
   is_active boolean NOT NULL DEFAULT true,
+  visible_to_applicants boolean NOT NULL DEFAULT true,
+  target_audience varchar(20) NOT NULL DEFAULT 'ALL' CONSTRAINT form_questions_target_audience_chk CHECK (target_audience IN ('ALL', 'NEW_ONLY', 'RETURNING_ONLY')),
+  skip_for_returning boolean NOT NULL DEFAULT false,
   apply_from date,
   created_at timestamptz NOT NULL DEFAULT now()
 );
@@ -593,3 +596,33 @@ CREATE UNIQUE INDEX IF NOT EXISTS planning_target_period_uq ON planning_targets 
 --   GROUP BY related_movement_id HAVING count(*) > 1;
 CREATE UNIQUE INDEX IF NOT EXISTS workforce_movement_spawn_resignation_uq ON workforce_movements (related_movement_id)
   WHERE movement_type = 'resignation' AND related_movement_id IS NOT NULL;
+
+-- ============================================================
+-- CẬP NHẬT 2026-08-13 — FORM TARGETING + CCCD ĐÚNG 12 CHỮ SỐ
+-- ============================================================
+ALTER TABLE form_questions ADD COLUMN IF NOT EXISTS visible_to_applicants boolean NOT NULL DEFAULT true;
+ALTER TABLE form_questions ADD COLUMN IF NOT EXISTS target_audience varchar(20) NOT NULL DEFAULT 'ALL';
+ALTER TABLE form_questions ADD COLUMN IF NOT EXISTS skip_for_returning boolean NOT NULL DEFAULT false;
+
+DO $$ BEGIN
+  IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'form_questions_target_audience_chk') THEN
+    ALTER TABLE form_questions ADD CONSTRAINT form_questions_target_audience_chk
+      CHECK (target_audience IN ('ALL', 'NEW_ONLY', 'RETURNING_ONLY'));
+  END IF;
+END $$;
+
+-- NOT VALID giữ nguyên dữ liệu lịch sử chưa chuẩn hoá nhưng chặn mọi INSERT/UPDATE mới sai định dạng.
+DO $$ BEGIN
+  IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'daily_applications_cccd_exact_12_chk') THEN
+    ALTER TABLE daily_applications ADD CONSTRAINT daily_applications_cccd_exact_12_chk
+      CHECK (cccd IS NOT NULL AND cccd ~ '^[0-9]{12}$') NOT VALID;
+  END IF;
+  IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'dw_data_cccd_exact_12_chk') THEN
+    ALTER TABLE dw_data ADD CONSTRAINT dw_data_cccd_exact_12_chk
+      CHECK (cccd IS NOT NULL AND cccd ~ '^[0-9]{12}$') NOT VALID;
+  END IF;
+  IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'worker_profiles_cccd_exact_12_chk') THEN
+    ALTER TABLE worker_profiles ADD CONSTRAINT worker_profiles_cccd_exact_12_chk
+      CHECK (cccd IS NOT NULL AND cccd ~ '^[0-9]{12}$') NOT VALID;
+  END IF;
+END $$;

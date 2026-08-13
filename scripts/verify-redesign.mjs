@@ -12,6 +12,7 @@
  */
 
 import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
 
 console.log("==================================================");
 console.log("RUNNING AUTOMATED VERIFICATION TESTS FOR REDESIGN");
@@ -76,8 +77,19 @@ assert.equal(isMale("Nữ"), false);
 
 console.log("✓ TEST 2 PASSED: Gender helpers identify male/female accurately.\n");
 
-// --- TEST 3: CCCD Masking ---
-console.log("TEST 3: CCCD Privacy Masking...");
+// --- TEST 3: Exact-12 CCCD Policy & Masking ---
+console.log("TEST 3: Exact-12 CCCD Validation & Privacy Masking...");
+
+// Read the production validator pattern so this verification fails if the canonical
+// policy is accidentally relaxed without updating the acceptance checks below.
+const validatorsSource = readFileSync(new URL("../src/lib/validators.ts", import.meta.url), "utf8");
+const cccdPatternMatch = validatorsSource.match(/export const CCCD_PATTERN = "([^"]+)";/);
+assert.ok(cccdPatternMatch, "Canonical CCCD_PATTERN must be exported from validators.ts");
+const cccdRegex = new RegExp(cccdPatternMatch[1]);
+
+function isValidCccd(value) {
+  return typeof value === "string" && cccdRegex.test(value.trim());
+}
 
 function maskCccd(cccd) {
   if (!cccd) return "—";
@@ -86,12 +98,27 @@ function maskCccd(cccd) {
   return "•".repeat(clean.length - 4) + clean.slice(-4);
 }
 
+assert.equal(cccdPatternMatch[1], "^[0-9]{12}$", "Canonical policy must remain exactly 12 digits");
+assert.equal(isValidCccd("049201001234"), true);
+assert.equal(isValidCccd(" 049201001234 "), true, "Leading/trailing whitespace is normalized");
+for (const invalid of [
+  "",
+  "251234567", // obsolete short identity format
+  "04920100123",
+  "0492010012345",
+  "04920100123A",
+  "049201-01234",
+  null,
+  undefined,
+  49201001234,
+]) {
+  assert.equal(isValidCccd(invalid), false, `CCCD must reject ${String(invalid)}`);
+}
 assert.equal(maskCccd("049201001234"), "••••••••1234");
-assert.equal(maskCccd("251234567"), "•••••4567");
 assert.equal(maskCccd(""), "—");
 assert.equal(maskCccd(null), "—");
 
-console.log("✓ TEST 3 PASSED: Privacy masking formats properly.\n");
+console.log("✓ TEST 3 PASSED: Exact-12 validation rejects every malformed CCCD and masking formats properly.\n");
 
 // --- TEST 4: Data Scope Batch Update Logic ---
 console.log("TEST 4: Data Scope Batch Processing & Deduplication...");

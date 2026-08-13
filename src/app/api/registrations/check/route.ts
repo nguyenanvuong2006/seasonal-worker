@@ -4,6 +4,7 @@ import { db } from "@/db";
 import { dailyApplications, departments } from "@/db/schema";
 import { matchDwWorker } from "@/lib/matching";
 import { todayStr } from "@/lib/helpers";
+import { CCCD_ERROR_MESSAGE, isValidCccd } from "@/lib/validators";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -11,14 +12,11 @@ export const dynamic = "force-dynamic";
 export async function POST(req: Request) {
   try {
     const body = await req.json();
-    const cccd = String(body.cccd ?? "").replace(/\D/g, "");
+    const cccd = String(body.cccd ?? "").trim();
     const phone = String(body.phone ?? "").replace(/\D/g, "");
 
-    if (!/^\d{9,12}$/.test(cccd)) {
-      return NextResponse.json(
-        { error: "Bắt buộc nhập CCCD/CMND hợp lệ (9 hoặc 12 số)." },
-        { status: 400 },
-      );
+    if (!isValidCccd(cccd)) {
+      return NextResponse.json({ error: CCCD_ERROR_MESSAGE }, { status: 400 });
     }
     if (!/^\d{9,11}$/.test(phone)) {
       return NextResponse.json({ error: "Số điện thoại không hợp lệ." }, { status: 400 });

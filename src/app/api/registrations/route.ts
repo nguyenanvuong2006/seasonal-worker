@@ -6,6 +6,8 @@ import { getSession, getUserScope } from "@/lib/auth";
 import { matchDwWorker } from "@/lib/matching";
 import { todayStr } from "@/lib/helpers";
 import { runRules } from "@/lib/rule-engine";
+import { isQuestionForAudience } from "@/lib/form-targeting";
+import { CCCD_ERROR_MESSAGE, isValidCccd } from "@/lib/validators";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -14,17 +16,15 @@ export const dynamic = "force-dynamic";
 export async function POST(req: Request) {
   try {
     const body = await req.json();
-    const cccd = String(body.cccd ?? "").replace(/\D/g, "");
+    const cccd = String(body.cccd ?? "").trim();
     const phone = String(body.phone ?? "").replace(/\D/g, "");
     const fullName = String(body.full_name ?? "").trim();
-    const answers: Record<string, string> = body.custom_answers ?? {};
+    const rawAnswers = body.custom_answers && typeof body.custom_answers === "object" && !Array.isArray(body.custom_answers)
+      ? body.custom_answers as Record<string, unknown>
+      : {};
 
-    // ==== BẮT BUỘC CCCD (bỏ hoàn toàn nhánh "không mang CCCD") ====
-    if (!/^\d{9,12}$/.test(cccd)) {
-      return NextResponse.json(
-        { error: "Bắt buộc phải có số CCCD/CMND hợp lệ (9 hoặc 12 số) để đăng ký." },
-        { status: 400 },
-      );
+    if (!isValidCccd(cccd)) {
+      return NextResponse.json({ error: CCCD_ERROR_MESSAGE }, { status: 400 });
     }
     if (!/^\d{9,11}$/.test(phone)) {
       return NextResponse.json({ error: "Số điện thoại không hợp lệ." }, { status: 400 });
@@ -50,29 +50,32 @@ export async function POST(req: Request) {
     // Đối chiếu DW Data (nguồn sự thật) — không phụ thuộc lời khai
     const match = await matchDwWorker({ cccd, fullName, dob: body.dob, phone });
 
-    // Validate câu hỏi động bắt buộc đang hiệu lực
-    // — Chỉ áp dụng cho lao động MỚI (đi qua form nhập custom_answers).
-    // Lao động CŨ (is_returning) xác nhận nhanh, không đi qua form này nên bỏ qua bước validate,
-    // tránh lỗi "Thiếu câu trả lời bắt buộc" xảy ra 100% các lần cho nhóm này.
-    const isReturning = body.is_returning === true;
-    if (!isReturning) {
-      const required = await db
-        .select()
-        .from(formQuestions)
-        .where(
-          and(
-            eq(formQuestions.isActive, true),
-            eq(formQuestions.isRequired, true),
-            sql`(${formQuestions.applyFrom} IS NULL OR ${formQuestions.applyFrom} <= ${today}::date)`,
-          ),
+    // Phân loại hoàn toàn từ dữ liệu server; không tin cờ `is_returning` do client gửi.
+    const isReturning = match.status === "MATCHED" && match.confidence === "CCCD";
+    const activeQuestions = await db
+      .select()
+      .from(formQuestions)
+      .where(
+        and(
+          eq(formQuestions.isActive, true),
+          eq(formQuestions.visibleToApplicants, true),
+          sql`(${formQuestions.applyFrom} IS NULL OR ${formQuestions.applyFrom} <= ${today}::date)`,
+        ),
+      );
+    const applicableQuestions = activeQuestions.filter((question) =>
+      isQuestionForAudience(question, isReturning ? "RETURNING" : "NEW"),
+    );
+
+    // Chỉ lưu câu trả lời thuộc câu hỏi hiện đang hiển thị cho đúng nhóm ứng viên.
+    const answers: Record<string, string> = {};
+    for (const question of applicableQuestions) {
+      const value = rawAnswers[question.fieldKey];
+      if (value !== undefined && value !== null) answers[question.fieldKey] = String(value).trim();
+      if (question.isRequired && !answers[question.fieldKey]) {
+        return NextResponse.json(
+          { error: `Thiếu câu trả lời bắt buộc: "${question.questionText}"` },
+          { status: 400 },
         );
-      for (const q of required) {
-        if (!answers[q.fieldKey] || String(answers[q.fieldKey]).trim() === "") {
-          return NextResponse.json(
-            { error: `Thiếu câu trả lời bắt buộc: "${q.questionText}"` },
-            { status: 400 },
-          );
-        }
       }
     }
 
@@ -80,6 +83,9 @@ export async function POST(req: Request) {
     const year = dobStr?.match(/(19|20)\d{2}/)?.[0];
     const birthYear = year ? parseInt(year) : null;
     const computedAge = birthYear ? new Date().getFullYear() - birthYear : null;
+    const residentialAddress = String(body.residential_address ?? body.address_current ?? "").trim()
+      || match.worker?.residentialAddress
+      || null;
 
     // RULE ENGINE (#6) — chạy các rule đang bật ở trigger ON_REGISTER (cấu hình tại /admin/rules).
     let ruleStatus: string | null = null;
@@ -89,7 +95,7 @@ export async function POST(req: Request) {
       gender: body.gender ?? null,
       ethnicity: body.ethnicity ?? null,
       dwMatch: match.status,
-      declaredType: body.declared_type === "OLD" ? "OLD" : "NEW",
+      declaredType: isReturning ? "OLD" : "NEW",
     });
     for (const a of ruleActions) {
       if (a.type === "SET_STATUS") ruleStatus = a.value;
@@ -109,8 +115,8 @@ export async function POST(req: Request) {
         phone,
         ethnicity: body.ethnicity || null,
         permanentAddress: body.permanent_address || match.worker?.permanentAddress || null,
-        residentialAddress: body.residential_address || match.worker?.residentialAddress || null,
-        declaredType: body.declared_type === "OLD" ? "OLD" : "NEW",
+        residentialAddress,
+        declaredType: isReturning ? "OLD" : "NEW",
         dwMatch: match.status,
         dwId: match.worker?.id ?? null,
         dwCode: match.worker?.code ?? null,
@@ -133,7 +139,7 @@ export async function POST(req: Request) {
         dob: dobStr ?? match.worker?.bod ?? null,
         phone,
         permanentAddress: body.permanent_address || match.worker?.permanentAddress || null,
-        residentialAddress: body.residential_address || match.worker?.residentialAddress || null,
+        residentialAddress,
         dwId: match.worker?.id ?? null,
       })
       .onConflictDoUpdate({
@@ -142,7 +148,7 @@ export async function POST(req: Request) {
         set: {
           fullName: match.worker?.fullName ?? fullName,
           phone,
-          residentialAddress: body.residential_address || match.worker?.residentialAddress || null,
+          residentialAddress,
           updatedAt: new Date(),
         },
       })

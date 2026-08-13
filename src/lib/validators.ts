@@ -9,12 +9,20 @@
  * lại regex 1 lần nữa trong SQL), giữ 1 nguồn sự thật cho định dạng dù chạy ở tầng nào.
  */
 
-export const CCCD_PATTERN = "^[0-9]{9,12}$";
+export const CCCD_LENGTH = 12;
+export const CCCD_PATTERN = "^[0-9]{12}$";
+export const CCCD_ERROR_MESSAGE = "CCCD là bắt buộc và phải gồm đúng 12 chữ số";
 export const VN_PHONE_PATTERN = "^0[0-9]{8,10}$";
 export const NUMBER_PATTERN = "^-?[0-9]+(\\.[0-9]+)?$";
 
-export function isValidCccd(v: string | null | undefined): boolean {
-  return new RegExp(CCCD_PATTERN).test(String(v ?? "").trim());
+const CCCD_REGEX = new RegExp(CCCD_PATTERN);
+
+export function normalizeCccd(v: unknown): string {
+  return typeof v === "string" ? v.trim() : "";
+}
+
+export function isValidCccd(v: unknown): v is string {
+  return CCCD_REGEX.test(normalizeCccd(v));
 }
 
 export function isValidVietnamesePhone(v: string | null | undefined): boolean {

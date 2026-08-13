@@ -53,9 +53,7 @@ export const ROLE_LABEL: Record<string, string> = {
   DEPT_MANAGER: "Quản lý bộ phận",
 };
 
-export function isValidCccd(v: string) {
-  return /^\d{9,12}$/.test(v);
-}
+export { isValidCccd } from "@/lib/validators";
 
 export function isValidPhone(v: string) {
   return /^0\d{8,10}$/.test(v);

@@ -364,7 +364,7 @@ thống hoạt động ra sao (biết mô tả đúng vấn đề cho dev), như
 |---|---|
 | `auth.ts` | Mã hoá mật khẩu, kiểm tra đăng nhập đúng/sai, hết hạn phiên đăng nhập |
 | `helpers.ts` | Vài hàm nhỏ dùng chung, vd. lấy đúng ngày giờ Việt Nam |
-| `validators.ts` | Quy định định dạng hợp lệ: CCCD phải 9-12 số, SĐT đúng định dạng VN... |
+| `validators.ts` | Quy định định dạng hợp lệ: CCCD bắt buộc đúng 12 chữ số, SĐT đúng định dạng VN... |
 | `date-parser.ts` | Đọc hiểu các kiểu ngày tháng khác nhau khi import file Excel cũ (vd `13/08/2024` lẫn `2024-08-13`) |
 | `file-parser.ts` | Đọc nội dung file Excel/CSV bạn tải lên |
 | `csv-client.ts` | Đọc CSV ngay trên trình duyệt (không cần gửi lên server trước) |

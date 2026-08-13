@@ -7,6 +7,7 @@ import { todayStr } from "@/lib/helpers";
 import { runRules } from "@/lib/rule-engine";
 import { queueNotification } from "@/lib/notifications";
 import { autoAllocateInternship } from "@/lib/planning";
+import { isValidCccd, normalizeCccd } from "@/lib/validators";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -58,12 +59,26 @@ export async function POST(req: Request) {
         }
       }
 
-      const alreadyAtStatus = allTargets.filter((t) => t.status === finalStatus);
+      const invalidIdentity = allTargets.filter(
+        (target) => !isValidCccd(target.cccd) || target.cccd !== normalizeCccd(target.cccd),
+      );
+      const invalidIdentityIds = new Set(invalidIdentity.map((target) => target.id));
+      for (const target of invalidIdentity) {
+        results.push({
+          id: target.id,
+          cccd: target.cccd,
+          fullName: target.fullName,
+          ok: false,
+          reason: "CCCD phải gồm đúng 12 chữ số trước khi xử lý hồ sơ",
+        });
+      }
+
+      const alreadyAtStatus = allTargets.filter((target) => target.status === finalStatus && !invalidIdentityIds.has(target.id));
       for (const t of alreadyAtStatus) {
         results.push({ id: t.id, cccd: t.cccd, fullName: t.fullName, ok: false, reason: "Hồ sơ đã ở đúng trạng thái này từ trước — không có gì để duyệt lại (bỏ qua)" });
       }
 
-      const targets = allTargets.filter((t) => t.status !== finalStatus);
+      const targets = allTargets.filter((target) => target.status !== finalStatus && !invalidIdentityIds.has(target.id));
       if (targets.length === 0) {
         return { updated: 0, newImported: 0, results, processedIds: [] as string[] };
       }

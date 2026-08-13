@@ -13,6 +13,7 @@ import {
 } from "@tanstack/react-table";
 import { Badge, Button, Card, Input, KpiCard, Modal, toast, cn } from "@/components/ui";
 import { formatDate, STATUS_META, todayStr } from "@/lib/helpers";
+import { CCCD_ERROR_MESSAGE, isValidCccd, normalizeCccd } from "@/lib/validators";
 import {
   AlertTriangle,
   Calendar,
@@ -73,11 +74,17 @@ function EditableCell({
   onCommit,
   className,
   placeholder,
+  inputMode,
+  maxLength,
+  transformInput,
 }: {
   value: string;
   onCommit: (v: string) => void;
   className?: string;
   placeholder?: string;
+  inputMode?: React.ComponentProps<"input">["inputMode"];
+  maxLength?: number;
+  transformInput?: (value: string) => string;
 }) {
   const [draft, setDraft] = React.useState(value);
   const [editing, setEditing] = React.useState(false);
@@ -104,7 +111,9 @@ function EditableCell({
     <input
       autoFocus
       value={draft}
-      onChange={(e) => setDraft(e.target.value)}
+      inputMode={inputMode}
+      maxLength={maxLength}
+      onChange={(e) => setDraft(transformInput ? transformInput(e.target.value) : e.target.value)}
       onBlur={() => {
         setEditing(false);
         if (draft !== value) onCommit(draft);
@@ -297,6 +306,15 @@ export default function RegistrationsGrid({
 
   const patchRow = React.useCallback(
     async (id: string, patch: Partial<AppRow>) => {
+      if (patch.cccd !== undefined) {
+        const cccd = normalizeCccd(patch.cccd);
+        if (!isValidCccd(cccd)) {
+          toast({ title: CCCD_ERROR_MESSAGE, variant: "destructive" });
+          return;
+        }
+        patch = { ...patch, cccd };
+      }
+
       const prev = rows;
       setRows((p) => p.map((r) => (r.id === id ? { ...r, ...patch } : r)));
       try {
@@ -375,6 +393,9 @@ export default function RegistrationsGrid({
             <EditableCell
               value={i.getValue()}
               onCommit={(v) => patchRow(i.row.original.id, { cccd: v })}
+              inputMode="numeric"
+              maxLength={12}
+              transformInput={(value) => value.replace(/\D/g, "").slice(0, 12)}
               className="font-mono font-semibold"
             />
           ) : (

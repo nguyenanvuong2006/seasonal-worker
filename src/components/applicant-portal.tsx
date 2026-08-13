@@ -5,6 +5,8 @@ import { Button, Card, CardContent, Input, Label, SearchableSelect, toast } from
 import { AlertTriangle, CheckCircle2, Clock, Loader2, Search, ShieldCheck, Sparkles, UserPlus, XCircle } from "lucide-react";
 import { CccdQrScanner, type CccdQrData } from "@/components/cccd-qr-scanner";
 import type { FormQuestion } from "@/db/schema";
+import { isQuestionForAudience } from "@/lib/form-targeting";
+import { CCCD_ERROR_MESSAGE, isValidCccd } from "@/lib/validators";
 import Link from "next/link";
 
 type Stage = "check" | "returning_autofilled" | "already_registered" | "new" | "success";
@@ -17,6 +19,81 @@ type WorkerInfo = {
   dept_location?: string | null;
 };
 
+function DynamicQuestionFields({
+  questions,
+  answers,
+  onChange,
+  title,
+}: {
+  questions: FormQuestion[];
+  answers: Record<string, string>;
+  onChange: (fieldKey: string, value: string) => void;
+  title: string;
+}) {
+  return (
+    <div className="space-y-6 border-t border-slate-200 pt-8">
+      <div className="flex items-center gap-3">
+        <div className="h-8 w-1 rounded-full bg-gold-500" />
+        <div>
+          <h3 className="text-xl font-black text-slate-900">{title}</h3>
+          <p className="mt-1 text-sm text-slate-500">Vui lòng hoàn thành các câu hỏi áp dụng cho hồ sơ của bạn.</p>
+        </div>
+      </div>
+
+      {questions.map((question) => (
+        <div
+          key={question.id}
+          className="rounded-3xl border border-border bg-surface p-6 transition-all duration-200 hover:border-primary/40 hover:shadow-md"
+        >
+          <Label className="mb-4 block text-base font-semibold leading-7 text-slate-800">
+            {question.questionText}
+            {question.isRequired && <span className="ml-1 text-red-500">*</span>}
+          </Label>
+
+          {question.fieldType === "SELECT" && (question.options?.length ?? 0) > 0 ? (
+            <SearchableSelect
+              value={answers[question.fieldKey]}
+              onChange={(value) => onChange(question.fieldKey, value)}
+              options={(question.options ?? []).map((item) => ({ value: item, label: item }))}
+            />
+          ) : question.fieldType === "BOOLEAN" ? (
+            <div className="grid grid-cols-2 gap-4">
+              <Button
+                type="button"
+                size="lg"
+                variant={answers[question.fieldKey] === "Có" ? "success" : "outline"}
+                onClick={() => onChange(question.fieldKey, "Có")}
+                className="h-12 rounded-2xl font-bold"
+              >
+                ✓ Có
+              </Button>
+              <Button
+                type="button"
+                size="lg"
+                variant={answers[question.fieldKey] === "Không" ? "destructive" : "outline"}
+                onClick={() => onChange(question.fieldKey, "Không")}
+                className="h-12 rounded-2xl font-bold"
+              >
+                ✕ Không
+              </Button>
+            </div>
+          ) : (
+            <Input
+              type={question.fieldType === "NUMBER" ? "number" : question.fieldType === "DATE" ? "date" : "text"}
+              value={answers[question.fieldKey] || ""}
+              onChange={(event) => onChange(question.fieldKey, event.target.value)}
+              placeholder="Nhập câu trả lời..."
+              className="h-14 rounded-2xl bg-slate-50 px-5"
+            />
+          )}
+
+          {question.isRequired && <p className="mt-3 text-xs text-slate-400">Trường này là bắt buộc.</p>}
+        </div>
+      ))}
+    </div>
+  );
+}
+
 export default function ApplicantPortal({ questions }: { questions: FormQuestion[] }) {
   const [cccd, setCccd] = useState("");
   const [phone, setPhone] = useState("");
@@ -27,6 +104,24 @@ export default function ApplicantPortal({ questions }: { questions: FormQuestion
   const [fullName, setFullName] = useState("");
   const [dob, setDob] = useState("");
   const [address, setAddress] = useState("");
+
+  const newQuestions = questions.filter((question) => isQuestionForAudience(question, "NEW"));
+  const returningQuestions = questions.filter((question) => isQuestionForAudience(question, "RETURNING"));
+
+  const setAnswer = (fieldKey: string, value: string) => {
+    setCustomAnswers((current) => ({ ...current, [fieldKey]: value }));
+  };
+
+  const validateAnswers = (applicableQuestions: FormQuestion[]) => {
+    const missing = applicableQuestions.find(
+      (question) => question.isRequired && !customAnswers[question.fieldKey]?.trim(),
+    );
+    if (missing) {
+      toast({ title: `Thiếu: ${missing.questionText}`, variant: "destructive" });
+      return false;
+    }
+    return true;
+  };
 
   const reset = () => {
     setStage("check");
@@ -53,8 +148,8 @@ export default function ApplicantPortal({ questions }: { questions: FormQuestion
   };
 
   const handleCheck = async () => {
-    if (!/^\d{9,12}$/.test(cccd)) {
-      toast({ title: "CCCD phải chứa 9 - 12 chữ số hợp lệ", variant: "destructive" });
+    if (!isValidCccd(cccd)) {
+      toast({ title: CCCD_ERROR_MESSAGE, variant: "destructive" });
       return;
     }
     if (!/^\d{9,11}$/.test(phone)) {
@@ -95,6 +190,7 @@ export default function ApplicantPortal({ questions }: { questions: FormQuestion
   };
 
   const handleConfirmReturning = async () => {
+    if (!validateAnswers(returningQuestions)) return;
     setLoading(true);
     try {
       const res = await fetch("/api/registrations", {
@@ -104,7 +200,7 @@ export default function ApplicantPortal({ questions }: { questions: FormQuestion
           cccd,
           phone,
           full_name: workerInfo?.full_name,
-          is_returning: true,
+          custom_answers: customAnswers,
         }),
       });
       const data = await res.json();
@@ -123,15 +219,7 @@ export default function ApplicantPortal({ questions }: { questions: FormQuestion
       toast({ title: "Vui lòng nhập Họ Tên và Ngày Sinh", variant: "destructive" });
       return;
     }
-    for (const q of questions) {
-      if (q.isRequired && !customAnswers[q.fieldKey]) {
-        toast({
-          title: `Thiếu: ${q.questionText}`,
-          variant: "destructive",
-        });
-        return;
-      }
-    }
+    if (!validateAnswers(newQuestions)) return;
     setLoading(true);
     try {
       const res = await fetch("/api/registrations", {
@@ -203,7 +291,7 @@ export default function ApplicantPortal({ questions }: { questions: FormQuestion
             <div className="space-y-3">
       
               <Label className="text-sm font-bold text-slate-700">
-                Số CCCD / CMND
+                Số CCCD
                 <span className="ml-1 text-red-500">*</span>
               </Label>
       
@@ -214,7 +302,7 @@ export default function ApplicantPortal({ questions }: { questions: FormQuestion
                   inputMode="numeric"
                   maxLength={12}
                   value={cccd}
-                  placeholder="Nhập 9 hoặc 12 chữ số"
+                  placeholder="Nhập đúng 12 chữ số"
                   onChange={(e) =>
                     setCccd(e.target.value.replace(/\D/g, ""))
                   }
@@ -528,6 +616,15 @@ export default function ApplicantPortal({ questions }: { questions: FormQuestion
 
       </div>
 
+      {returningQuestions.length > 0 && (
+        <DynamicQuestionFields
+          questions={returningQuestions}
+          answers={customAnswers}
+          onChange={setAnswer}
+          title="Thông tin cần cập nhật"
+        />
+      )}
+
       <div className="rounded-3xl border border-emerald-200 bg-emerald-50 p-5">
 
         <p className="font-bold text-emerald-900">
@@ -709,145 +806,14 @@ export default function ApplicantPortal({ questions }: { questions: FormQuestion
 
       </div>
 
-      {questions.length > 0 && (
-  <div className="space-y-6 border-t border-slate-200 pt-8">
-
-    {/* Section Title */}
-
-    <div className="flex items-center gap-3">
-
-      <div className="h-8 w-1 rounded-full bg-gold-500" />
-
-      <div>
-
-        <h3 className="text-xl font-black text-slate-900">
-          Thông tin bổ sung
-        </h3>
-
-        <p className="mt-1 text-sm text-slate-500">
-          Vui lòng hoàn thành các câu hỏi dưới đây.
-        </p>
-
-      </div>
-
-    </div>
-
-    {questions.map((q) => (
-
-      <div
-        key={q.id}
-        className="rounded-3xl border border-border bg-surface p-6 transition-all duration-200 hover:border-primary/40 hover:shadow-md"
-      >
-
-        {/* Question */}
-
-        <Label className="mb-4 block text-base font-semibold leading-7 text-slate-800">
-
-          {q.questionText}
-
-          {q.isRequired && (
-            <span className="ml-1 text-red-500">*</span>
-          )}
-
-        </Label>
-
-        {/* SELECT */}
-
-        {q.fieldType === "SELECT" &&
-          (q.options?.length ?? 0) > 0 ? (
-
-          <SearchableSelect
-            value={customAnswers[q.fieldKey]}
-            onChange={(value) =>
-              setCustomAnswers({
-                ...customAnswers,
-                [q.fieldKey]: value,
-              })
-            }
-            options={(q.options ?? []).map((item) => ({
-              value: item,
-              label: item,
-            }))}
-          />
-
-        ) : q.fieldType === "BOOLEAN" ? (
-
-          /* BOOLEAN */
-
-          <div className="grid grid-cols-2 gap-4">
-
-            <Button
-              type="button"
-              size="lg"
-              variant={
-                customAnswers[q.fieldKey] === "Có"
-                  ? "success"
-                  : "outline"
-              }
-              onClick={() =>
-                setCustomAnswers({
-                  ...customAnswers,
-                  [q.fieldKey]: "Có",
-                })
-              }
-              className="h-12 rounded-2xl font-bold"
-            >
-              ✓ Có
-            </Button>
-
-            <Button
-              type="button"
-              size="lg"
-              variant={
-                customAnswers[q.fieldKey] === "Không"
-                  ? "destructive"
-                  : "outline"
-              }
-              onClick={() =>
-                setCustomAnswers({
-                  ...customAnswers,
-                  [q.fieldKey]: "Không",
-                })
-              }
-              className="h-12 rounded-2xl font-bold"
-            >
-              ✕ Không
-            </Button>
-
-          </div>
-
-        ) : (
-
-          /* TEXT */
-
-          <Input
-            value={customAnswers[q.fieldKey] || ""}
-            onChange={(e) =>
-              setCustomAnswers({
-                ...customAnswers,
-                [q.fieldKey]: e.target.value,
-              })
-            }
-            placeholder="Nhập câu trả lời..."
-            className="h-14 rounded-2xl bg-slate-50 px-5"
-          />
-
-        )}
-
-        {/* Required Hint */}
-
-        {q.isRequired && (
-          <p className="mt-3 text-xs text-slate-400">
-            Trường này là bắt buộc.
-          </p>
-        )}
-
-      </div>
-
-    ))}
-
-  </div>
-)}
+      {newQuestions.length > 0 && (
+        <DynamicQuestionFields
+          questions={newQuestions}
+          answers={customAnswers}
+          onChange={setAnswer}
+          title="Thông tin bổ sung"
+        />
+      )}
 
             {/* Confirmation */}
 

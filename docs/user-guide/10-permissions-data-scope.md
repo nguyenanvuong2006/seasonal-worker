@@ -51,7 +51,7 @@ Data Scope trả lời câu hỏi **"Người dùng được thao tác và xem d
    - **Location** (Vùng / Trại)
    - **Division** (Khối)
    - **Department** (Bộ phận)
-   - **Section** (Phân xưởng / Mảng)
+   - **Section** (Phân khu / Mảng)
    - **Group** (Tổ / Nhóm)
    - Tên Tiếng Việt & Phụ trách tiếp nhận
 3. **Bộ lọc & Tìm kiếm đa tầng:**

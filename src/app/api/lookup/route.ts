@@ -29,7 +29,7 @@ export async function POST(req: Request) {
     return NextResponse.json({ error: "Dữ liệu không hợp lệ." }, { status: 400 });
   }
 
-  const cccd = String(body.cccd ?? "").replace(/\D/g, "");
+  const cccd = String(body.cccd ?? "").trim();
   const phone = String(body.phone ?? "").replace(/\D/g, "");
 
   if (!isValidCccd(cccd) || !isValidPhone(phone)) {
@@ -37,7 +37,7 @@ export async function POST(req: Request) {
   }
   const phoneTail = phone.slice(-9);
 
-  // Xác minh danh tính: CCCD + 9 số cuối SĐT phải khớp ít nhất 1 nguồn dữ liệu thật (DW Data —
+  // Xác minh danh tính: CCCD + phần số thuê bao cuối phải khớp ít nhất 1 nguồn dữ liệu thật (DW Data —
   // lao động cũ, HOẶC chính SĐT người đó đã khai khi đăng ký) — không chỉ dựa vào CCCD một mình.
   const [dwMatch] = await db
     .select({ fullName: dwData.fullName })
