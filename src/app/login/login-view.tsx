@@ -40,8 +40,8 @@ export function LoginView({ branding }: { branding: PublicBranding }) {
 
   return (
     <main className="relative flex min-h-screen items-center justify-center bg-bg p-4">
-      <div className="animate-fade-in-scale relative w-full max-w-[960px] overflow-hidden rounded-[20px] border border-border bg-surface shadow-[0_20px_60px_rgba(8,50,27,0.12)] md:grid md:grid-cols-[1.1fr_0.9fr]">
-        <div className="hasfarm-hero relative hidden flex-col justify-between p-10 text-white md:flex">
+      <div className="animate-fade-in-scale relative w-full max-w-[960px] overflow-hidden rounded-[24px] border border-border bg-surface shadow-[0_24px_70px_rgba(28,36,24,0.10)] md:grid md:grid-cols-[1.1fr_0.9fr]">
+        <div className="relative hidden flex-col justify-between bg-[#0b4527] p-10 text-white md:flex">
           <BrandLogo light size="lg" />
 
           <div className="mt-10">
@@ -50,7 +50,7 @@ export function LoginView({ branding }: { branding: PublicBranding }) {
               <br />
               lao động <span className="text-gold-300">thời vụ</span>
             </h1>
-            <p className="mt-4 max-w-[38ch] text-sm leading-relaxed text-white/75">
+            <p className="mt-4 max-w-[38ch] text-sm leading-relaxed text-white/78">
               Quản lý thông tin lao động, kế hoạch nhân lực và các nghiệp vụ liên quan trên một nền tảng thống nhất.
             </p>
           </div>
@@ -73,7 +73,7 @@ export function LoginView({ branding }: { branding: PublicBranding }) {
               {branding.themeSubtitle ? <p className="text-[11px] text-white/60">{branding.themeSubtitle}</p> : null}
             </div>
           ) : (
-            <p className="mt-10 text-[10px] font-semibold uppercase tracking-[0.2em] text-white/40">
+            <p className="mt-10 text-[10px] font-semibold uppercase tracking-[0.2em] text-white/45">
               Seasonal Internship • Dalat Hasfarm
             </p>
           )}
