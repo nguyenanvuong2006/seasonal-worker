@@ -101,7 +101,7 @@ bạn sửa câu chữ thoải mái, không phải code — sửa xong hiển th
 thấy: banner xanh phía trên (hero), tiêu đề, logo, dòng chữ khuyến mãi lương/xe đưa
 đón trên cùng, khối "Quy trình sau khi bạn đăng ký", 2 nút "Tra cứu trạng thái" /
 "Hỗ trợ nhân sự", dòng bản quyền cuối trang — **tất cả nằm trong file này**.
-- Muốn đổi số điện thoại hỗ trợ (`0263 3842777`) → tìm đúng chuỗi số đó trong file,
+- Muốn đổi số điện thoại hỗ trợ (`0263 3620295`) → tìm đúng chuỗi số đó trong file,
   sửa trực tiếp.
 - Muốn đổi câu "Quy trình sau khi bạn đăng ký" → xem lại hướng dẫn mình đã đưa ở
   câu trả lời trước (dòng ~80-99).
