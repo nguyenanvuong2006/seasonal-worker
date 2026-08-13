@@ -1,8 +1,8 @@
 [← Mục lục](./README.md)
 
-# 10. Permissions & Data Scope
+# 10. Permissions & Data Scope (Phân quyền dữ liệu)
 
-Đây là phần **quan trọng nhất** để hiểu "vì sao tôi thấy/không thấy cái này". Hệ thống phân quyền theo **3 lớp độc lập**, không phải 1 lớp duy nhất:
+Hệ thống phân quyền theo **3 lớp độc lập**:
 
 ```mermaid
 flowchart TB
@@ -10,47 +10,59 @@ flowchart TB
         R["ADMIN · HR_RECRUITER · DEPT_MANAGER"]
     end
     subgraph L2["Lớp 2 — PERMISSION (Bạn ĐƯỢC LÀM GÌ)"]
-        P["29 chức năng bật/tắt riêng theo từng Role<br/>vd: registrations.approve, workers.edit, backup.manage..."]
+        P["Quyền chi tiết bật/tắt riêng theo từng Role<br/>vd: registrations.approve, workers.edit, planning.manage..."]
     end
     subgraph L3["Lớp 3 — DATA SCOPE (Bạn ĐƯỢC XEM DỮ LIỆU NÀO)"]
-        D["Chỉ áp dụng cho DEPT_MANAGER —<br/>giới hạn theo (các) bộ phận được gán"]
+        D["Áp dụng cho DEPT_MANAGER —<br/>Phân quyền theo bảng danh mục gần 100 bộ phận"]
     end
     R --> P --> D
 ```
 
-## 10.1 Lớp 1 — Role (Bạn là ai)
+## 10.1 Lớp 1 — Role (Vai trò hệ thống)
 
-3 vai trò cố định: `ADMIN`, `HR_RECRUITER`, `DEPT_MANAGER`. Vai trò quyết định **về tổng thể** bạn thuộc nhóm nào và thấy nhóm menu nào trên Sidebar — xem bảng chi tiết ở [Phụ lục — Role matrix](./23-appendix.md#role-matrix).
+3 vai trò cố định:
+- `ADMIN`: Quản trị viên hệ thống (toàn quyền cấu hình, quản trị người dùng, phân quyền).
+- `HR_RECRUITER`: Nhân sự tuyển dụng (tiếp nhận Daily Application, xếp bộ phận, đối chiếu DW Data, quản lý Planning, duyệt Nghỉ việc/Thuyên chuyển).
+- `DEPT_MANAGER`: Quản lý bộ phận (truy cập "Bộ phận của tôi", xem người tập nghề trong phạm vi Data Scope, báo nghỉ việc/thuyên chuyển).
 
-## 10.2 Lớp 2 — Permission (Bạn được làm gì)
+## 10.2 Lớp 2 — Permission (Phân quyền chi tiết)
 
-Trên nền vai trò, hệ thống có **29 quyền chi tiết** (ví dụ: *Duyệt/Từ chối hồ sơ*, *Sửa/Xoá DW Data*, *Backup dữ liệu*, *Xem CCCD khi Export*...), mỗi quyền bật/tắt **độc lập cho từng vai trò** tại **Phân quyền chi tiết** (`/admin/permissions`).
+Admin có thể bật/tắt độc lập từng quyền chi tiết cho từng vai trò tại **Phân quyền chi tiết** (`/admin/permissions`).
 
-- **Mặc định** (chưa từng cấu hình) = **cho phép** — Admin không cần bật tay từng ô, hệ thống hoạt động đầy đủ ngay từ đầu.
-- Admin **tắt** một ô cụ thể để **chặn thêm** một chức năng cho một vai trò — ví dụ tắt "Tạo yêu cầu Nghỉ việc/Thuyên chuyển" cho `DEPT_MANAGER` nếu công ty muốn chỉ HR mới được tạo yêu cầu, quản đốc chỉ được xem.
-- Danh sách đầy đủ 29 quyền: [Phụ lục — Permission overview](./23-appendix.md#permission-overview).
+- Mặc định hệ thống cho phép đầy đủ quyền chuẩn cho từng vai trò.
+- Admin có thể tuỳ biến chặn hoặc mở rộng quyền mà không cần sửa mã nguồn.
 
-> **Lưu ý:** Permission là lớp **bổ sung**, không thay thế Role. Một quyền bị tắt chỉ chặn đúng thao tác đó cho đúng vai trò đó — không ảnh hưởng tới các vai trò khác hay các quyền khác.
+## 10.3 Lớp 3 — Data Scope Redesign (Phân quyền theo cơ cấu tổ chức)
 
-## 10.3 Lớp 3 — Data Scope (Bạn được xem dữ liệu nào)
+Data Scope trả lời câu hỏi **"Người dùng được thao tác và xem dữ liệu Ở ĐÂU"**.
 
-Data Scope trả lời câu hỏi **"được thao tác Ở ĐÂU"** — tách biệt hoàn toàn khỏi Role và Permission.
+- `ADMIN` và `HR_RECRUITER`: Xem toàn bộ hệ thống, không cần cấu hình Data Scope.
+- `DEPT_MANAGER`: Chỉ xem và thao tác trên những bộ phận được Admin phân quyền tại **Data Scope** (`/admin/data-scopes`).
 
-- `ADMIN` và `HR_RECRUITER`: **luôn xem toàn bộ**, không cần cấu hình gì.
-- `DEPT_MANAGER`: **chỉ xem được (các) bộ phận được gán riêng** tại **Data Scope** (`/admin/data-scopes`). Một Quản đốc có thể được gán **nhiều bộ phận cùng lúc**.
+### Giao diện quản lý Data Scope cho gần 100 bộ phận
 
-**Ví dụ cụ thể:** Một tài khoản có vai trò `DEPT_MANAGER` nhưng chỉ được gán **Packing – A** và **Packing – B** tại Data Scope thì **không thể xem được dữ liệu của Cẩm Chướng** — dù họ có đầy đủ quyền `DEPT_MANAGER` thông thường. Đây không phải lỗi hệ thống, mà đúng theo thiết kế.
+Để quản lý số lượng lớn bộ phận mà không bị rối hay quá tải giao diện, hệ thống cung cấp quy trình phân quyền dạng bảng chuyên nghiệp:
 
-Data Scope ảnh hưởng tới hầu hết màn hình: "Bộ phận của tôi", Task Center, Daily Application (khi xem theo bộ phận), Workforce Movement, Planning...
+<img src="images/desktop/data-scope.png" width="720" alt="Data Scope — Phân quyền bộ phận">
 
-> **Quan trọng:** Nếu một tài khoản `DEPT_MANAGER` chưa được gán bộ phận nào ở Data Scope, một số màn hình sẽ hiện **danh sách trống** hoặc thông báo "chưa được gán bộ phận nào" — đây là hành vi **an toàn theo mặc định** (không gán = không xem được gì), không phải lỗi.
-
-## 10.4 Vì sao tôi không thấy một menu/nút nào đó?
-
-Kiểm tra theo đúng thứ tự 3 lớp:
-
-1. **Role** — menu đó có thuộc nhóm dành cho vai trò của bạn không? (xem [Role matrix](./23-appendix.md#role-matrix))
-2. **Permission** — quyền tương ứng có đang bị Admin tắt cho vai trò của bạn không? (kiểm tra tại Phân quyền chi tiết)
-3. **Data Scope** — nếu bạn là Quản đốc bộ phận, dữ liệu bạn cần tìm có thuộc bộ phận được gán cho bạn không?
+1. **Danh sách người dùng:** Màn hình chính hiển thị danh sách các tài khoản `DEPT_MANAGER`, số lượng bộ phận đã được gán (ví dụ: *Đã gán 17 bộ phận*).
+2. **Bảng phân quyền chi tiết (Drawer / Modal lớn):** Khi bấm **"Phân quyền bộ phận"** trên một tài khoản, một bảng phân quyền mở rộng (70–80% màn hình) sẽ hiển thị với đầy đủ cây cơ cấu:
+   - Cột chọn: Checkbox từng dòng
+   - **Location** (Vùng / Trại)
+   - **Division** (Khối)
+   - **Department** (Bộ phận)
+   - **Section** (Phân xưởng / Mảng)
+   - **Group** (Tổ / Nhóm)
+   - Tên Tiếng Việt & Phụ trách tiếp nhận
+3. **Bộ lọc & Tìm kiếm đa tầng:**
+   - Ô tìm kiếm nhanh theo mã, tên bộ phận, người phụ trách.
+   - Các dropdown lọc độc lập: Lọc theo Location, Division, Department, Group.
+4. **Thao tác chọn hàng loạt:**
+   - Bấm **"Chọn tất cả"** để chọn toàn bộ các bộ phận đang hiển thị theo bộ lọc.
+   - Bấm **"Bỏ chọn kết quả lọc"** hoặc **"Xoá toàn bộ đã chọn"**.
+   - Bộ đếm thời gian thực: Hiển thị rõ *Đã chọn 17 / 71 bộ phận*.
+5. **Lưu an toàn (Batch Transaction):**
+   - Không tự động lưu từng checkbox lẻ để tránh xung đột mạng.
+   - Bấm nút **"Lưu phân quyền"** ở thanh chân trang cố định (Sticky Footer) để cập nhật toàn bộ lựa chọn trong một giao dịch an toàn duy nhất.
 
 Tiếp theo: [11 — Import / Export](./11-import-export.md)

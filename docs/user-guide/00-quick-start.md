@@ -18,7 +18,7 @@ Sau khi đăng nhập, hệ thống đưa bạn thẳng vào không gian làm vi
 
 <img src="images/desktop/task-center.png" width="720" alt="Task Center">
 
-Task Center gom toàn bộ việc đang chờ bạn xử lý — hồ sơ mới, yêu cầu nghỉ việc/thuyên chuyển, planning sắp hết hạn — vào một màn hình, để bạn không phải mở lần lượt từng module để kiểm tra còn việc gì chưa xử lý.
+Task Center gom toàn bộ việc đang chờ bạn xử lý — hồ sơ mới, yêu cầu nghỉ việc/thuyên chuyển, planning nhu cầu sắp hết hạn — vào một màn hình, để bạn không phải mở lần lượt từng module để kiểm tra còn việc gì chưa xử lý.
 
 ## Bước 3 — Kiểm tra việc chờ xử lý
 
@@ -26,13 +26,13 @@ Mỗi thẻ trong Task Center là một nhóm việc. Số trong ngoặc là s�
 
 ## Bước 4 — Mở Daily Application (nếu bạn là HR)
 
-Nếu vai trò của bạn là HR Tuyển dụng, đây là màn hình bạn dùng nhiều nhất trong ngày: xem ai vừa đăng ký hôm nay, đối chiếu DW Data, xếp bộ phận, duyệt hồ sơ.
+Nếu vai trò của bạn là HR Tuyển dụng, đây là màn hình bạn dùng nhiều nhất trong ngày: xem ai vừa đăng ký hôm nay, đối chiếu DW Data, xếp bộ phận trong cơ cấu tổ chức, duyệt hồ sơ Tập nghề.
 
 <img src="images/desktop/daily-application.png" width="720" alt="Daily Application">
 
 ## Bước 5 — Xử lý task đầu tiên
 
-Chọn một hồ sơ **Chờ duyệt**, kiểm tra thông tin, chọn **Bộ phận + Nhóm** phù hợp, đổi trạng thái sang **Đã nhận việc** (nếu nhận) hoặc **Không nhận** (nếu từ chối). Xong — bạn vừa hoàn thành thao tác nghiệp vụ đầu tiên trên hệ thống.
+Chọn một hồ sơ **Chờ duyệt**, kiểm tra thông tin, chọn **Bộ phận + Nhóm** phù hợp, đổi trạng thái sang **Đã nhận việc** (nếu nhận) hoặc **Không nhận** (nếu từ chối). Hệ thống sẽ tự động phân bổ người tập nghề vào Kế hoạch Nhu cầu (Planning) đang áp dụng. Xong — bạn vừa hoàn thành thao tác nghiệp vụ đầu tiên trên hệ thống.
 
 ---
 

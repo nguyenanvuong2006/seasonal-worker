@@ -15,8 +15,8 @@ import { exportColumns, getFieldDefinitions } from "@/lib/metadata";
 export const KPI_METRICS = [
   { key: "today_registrations", label: "Đăng ký hôm nay" },
   { key: "pending_count", label: "Đang chờ duyệt" },
-  { key: "approved_count", label: "Đã duyệt (tổng)" },
-  { key: "dw_data_total", label: "Tổng lao động trong DW Data" },
+  { key: "approved_count", label: "Đã nhận việc (tổng)" },
+  { key: "dw_data_total", label: "Tổng hồ sơ trong DW Data" },
 ] as const;
 
 async function computeMetric(key: string, deptScope: string[] | null): Promise<number> {

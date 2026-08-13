@@ -176,7 +176,7 @@ export const DEFAULT_FIELD_DEFINITIONS: SeedDef[] = [
   { fieldKey: "dept_name", groupName: "department", displayName: "Bộ phận (Dept.)", databaseField: "dept_name", importColumnName: "Dept.", aliases: ["Department", "Bộ phận"], required: true, searchable: true, sortOrder: 2 },
   { fieldKey: "dept_group", groupName: "department", displayName: "Nhóm (Group)", databaseField: "group_name", importColumnName: "Group", aliases: ["Nhóm"], searchable: true, sortOrder: 3 },
   { fieldKey: "dept_vn_name", groupName: "department", displayName: "Tên Tiếng Việt", databaseField: "vn_name", importColumnName: "Tên Tiếng Việt", aliases: ["Ten Tieng Viet"], sortOrder: 4 },
-  { fieldKey: "dept_supervisor", groupName: "department", displayName: "Phụ Trách Lao Động", databaseField: "supervisor", importColumnName: "Phụ Trách Lao Động", aliases: ["Người phụ trách", "Supervisor"], sortOrder: 5 },
+  { fieldKey: "dept_supervisor", groupName: "department", displayName: "Phụ trách tiếp nhận", databaseField: "supervisor", importColumnName: "Phụ Trách Lao Động", aliases: ["Người phụ trách", "Supervisor", "Phụ Trách Lao Động"], sortOrder: 5 },
   { fieldKey: "dept_supervisor_phone", groupName: "department", displayName: "SĐT phụ trách", databaseField: "supervisor_phone", importColumnName: "SĐT", aliases: ["Phone", "Điện thoại"], sortOrder: 6 },
   { fieldKey: "dept_note", groupName: "department", displayName: "Ghi chú", databaseField: "sheet_link", importColumnName: "Note here!", aliases: ["Ghi chú", "Note"], sortOrder: 7 },
 

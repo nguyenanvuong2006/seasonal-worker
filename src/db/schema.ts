@@ -22,7 +22,10 @@ export const departments = pgTable(
   {
     id: uuid("id").defaultRandom().primaryKey(),
     stt: integer("stt"),
+    location: varchar("location", { length: 120 }).default(""),
+    division: varchar("division", { length: 120 }).default(""),
     deptName: varchar("dept_name", { length: 120 }).notNull(),
+    section: varchar("section", { length: 120 }).default(""),
     groupName: varchar("group_name", { length: 120 }).notNull().default(""),
     vnName: varchar("vn_name", { length: 200 }),
     supervisor: varchar("supervisor", { length: 160 }),
@@ -498,17 +501,26 @@ export const planningPeriods = pgTable(
   {
     id: uuid("id").defaultRandom().primaryKey(),
     departmentId: uuid("department_id").notNull(),
-    section: varchar("section", { length: 120 }), // = departments.groupName tại thời điểm tạo kế hoạch
+    section: varchar("section", { length: 120 }), // Section / groupName
+    groupName: varchar("group_name", { length: 120 }),
+    location: varchar("location", { length: 120 }),
+    division: varchar("division", { length: 120 }),
     startDate: date("start_date").notNull(),
     endDate: date("end_date").notNull(),
     status: varchar("status", { length: 20 }).notNull().default("DRAFT"), // DRAFT | ACTIVE | EXPIRED
     version: integer("version").notNull().default(1),
-    supersededBy: uuid("superseded_by"), // trỏ tới bản ghi version mới hơn (tự tham chiếu)
+    requestType: varchar("request_type", { length: 24 }).notNull().default("ORIGINAL"), // ORIGINAL | SUPPLEMENT
+    supplementIndex: integer("supplement_index").notNull().default(0), // 0: Gốc, 1: Bổ sung 1, 2: Bổ sung 2...
+    parentPeriodId: uuid("parent_period_id"), // trỏ tới kế hoạch gốc nếu là bổ sung
+    supersededBy: uuid("superseded_by"), // trỏ tới bản ghi version mới hơn (tự tham chiếu khi revise)
     createdBy: varchar("created_by", { length: 64 }).notNull(),
     createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
     updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
   },
-  (t) => [uniqueIndex("planning_active_dept_section_uq").on(t.departmentId, t.section).where(sql`status = 'ACTIVE'`)],
+  (t) => [
+    index("planning_dept_status_idx").on(t.departmentId, t.status),
+    index("planning_parent_idx").on(t.parentPeriodId),
+  ],
 );
 
 export const planningTargets = pgTable(
@@ -516,13 +528,11 @@ export const planningTargets = pgTable(
   {
     id: uuid("id").defaultRandom().primaryKey(),
     planningPeriodId: uuid("planning_period_id").notNull(),
-    targetCount: integer("target_count").notNull().default(0),
+    demandMale: integer("demand_male").notNull().default(0),
+    demandFemale: integer("demand_female").notNull().default(0),
+    targetCount: integer("target_count").notNull().default(0), // Tổng nhu cầu (= demandMale + demandFemale hoặc legacy)
     note: text("note"),
   },
-  // Phase 6 (Production Hardening Audit) — mỗi kế hoạch (kể cả mỗi VERSION mới do
-  // reviseActivePeriod() tạo ra — planningPeriodId khác nhau cho mỗi version) chỉ có ĐÚNG 1
-  // target (createPeriod()/reviseActivePeriod() luôn insert đúng 1 dòng target/period, không có
-  // chỗ nào insert dòng thứ 2 cho cùng 1 planningPeriodId) — enforce ở DB, không chỉ dựa vào code.
   (t) => [uniqueIndex("planning_target_period_uq").on(t.planningPeriodId)],
 );
 
@@ -535,7 +545,11 @@ export const planningAllocations = pgTable(
     allocatedAt: timestamp("allocated_at", { withTimezone: true }).notNull().defaultNow(),
     allocatedBy: varchar("allocated_by", { length: 64 }).notNull(),
   },
-  (t) => [index("planning_alloc_session_idx").on(t.employmentSessionId), index("planning_alloc_period_idx").on(t.planningPeriodId)],
+  (t) => [
+    index("planning_alloc_session_idx").on(t.employmentSessionId),
+    index("planning_alloc_period_idx").on(t.planningPeriodId),
+    uniqueIndex("planning_alloc_session_period_uq").on(t.employmentSessionId, t.planningPeriodId),
+  ],
 );
 
 /* ============================================================

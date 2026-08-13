@@ -17,6 +17,26 @@ export function formatDate(value?: string | null): string {
   return `${d}/${m}/${y}`;
 }
 
+export function isFemale(gender?: string | null): boolean {
+  if (!gender) return false;
+  const g = gender.trim().toLowerCase();
+  return g === "nữ" || g === "nu" || g === "female" || g === "f" || g.includes("nữ") || g.includes("nu");
+}
+
+export function isMale(gender?: string | null): boolean {
+  if (!gender) return false;
+  const g = gender.trim().toLowerCase();
+  if (isFemale(gender)) return false;
+  return g === "nam" || g === "male" || g === "m" || g.includes("nam");
+}
+
+export function maskCccd(cccd?: string | null): string {
+  if (!cccd) return "—";
+  const clean = cccd.trim();
+  if (clean.length <= 4) return clean;
+  return "•".repeat(clean.length - 4) + clean.slice(-4);
+}
+
 export const STATUS_META: Record<
   string,
   { label: string; tone: "gray" | "green" | "amber" | "red" | "blue" }
@@ -30,7 +50,7 @@ export const STATUS_META: Record<
 export const ROLE_LABEL: Record<string, string> = {
   ADMIN: "Quản trị viên",
   HR_RECRUITER: "Nhân sự tuyển dụng",
-  DEPT_MANAGER: "Quản đốc bộ phận",
+  DEPT_MANAGER: "Quản lý bộ phận",
 };
 
 export function isValidCccd(v: string) {

@@ -217,6 +217,11 @@ export async function GET(req: Request) {
       deptName: departments.deptName,
       groupName: departments.groupName,
       vnName: departments.vnName,
+      location: departments.location,
+      division: departments.division,
+      section: departments.section,
+      supervisor: departments.supervisor,
+      supervisorPhone: departments.supervisorPhone,
       status: dailyApplications.status,
       startingDate: dailyApplications.startingDate,
       appointmentList: dailyApplications.appointmentList,
@@ -224,9 +229,11 @@ export async function GET(req: Request) {
       vaccine: dailyApplications.vaccine,
       isImported: dailyApplications.isImported,
       customAnswers: dailyApplications.customAnswers,
+      workerId: workerProfiles.id,
     })
     .from(dailyApplications)
     .leftJoin(departments, eq(dailyApplications.deptId, departments.id))
+    .leftJoin(workerProfiles, and(eq(dailyApplications.cccd, workerProfiles.cccd), isNull(workerProfiles.deletedAt)))
     .where(and(...filters))
     .orderBy(desc(dailyApplications.regDate), asc(dailyApplications.fullName))
     .limit(3000);

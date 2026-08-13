@@ -15,7 +15,10 @@ export async function GET() {
     .select({
       id: departments.id,
       stt: departments.stt,
+      location: departments.location,
+      division: departments.division,
       deptName: departments.deptName,
+      section: departments.section,
       groupName: departments.groupName,
       vnName: departments.vnName,
       supervisor: departments.supervisor,
@@ -53,7 +56,10 @@ export async function POST(req: Request) {
       .insert(departments)
       .values({
         stt: (max?.m ?? 0) + 1,
+        location: body.location || "",
+        division: body.division || "",
         deptName,
+        section: body.section || "",
         groupName: String(body.groupName || "").trim(),
         vnName: body.vnName || null,
         supervisor: body.supervisor || null,
@@ -73,7 +79,7 @@ export async function POST(req: Request) {
   }
 }
 
-const EDITABLE = ["deptName", "groupName", "vnName", "supervisor", "supervisorPhone", "sheetLink", "dailyQuota", "isActive"] as const;
+const EDITABLE = ["location", "division", "deptName", "section", "groupName", "vnName", "supervisor", "supervisorPhone", "sheetLink", "dailyQuota", "isActive"] as const;
 
 export async function PATCH(req: Request) {
   const guard = await requireRoleAndPermission(["ADMIN", "HR_RECRUITER"], "departments.manage");
@@ -85,7 +91,7 @@ export async function PATCH(req: Request) {
   const [before] = await db.select().from(departments).where(eq(departments.id, body.id));
 
   const patch: Record<string, unknown> = {};
-  for (const k of ["deptName", "groupName", "vnName", "supervisor", "supervisorPhone", "sheetLink"]) {
+  for (const k of ["location", "division", "deptName", "section", "groupName", "vnName", "supervisor", "supervisorPhone", "sheetLink"]) {
     if (k in body) patch[k] = body[k] ?? null;
   }
   if ("dailyQuota" in body) patch.dailyQuota = Number(body.dailyQuota) || 0;

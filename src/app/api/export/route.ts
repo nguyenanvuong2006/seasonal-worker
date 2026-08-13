@@ -185,7 +185,7 @@ export async function GET(req: Request) {
 
   ws.mergeCells(`A1:${LAST}1`);
   const t = ws.getCell("A1");
-  t.value = "🌸 DALAT HASFARM — CỔNG THÔNG TIN QUẢN LÝ LAO ĐỘNG THỜI VỤ";
+  t.value = "🌸 DALAT HASFARM — CỔNG THÔNG TIN QUẢN LÝ TẬP NGHỀ THỜI VỤ";
   t.font = { name: "Arial", size: 16, bold: true, color: { argb: "FFFFFFFF" } };
   t.fill = { type: "pattern", pattern: "solid", fgColor: { argb: GREEN } };
   t.alignment = { vertical: "middle", horizontal: "center" };
@@ -194,7 +194,7 @@ export async function GET(req: Request) {
   ws.mergeCells(`A2:${LAST}2`);
   const s = ws.getCell("A2");
   const rangeLabel = from === to ? `NGÀY ${formatDate(from)}` : `TỪ ${formatDate(from)} ĐẾN ${formatDate(to)}`;
-  s.value = `DANH SÁCH LAO ĐỘNG — ${deptLabel.toUpperCase()} — ${rangeLabel}`;
+  s.value = `DANH SÁCH TIẾP NHẬN TẬP NGHỀ — ${deptLabel.toUpperCase()} — ${rangeLabel}`;
   s.font = { name: "Arial", size: 12, bold: true, color: { argb: GREEN } };
   s.fill = { type: "pattern", pattern: "solid", fgColor: { argb: "FFFAEDCD" } };
   s.alignment = { vertical: "middle", horizontal: "center" };
@@ -202,7 +202,7 @@ export async function GET(req: Request) {
 
   ws.mergeCells(`A3:${LAST}3`);
   const m = ws.getCell("A3");
-  m.value = `Xuất bởi: ${session.fullName} (${session.username}) • ${new Date().toLocaleString("vi-VN", { timeZone: "Asia/Ho_Chi_Minh" })} • Tổng: ${rows.length} lao động`;
+  m.value = `Xuất bởi: ${session.fullName} (${session.username}) • ${new Date().toLocaleString("vi-VN", { timeZone: "Asia/Ho_Chi_Minh" })} • Tổng: ${rows.length} người tập nghề`;
   m.font = { name: "Arial", size: 9, italic: true, color: { argb: "FF6B7F72" } };
   m.alignment = { horizontal: "center" };
 
@@ -279,7 +279,7 @@ export async function GET(req: Request) {
   const fr = ws.addRow([]);
   ws.mergeCells(`A${fr.number + 1}:${LAST}${fr.number + 1}`);
   const f = ws.getCell(`A${fr.number + 1}`);
-  f.value = "Dalat Hasfarm — EST. 1994 • Tài liệu nội bộ • In hoặc gửi Zalo cho Phụ trách lao động bộ phận";
+  f.value = "Dalat Hasfarm — EST. 1994 • Tài liệu nội bộ • In hoặc gửi Zalo cho Phụ trách tiếp nhận Tập nghề bộ phận";
   f.font = { name: "Arial", size: 8, italic: true, color: { argb: "FF9CA3AF" } };
   f.alignment = { horizontal: "center" };
 

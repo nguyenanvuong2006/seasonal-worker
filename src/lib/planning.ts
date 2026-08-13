@@ -1,56 +1,113 @@
 import "server-only";
-import { and, eq, isNull, ne, notInArray, sql } from "drizzle-orm";
+import { and, desc, eq, inArray, isNull, ne, notInArray, sql } from "drizzle-orm";
 import { db } from "@/db";
-import { departments, employmentSessions, planningAllocations, planningPeriods, planningTargets, workerProfiles } from "@/db/schema";
+import {
+  departments,
+  employmentSessions,
+  planningAllocations,
+  planningPeriods,
+  planningTargets,
+  workerProfiles,
+  workforceMovements,
+} from "@/db/schema";
+import { isFemale, isMale } from "@/lib/helpers";
 
 type Executor = typeof db | Parameters<Parameters<typeof db.transaction>[0]>[0];
 
+export type PlanningMetrics = {
+  demandMale: number;
+  demandFemale: number;
+  demandTotal: number;
+  allocatedMale: number;
+  allocatedFemale: number;
+  allocatedTotal: number;
+  resignedMale: number;
+  resignedFemale: number;
+  resignedTotal: number;
+  recruitmentNeededMale: number;
+  recruitmentNeededFemale: number;
+  recruitmentNeededTotal: number;
+  fillRatePercent: number;
+};
+
 /**
- * PLANNING (Phase 2, Step 4) — thay departments.dailyQuota (deprecated, xem Bước A ở #7
- * "dọn dẹp") bằng kế hoạch theo GIAI ĐOẠN, có version, không cho overlap.
- * `section` = departments.groupName tại thời điểm tạo (đã xác nhận dùng lại groupName,
- * không tạo bảng sections riêng).
+ * Tạo kế hoạch Tập nghề mới (Gốc hoặc Bổ sung).
+ * Nghiệp vụ mới: Cho phép NHIỀU kế hoạch trùng thời gian cho cùng Department / Section / Group.
+ * Phân biệt:
+ *   - ORIGINAL: Kế hoạch gốc (supplementIndex = 0)
+ *   - SUPPLEMENT: Yêu cầu bổ sung (supplementIndex = 1, 2, 3...)
  */
-
-/** Kiểm tra chồng lấn ngày với các kế hoạch ACTIVE cùng Department+Section. */
-export async function checkOverlap(
-  departmentId: string,
-  section: string | null,
-  startDate: string,
-  endDate: string,
-  excludePeriodId?: string,
-  executor: Executor = db,
-) {
-  const filters = [
-    eq(planningPeriods.departmentId, departmentId),
-    eq(planningPeriods.status, "ACTIVE"),
-    // overlap nếu KHÔNG (kết thúc mới < bắt đầu cũ HOẶC bắt đầu mới > kết thúc cũ)
-    sql`NOT (${endDate}::date < ${planningPeriods.startDate} OR ${startDate}::date > ${planningPeriods.endDate})`,
-  ];
-  if (section) filters.push(eq(planningPeriods.section, section));
-  else filters.push(isNull(planningPeriods.section));
-  if (excludePeriodId) filters.push(ne(planningPeriods.id, excludePeriodId));
-
-  return executor.select().from(planningPeriods).where(and(...filters));
-}
-
 export async function createPeriod(input: {
   departmentId: string;
-  section: string | null;
+  section?: string | null;
+  groupName?: string | null;
   startDate: string;
   endDate: string;
-  targetCount: number;
+  demandMale: number;
+  demandFemale: number;
+  targetCount?: number;
+  requestType?: "ORIGINAL" | "SUPPLEMENT";
+  parentPeriodId?: string | null;
   note?: string;
   createdBy: string;
-  activateNow: boolean;
+  activateNow?: boolean;
 }) {
-  if (input.startDate > input.endDate) throw new Error("Ngày bắt đầu phải trước ngày kết thúc.");
-  if (input.activateNow) {
-    const overlaps = await checkOverlap(input.departmentId, input.section, input.startDate, input.endDate);
-    if (overlaps.length > 0) {
-      throw new Error(
-        `Chồng lấn thời gian với kế hoạch đang ACTIVE (${overlaps[0].startDate} → ${overlaps[0].endDate}). Vui lòng chọn khoảng ngày khác hoặc kích hoạt sau khi kế hoạch cũ hết hạn.`,
-      );
+  if (input.startDate > input.endDate) {
+    throw new Error("Ngày bắt đầu phải trước ngày kết thúc.");
+  }
+  const demandMale = Math.max(0, Number(input.demandMale) || 0);
+  const demandFemale = Math.max(0, Number(input.demandFemale) || 0);
+  const targetCount = input.targetCount !== undefined && input.targetCount > 0
+    ? Number(input.targetCount)
+    : demandMale + demandFemale;
+
+  if (targetCount <= 0 && demandMale <= 0 && demandFemale <= 0) {
+    throw new Error("Nhu cầu nhân lực phải lớn hơn 0.");
+  }
+
+  const [dept] = await db
+    .select()
+    .from(departments)
+    .where(eq(departments.id, input.departmentId));
+
+  const section = input.section ?? dept?.section ?? dept?.groupName ?? null;
+  const groupName = input.groupName ?? dept?.groupName ?? null;
+  const location = dept?.location ?? "";
+  const division = dept?.division ?? "";
+
+  const requestType = input.requestType ?? "ORIGINAL";
+  let supplementIndex = 0;
+  let parentPeriodId = input.parentPeriodId ?? null;
+
+  if (requestType === "SUPPLEMENT") {
+    // Tự động xác định số thứ tự bổ sung (Bổ sung 1, 2, 3...)
+    const existingSupplements = await db
+      .select({ supplementIndex: planningPeriods.supplementIndex, id: planningPeriods.id })
+      .from(planningPeriods)
+      .where(
+        and(
+          eq(planningPeriods.departmentId, input.departmentId),
+          eq(planningPeriods.requestType, "SUPPLEMENT"),
+        ),
+      )
+      .orderBy(desc(planningPeriods.supplementIndex));
+
+    supplementIndex = (existingSupplements[0]?.supplementIndex ?? 0) + 1;
+
+    if (!parentPeriodId) {
+      // Tìm kế hoạch gốc gần nhất nếu chưa truyền parentPeriodId
+      const [orig] = await db
+        .select({ id: planningPeriods.id })
+        .from(planningPeriods)
+        .where(
+          and(
+            eq(planningPeriods.departmentId, input.departmentId),
+            eq(planningPeriods.requestType, "ORIGINAL"),
+          ),
+        )
+        .orderBy(desc(planningPeriods.createdAt))
+        .limit(1);
+      parentPeriodId = orig?.id ?? null;
     }
   }
 
@@ -58,90 +115,116 @@ export async function createPeriod(input: {
     .insert(planningPeriods)
     .values({
       departmentId: input.departmentId,
-      section: input.section,
+      section,
+      groupName,
+      location,
+      division,
       startDate: input.startDate,
       endDate: input.endDate,
       status: input.activateNow ? "ACTIVE" : "DRAFT",
       version: 1,
+      requestType,
+      supplementIndex,
+      parentPeriodId,
       createdBy: input.createdBy,
     })
     .returning();
 
-  await db.insert(planningTargets).values({ planningPeriodId: period.id, targetCount: input.targetCount, note: input.note ?? null });
+  await db.insert(planningTargets).values({
+    planningPeriodId: period.id,
+    demandMale,
+    demandFemale,
+    targetCount,
+    note: input.note ?? null,
+  });
+
   return period;
 }
 
-/** Kích hoạt 1 kế hoạch DRAFT — kiểm tra overlap tại thời điểm kích hoạt. */
+/** Kích hoạt 1 kế hoạch DRAFT -> ACTIVE. */
 export async function activatePeriod(periodId: string) {
   const [period] = await db.select().from(planningPeriods).where(eq(planningPeriods.id, periodId));
   if (!period) throw new Error("Không tìm thấy kế hoạch.");
   if (period.status !== "DRAFT") throw new Error("Chỉ có thể kích hoạt kế hoạch đang ở trạng thái Draft.");
 
-  const overlaps = await checkOverlap(period.departmentId, period.section, period.startDate, period.endDate, period.id);
-  if (overlaps.length > 0) {
-    throw new Error(`Chồng lấn thời gian với kế hoạch đang ACTIVE khác. Không thể kích hoạt.`);
-  }
-  const [updated] = await db.update(planningPeriods).set({ status: "ACTIVE", updatedAt: new Date() }).where(eq(planningPeriods.id, periodId)).returning();
+  const [updated] = await db
+    .update(planningPeriods)
+    .set({ status: "ACTIVE", updatedAt: new Date() })
+    .where(eq(planningPeriods.id, periodId))
+    .returning();
   return updated;
 }
 
 /**
- * Sửa 1 kế hoạch ACTIVE = tạo bản ghi VERSION MỚI (giữ nguyên bản cũ, không UPDATE đè —
- * đúng yêu cầu "Không được mất lịch sử"). Bản cũ được đánh dấu supersededBy trỏ tới bản mới.
- *
- * P0-5 (Production Hardening Audit) — TRƯỚC ĐÂY: (1) insert bản mới ACTIVE trong khi bản cũ
- * VẪN ACTIVE → đụng thẳng unique partial index `planning_active_dept_section_uq`
- * (departmentId, section) WHERE status='ACTIVE' (2 bản ACTIVE cùng dept+section cùng lúc);
- * (2) các bước insert/update rời rạc không transaction — 1 bước fail giữa chừng để lại DB ở
- * trạng thái dở dang (có thể 0 hoặc 2 bản ACTIVE, allocations trỏ sai version). Nay: toàn bộ
- * chạy trong 1 transaction (rollback hết nếu bất kỳ bước nào lỗi), và LUÔN hết hạn bản cũ
- * TRƯỚC khi insert bản mới ACTIVE (giải phóng đúng "chỗ trống" mà unique index yêu cầu) — khoá
- * dòng bản cũ bằng SELECT ... FOR UPDATE để chặn 2 lần revise cùng lúc trên cùng 1 kế hoạch.
+ * Sửa 1 kế hoạch ACTIVE = tạo bản ghi VERSION MỚI (giữ nguyên lịch sử bản cũ).
+ * Bản cũ được đánh dấu supersededBy trỏ tới bản mới, status -> EXPIRED.
+ * Phân biệt rõ:
+ *   - Versioning: Thay đổi nội dung của chính kế hoạch đó (tạo version mới)
+ *   - Supplement: Thêm nhu cầu mới độc lập cùng khoảng thời gian
  */
 export async function reviseActivePeriod(
   periodId: string,
-  input: { startDate?: string; endDate?: string; targetCount?: number; note?: string },
+  input: {
+    startDate?: string;
+    endDate?: string;
+    demandMale?: number;
+    demandFemale?: number;
+    targetCount?: number;
+    note?: string;
+  },
   revisedBy: string,
 ) {
   return db.transaction(async (tx) => {
     const [old] = await tx.select().from(planningPeriods).where(eq(planningPeriods.id, periodId)).for("update");
     if (!old) throw new Error("Không tìm thấy kế hoạch.");
-    if (old.status !== "ACTIVE") throw new Error("Chỉ sửa được kế hoạch đang ACTIVE (kế hoạch Draft có thể sửa trực tiếp, Expired thì tạo kế hoạch mới).");
+    if (old.status !== "ACTIVE") {
+      throw new Error("Chỉ sửa được kế hoạch đang ACTIVE (kế hoạch Draft có thể sửa trực tiếp, Expired thì tạo kế hoạch mới).");
+    }
 
     const newStartDate = input.startDate ?? old.startDate;
     const newEndDate = input.endDate ?? old.endDate;
-
-    const overlaps = await checkOverlap(old.departmentId, old.section, newStartDate, newEndDate, old.id, tx);
-    if (overlaps.length > 0) {
-      throw new Error(`Khoảng ngày mới chồng lấn với kế hoạch ACTIVE khác.`);
-    }
+    if (newStartDate > newEndDate) throw new Error("Ngày bắt đầu phải trước ngày kết thúc.");
 
     const [oldTarget] = await tx.select().from(planningTargets).where(eq(planningTargets.planningPeriodId, old.id));
 
-    // BƯỚC 1 — hết hạn bản cũ TRƯỚC, giải phóng "chỗ trống" ACTIVE cho dept+section này.
+    const demandMale = input.demandMale !== undefined ? Math.max(0, Number(input.demandMale)) : (oldTarget?.demandMale ?? 0);
+    const demandFemale = input.demandFemale !== undefined ? Math.max(0, Number(input.demandFemale)) : (oldTarget?.demandFemale ?? 0);
+    const targetCount = input.targetCount !== undefined && input.targetCount > 0
+      ? Number(input.targetCount)
+      : (demandMale + demandFemale > 0 ? demandMale + demandFemale : (oldTarget?.targetCount ?? 0));
+
+    // BƯỚC 1: Đánh dấu bản cũ hết hạn
     await tx.update(planningPeriods).set({ status: "EXPIRED", updatedAt: new Date() }).where(eq(planningPeriods.id, old.id));
 
-    // BƯỚC 2 — tạo bản mới ACTIVE (an toàn với unique index vì bản cũ đã EXPIRED ở trên, CÙNG transaction).
+    // BƯỚC 2: Tạo bản version mới
     const [newVersion] = await tx
       .insert(planningPeriods)
       .values({
         departmentId: old.departmentId,
         section: old.section,
+        groupName: old.groupName,
+        location: old.location,
+        division: old.division,
         startDate: newStartDate,
         endDate: newEndDate,
         status: "ACTIVE",
         version: old.version + 1,
+        requestType: old.requestType,
+        supplementIndex: old.supplementIndex,
+        parentPeriodId: old.parentPeriodId,
         createdBy: revisedBy,
       })
       .returning();
 
-    // BƯỚC 3 — gắn supersededBy trên bản cũ trỏ đúng sang bản mới vừa tạo.
+    // BƯỚC 3: Bản cũ trỏ tới bản mới
     await tx.update(planningPeriods).set({ supersededBy: newVersion.id }).where(eq(planningPeriods.id, old.id));
 
-    // BƯỚC 4 — target mới + chuyển toàn bộ phân bổ (allocations) sang version mới, không mất liên kết lao động đã gán.
+    // BƯỚC 4: Target mới + chuyển các allocations sang version mới
     await tx.insert(planningTargets).values({
       planningPeriodId: newVersion.id,
-      targetCount: input.targetCount ?? oldTarget?.targetCount ?? 0,
+      demandMale,
+      demandFemale,
+      targetCount,
       note: input.note ?? oldTarget?.note ?? null,
     });
     await tx.update(planningAllocations).set({ planningPeriodId: newVersion.id }).where(eq(planningAllocations.planningPeriodId, old.id));
@@ -150,7 +233,138 @@ export async function reviseActivePeriod(
   });
 }
 
-/** Danh sách employment_sessions ĐANG LÀM (chưa kết thúc) nhưng chưa được phân bổ vào kế hoạch ACTIVE nào. */
+/**
+ * Tự động phân bổ người tập nghề vào kế hoạch ACTIVE phù hợp khi Recruiter duyệt / xếp việc.
+ * Quy tắc ưu tiên khi có nhiều kế hoạch trùng:
+ *   1. Ưu tiên kế hoạch GỐC (ORIGINAL, supplementIndex = 0) trước nếu còn chỉ tiêu theo giới tính.
+ *   2. Sau đó ưu tiên kế hoạch BỔ SUNG theo thứ tự (Bổ sung 1, Bổ sung 2...).
+ *   3. Nếu tất cả đã đủ chỉ tiêu, gán vào kế hoạch active mới nhất.
+ */
+export async function autoAllocateInternship(
+  employmentSessionId: string,
+  departmentId: string,
+  startingDate?: string | null,
+  allocatedBy = "SYSTEM",
+  executor: Executor = db,
+) {
+  // Tìm các kế hoạch ACTIVE của bộ phận này
+  const activePeriods = await executor
+    .select({
+      id: planningPeriods.id,
+      startDate: planningPeriods.startDate,
+      endDate: planningPeriods.endDate,
+      requestType: planningPeriods.requestType,
+      supplementIndex: planningPeriods.supplementIndex,
+      demandMale: planningTargets.demandMale,
+      demandFemale: planningTargets.demandFemale,
+      targetCount: planningTargets.targetCount,
+    })
+    .from(planningPeriods)
+    .leftJoin(planningTargets, eq(planningTargets.planningPeriodId, planningPeriods.id))
+    .where(
+      and(
+        eq(planningPeriods.departmentId, departmentId),
+        eq(planningPeriods.status, "ACTIVE"),
+      ),
+    )
+    .orderBy(
+      // ORIGINAL trước (supplementIndex = 0), sau đó SUPPLEMENT 1, 2...
+      planningPeriods.supplementIndex,
+      planningPeriods.createdAt,
+    );
+
+  if (activePeriods.length === 0) return null;
+
+  // Lọc theo date range nếu có startingDate
+  const matchingDatePeriods = startingDate
+    ? activePeriods.filter((p) => p.startDate <= startingDate && p.endDate >= startingDate)
+    : activePeriods;
+
+  const candidatePeriods = matchingDatePeriods.length > 0 ? matchingDatePeriods : activePeriods;
+
+  // Lấy giới tính của người tập nghề
+  const [session] = await executor
+    .select({
+      workerId: employmentSessions.workerId,
+      gender: workerProfiles.gender,
+    })
+    .from(employmentSessions)
+    .leftJoin(workerProfiles, eq(employmentSessions.workerId, workerProfiles.id))
+    .where(eq(employmentSessions.id, employmentSessionId));
+
+  const gender = session?.gender ?? null;
+  const isTargetFemale = isFemale(gender);
+  const isTargetMale = isMale(gender);
+
+  // Tính số đã phân bổ của từng kế hoạch ứng viên
+  const periodIds = candidatePeriods.map((p) => p.id);
+  const allocations = await executor
+    .select({
+      planningPeriodId: planningAllocations.planningPeriodId,
+      gender: workerProfiles.gender,
+    })
+    .from(planningAllocations)
+    .innerJoin(employmentSessions, eq(planningAllocations.employmentSessionId, employmentSessions.id))
+    .leftJoin(workerProfiles, eq(employmentSessions.workerId, workerProfiles.id))
+    .where(
+      and(
+        inArray(planningAllocations.planningPeriodId, periodIds),
+        eq(employmentSessions.status, "APPROVED"),
+        isNull(employmentSessions.endDate),
+      ),
+    );
+
+  const allocCounts = new Map<string, { male: number; female: number; total: number }>();
+  for (const pid of periodIds) {
+    allocCounts.set(pid, { male: 0, female: 0, total: 0 });
+  }
+  for (const a of allocations) {
+    const current = allocCounts.get(a.planningPeriodId);
+    if (current) {
+      current.total += 1;
+      if (isFemale(a.gender)) current.female += 1;
+      else if (isMale(a.gender)) current.male += 1;
+    }
+  }
+
+  // Tìm kế hoạch đầu tiên còn chỗ cho giới tính này
+  let chosenPeriodId = candidatePeriods[0].id;
+  for (const p of candidatePeriods) {
+    const alloc = allocCounts.get(p.id) ?? { male: 0, female: 0, total: 0 };
+    const maleDemand = p.demandMale ?? 0;
+    const femaleDemand = p.demandFemale ?? 0;
+    const totalDemand = (maleDemand + femaleDemand > 0) ? (maleDemand + femaleDemand) : (p.targetCount ?? 0);
+
+    if (isTargetFemale && femaleDemand > 0 && alloc.female < femaleDemand) {
+      chosenPeriodId = p.id;
+      break;
+    } else if (isTargetMale && maleDemand > 0 && alloc.male < maleDemand) {
+      chosenPeriodId = p.id;
+      break;
+    } else if (!isTargetFemale && !isTargetMale && alloc.total < totalDemand) {
+      chosenPeriodId = p.id;
+      break;
+    }
+  }
+
+  // Xoá phân bổ cũ nếu đã có (tránh double-allocation khi đổi bộ phận / gán lại)
+  await executor
+    .delete(planningAllocations)
+    .where(eq(planningAllocations.employmentSessionId, employmentSessionId));
+
+  await executor
+    .insert(planningAllocations)
+    .values({
+      employmentSessionId,
+      planningPeriodId: chosenPeriodId,
+      allocatedBy,
+    })
+    .onConflictDoNothing();
+
+  return chosenPeriodId;
+}
+
+/** Danh sách employment_sessions ĐANG LÀM nhưng chưa được phân bổ vào kế hoạch ACTIVE nào. */
 export async function getUnplannedSessions(departmentId?: string) {
   const allocatedToActive = await db
     .select({ sessionId: planningAllocations.employmentSessionId })
@@ -169,6 +383,7 @@ export async function getUnplannedSessions(departmentId?: string) {
       workerId: employmentSessions.workerId,
       workerName: workerProfiles.fullName,
       workerCccd: workerProfiles.cccd,
+      gender: workerProfiles.gender,
       deptId: employmentSessions.deptId,
       deptName: departments.deptName,
       regDate: employmentSessions.regDate,
@@ -179,16 +394,142 @@ export async function getUnplannedSessions(departmentId?: string) {
     .where(and(...filters));
 }
 
-/** Tỷ lệ lấp đầy — ACTIVE (đã phân bổ + đang APPROVED) / Nhu cầu Planning đang Active. */
-export async function computeFillRate(periodId: string) {
-  const [target] = await db.select().from(planningTargets).where(eq(planningTargets.planningPeriodId, periodId));
-  const allocated = await db
-    .select({ sessionId: planningAllocations.employmentSessionId })
+/**
+ * Tổng hợp toàn bộ chỉ số cho danh sách Kế hoạch Tập nghề theo batch (Không N+1 query).
+ *
+ * CÔNG THỨC:
+ *   - Cần tuyển Nam = Nhu cầu cần Nam - Phân bổ Nam + Nghỉ việc Nam (clamp về 0)
+ *   - Cần tuyển Nữ = Nhu cầu cần Nữ - Phân bổ Nữ + Nghỉ việc Nữ (clamp về 0)
+ *   - Tổng cần tuyển = Cần tuyển Nam + Cần tuyển Nữ
+ */
+export async function batchComputePlanningMetrics(periodIds: string[]): Promise<Map<string, PlanningMetrics>> {
+  const result = new Map<string, PlanningMetrics>();
+  if (periodIds.length === 0) return result;
+
+  // 1. Lấy targets
+  const targets = await db
+    .select({
+      planningPeriodId: planningTargets.planningPeriodId,
+      demandMale: planningTargets.demandMale,
+      demandFemale: planningTargets.demandFemale,
+      targetCount: planningTargets.targetCount,
+    })
+    .from(planningTargets)
+    .where(inArray(planningTargets.planningPeriodId, periodIds));
+
+  const targetMap = new Map(targets.map((t) => [t.planningPeriodId, t]));
+
+  // 2. Lấy allocations đang active (APPROVED và chưa kết thúc)
+  const allocations = await db
+    .select({
+      planningPeriodId: planningAllocations.planningPeriodId,
+      gender: workerProfiles.gender,
+    })
     .from(planningAllocations)
     .innerJoin(employmentSessions, eq(planningAllocations.employmentSessionId, employmentSessions.id))
-    .where(and(eq(planningAllocations.planningPeriodId, periodId), eq(employmentSessions.status, "APPROVED"), isNull(employmentSessions.endDate)));
+    .leftJoin(workerProfiles, eq(employmentSessions.workerId, workerProfiles.id))
+    .where(
+      and(
+        inArray(planningAllocations.planningPeriodId, periodIds),
+        eq(employmentSessions.status, "APPROVED"),
+        isNull(employmentSessions.endDate),
+      ),
+    );
 
-  const demand = target?.targetCount ?? 0;
-  const active = allocated.length;
-  return { demand, active, missing: Math.max(0, demand - active), percent: demand > 0 ? Math.round((active / demand) * 100) : 0 };
+  const allocCountMap = new Map<string, { male: number; female: number; total: number }>();
+  for (const pid of periodIds) {
+    allocCountMap.set(pid, { male: 0, female: 0, total: 0 });
+  }
+  for (const a of allocations) {
+    const c = allocCountMap.get(a.planningPeriodId);
+    if (c) {
+      c.total += 1;
+      if (isFemale(a.gender)) c.female += 1;
+      else if (isMale(a.gender)) c.male += 1;
+    }
+  }
+
+  // 3. Lấy số lượng nghỉ việc đã có hiệu lực (RESIGNATION đã duyệt / INACTIVE) của các người thuộc kế hoạch này
+  const resignations = await db
+    .select({
+      planningPeriodId: planningAllocations.planningPeriodId,
+      gender: workerProfiles.gender,
+    })
+    .from(planningAllocations)
+    .innerJoin(employmentSessions, eq(planningAllocations.employmentSessionId, employmentSessions.id))
+    .leftJoin(workerProfiles, eq(employmentSessions.workerId, workerProfiles.id))
+    .innerJoin(
+      workforceMovements,
+      and(
+        eq(workforceMovements.workerId, employmentSessions.workerId),
+        eq(workforceMovements.movementType, "resignation"),
+        eq(workforceMovements.status, "INACTIVE"),
+      ),
+    )
+    .where(inArray(planningAllocations.planningPeriodId, periodIds));
+
+  const resignCountMap = new Map<string, { male: number; female: number; total: number }>();
+  for (const pid of periodIds) {
+    resignCountMap.set(pid, { male: 0, female: 0, total: 0 });
+  }
+  for (const r of resignations) {
+    const c = resignCountMap.get(r.planningPeriodId);
+    if (c) {
+      c.total += 1;
+      if (isFemale(r.gender)) c.female += 1;
+      else if (isMale(r.gender)) c.male += 1;
+    }
+  }
+
+  // 4. Tính toán cho từng period
+  for (const pid of periodIds) {
+    const target = targetMap.get(pid);
+    const alloc = allocCountMap.get(pid) ?? { male: 0, female: 0, total: 0 };
+    const resign = resignCountMap.get(pid) ?? { male: 0, female: 0, total: 0 };
+
+    const demandMale = target?.demandMale ?? 0;
+    const demandFemale = target?.demandFemale ?? 0;
+    // Nếu legacy data chưa phân tách nam/nữ, dùng targetCount làm tổng nhu cầu
+    const demandTotal = (demandMale + demandFemale > 0)
+      ? (demandMale + demandFemale)
+      : (target?.targetCount ?? 0);
+
+    const allocatedMale = alloc.male;
+    const allocatedFemale = alloc.female;
+    const allocatedTotal = alloc.total;
+
+    const resignedMale = resign.male;
+    const resignedFemale = resign.female;
+    const resignedTotal = resign.total;
+
+    // CÔNG THỨC: Nhu cầu - Phân bổ + Nghỉ việc (clamp về 0 nếu âm)
+    // Nghiệp vụ tuyển dụng: Nếu phân bổ vượt nhu cầu, số cần tuyển không được âm.
+    const recruitmentNeededMale = Math.max(0, demandMale - allocatedMale + resignedMale);
+    const recruitmentNeededFemale = Math.max(0, demandFemale - allocatedFemale + resignedFemale);
+    const recruitmentNeededTotal = demandMale + demandFemale > 0
+      ? (recruitmentNeededMale + recruitmentNeededFemale)
+      : Math.max(0, demandTotal - allocatedTotal + resignedTotal);
+
+    const fillRatePercent = demandTotal > 0
+      ? Math.min(100, Math.round((allocatedTotal / demandTotal) * 100))
+      : 0;
+
+    result.set(pid, {
+      demandMale,
+      demandFemale,
+      demandTotal,
+      allocatedMale,
+      allocatedFemale,
+      allocatedTotal,
+      resignedMale,
+      resignedFemale,
+      resignedTotal,
+      recruitmentNeededMale,
+      recruitmentNeededFemale,
+      recruitmentNeededTotal,
+      fillRatePercent,
+    });
+  }
+
+  return result;
 }

@@ -1,36 +1,65 @@
 [← Mục lục](./README.md)
 
-# 6. Department
+# 6. Cơ cấu tổ chức & "Bộ phận của tôi"
 
-Có **2 màn hình khác nhau** tuỳ vai trò — đừng nhầm lẫn:
+Hệ thống quản lý cơ cấu tổ chức Dalat Hasfarm theo chuẩn 5 tầng:
+
+$$\text{Location} \longrightarrow \text{Division} \longrightarrow \text{Department} \longrightarrow \text{Section} \longrightarrow \text{Group}$$
+
+Không sử dụng các thuật ngữ không chuẩn như "Xưởng", "Workshop" khi diễn đạt cơ cấu phòng ban.
+
+Có **2 màn hình khác nhau** tuỳ vai trò:
 
 | Màn hình | Ai dùng | Xem gì |
 |---|---|---|
-| **Department** (`/admin/departments`) | ADMIN, HR_RECRUITER | Quản lý **toàn bộ** danh sách bộ phận trong hệ thống |
-| **Bộ phận của tôi** (`/department`) | DEPT_MANAGER (ADMIN/HR_RECRUITER cũng xem được) | Chỉ xem lao động thuộc (các) bộ phận **được phân công** cho tài khoản đang đăng nhập |
+| **Cơ cấu tổ chức (Department)** (`/admin/departments`) | ADMIN, HR_RECRUITER | Quản lý **toàn bộ** danh mục bộ phận trong cơ cấu tổ chức |
+| **Bộ phận của tôi** (`/department`) | DEPT_MANAGER (ADMIN/HR_RECRUITER cũng xem được) | Xem toàn bộ người tập nghề thuộc các bộ phận nằm trong **Data Scope** được phân công |
 
-## 6.1 Department (dành cho Admin / HR)
+## 6.1 Cơ cấu tổ chức (dành cho Admin / HR)
 
-<img src="images/desktop/department-admin.png" width="720" alt="Quản lý Department">
+<img src="images/desktop/department-admin.png" width="720" alt="Quản lý Cơ cấu tổ chức">
 
-- Cấu trúc **Dept. + Group** (ví dụ *Packing – A*, *Packing – B*) tương ứng với cách tổ chức xưởng thực tế.
-- Bấm **"+ Thêm bộ phận"** để tạo bộ phận mới — bộ phận vừa tạo **sẽ tự động xuất hiện trong dropdown xếp việc** ở Daily Application ngay lập tức, không cần cấu hình gì thêm.
-- Có thể sửa trực tiếp trên bảng: **Định mức lao động/ngày**, bật/khoá bộ phận (nút **Bật/Khoá** ở cột trạng thái — khoá một bộ phận sẽ ẩn nó khỏi dropdown xếp việc mới nhưng không xoá dữ liệu cũ), và **Xoá** (xoá mềm — đưa vào Thùng rác, xem [chương 9](./09-admin-modules.md#thùng-rác)).
-- Các cột "Hôm nay" / "Tổng" cho biết số lao động đã được xếp vào bộ phận đó.
+- Phân cấp chuẩn: **Location** (Vùng/Trại) → **Division** (Khối) → **Department** (Tên bộ phận) → **Section** (Phân xưởng/Mảng) → **Group** (Tổ/Nhóm).
+- Bấm **"+ Thêm bộ phận"** để tạo bộ phận mới — bộ phận vừa tạo **sẽ tự động xuất hiện trong dropdown xếp việc** ở Daily Application và Data Scope ngay lập tức.
+- Có thể sửa trực tiếp trên bảng: **Nhu cầu nhân lực dự kiến/ngày**, bật/khoá bộ phận (nút **Bật/Khoá** ở cột trạng thái — khoá một bộ phận sẽ ẩn nó khỏi dropdown xếp việc mới nhưng không xoá dữ liệu cũ), và **Xoá** (xoá mềm — đưa vào Thùng rác).
+- Các cột "Hôm nay" / "Tổng" cho biết số người tập nghề đã được xếp vào bộ phận đó.
 
-> **Lưu ý:** Cột "Định mức lao động/ngày" (Quota) là cơ chế **cũ**, hiện phần lớn đã được thay bằng [Planning theo giai đoạn](./07-planning.md) — vẫn hiển thị để tương thích ngược, không bắt buộc phải cập nhật nếu bộ phận của bạn đã dùng Planning.
-
-## 6.2 "Bộ phận của tôi" (dành cho Quản đốc bộ phận)
+## 6.2 "Bộ phận của tôi" (dành cho Quản lý bộ phận — DEPT_MANAGER)
 
 <img src="images/desktop/department-manager.png" width="720" alt="Bộ phận của tôi">
 
-Đây là "cổng nhận lao động" dành cho Quản đốc — chỉ hiện đúng những bộ phận được Admin gán cho tài khoản của bạn.
+Đây là cổng dành cho Quản lý bộ phận để theo dõi và quản lý người tập nghề trong phạm vi phụ trách:
 
-- Nếu bạn phụ trách **nhiều bộ phận cùng lúc**, chọn bộ phận muốn xem ở dropdown đầu trang.
-- Chọn khoảng ngày để xem danh sách lao động được xếp vào bộ phận trong khoảng đó.
-- 4 chỉ số nhanh: **Lao động nhận**, **Định mức/ngày**, **Người mới**, **Tỷ lệ lấp đầy**.
-- Bấm **"Tải Excel gửi Zalo"** để xuất nhanh danh sách gửi cho tổ trưởng/nhóm Zalo của bộ phận.
+### Mặc định hiển thị toàn bộ phạm vi Data Scope
+Khi vào trang, hệ thống **tự động hiển thị danh sách tất cả người tập nghề thuộc mọi bộ phận được gán cho bạn** trong Data Scope, không bắt buộc bạn phải chọn từng bộ phận riêng lẻ trước khi xem.
 
-> **Quan trọng — Data Scope:** Quản đốc bộ phận **chỉ nhìn thấy lao động thuộc (các) bộ phận được phân công** cho mình tại [Data Scope](./10-permissions-data-scope.md). Nếu bạn không thấy bộ phận cần tìm, hoặc màn hình báo "Tài khoản chưa được gán bộ phận nào", đây **không phải lỗi hệ thống** — liên hệ Admin để được gán đúng bộ phận tại Data Scope. Quản đốc cũng **không thể tự sửa** thông tin bộ phận (tên, định mức, người phụ trách) từ màn hình này — việc đó thuộc quyền Admin/HR ở màn hình Department phía trên.
+### Bộ lọc linh hoạt theo cơ cấu tổ chức
+Bạn có thể nhanh chóng thu hẹp danh sách theo:
+- **Location** (Địa điểm / Trại)
+- **Division** (Khối)
+- **Department** (Bộ phận)
+- **Section** (Phân xưởng / Mảng)
+- **Group** (Tổ / Nhóm)
+- **Khoảng ngày** (Từ ngày → Đến ngày)
+- **Tìm kiếm nhanh** theo Họ tên, CCCD, Số điện thoại.
+
+### Bảng dữ liệu chuẩn hóa
+Bảng tập trung vào các thông tin điều hành cần thiết:
+- Checkbox chọn dòng (Multi-select)
+- STT, Họ và tên, CCCD (đã che bảo mật)
+- Giới tính (Nam / Nữ)
+- Department, Section, Group
+- Ngày bắt đầu, Trạng thái tiếp nhận
+- Nút thao tác nhanh: **Báo nghỉ Tập nghề**, **Xem Hồ sơ Tập nghề**.
+*(Đã loại bỏ các cột không cần thiết như Loại CŨ/MỚI, Tuổi).*
+
+### Chọn nhiều người (Multi-select) & Thao tác hàng loạt (Bulk Actions)
+- Bạn có thể tick chọn từng người hoặc bấm **"Chọn tất cả"** trên danh sách đang hiển thị.
+- Khi chọn từ 1 người trở lên, thanh công cụ **Bulk Action Bar** nổi phía dưới sẽ xuất hiện:
+  - **Báo nghỉ việc hàng loạt:** Mở hộp thoại nhập ngày hiệu lực, lý do nghỉ việc để gửi hàng loạt yêu cầu báo nghỉ cho HR duyệt.
+  - **Xuất Excel đã chọn:** Xuất file danh sách những người đã chọn để gửi Zalo hoặc in ấn.
+  - **Bỏ chọn:** Huỷ chọn tất cả.
+
+> **Lưu ý — Data Scope:** Quản lý bộ phận **chỉ nhìn thấy người tập nghề thuộc (các) bộ phận được phân công** tại [Data Scope](./10-permissions-data-scope.md). Nếu bạn không thấy bộ phận mình phụ trách, liên hệ Admin để được gán đúng bộ phận tại màn hình Quản trị Data Scope.
 
 Tiếp theo: [07 — Planning](./07-planning.md)

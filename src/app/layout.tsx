@@ -4,9 +4,9 @@ import "./globals.css";
 import { Toaster } from "@/components/ui";
 
 export const metadata: Metadata = {
-  title: "Dalat Hasfarm — Hệ Thống Quản Trị Lao Động Thời Vụ",
+  title: "Dalat Hasfarm — Hệ Thống Quản Trị Tập Nghề Thời Vụ",
   description:
-    "Đăng ký lao động thời vụ, xếp bộ phận và quản trị nhân sự cho Dalat Hasfarm.",
+    "Đăng ký tập nghề thời vụ, xếp bộ phận và quản trị nhân sự cho Dalat Hasfarm.",
 };
 
 export default function RootLayout({ children }: { children: ReactNode }) {

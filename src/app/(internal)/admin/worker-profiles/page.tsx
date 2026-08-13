@@ -72,8 +72,7 @@ export default function WorkerProfilesPage() {
     }
   };
 
-  // Deep-link từ Tìm kiếm toàn hệ thống (?cccd=...) — tự tra cứu ngay khi vào trang, không bắt
-  // người dùng gõ lại CCCD lần nữa.
+  // Deep-link từ Tìm kiếm toàn hệ thống (?cccd=...) — tự tra cứu ngay khi vào trang
   useEffect(() => {
     if (searchParams.get("cccd")) void search();
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -109,7 +108,7 @@ export default function WorkerProfilesPage() {
         return;
       }
       toast({
-        title: `Đã đồng bộ: ${d.profilesFromApps} hồ sơ điện tử, ${d.sessionsCreated} đợt làm việc mới được liên kết`,
+        title: `Đã đồng bộ: ${d.profilesFromApps} hồ sơ Tập nghề, ${d.sessionsCreated} đợt Tập nghề mới được liên kết`,
       });
     } finally {
       setBackfilling(false);
@@ -119,8 +118,8 @@ export default function WorkerProfilesPage() {
   return (
     <div className="space-y-5">
       <PageHeader
-        title="Hồ sơ điện tử lao động (Digital Worker File)"
-        description="Mỗi người chỉ có 1 hồ sơ duy nhất, gộp toàn bộ lịch sử các lần đăng ký/đợt làm việc — không tạo người mới mỗi lần quay lại."
+        title="Hồ sơ Tập nghề (Digital Internship Profile)"
+        description="Mỗi người tập nghề chỉ có 1 hồ sơ duy nhất, gộp toàn bộ lịch sử các lần đăng ký và đợt Tập nghề — không tạo trùng hồ sơ mỗi khi quay lại."
         actions={
           <Button variant="outline" onClick={runBackfill} loading={backfilling}>
             <RefreshCw className="h-4 w-4" /> Đồng bộ dữ liệu cũ
@@ -134,7 +133,7 @@ export default function WorkerProfilesPage() {
             value={cccd}
             onChange={(e) => setCccd(e.target.value)}
             onKeyDown={(e) => e.key === "Enter" && search()}
-            placeholder="Nhập số CCCD để tra cứu hồ sơ điện tử..."
+            placeholder="Nhập số CCCD để tra cứu hồ sơ Tập nghề..."
             className="h-11 flex-1"
           />
           <Button onClick={search} loading={loading}>
@@ -147,8 +146,8 @@ export default function WorkerProfilesPage() {
         <Card>
           <EmptyState
             icon={<UserX className="h-5 w-5" aria-hidden />}
-            title="Không tìm thấy hồ sơ"
-            description="Chưa có hồ sơ điện tử cho số CCCD này."
+            title="Không tìm thấy hồ sơ Tập nghề"
+            description="Chưa có hồ sơ Tập nghề điện tử cho số CCCD này."
           />
         </Card>
       )}
@@ -169,7 +168,7 @@ export default function WorkerProfilesPage() {
             <CardHeader
               title={
                 <span className="flex items-center gap-2">
-                  <Fingerprint className="h-4 w-4" /> Biometric — Mã vân tay
+                  <Fingerprint className="h-4 w-4" /> Biometric — Mã vân tay người tập nghề
                 </span>
               }
               subtitle={<Badge tone={profile.fingerprintStatus === "DA_CAP" ? "green" : "amber"} dot>{profile.fingerprintStatus === "DA_CAP" ? "Đã cấp" : "Chưa cấp"}</Badge>}
@@ -190,10 +189,10 @@ export default function WorkerProfilesPage() {
           </Card>
 
           <Card className="p-0">
-            <CardHeader title={`Lịch sử làm việc — ${sessions.length} đợt`} />
+            <CardHeader title={`Lịch sử đợt Tập nghề — ${sessions.length} đợt`} />
             <CardContent className="p-0">
               {sessions.length === 0 ? (
-                <EmptyState title="Chưa có lịch sử làm việc" description="Người này chưa có đợt làm việc nào được ghi nhận." />
+                <EmptyState title="Chưa có lịch sử Tập nghề" description="Người này chưa có đợt Tập nghề nào được ghi nhận." />
               ) : (
                 <ul className="divide-y divide-border">
                   {sessions.map((s) => (
@@ -202,6 +201,7 @@ export default function WorkerProfilesPage() {
                       <span className="font-semibold text-fg">{s.deptName ?? "Chưa xếp bộ phận"}</span>
                       <span className="text-fg-muted">Đăng ký: {s.regDate}</span>
                       {s.startingDate && <span className="text-fg-muted">Bắt đầu: {s.startingDate}</span>}
+                      {s.endDate && <span className="text-fg-muted">Kết thúc: {s.endDate}</span>}
                     </li>
                   ))}
                 </ul>

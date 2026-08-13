@@ -75,7 +75,7 @@ export function BrandLogo({
       {withText && (
         <div className="leading-[1.15]">
           <p className={`${titleSize} font-bold tracking-[-0.01em] ${light ? "text-white" : "text-fg"}`}>
-            Seasonal Worker
+            Seasonal Internship
           </p>
           <p className={`${subSize} mt-[1px] font-medium uppercase tracking-[0.14em] ${light ? "text-white/55" : "text-fg-muted"}`}>
             Dalat Hasfarm

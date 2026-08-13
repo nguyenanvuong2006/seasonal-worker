@@ -67,9 +67,9 @@ export default function LookupPage() {
           </Link>
         </div>
         <div className="mx-auto mt-8 max-w-4xl">
-          <h1 className="text-[28px] font-black leading-[0.95] md:text-[36px]">Tra cứu trạng thái & bộ phận làm việc</h1>
+          <h1 className="text-[28px] font-black leading-[0.95] md:text-[36px]">Tra cứu trạng thái & bộ phận tiếp nhận Tập nghề</h1>
           <p className="mt-2 max-w-[50ch] text-sm text-white/75">
-            Nhập CCCD để biết bạn đã được xếp vào xưởng nào hôm nay — nếu chưa, HR vẫn đang điều phối.
+            Nhập CCCD để biết bạn đã được xếp vào bộ phận nào hôm nay — nếu chưa, HR vẫn đang điều phối.
           </p>
         </div>
       </header>

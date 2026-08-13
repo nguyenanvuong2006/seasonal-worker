@@ -3,6 +3,7 @@ import { and, desc, eq } from "drizzle-orm";
 import { db } from "@/db";
 import { dailyApplications, employmentSessions, workforceMovements } from "@/db/schema";
 import { queueNotification } from "@/lib/notifications";
+import { autoAllocateInternship } from "@/lib/planning";
 import type { Session } from "@/lib/auth";
 
 /**
@@ -108,6 +109,8 @@ export async function applyMovementAction(
                 .set({ deptId: movement.toDeptId })
                 .where(eq(dailyApplications.id, currentSession.dailyApplicationId));
             }
+            // Tự động phân bổ lại vào Kế hoạch Tập nghề của bộ phận đích khi Transfer hoàn tất
+            await autoAllocateInternship(currentSession.id, movement.toDeptId, movement.effectiveDate, session.username, tx);
           }
         }
         break;

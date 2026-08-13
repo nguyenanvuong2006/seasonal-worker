@@ -85,10 +85,10 @@ export default async function ApplicantHomePage() {
             </p>
             <ol className="mt-3 space-y-2 text-[13px]">
               {[
-                "Đơn vào sheet Daily Application của HR (chỉ hiện hôm nay cho gọn)",
-                "HR đối chiếu DW Data → xác nhận bạn là lao động cũ hay mới",
-                "HR xếp Bộ phận + Nhóm từ danh sách 71 bộ phận",
-                "Bạn tra cứu buổi chiều để biết bộ phận & người phụ trách",
+                "Đơn vào hệ thống Daily Application của HR tiếp nhận",
+                "HR đối chiếu DW Data → xác nhận bạn là người tập nghề cũ hay mới",
+                "HR xếp Bộ phận từ cơ cấu tổ chức Location → Division → Department → Section → Group",
+                "Bạn tra cứu buổi chiều để biết bộ phận & người phụ trách tiếp nhận",
               ].map((s, i) => (
                 <li key={s} className="flex gap-2.5 rounded-xl bg-surface-hover p-3">
                   <span className="flex h-5 w-5 shrink-0 items-center justify-center rounded-full bg-hasfarm-700 text-[10px] font-black text-white">

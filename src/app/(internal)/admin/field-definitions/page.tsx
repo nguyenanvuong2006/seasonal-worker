@@ -26,9 +26,9 @@ type FieldDef = {
 };
 
 const GROUPS: { key: FieldDef["groupName"]; label: string }[] = [
-  { key: "department", label: "Department (Bộ phận)" },
-  { key: "dw_data", label: "DW Data (Kho lao động)" },
-  { key: "daily_application", label: "Daily Application (Đăng ký hằng ngày)" },
+  { key: "department", label: "Cơ cấu tổ chức (Department)" },
+  { key: "dw_data", label: "DW Data (Đối chiếu lịch sử)" },
+  { key: "daily_application", label: "Daily Application (Tiếp nhận Tập nghề)" },
 ];
 
 function Toggle({ on, onClick, label }: { on: boolean; onClick: () => void; label: string }) {
