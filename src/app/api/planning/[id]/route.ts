@@ -15,6 +15,8 @@ export async function PATCH(req: Request, ctx: { params: Promise<{ id: string }>
     action?: "activate" | "revise";
     startDate?: string;
     endDate?: string;
+    demandMale?: number;
+    demandFemale?: number;
     targetCount?: number;
     note?: string;
   };
@@ -28,7 +30,14 @@ export async function PATCH(req: Request, ctx: { params: Promise<{ id: string }>
     if (body.action === "revise") {
       const row = await reviseActivePeriod(
         id,
-        { startDate: body.startDate, endDate: body.endDate, targetCount: body.targetCount, note: body.note },
+        {
+          startDate: body.startDate,
+          endDate: body.endDate,
+          demandMale: body.demandMale,
+          demandFemale: body.demandFemale,
+          targetCount: body.targetCount,
+          note: body.note,
+        },
         guard.session.username,
       );
       await writeAudit(guard.session, "REVISE_PLANNING_PERIOD", "planning_periods", { id, newVersionId: row.id });

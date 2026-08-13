@@ -94,14 +94,14 @@ export default function DwDataPage() {
     <div className="space-y-5">
       <div className="rounded-[20px] bg-white p-6 shadow-sm ring-1 ring-black/5">
         <span className="rounded-full bg-primary px-3 py-1 text-[10px] font-black uppercase tracking-widest text-white">
-          Sheet: DW Data
+          DW Data — Nguồn đối chiếu Tập nghề
         </span>
         <h1 className="mt-3 text-[26px] font-black tracking-tight text-fg">
-          Kho hồ sơ lao động — {total.toLocaleString("vi-VN")} người
+          DW Data — {total.toLocaleString("vi-VN")} hồ sơ đối chiếu lịch sử
         </h1>
         <p className="mt-1 max-w-[85ch] text-sm text-fg-secondary">
-          Đây là nguồn sự thật để đối chiếu <b>người cũ / người mới</b>. Ai không có trong bảng này là lao động MỚI.
-          Nếu người mới nhập sai CCCD, sửa CCCD tại đây — hệ thống tự đồng bộ toàn bộ đơn đăng ký sang CCCD đúng.
+          Đây là nguồn dữ liệu lịch sử công ty dùng để đối chiếu <b>người cũ / người mới</b>. Ai không có trong kho dữ liệu này được xác định là người tập nghề MỚI.
+          Nếu ứng viên nhập sai CCCD, sửa CCCD tại đây — hệ thống tự đồng bộ toàn bộ đơn đăng ký sang CCCD đúng.
         </p>
       </div>
 

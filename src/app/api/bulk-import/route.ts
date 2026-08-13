@@ -6,6 +6,7 @@ import { requireRoleAndPermission, writeAudit } from "@/lib/auth";
 import { todayStr } from "@/lib/helpers";
 import { runRules } from "@/lib/rule-engine";
 import { queueNotification } from "@/lib/notifications";
+import { autoAllocateInternship } from "@/lib/planning";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -126,14 +127,24 @@ export async function POST(req: Request) {
         .returning({ id: dailyApplications.id });
 
       // DIGITAL WORKER FILE (#10) — đồng bộ trạng thái/bộ phận/ngày bắt đầu sang employment_sessions.
-      await tx
+      const updatedSessions = await tx
         .update(employmentSessions)
         .set({
           status: finalStatus,
           ...(deptId ? { deptId } : {}),
           ...(finalStatus === "APPROVED" ? { startingDate: today } : {}),
         })
-        .where(inArray(employmentSessions.dailyApplicationId, targets.map((t) => t.id)));
+        .where(inArray(employmentSessions.dailyApplicationId, targets.map((t) => t.id)))
+        .returning({ id: employmentSessions.id, deptId: employmentSessions.deptId, startingDate: employmentSessions.startingDate });
+
+      if (finalStatus === "APPROVED") {
+        for (const s of updatedSessions) {
+          const targetDept = s.deptId ?? deptId;
+          if (targetDept) {
+            await autoAllocateInternship(s.id, targetDept, s.startingDate, guard.session.username, tx);
+          }
+        }
+      }
 
       for (const t of targets) {
         const reason =

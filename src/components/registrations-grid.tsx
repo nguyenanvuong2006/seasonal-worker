@@ -703,8 +703,8 @@ export default function RegistrationsGrid({
               className="h-10 rounded-[10px] border border-border-strong bg-surface px-3 text-[13px] font-medium text-fg outline-none focus:border-primary focus:ring-2 focus:ring-primary/15"
             >
               <option value="ALL">Tất cả</option>
-              <option value="MATCHED">Lao động CŨ</option>
-              <option value="NEW">Lao động MỚI</option>
+              <option value="MATCHED">Người tập nghề CŨ</option>
+              <option value="NEW">Người tập nghề MỚI</option>
             </select>
           </div>
           <div>
@@ -972,8 +972,8 @@ export default function RegistrationsGrid({
             >
               <b>Đối chiếu DW Data:</b>{" "}
               {detail.dwMatch === "MATCHED"
-                ? `Lao động CŨ — đã có hồ sơ trong DW Data (${detail.dwCode ?? "no code"})`
-                : "Lao động MỚI — chưa có trong DW Data, cần duyệt để thêm vào"}
+                ? `Người tập nghề CŨ — đã có hồ sơ trong DW Data (${detail.dwCode ?? "no code"})`
+                : "Người tập nghề MỚI — chưa có trong DW Data, cần duyệt để thêm vào"}
               {detail.declaredType === "OLD" && detail.dwMatch === "NEW" && (
                 <p className="mt-1 flex items-center gap-1.5 font-semibold">
                   <AlertTriangle className="h-3.5 w-3.5 shrink-0" aria-hidden /> Người này TỰ KHAI là đã từng làm nhưng không tìm thấy trong DW Data.

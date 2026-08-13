@@ -149,7 +149,7 @@ export default function WorkforceMovementsPage() {
 
   const submitCreate = async () => {
     if (!foundWorker) {
-      toast({ title: "Chưa tìm lao động", variant: "destructive" });
+      toast({ title: "Chưa tìm người tập nghề", variant: "destructive" });
       return;
     }
     if (!form.effectiveDate) {
@@ -277,9 +277,9 @@ export default function WorkforceMovementsPage() {
 
       <Modal open={createOpen} onClose={() => setCreateOpen(false)} title="Tạo yêu cầu Nghỉ việc / Thuyên chuyển" width="max-w-xl">
         <div className="space-y-4">
-          <FormField label="Tìm lao động theo CCCD" required>
+          <FormField label="Tìm người tập nghề theo CCCD" required>
             <div className="flex gap-2">
-              <Input value={cccdSearch} onChange={(e) => setCccdSearch(e.target.value.replace(/\D/g, ""))} placeholder="Nhập số CCCD" />
+              <Input value={cccdSearch} onChange={(e) => setCccdSearch(e.target.value.replace(/\D/g, ""))} placeholder="Nhập số CCCD..." />
               <Button onClick={searchWorker} loading={searching}>
                 <Search className="h-4 w-4" /> Tìm
               </Button>

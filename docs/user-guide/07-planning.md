@@ -1,67 +1,89 @@
 [← Mục lục](./README.md)
 
-# 7. Planning
+# 7. Planning — Kế hoạch Nhu cầu Tập nghề
 
-**Ai dùng:** xem được cả 3 vai trò (tuỳ Data Scope); tạo/sửa cần quyền `planning.manage` (mặc định ADMIN, HR_RECRUITER).
+**Ai dùng:** Xem được cả 3 vai trò (tuỳ theo Data Scope); tạo/sửa kế hoạch cần quyền `planning.manage` (mặc định `ADMIN`, `HR_RECRUITER`).
 
 ## 7.1 Planning là gì?
 
-Planning thay thế cho "Định mức lao động/ngày" cố định trên Department bằng cách quản lý nhu cầu nhân lực **theo từng giai đoạn** (khoảng ngày cụ thể), cho một bộ phận. Ví dụ thực tế:
+Planning là công cụ quản lý **Nhu cầu tuyển dụng Tập nghề theo từng giai đoạn** (khoảng ngày cụ thể) cho từng bộ phận theo cơ cấu tổ chức Location → Division → Department → Section → Group.
 
-> *Bộ phận Cúc – Fast H cần 120 lao động, từ ngày 01/09 đến 15/09.*
-
-Đây chính là một "kế hoạch" (Planning Period) — thay vì phải nhớ một con số quota cố định áp dụng mãi mãi, bạn khai báo rõ **cần bao nhiêu người, trong khoảng thời gian nào**.
+Hệ thống sử dụng các thuật ngữ tuyển dụng chuẩn:
+- **Nhu cầu nhân lực / Nhu cầu Tập nghề** (không dùng thuật ngữ Quota).
+- **Phân bổ:** Số lượng người tập nghề đã được xếp vào bộ phận.
+- **Nghỉ việc:** Số lượng người tập nghề trong kế hoạch đã nghỉ việc.
+- **Cần tuyển:** Số lượng nhân sự cần tiếp tục tuyển dụng để đáp ứng đủ nhu cầu.
 
 <img src="images/desktop/planning-active.png" width="720" alt="Planning — Đang áp dụng">
 
-## 7.2 Ba trạng thái của một kế hoạch
+## 7.2 Cho phép nhiều kế hoạch trùng thời gian & Yêu cầu bổ sung
 
-| Trạng thái | Ý nghĩa |
-|---|---|
-| **Nháp** (Draft) | Đã tạo nhưng chưa áp dụng — chưa tính vào số liệu vận hành |
-| **Đang áp dụng** (Active) | Kế hoạch đang có hiệu lực — hệ thống tính tỷ lệ lấp đầy thực tế cho kế hoạch này |
-| **Đã hết hạn** (Expired) | Kế hoạch cũ, đã bị thay thế bởi phiên bản mới hơn hoặc đã qua ngày kết thúc |
+Hệ thống cho phép **nhiều kế hoạch cùng tồn tại trong cùng một khoảng thời gian** cho cùng một bộ phận, phân biệt rõ giữa hai khái niệm:
 
-Chuyển đổi giữa 3 tab **Đang áp dụng / Nháp / Đã hết hạn** ở đầu trang để xem từng nhóm.
+1. **Kế hoạch gốc (Original):** Yêu cầu nhân lực ban đầu của bộ phận cho một đợt tập nghề.
+2. **Yêu cầu bổ sung (Supplement):** Khi bộ phận phát sinh nhu cầu tăng thêm nhân sự trong cùng khoảng thời gian (Bổ sung lần 1, Bổ sung lần 2...). Đây là các yêu cầu cộng dồn nhu cầu, không phải thay thế kế hoạch gốc.
+3. **Phiên bản mới (Versioning):** Khi cần chỉnh sửa thông tin của một kế hoạch đang chạy, hệ thống tạo ra một phiên bản mới (v2, v3) và chuyển bản cũ sang trạng thái Đã hết hạn để giữ nguyên lịch sử kiểm toán.
 
-<img src="images/desktop/planning-draft.png" width="720" alt="Planning — Nháp"><br>
-<img src="images/desktop/planning-expired.png" width="720" alt="Planning — Đã hết hạn">
+## 7.3 Phân tách giới tính & Công thức tính tự động
 
-## 7.3 Đọc chỉ số lấp đầy (Fill Rate)
+Mỗi kế hoạch quản lý chi tiết theo giới tính:
 
-Với kế hoạch **Đang áp dụng**, mỗi dòng hiện: `active/demand (percent%)`, kèm `· thiếu N` nếu chưa đủ.
+| Nhóm chỉ số | Chi tiết | Cách tính / Nguồn dữ liệu |
+|---|---|---|
+| **Nhu cầu cần** | Nhu cầu Nam (`demandMale`), Nhu cầu Nữ (`demandFemale`) | Do người tạo kế hoạch nhập |
+| **Phân bổ** | Phân bổ Nam (`allocatedMale`), Phân bổ Nữ (`allocatedFemale`) | Tự động tổng hợp từ các đợt tập nghề đã được xếp việc (`APPROVED`) vào kế hoạch này |
+| **Nghỉ việc** | Nghỉ Nam (`resignedMale`), Nghỉ Nữ (`resignedFemale`) | Tự động tổng hợp từ các yêu cầu Nghỉ việc (`RESIGNATION`) đã có hiệu lực (`INACTIVE`) của kế hoạch |
+| **Cần tuyển** | Cần tuyển Nam, Cần tuyển Nữ, Tổng cần tuyển | **Tự động tính theo công thức tuyển dụng chuẩn** |
 
-| Chỉ số | Ý nghĩa |
-|---|---|
-| **Nhu cầu (demand)** | Số lượng lao động kế hoạch cần — đúng bằng "Nhu cầu (số lượng)" bạn khai khi tạo |
-| **Đang có (active)** | Số lao động thực tế đã được phân bổ vào kế hoạch này |
-| **Thiếu (missing)** | `Nhu cầu − Đang có` (không bao giờ âm) |
-| **Tỷ lệ %** | `Đang có ÷ Nhu cầu`, làm tròn |
+### Công thức tính số Cần tuyển:
 
-Kế hoạch ở trạng thái Nháp/Đã hết hạn không hiện tỷ lệ lấp đầy — chỉ hiện "Nhu cầu: N" đơn thuần.
+$$\text{Cần tuyển Nam} = \max(0, \text{Nhu cầu Nam} - \text{Phân bổ Nam} + \text{Nghỉ việc Nam})$$
 
-## 7.4 Tạo kế hoạch mới
+$$\text{Cần tuyển Nữ} = \max(0, \text{Nhu cầu Nữ} - \text{Phân bổ Nữ} + \text{Nghỉ việc Nữ})$$
 
-Bấm **"+ Tạo kế hoạch"**, điền:
-1. **Bộ phận** — bắt buộc.
-2. **Từ ngày / Đến ngày** — bắt buộc, không được trùng khoảng ngày với một kế hoạch **Đang áp dụng** khác của cùng bộ phận + nhóm.
-3. **Nhu cầu (số lượng)** — bắt buộc.
-4. **Ghi chú** — tuỳ chọn.
-5. Tick **"Kích hoạt ngay"** để tạo thẳng ở trạng thái Đang áp dụng, hoặc bỏ tick để lưu Nháp trước.
+$$\text{Tổng cần tuyển} = \text{Cần tuyển Nam} + \text{Cần tuyển Nữ}$$
 
-Nếu kích hoạt ngay và có lao động **chưa thuộc kế hoạch nào** (Unplanned) ở bộ phận đó, hệ thống sẽ tự mở hộp thoại **"Phân bổ lao động chưa có kế hoạch"** để bạn gán họ vào kế hoạch vừa tạo.
+**Ví dụ thực tế:**
+- **Nam:** Nhu cầu = 20, Phân bổ = 15, Nghỉ việc = 2 $\longrightarrow$ **Cần tuyển = $20 - 15 + 2 = 7$**
+- **Nữ:** Nhu cầu = 30, Phân bổ = 25, Nghỉ việc = 1 $\longrightarrow$ **Cần tuyển = $30 - 25 + 1 = 6$**
+- **Tổng cần tuyển:** $7 + 6 = 13$ người.
 
-## 7.5 Sửa kế hoạch — giữ nguyên lịch sử (Versioning)
+> **Quy tắc bảo vệ:** Người dùng không nhập tay cột "Cần tuyển". Nếu số lượng phân bổ thực tế vượt quá nhu cầu, hệ thống tự động giữ số Cần tuyển ở mức **0** (không để xảy ra số cần tuyển âm).
 
-Bấm **"Sửa (tạo version mới)"** trên một kế hoạch Đang áp dụng. Đây **không phải** sửa đè lên kế hoạch cũ — hệ thống:
+## 7.4 Tự động cập nhật Phân bổ, Nghỉ việc và Thuyên chuyển
 
-1. Tạo một **phiên bản mới** (version + 1) với thông tin bạn vừa sửa.
-2. Chuyển **phiên bản cũ sang trạng thái "Đã hết hạn"** — không xoá, vẫn xem lại được ở tab Đã hết hạn.
+Hệ thống tự động liên kết các luồng vận hành để cập nhật dữ liệu Planning theo thời gian thực:
 
-> **Mẹo:** Nhờ cơ chế này, bạn luôn có thể xem lại "kế hoạch ban đầu là gì, đã điều chỉnh những gì, khi nào" mà không lo mất dữ liệu lịch sử.
+1. **Khi HR xếp việc (Recruiter Assignment):**
+   - Khi một người tập nghề được duyệt nhận việc (`APPROVED`) và gán vào bộ phận, hệ thống tự động tìm kế hoạch ACTIVE phù hợp (ưu tiên kế hoạch gốc, sau đó đến các kế hoạch bổ sung còn thiếu chỉ tiêu theo đúng giới tính) và cập nhật số Phân bổ.
+   - Thao tác là giao dịch an toàn (transactional), chống trùng lặp (idempotent) khi chỉnh sửa bộ phận hoặc duyệt lại.
 
-## 7.6 Phân bổ lao động chưa có kế hoạch
+2. **Khi có Nghỉ việc (Resignation):**
+   - Khi yêu cầu nghỉ việc được HR phê duyệt có hiệu lực, số lượng Nghỉ việc của kế hoạch tương ứng tự động tăng lên, kéo theo số Cần tuyển tăng tương ứng để bộ phận tiếp tục tuyển bù.
 
-Bấm **"Phân bổ lao động"** trên một kế hoạch Đang áp dụng để xem danh sách lao động đang làm ở bộ phận đó nhưng **chưa thuộc kế hoạch Đang áp dụng nào** (Unplanned), tick chọn người cần gán, bấm **"Phân bổ đã chọn"**.
+3. **Khi có Thuyên chuyển (Transfer):**
+   - Khi người tập nghề hoàn tất thuyên chuyển đến bộ phận mới (`CONFIRM_ARRIVED`), bộ phận nguồn được giảm phân bổ và bộ phận đích được tự động tăng phân bổ vào kế hoạch đang áp dụng của bộ phận đích.
+   - Không cập nhật khi yêu cầu mới ở trạng thái chờ duyệt (`PENDING_HR`).
+
+## 7.5 Tạo kế hoạch gốc & Yêu cầu bổ sung
+
+1. **Tạo kế hoạch gốc:**
+   - Bấm **"+ Kế hoạch gốc mới"**
+   - Chọn Bộ phận, khoảng ngày (Từ ngày → Đến ngày).
+   - Nhập Nhu cầu Nam và Nhu cầu Nữ.
+   - Chọn Kích hoạt ngay (Active) hoặc lưu Nháp (Draft).
+
+2. **Tạo yêu cầu bổ sung:**
+   - Bấm **"Yêu cầu bổ sung"**
+   - Chọn Bộ phận và liên kết với Kế hoạch gốc tương ứng trong khoảng thời gian đó.
+   - Nhập Nhu cầu bổ sung (Nam / Nữ).
+   - Hệ thống tự động đánh số thứ tự bổ sung (Bổ sung 1, Bổ sung 2...).
+
+## 7.6 Sửa kế hoạch — Lưu lịch sử phiên bản (Versioning)
+
+Khi cần điều chỉnh ngày hoặc nhu cầu của một kế hoạch đang chạy:
+1. Bấm **"Sửa (tạo version mới)"** trên dòng kế hoạch.
+2. Nhập thông tin điều chỉnh.
+3. Hệ thống tạo ra **phiên bản mới (v2, v3...)**, giữ nguyên toàn bộ liên kết phân bổ hiện tại và chuyển bản ghi cũ sang trạng thái **Đã hết hạn** để lưu vết kiểm toán.
 
 Tiếp theo: [08 — Workforce Movement](./08-workforce-movement.md)

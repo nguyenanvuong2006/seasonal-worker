@@ -21,7 +21,10 @@ import { Building2, Plus } from "lucide-react";
 type Dept = {
   id: string;
   stt: number | null;
+  location: string | null;
+  division: string | null;
   deptName: string;
+  section: string | null;
   groupName: string;
   vnName: string | null;
   supervisor: string | null;
@@ -41,7 +44,10 @@ export default function DepartmentsAdminPage() {
   const [saving, setSaving] = useState(false);
   const [q, setQ] = useState(() => searchParams.get("q") ?? "");
   const [form, setForm] = useState({
+    location: "",
+    division: "",
     deptName: "",
+    section: "",
     groupName: "",
     vnName: "",
     supervisor: "",
@@ -70,6 +76,9 @@ export default function DepartmentsAdminPage() {
         r.deptName.toLowerCase().includes(s) ||
         r.groupName.toLowerCase().includes(s) ||
         (r.vnName ?? "").toLowerCase().includes(s) ||
+        (r.location ?? "").toLowerCase().includes(s) ||
+        (r.division ?? "").toLowerCase().includes(s) ||
+        (r.section ?? "").toLowerCase().includes(s) ||
         (r.supervisor ?? "").toLowerCase().includes(s),
     );
   }, [rows, q]);
@@ -87,9 +96,20 @@ export default function DepartmentsAdminPage() {
         toast({ title: d.error ?? "Lỗi tạo bộ phận", variant: "destructive" });
         return;
       }
-      toast({ title: "Đã thêm bộ phận — tự động vào dropdown Daily Application" });
+      toast({ title: "Đã thêm bộ phận — tự động cập nhật cơ cấu tổ chức" });
       setOpen(false);
-      setForm({ deptName: "", groupName: "", vnName: "", supervisor: "", supervisorPhone: "", sheetLink: "", dailyQuota: 0 });
+      setForm({
+        location: "",
+        division: "",
+        deptName: "",
+        section: "",
+        groupName: "",
+        vnName: "",
+        supervisor: "",
+        supervisorPhone: "",
+        sheetLink: "",
+        dailyQuota: 0,
+      });
       await load();
     } finally {
       setSaving(false);
@@ -123,11 +143,11 @@ export default function DepartmentsAdminPage() {
   return (
     <div className="space-y-5">
       <PageHeader
-        title={`Bộ phận & Nhóm (${rows.length})`}
+        title={`Cơ cấu tổ chức — Bộ phận (${rows.length})`}
         description={
           <>
-            Cấu trúc <b>Dept. + Group</b> giống hệt sheet gốc. Thêm bộ phận mới ở đây sẽ <b>tự động xuất hiện trong dropdown</b>{" "}
-            của Daily Application.
+            Chuẩn hóa cơ cấu tổ chức Dalat Hasfarm: <b>Location → Division → Department → Section → Group</b>.
+            Bộ phận tạo ở đây sẽ tự động hiển thị trong dropdown tiếp nhận Tập nghề và Data Scope.
           </>
         }
         actions={
@@ -137,17 +157,17 @@ export default function DepartmentsAdminPage() {
         }
       />
 
-      <SearchBar value={q} onChange={setQ} placeholder="Tìm Dept / Group / Tên tiếng Việt / Người phụ trách..." className="max-w-md" />
+      <SearchBar value={q} onChange={setQ} placeholder="Tìm Location / Division / Dept / Section / Group / Tên tiếng Việt..." className="max-w-md" />
 
       <Card className="overflow-hidden p-0">
         <div className="flex items-center justify-between border-b border-border px-4 py-3">
-          <p className="text-[13px] font-semibold text-fg">Danh sách bộ phận</p>
+          <p className="text-[13px] font-semibold text-fg">Danh sách cơ cấu bộ phận</p>
           <Badge tone="gray">{filtered.length} dòng</Badge>
         </div>
         <CardContent className="p-0">
           {loading ? (
             <div className="p-4">
-              <SkeletonTable rows={6} cols={8} />
+              <SkeletonTable rows={6} cols={9} />
             </div>
           ) : filtered.length === 0 ? (
             <EmptyState
@@ -160,7 +180,7 @@ export default function DepartmentsAdminPage() {
               <table className="grid-sheet w-full text-[13px]">
                 <thead className="sticky top-0 bg-primary text-white">
                   <tr>
-                    {["STT", "Dept.", "Group", "Tên Tiếng Việt", "Phụ trách", "SĐT", "Quota", "Hôm nay", "Tổng", "TT", ""].map(
+                    {["STT", "Location", "Division", "Department", "Section", "Group", "Tên Tiếng Việt", "Phụ trách", "SĐT", "Nhu cầu/ngày", "Hôm nay", "Tổng", "TT", ""].map(
                       (h) => (
                         <th key={h} className="px-3 py-2.5 text-left text-[10.5px] font-semibold uppercase tracking-wide">
                           {h}
@@ -173,7 +193,10 @@ export default function DepartmentsAdminPage() {
                   {filtered.map((d) => (
                     <tr key={d.id} className="border-b border-border transition-colors hover:bg-surface-hover">
                       <td className="px-3 py-2 text-fg-muted">{d.stt}</td>
+                      <td className="px-3 py-2 text-xs text-fg-secondary">{d.location || "—"}</td>
+                      <td className="px-3 py-2 text-xs text-fg-secondary">{d.division || "—"}</td>
                       <td className="px-3 py-2 font-semibold text-fg">{d.deptName}</td>
+                      <td className="px-3 py-2 text-xs text-fg-secondary">{d.section || d.groupName || "—"}</td>
                       <td className="px-3 py-2">{d.groupName ? <Badge tone="blue">{d.groupName}</Badge> : <span className="text-fg-muted">—</span>}</td>
                       <td className="px-3 py-2 text-fg-secondary">{d.vnName ?? "—"}</td>
                       <td className="px-3 py-2 text-fg-secondary">{d.supervisor ?? "—"}</td>
@@ -213,47 +236,65 @@ export default function DepartmentsAdminPage() {
         </CardContent>
       </Card>
 
-      <Modal open={open} onClose={() => setOpen(false)} title="Thêm bộ phận mới" width="max-w-xl">
+      <Modal open={open} onClose={() => setOpen(false)} title="Thêm bộ phận mới vào cơ cấu tổ chức" width="max-w-xl">
         <div className="space-y-4">
-          <div className="grid gap-4 md:grid-cols-2">
-            <FormField label="Dept. (tên bộ phận)" required>
+          <div className="grid gap-3 md:grid-cols-2">
+            <FormField label="Location (Trại / Vùng / Địa điểm)">
+              <Input
+                value={form.location}
+                onChange={(e) => setForm({ ...form, location: e.target.value })}
+                placeholder="VD: Trại Đa Quý, VP Đà Lạt..."
+              />
+            </FormField>
+            <FormField label="Division (Khối)">
+              <Input
+                value={form.division}
+                onChange={(e) => setForm({ ...form, division: e.target.value })}
+                placeholder="VD: Khối Sản Xuất, Khối Hậu Cần..."
+              />
+            </FormField>
+          </div>
+          <div className="grid gap-3 md:grid-cols-2">
+            <FormField label="Department (Tên bộ phận)" required>
               <Input
                 value={form.deptName}
                 onChange={(e) => setForm({ ...form, deptName: e.target.value })}
                 placeholder="VD: Chrysanth Spray"
               />
             </FormField>
-            <FormField label="Group (nhóm — có thể để trống)">
+            <FormField label="Section (Phân xưởng / Mảng)">
+              <Input
+                value={form.section}
+                onChange={(e) => setForm({ ...form, section: e.target.value })}
+                placeholder="VD: Thu hoạch, Đóng gói..."
+              />
+            </FormField>
+          </div>
+          <div className="grid gap-3 md:grid-cols-2">
+            <FormField label="Group (Tổ / Nhóm)">
               <Input
                 value={form.groupName}
                 onChange={(e) => setForm({ ...form, groupName: e.target.value })}
                 placeholder="VD: Fast H"
               />
             </FormField>
+            <FormField label="Tên Tiếng Việt">
+              <Input
+                value={form.vnName}
+                onChange={(e) => setForm({ ...form, vnName: e.target.value })}
+                placeholder="VD: Cúc Fast nhóm thu hoạch"
+              />
+            </FormField>
           </div>
-          <FormField label="Tên Tiếng Việt">
-            <Input
-              value={form.vnName}
-              onChange={(e) => setForm({ ...form, vnName: e.target.value })}
-              placeholder="VD: Cúc Fast nhóm thu hoạch"
-            />
-          </FormField>
-          <div className="grid gap-4 md:grid-cols-2">
-            <FormField label="Phụ trách lao động">
+          <div className="grid gap-3 md:grid-cols-2">
+            <FormField label="Phụ trách tiếp nhận">
               <Input value={form.supervisor} onChange={(e) => setForm({ ...form, supervisor: e.target.value })} />
             </FormField>
             <FormField label="SĐT phụ trách">
               <Input value={form.supervisorPhone} onChange={(e) => setForm({ ...form, supervisorPhone: e.target.value })} />
             </FormField>
           </div>
-          <FormField label="Link sheet riêng (nếu có)">
-            <Input
-              value={form.sheetLink}
-              onChange={(e) => setForm({ ...form, sheetLink: e.target.value })}
-              placeholder="https://docs.google.com/..."
-            />
-          </FormField>
-          <FormField label="Định mức lao động / ngày">
+          <FormField label="Nhu cầu nhân lực dự kiến / ngày">
             <Input
               type="number"
               value={form.dailyQuota}

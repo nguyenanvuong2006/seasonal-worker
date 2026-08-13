@@ -54,24 +54,24 @@ const NAV_GROUPS: NavGroup[] = [
     ],
   },
   {
-    group: "Tuyển & nhận lao động",
+    group: "Tuyển & Tiếp nhận Tập nghề",
     items: [
       { href: "/hr/registrations", label: "Daily Application", icon: ClipboardList, roles: ["ADMIN", "HR_RECRUITER"] },
-      { href: "/hr/workers", label: "DW Data", icon: Database, roles: ["ADMIN", "HR_RECRUITER"] },
-      { href: "/admin/departments", label: "Department", icon: Building2, roles: ["ADMIN", "HR_RECRUITER"] },
+      { href: "/hr/workers", label: "DW Data (Đối chiếu)", icon: Database, roles: ["ADMIN", "HR_RECRUITER"] },
+      { href: "/admin/departments", label: "Cơ cấu tổ chức", icon: Building2, roles: ["ADMIN", "HR_RECRUITER"] },
       { href: "/department", label: "Bộ phận của tôi", icon: Factory, roles: ["DEPT_MANAGER", "ADMIN", "HR_RECRUITER"] },
     ],
   },
   {
-    group: "Quản lý lao động",
+    group: "Quản lý Tập nghề",
     items: [
-      { href: "/admin/worker-profiles", label: "Hồ sơ điện tử", icon: IdCard, roles: ["ADMIN", "HR_RECRUITER"] },
+      { href: "/admin/worker-profiles", label: "Hồ sơ Tập nghề", icon: IdCard, roles: ["ADMIN", "HR_RECRUITER"] },
       { href: "/admin/workforce-movements", label: "Nghỉ việc / Thuyên chuyển", icon: ArrowLeftRight, roles: ["ADMIN", "HR_RECRUITER", "DEPT_MANAGER"] },
     ],
   },
   {
-    group: "Kế hoạch",
-    items: [{ href: "/admin/planning", label: "Planning", icon: CalendarRange, roles: ["ADMIN", "HR_RECRUITER", "DEPT_MANAGER"] }],
+    group: "Kế hoạch nhu cầu",
+    items: [{ href: "/admin/planning", label: "Planning (Nhu cầu)", icon: CalendarRange, roles: ["ADMIN", "HR_RECRUITER", "DEPT_MANAGER"] }],
   },
   {
     group: "Cấu hình nghiệp vụ",
@@ -203,7 +203,7 @@ export function Sidebar({ session, branding }: { session: Session; branding?: Pu
       {!collapsed && (
         <div className="border-t border-white/10 p-2.5">
           <Link href="/" className="block rounded-[9px] bg-white/[0.06] px-2.5 py-2 text-center text-[12px] font-medium text-white/70 hover:bg-white/[0.1] hover:text-white">
-            ← Về cổng đăng ký lao động
+            ← Về cổng đăng ký Tập nghề
           </Link>
         </div>
       )}

@@ -4,6 +4,7 @@ import { db } from "@/db";
 import { dailyApplications, employmentSessions, workerProfiles } from "@/db/schema";
 import { requireRoleAndPermission, writeAudit } from "@/lib/auth";
 import { getWorkflowStages } from "@/lib/workflow";
+import { autoAllocateInternship } from "@/lib/planning";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -112,6 +113,15 @@ export async function PATCH(req: Request, ctx: { params: Promise<{ id: string }>
       if ("startingDate" in patch) sessionPatch.startingDate = patch.startingDate;
       if (linkedSession && Object.keys(sessionPatch).length > 0) {
         await tx.update(employmentSessions).set(sessionPatch).where(eq(employmentSessions.id, linkedSession.id));
+      }
+
+      // Tự động phân bổ vào Kế hoạch Tập nghề (Planning) khi APPROVED có deptId
+      const finalStatus = (patch.status as string) ?? existing.status;
+      const finalDeptId = (patch.deptId as string) ?? existing.deptId;
+      const finalStartingDate = (patch.startingDate as string) ?? existing.startingDate;
+
+      if (linkedSession && finalStatus === "APPROVED" && finalDeptId) {
+        await autoAllocateInternship(linkedSession.id, finalDeptId, finalStartingDate, guard.session.username, tx);
       }
 
       if (linkedSession) {

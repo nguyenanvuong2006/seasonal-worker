@@ -289,7 +289,7 @@ export function PageHeader({
 }
 
 /* ---------------- Badge ---------------- */
-type BadgeTone = "gray" | "green" | "amber" | "red" | "gold" | "blue";
+type BadgeTone = "gray" | "green" | "amber" | "red" | "gold" | "blue" | "purple";
 const badgeTones: Record<BadgeTone, string> = {
   gray: "bg-surface-hover text-fg-secondary",
   green: "bg-success-tint text-success",
@@ -297,6 +297,7 @@ const badgeTones: Record<BadgeTone, string> = {
   red: "bg-danger-tint text-danger",
   gold: "bg-accent-tint text-accent",
   blue: "bg-info-tint text-info",
+  purple: "bg-purple-100 text-purple-800",
 };
 const badgeDotTones: Record<BadgeTone, string> = {
   gray: "bg-fg-muted",
@@ -305,6 +306,7 @@ const badgeDotTones: Record<BadgeTone, string> = {
   red: "bg-danger",
   gold: "bg-accent",
   blue: "bg-info",
+  purple: "bg-purple-600",
 };
 
 export function Badge({

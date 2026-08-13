@@ -186,7 +186,7 @@ export default function ApplicantPortal({ questions }: { questions: FormQuestion
       
                 <p className="mt-3 max-w-xl text-sm leading-7 text-white/80">
                   Nhập số CCCD và số điện thoại để hệ thống kiểm tra
-                  bạn là lao động mới hay lao động đã có hồ sơ tại
+                  bạn là người tập nghề mới hay đã có hồ sơ tại
                   Dalat Hasfarm.
                 </p>
       
@@ -531,7 +531,7 @@ export default function ApplicantPortal({ questions }: { questions: FormQuestion
       <div className="rounded-3xl border border-emerald-200 bg-emerald-50 p-5">
 
         <p className="font-bold text-emerald-900">
-          Hệ thống đã nhận diện bạn là lao động đã có hồ sơ.
+          Hệ thống đã nhận diện bạn là người tập nghề đã có hồ sơ.
         </p>
 
         <p className="mt-2 text-sm leading-7 text-slate-700">
@@ -990,8 +990,8 @@ export default function ApplicantPortal({ questions }: { questions: FormQuestion
 
               <br />
 
-              Nếu bạn là lao động mới, hồ sơ sẽ được xác minh trước khi đưa vào
-              danh sách lao động chính thức.
+              Nếu bạn là người tập nghề mới, hồ sơ sẽ được xác minh trước khi đưa vào
+              danh sách tiếp nhận chính thức.
 
             </p>
 

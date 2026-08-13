@@ -10,7 +10,10 @@ CREATE EXTENSION IF NOT EXISTS pgcrypto;
 CREATE TABLE IF NOT EXISTS departments (
   id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
   stt integer,
+  location varchar(120) DEFAULT '',
+  division varchar(120) DEFAULT '',
   dept_name varchar(120) NOT NULL,
+  section varchar(120) DEFAULT '',
   group_name varchar(120) NOT NULL DEFAULT '',
   vn_name varchar(200),
   supervisor varchar(160),
@@ -369,23 +372,33 @@ CREATE TABLE IF NOT EXISTS planning_periods (
   id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
   department_id uuid NOT NULL,
   section varchar(120),
+  group_name varchar(120),
+  location varchar(120),
+  division varchar(120),
   start_date date NOT NULL,
   end_date date NOT NULL,
   status varchar(20) NOT NULL DEFAULT 'DRAFT',
   version integer NOT NULL DEFAULT 1,
+  request_type varchar(24) NOT NULL DEFAULT 'ORIGINAL',
+  supplement_index integer NOT NULL DEFAULT 0,
+  parent_period_id uuid REFERENCES planning_periods(id) ON DELETE SET NULL,
   superseded_by uuid,
   created_by varchar(64) NOT NULL,
   created_at timestamptz NOT NULL DEFAULT now(),
   updated_at timestamptz NOT NULL DEFAULT now()
 );
-CREATE UNIQUE INDEX IF NOT EXISTS planning_active_dept_section_uq ON planning_periods (department_id, section) WHERE status = 'ACTIVE';
+CREATE INDEX IF NOT EXISTS planning_dept_status_idx ON planning_periods (department_id, status);
+CREATE INDEX IF NOT EXISTS planning_parent_idx ON planning_periods (parent_period_id);
 
 CREATE TABLE IF NOT EXISTS planning_targets (
   id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
   planning_period_id uuid NOT NULL REFERENCES planning_periods(id) ON DELETE CASCADE,
+  demand_male integer NOT NULL DEFAULT 0,
+  demand_female integer NOT NULL DEFAULT 0,
   target_count integer NOT NULL DEFAULT 0,
   note text
 );
+CREATE UNIQUE INDEX IF NOT EXISTS planning_target_period_uq ON planning_targets (planning_period_id);
 
 CREATE TABLE IF NOT EXISTS planning_allocations (
   id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -396,6 +409,7 @@ CREATE TABLE IF NOT EXISTS planning_allocations (
 );
 CREATE INDEX IF NOT EXISTS planning_alloc_session_idx ON planning_allocations (employment_session_id);
 CREATE INDEX IF NOT EXISTS planning_alloc_period_idx ON planning_allocations (planning_period_id);
+CREATE UNIQUE INDEX IF NOT EXISTS planning_alloc_session_period_uq ON planning_allocations (employment_session_id, planning_period_id);
 
 -- Di trú 1 lần users.deptId (cột cũ, đơn) sang user_department_scopes (nhiều-nhiều) —
 -- an toàn chạy lại nhiều lần (ON CONFLICT DO NOTHING theo unique index ở trên).

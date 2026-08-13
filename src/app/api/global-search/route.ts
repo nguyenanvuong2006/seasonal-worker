@@ -66,7 +66,7 @@ export async function GET(req: Request) {
     if (rows.length > 0) {
       groups.push({
         type: "worker",
-        label: "Người lao động",
+        label: "Hồ sơ Tập nghề",
         items: rows.map((r) => ({
           id: r.id,
           title: r.fullName,

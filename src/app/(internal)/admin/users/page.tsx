@@ -108,7 +108,7 @@ export default function UsersAdminPage() {
         <div>
           <h1 className="text-2xl font-black text-fg">Tài khoản & phân quyền (RBAC)</h1>
           <p className="text-sm text-fg-secondary">
-            Cấp quyền cho HR tuyển dụng và quản đốc từng xưởng.
+            Cấp quyền cho HR tuyển dụng và Quản lý từng bộ phận.
           </p>
         </div>
         <Button variant="gold" onClick={() => setOpen(true)}>

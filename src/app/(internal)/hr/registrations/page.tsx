@@ -42,12 +42,12 @@ export default async function HrRegistrationsPage() {
   return (
     <div className="space-y-5">
       <PageHeader
-        title="Sắp xếp công việc theo ngày"
+        title="Tiếp nhận & Xếp việc Tập nghề theo ngày"
         description={
           <>
             Màn hình mặc định <b>chỉ hiện đơn hôm nay</b>. Tick ô <b>&ldquo;Xem khoảng ngày&rdquo;</b> để tra cứu &amp; xuất
             kết quả các ngày trước làm tham khảo. Cột <b>DW Data</b> tự động đối chiếu 3 tầng (CCCD → Tên+Năm sinh →
-            Tên+SĐT) để xác định lao động CŨ hay MỚI, không phụ thuộc vào lời tự khai.
+            Tên+SĐT) để xác định người tập nghề CŨ hay MỚI, không phụ thuộc vào lời tự khai.
           </>
         }
         actions={
@@ -61,8 +61,8 @@ export default async function HrRegistrationsPage() {
 
       <div className="grid grid-cols-3 gap-3">
         <KpiCard icon={<Clock className="h-4 w-4" />} label="Chờ duyệt hôm nay" value={pipeline?.pending ?? 0} tone="warning" />
-        <KpiCard icon={<CheckCircle2 className="h-4 w-4" />} label="Đã duyệt hôm nay" value={pipeline?.approved ?? 0} tone="success" />
-        <KpiCard icon={<UserPlus2 className="h-4 w-4" />} label="Lao động mới" value={pipeline?.newToDw ?? 0} tone="info" />
+        <KpiCard icon={<CheckCircle2 className="h-4 w-4" />} label="Đã nhận việc hôm nay" value={pipeline?.approved ?? 0} tone="success" />
+        <KpiCard icon={<UserPlus2 className="h-4 w-4" />} label="Người tập nghề mới" value={pipeline?.newToDw ?? 0} tone="info" />
       </div>
 
       <RegistrationsGrid departments={depts} canEdit />
