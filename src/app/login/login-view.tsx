@@ -55,8 +55,6 @@ export function LoginView({ branding }: { branding: PublicBranding }) {
             </p>
           </div>
 
-          {/* Year Theme — "lớp chiến dịch" phụ, luôn nhỏ hơn/nhẹ hơn logo + tên hệ thống ở trên,
-              không hiển thị gì nếu Admin chưa cấu hình (tránh khoảng trống xấu). */}
           {hasTheme ? (
             <div className="mt-10 space-y-3">
               {branding.yearThemeImage ? (
@@ -76,7 +74,7 @@ export function LoginView({ branding }: { branding: PublicBranding }) {
             </div>
           ) : (
             <p className="mt-10 text-[10px] font-semibold uppercase tracking-[0.2em] text-white/40">
-              EST. 1994 • DA LAT — NETHERLANDS — JAPAN
+              Seasonal Internship • Dalat Hasfarm
             </p>
           )}
         </div>
