@@ -93,7 +93,11 @@ body {
    ============================================================ */
 .hasfarm-hero {
   position: relative;
-  background:
+  /* Longhand + solid fallback. The previous `background:` shorthand reset
+     background-color to transparent, so a later `.field-rows` background-image
+     override punched a cream hole through every brand band. */
+  background-color: #0f4424;
+  background-image:
     radial-gradient(1000px 460px at 12% -12%, rgba(244, 220, 156, 0.28), transparent 62%),
     radial-gradient(900px 480px at 96% 2%, rgba(92, 158, 71, 0.35), transparent 58%),
     linear-gradient(150deg, #08290f 0%, #0d3a1d 34%, #0f4424 62%, #145a2d 100%);
@@ -108,7 +112,10 @@ body {
 
 /* Field-row texture — subtle horizontal "planting rows" pattern used on
    brand surfaces (sidebar, hero) so the identity reads as an agricultural
-   operations brand without a single photo. */
+   operations brand without a single photo.
+   IMPORTANT: this rule must keep using the `background-image` longhand so it
+   can be layered as an overlay (sidebar) without wiping a parent's color.
+   Do NOT change it to the `background` shorthand. */
 .field-rows {
   background-image:
     repeating-linear-gradient(
@@ -125,6 +132,36 @@ body {
       transparent 1px,
       transparent 64px
     );
+}
+
+/* PRODUCTION ROOT CAUSE FIX (public registration visual regression).
+   `.hasfarm-hero` and `.field-rows` share specificity (0,1,0). Because
+   `.field-rows` is declared later and sets `background-image`, it replaced
+   the entire greenhouse gradient. Combined with a transparent background-
+   color from the old shorthand, the hero and the form StageHeader collapsed
+   onto the cream page surface — white-wash + white-on-white text.
+   This (0,2,0) rule paints the field-row texture ON TOP OF the greenhouse
+   stack so neither layer is lost, regardless of source order. */
+.hasfarm-hero.field-rows {
+  background-color: #0f4424;
+  background-image:
+    repeating-linear-gradient(
+      0deg,
+      rgba(255, 255, 255, 0.045) 0px,
+      rgba(255, 255, 255, 0.045) 1px,
+      transparent 1px,
+      transparent 26px
+    ),
+    repeating-linear-gradient(
+      90deg,
+      rgba(255, 255, 255, 0.02) 0px,
+      rgba(255, 255, 255, 0.02) 1px,
+      transparent 1px,
+      transparent 64px
+    ),
+    radial-gradient(1000px 460px at 12% -12%, rgba(244, 220, 156, 0.28), transparent 62%),
+    radial-gradient(900px 480px at 96% 2%, rgba(92, 158, 71, 0.35), transparent 58%),
+    linear-gradient(150deg, #08290f 0%, #0d3a1d 34%, #0f4424 62%, #145a2d 100%);
 }
 .field-rows-light {
   background-image:

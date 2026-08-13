@@ -88,7 +88,7 @@ function StageHeader({
             {subtitle ? <p className="mt-2 max-w-xl text-[13.5px] leading-6 text-white/80">{subtitle}</p> : null}
           </div>
         </div>
-        <div className="hidden shrink-0 md:block">
+        <div className="hidden shrink-0 lg:block">
           <Journey current={current} />
         </div>
       </div>
@@ -189,7 +189,8 @@ function FieldError({ message }: { message?: string | null }) {
   );
 }
 
-const inputClass = "h-14 rounded-2xl border-border bg-surface-raised px-5 text-[16px] font-medium tracking-[0.02em] focus:border-accent focus:ring-2 focus:ring-accent/20";
+const inputClass =
+  "h-14 rounded-2xl border-2 border-primary/30 bg-surface-raised px-5 text-[16px] font-medium tracking-[0.02em] text-fg placeholder:text-fg-muted focus:border-accent focus:ring-2 focus:ring-accent/25 focus:shadow-[0_0_0_3px_rgba(15,68,36,0.12)]";
 
 export default function ApplicantPortal({ questions }: { questions: FormQuestion[] }) {
   const [cccd, setCccd] = useState("");
@@ -369,11 +370,11 @@ export default function ApplicantPortal({ questions }: { questions: FormQuestion
           <StageHeader
             current={1}
             kicker="Bước 1 / 2 · Xác thực"
-            title="Xác thực thông tin ứng viên"
+            title="Xác thực thông tin"
             subtitle="Nhập số CCCD và số điện thoại để hệ thống kiểm tra bạn là người tập nghề mới hay đã có hồ sơ tại Dalat Hasfarm."
             icon={<ShieldCheck className="h-6 w-6" />}
           />
-          <CardContent className="space-y-7 p-6 md:p-8">
+          <CardContent className="space-y-7 bg-surface p-6 text-fg md:p-8">
             <div className="space-y-3">
               <Label className="text-[14px] font-bold text-fg">
                 Số CCCD

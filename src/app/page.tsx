@@ -30,33 +30,42 @@ export default async function ApplicantHomePage() {
   }
 
   return (
-    <main className="min-h-screen bg-bg text-fg">
+    <main className="min-h-screen w-full overflow-x-hidden bg-bg text-fg">
       {/* Utility strip */}
       <div className="border-b border-gold-200/60 bg-gold-50 px-4 py-2 text-center text-[11px] font-bold uppercase tracking-widest text-gold-700">
         <Sprout className="mr-1.5 inline h-3.5 w-3.5" aria-hidden />
         Thu nhập ~15 tháng lương/năm • Xe đưa đón Đà Lạt → Đạ Ròn & Lâm Hà • BHXH/BHYT đầy đủ
       </div>
 
-      {/* BRAND HERO — deep-green greenhouse band.
+      {/* BRAND HERO — deep-green greenhouse band + official photo.
           Official approved hero: public/brand/dalat-hasfarm-chrysanthemum-hero.png
-          (PNG — do not convert to JPG). Rendered as a decorative cover background:
-          background-size: cover + background-position keep the original aspect ratio
-          (never squashed/stretched) while filling the band. When the file is absent
-          (asset slot not yet supplied) a missing background renders nothing — the
-          deep-green gradient + field-rows texture carry the hero, so there is never
-          a broken image. */}
-      <header className="hasfarm-hero field-rows relative z-0 overflow-hidden px-4 pb-24 pt-6 text-white md:pb-28">
+          (PNG — do not convert to JPG). The file is a photo collage on a white
+          canvas. mix-blend-multiply lets the greenhouse gradient show through
+          that white so flower colors stay visible and the band cannot white-wash
+          or leave a right-hand white strip. A 404 is a no-op (CSS background) —
+          the `.hasfarm-hero.field-rows` gradient + texture carry the hero, so
+          there is never a broken image and never a full-bleed white overlay. */}
+      <header className="hasfarm-hero field-rows relative z-0 w-full overflow-hidden px-4 pb-24 pt-6 text-white md:pb-28">
         <div
-          className="pointer-events-none absolute inset-0 opacity-[0.16] mix-blend-screen"
+          className="pointer-events-none absolute inset-0 bg-no-repeat opacity-95 mix-blend-multiply"
           style={{
             backgroundImage: "url(/brand/dalat-hasfarm-chrysanthemum-hero.png)",
             backgroundSize: "cover",
-            backgroundPosition: "center 62%",
-            backgroundRepeat: "no-repeat",
+            backgroundPosition: "center 42%",
           }}
           aria-hidden
         />
-        <div className="relative mx-auto max-w-6xl">
+        {/* Localized dark-green scrim behind the headline only — not a
+            white/cream overlay across the whole photograph. */}
+        <div
+          className="pointer-events-none absolute inset-y-0 left-0 w-full max-w-[760px] md:w-[60%]"
+          style={{
+            background:
+              "linear-gradient(90deg, rgba(8, 41, 15, 0.88) 0%, rgba(13, 58, 29, 0.68) 58%, rgba(13, 58, 29, 0.18) 82%, transparent 100%)",
+          }}
+          aria-hidden
+        />
+        <div className="relative mx-auto w-full max-w-[1400px]">
           <div className="flex items-center justify-between">
             <BrandLogo light size="lg" />
             <div className="flex items-center gap-2">
@@ -95,7 +104,7 @@ export default async function ApplicantHomePage() {
         </div>
       </header>
 
-      <section className="relative z-10 mx-auto grid max-w-6xl gap-8 px-4 pb-20 md:-mt-16 md:grid-cols-[1.15fr_0.85fr]">
+      <section className="relative z-10 mx-auto grid w-full max-w-[1400px] gap-8 px-4 pb-20 lg:-mt-16 lg:grid-cols-[1.15fr_0.85fr]">
         <ApplicantPortal questions={questions} />
 
         <div className="space-y-4">
@@ -106,10 +115,10 @@ export default async function ApplicantHomePage() {
             </p>
             <ol className="mt-3 space-y-2 text-[13px]">
               {[
-                "Đơn vào hệ thống Daily Application của HR tiếp nhận",
-                "HR đối chiếu DW Data → xác nhận bạn là người tập nghề cũ hay mới",
-                "HR xếp Bộ phận từ cơ cấu tổ chức Location → Division → Department → Section → Group",
-                "Bạn tra cứu buổi chiều để biết bộ phận & người phụ trách tiếp nhận",
+                "Tiếp nhận thông tin đăng ký",
+                "Đối chiếu hồ sơ",
+                "Xếp bộ phận phù hợp",
+                "Thông báo kết quả tiếp nhận",
               ].map((s, i) => (
                 <li key={s} className="flex gap-2.5 rounded-xl bg-botanical-50 p-3">
                   <span className="flex h-5 w-5 shrink-0 items-center justify-center rounded-full bg-primary text-[10px] font-black text-white">
@@ -131,12 +140,12 @@ export default async function ApplicantHomePage() {
               <p className="text-[11px] text-white/70">Xem bộ phận được xếp</p>
             </Link>
             <a
-              href="tel:02633842777"
+              href="tel:+842633620295"
               className="rounded-[18px] border-2 border-accent/25 bg-accent-tint p-5 text-fg shadow-[0_10px_24px_rgba(226,109,28,0.12)] transition hover:-translate-y-[1px] hover:border-accent/50"
             >
               <Phone className="h-6 w-6 text-accent" aria-hidden />
               <p className="mt-2 text-sm font-black">Hỗ trợ nhân sự</p>
-              <p className="text-[11px] text-fg-secondary">0263 3842777 • 7h-17h</p>
+              <p className="text-[11px] text-fg-secondary">0263 3620295 • 7h-17h</p>
             </a>
           </div>
 
