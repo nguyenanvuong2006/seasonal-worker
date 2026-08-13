@@ -1,0 +1,2249 @@
+<!doctype html>
+<html lang="vi">
+<head>
+<meta charset="utf-8">
+<title>Seasonal Worker — Hướng dẫn sử dụng</title>
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<style>
+:root {
+  --bg: #f7f8f5; --surface: #ffffff; --border: #e3e7e0; --border-strong: #cdd4c8;
+  --fg: #16231a; --fg-secondary: #576358; --fg-muted: #8b968a;
+  --primary: #115830; --primary-hover: #0d4626; --primary-tint: #eaf3ec;
+  --accent: #b8841c; --accent-tint: #fbf3e1;
+  --success: #059669; --success-tint: #e7f6ef;
+  --warning: #b45309; --warning-tint: #fdf3e1;
+  --danger: #b91c1c; --danger-tint: #fbeaea;
+}
+* { box-sizing: border-box; }
+body {
+  margin: 0; background: var(--bg); color: var(--fg);
+  font-family: -apple-system, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+  line-height: 1.65; font-size: 15.5px;
+}
+.cover {
+  min-height: 100vh; display: flex; flex-direction: column; align-items: center; justify-content: center;
+  text-align: center; padding: 60px 24px;
+  background: linear-gradient(135deg, #071a0e 0%, #0f4a26 28%, #115830 58%, #1a6d3a 100%);
+  color: #fff;
+  page-break-after: always;
+}
+.cover .eyebrow { font-size: 12px; font-weight: 800; letter-spacing: .2em; text-transform: uppercase; color: #f4dc9c; margin-bottom: 18px; }
+.cover h1 { font-size: 56px; font-weight: 900; letter-spacing: -0.02em; margin: 0 0 14px; color: #ffffff; }
+.cover .sub { font-size: 19px; font-weight: 600; max-width: 640px; color: rgba(255,255,255,.9); margin-bottom: 6px; }
+.cover .sub2 { font-size: 14px; color: rgba(255,255,255,.65); max-width: 560px; }
+.cover .meta { margin-top: 48px; font-size: 12px; text-transform: uppercase; letter-spacing: .15em; color: rgba(255,255,255,.55); }
+.toc-page { max-width: 860px; margin: 0 auto; padding: 60px 32px; page-break-after: always; }
+.toc-page h2 { font-size: 13px; text-transform: uppercase; letter-spacing: .12em; color: var(--primary); margin: 28px 0 10px; }
+.toc-page ol, .toc-page ul { list-style: none; padding: 0; margin: 0 0 8px; columns: 1; }
+.toc-page li { padding: 5px 0; border-bottom: 1px dashed var(--border); font-size: 14.5px; }
+.toc-page a { color: var(--fg); text-decoration: none; }
+.toc-page a:hover { color: var(--primary); }
+.doc-page { max-width: 860px; margin: 0 auto; padding: 48px 32px; border-top: 1px solid var(--border); page-break-before: always; }
+.doc-page:first-of-type { border-top: none; }
+h1 { font-size: 28px; font-weight: 800; letter-spacing: -0.01em; color: var(--fg); margin: 0 0 6px; }
+h2 { font-size: 20px; font-weight: 800; color: var(--primary); margin: 34px 0 10px; padding-top: 8px; }
+h3 { font-size: 16px; font-weight: 700; color: var(--fg); margin: 24px 0 8px; }
+p { margin: 0 0 12px; color: var(--fg-secondary); }
+a { color: var(--primary); }
+strong { color: var(--fg); }
+ul, ol { margin: 0 0 14px; padding-left: 22px; color: var(--fg-secondary); }
+li { margin-bottom: 4px; }
+li > p { margin-bottom: 4px; }
+table { border-collapse: collapse; width: 100%; margin: 14px 0 20px; font-size: 13.8px; }
+th, td { border: 1px solid var(--border); padding: 8px 10px; text-align: left; vertical-align: top; }
+th { background: var(--primary); color: #fff; font-weight: 700; font-size: 12px; text-transform: uppercase; letter-spacing: .03em; }
+tr:nth-child(even) td { background: var(--primary-tint); }
+code { background: var(--border); padding: 1px 6px; border-radius: 4px; font-size: 13px; font-family: ui-monospace, "SF Mono", Menlo, monospace; }
+blockquote { margin: 16px 0; padding: 12px 16px; border-left: 3px solid var(--accent); background: var(--accent-tint); border-radius: 0 8px 8px 0; }
+blockquote p { margin: 0; color: var(--fg); font-size: 14px; }
+blockquote p strong:first-child { color: var(--accent); }
+img { max-width: 100%; border-radius: 10px; border: 1px solid var(--border); box-shadow: 0 1px 3px rgba(8,50,27,.08); margin: 10px 0 18px; display: block; }
+img.diagram { border: none; box-shadow: none; background: #fff; padding: 8px; }
+hr { border: none; border-top: 1px solid var(--border); margin: 28px 0; }
+table + p, p + table { margin-top: 4px; }
+.doc-page table img { max-width: 340px; }
+@media print {
+  body { background: #fff; }
+  .cover, .doc-page { page-break-inside: avoid; }
+  a { color: var(--fg); text-decoration: none; }
+}
+</style>
+</head>
+<body>
+
+<div class="cover">
+  <div class="eyebrow">Dalat Hasfarm</div>
+  <h1>SEASONAL WORKER</h1>
+  <p class="sub">Hướng dẫn sử dụng hệ thống quản lý lao động thời vụ</p>
+  <p class="sub2">Dành cho HR Tuyển dụng, Quản lý bộ phận và Quản trị hệ thống</p>
+  <div class="meta">Phiên bản tài liệu 1.0 &nbsp;·&nbsp; Cập nhật 12/08/2026</div>
+</div>
+
+<div class="toc-page">
+  <h1 style="border:none;">Mục lục</h1>
+  <ol>
+    <li><a href="#README">Trang bìa & Mục lục</a></li>
+<li><a href="#00-quick-start">Bắt đầu trong 5 phút</a></li>
+<li><a href="#01-gioi-thieu">1. Giới thiệu hệ thống</a></li>
+<li><a href="#02-dang-nhap-giao-dien">2. Đăng nhập & giao diện chung</a></li>
+<li><a href="#03-task-center">3. Task Center</a></li>
+<li><a href="#04-daily-application">4. Daily Application</a></li>
+<li><a href="#05-dw-data-worker-profile">5. DW Data / Worker Profile / Employment Session</a></li>
+<li><a href="#06-department">6. Department</a></li>
+<li><a href="#07-planning">7. Planning</a></li>
+<li><a href="#08-workforce-movement">8. Workforce Movement (Nghỉ việc & Thuyên chuyển)</a></li>
+<li><a href="#09-admin-modules">9. Các module Admin</a></li>
+<li><a href="#10-permissions-data-scope">10. Permissions & Data Scope</a></li>
+<li><a href="#11-import-export">11. Import / Export</a></li>
+<li><a href="#12-backup">12. Backup</a></li>
+<li><a href="#13-public-lookup">13. Tra cứu công khai (Public Lookup)</a></li>
+<li><a href="#14-mobile-guide">14. Hướng dẫn dùng trên điện thoại</a></li>
+<li><a href="#15-best-practices">15. Thói quen làm việc hiệu quả</a></li>
+<li><a href="#16-common-mistakes">16. Lỗi thường gặp khi thao tác</a></li>
+<li><a href="#17-troubleshooting">17. Xử lý sự cố (Troubleshooting)</a></li>
+<li><a href="#18-faq">18. Câu hỏi thường gặp (FAQ)</a></li>
+<li><a href="#19-glossary">19. Thuật ngữ (Glossary)</a></li>
+<li><a href="#20-sop">20. Quy trình xử lý tình huống (SOP)</a></li>
+<li><a href="#21-do-dont">21. Nên làm / Không nên làm theo vai trò</a></li>
+<li><a href="#22-checklists">22. Checklist vận hành</a></li>
+<li><a href="#23-appendix">23. Phụ lục tham chiếu nhanh</a></li>
+<li><a href="#role-hr">Cheat sheet — HR Tuyển dụng</a></li>
+<li><a href="#role-manager">Cheat sheet — Quản lý bộ phận (Quản đốc)</a></li>
+<li><a href="#role-admin">Cheat sheet — Admin</a></li>
+<li><a href="#CHANGELOG">Changelog — Tài liệu hướng dẫn sử dụng</a></li>
+
+  </ol>
+</div>
+
+<section class="doc-page" id="README">
+<p align="center">
+  <img src="images/desktop/login.png" alt="Seasonal Worker" width="640">
+</p>
+
+<h1 align="center">SEASONAL WORKER</h1>
+<p align="center"><b>Hướng dẫn sử dụng hệ thống quản lý lao động thời vụ</b></p>
+<p align="center">Dành cho HR Tuyển dụng, Quản lý bộ phận và Quản trị hệ thống — Dalat Hasfarm</p>
+
+<p align="center">
+  <sub>Phiên bản tài liệu 1.0 · Cập nhật lần cuối: 12/08/2026 · Dựa trên mã nguồn nhánh <code>main</code></sub>
+</p>
+
+<hr>
+<h2 id="README-đây-là-tài-liệu-gì">Đây là tài liệu gì?</h2>
+<p>Đây là <strong>cẩm nang sử dụng</strong> hệ thống Seasonal Worker — không phải tài liệu kỹ thuật cho lập trình viên. Mọi mô tả trong tài liệu này đều được đối chiếu trực tiếp với giao diện và mã nguồn thật của hệ thống tại thời điểm viết, không có tính năng nào được &quot;vẽ thêm&quot;.</p>
+<p>Nếu bạn mới bắt đầu, hãy đọc <strong><a href="#00-quick-start">Bắt đầu trong 5 phút</a></strong> trước tiên.</p>
+<h2 id="README-mục-lục">Mục lục</h2>
+<h3 id="README-bắt-đầu">Bắt đầu</h3>
+<ul>
+<li><strong><a href="#00-quick-start">00 — Bắt đầu trong 5 phút</a></strong></li>
+<li><strong><a href="#01-gioi-thieu">01 — Giới thiệu hệ thống</a></strong> — Seasonal Worker là gì, ai dùng, luồng nghiệp vụ tổng thể</li>
+<li><strong><a href="#02-dang-nhap-giao-dien">02 — Đăng nhập &amp; giao diện chung</a></strong> — đăng nhập, Sidebar, Header</li>
+</ul>
+<h3 id="README-nghiệp-vụ-hàng-ngày">Nghiệp vụ hàng ngày</h3>
+<ul>
+<li><strong><a href="#03-task-center">03 — Task Center</a></strong> ⭐ nơi bắt đầu mỗi ngày làm việc</li>
+<li><strong><a href="#04-daily-application">04 — Daily Application</a></strong> — tiếp nhận, duyệt, xếp bộ phận</li>
+<li><strong><a href="#05-dw-data-worker-profile">05 — DW Data / Worker Profile</a></strong> — hồ sơ điện tử người lao động</li>
+<li><strong><a href="#06-department">06 — Department</a></strong> — quản lý bộ phận (Admin) &amp; &quot;Bộ phận của tôi&quot; (Manager)</li>
+<li><strong><a href="#07-planning">07 — Planning</a></strong> — kế hoạch nhân lực theo giai đoạn</li>
+<li><strong><a href="#08-workforce-movement">08 — Workforce Movement</a></strong> — nghỉ việc &amp; thuyên chuyển</li>
+</ul>
+<h3 id="README-quản-trị-hệ-thống">Quản trị hệ thống</h3>
+<ul>
+<li><strong><a href="#09-admin-modules">09 — Các module Admin</a></strong> — Users, Form Builder, Field Definitions, Workflow, Rule Engine, Notifications, System Control Center, Audit Log</li>
+<li><strong><a href="#10-permissions-data-scope">10 — Permissions &amp; Data Scope</a></strong> — mô hình 3 lớp phân quyền</li>
+<li><strong><a href="#11-import-export">11 — Import / Export</a></strong></li>
+<li><strong><a href="#12-backup">12 — Backup</a></strong></li>
+</ul>
+<h3 id="README-dành-cho-người-ngoài-hệ-thống">Dành cho người ngoài hệ thống</h3>
+<ul>
+<li><strong><a href="#13-public-lookup">13 — Tra cứu công khai (Public Lookup)</a></strong></li>
+</ul>
+<h3 id="README-tham-khảo-nhanh">Tham khảo nhanh</h3>
+<ul>
+<li><strong><a href="#14-mobile-guide">14 — Hướng dẫn dùng trên điện thoại</a></strong></li>
+<li><strong><a href="#15-best-practices">15 — Thói quen làm việc hiệu quả</a></strong></li>
+<li><strong><a href="#16-common-mistakes">16 — Lỗi thường gặp khi thao tác</a></strong></li>
+<li><strong><a href="#17-troubleshooting">17 — Xử lý sự cố (Troubleshooting)</a></strong></li>
+<li><strong><a href="#18-faq">18 — Câu hỏi thường gặp (FAQ)</a></strong></li>
+<li><strong><a href="#19-glossary">19 — Thuật ngữ (Glossary)</a></strong></li>
+<li><strong><a href="#20-sop">20 — Quy trình xử lý tình huống (SOP)</a></strong></li>
+<li><strong><a href="#21-do-dont">21 — Nên làm / Không nên làm theo vai trò</a></strong></li>
+<li><strong><a href="#22-checklists">22 — Checklist vận hành</a></strong></li>
+<li><strong><a href="#23-appendix">23 — Phụ lục tham chiếu nhanh</a></strong></li>
+</ul>
+<h3 id="README-cheat-sheet-theo-vai-trò">Cheat sheet theo vai trò</h3>
+<ul>
+<li><strong><a href="#role-hr">role-hr.md</a></strong> — HR Tuyển dụng: tôi cần làm gì mỗi ngày?</li>
+<li><strong><a href="#role-manager">role-manager.md</a></strong> — Quản lý bộ phận: tôi cần làm gì mỗi ngày?</li>
+<li><strong><a href="#role-admin">role-admin.md</a></strong> — Admin: tôi cần kiểm tra gì định kỳ?</li>
+</ul>
+<hr>
+<h2 id="README-ba-vai-trò-trong-hệ-thống">Ba vai trò trong hệ thống</h2>
+<table>
+<thead>
+<tr>
+<th>Vai trò</th>
+<th>Tên trong hệ thống</th>
+<th>Công việc chính</th>
+</tr>
+</thead>
+<tbody><tr>
+<td><strong>Quản trị viên</strong></td>
+<td><code>ADMIN</code></td>
+<td>Quản trị toàn hệ thống: tài khoản, phân quyền, cấu hình nghiệp vụ, backup, theo dõi audit log</td>
+</tr>
+<tr>
+<td><strong>Nhân sự tuyển dụng</strong></td>
+<td><code>HR_RECRUITER</code></td>
+<td>Tiếp nhận &amp; duyệt hồ sơ, xếp bộ phận, quản lý Planning, xử lý Nghỉ việc/Thuyên chuyển</td>
+</tr>
+<tr>
+<td><strong>Quản đốc bộ phận</strong></td>
+<td><code>DEPT_MANAGER</code></td>
+<td>Theo dõi lao động thuộc bộ phận được phân công, tạo yêu cầu nghỉ việc/thuyên chuyển</td>
+</tr>
+</tbody></table>
+<p>Quyền hạn thực tế của mỗi vai trò còn phụ thuộc vào <strong>Phân quyền chi tiết</strong> và <strong>Data Scope</strong> do Admin cấu hình — xem chi tiết ở <a href="#10-permissions-data-scope">chương 10</a>. Vì vậy hai người cùng vai trò <code>DEPT_MANAGER</code> vẫn có thể thấy quyền và dữ liệu khác nhau.</p>
+<h2 id="README-định-dạng-tài-liệu">Định dạng tài liệu</h2>
+<ul>
+<li><strong>Markdown</strong> (<code>.md</code>) — nguồn chính, dễ đọc trực tiếp trên GitHub, dễ cập nhật khi giao diện thay đổi.</li>
+<li><strong><a href="./handbook.html">handbook.html</a></strong> — bản gộp toàn bộ tài liệu thành 1 trang, có thể mở bằng trình duyệt và <strong>in ra PDF</strong> (File → Print → Save as PDF) mà không cần cài thêm phần mềm.</li>
+<li><strong><a href="#CHANGELOG">CHANGELOG.md</a></strong> — lịch sử cập nhật tài liệu theo từng phiên bản hệ thống.</li>
+</ul>
+<h3 id="README-cập-nhật-handbookhtml-sau-khi-sửa-nội-dung-md">Cập nhật <code>handbook.html</code> sau khi sửa nội dung <code>.md</code></h3>
+<p><code>handbook.html</code> là <strong>bản build</strong>, không sửa tay trực tiếp — sửa các file <code>.md</code> tương ứng rồi build lại:</p>
+<pre><code class="language-bash">npm install --no-save marked          # chỉ cần chạy 1 lần
+node scripts/build-user-guide.mjs
+</code></pre>
+<p>Nếu bạn sửa hoặc thêm sơ đồ (bash
+npm install --no-save mermaid playwright-core   # chỉ cần chạy 1 lần
+node scripts/render-user-guide-diagrams.mjs
+node scripts/build-user-guide.mjs</p>
+<pre><code>
+Hai lệnh `npm install --no-save` ở trên **không đụng tới** `package.json`/`package-lock.json` của ứng dụng — chỉ cài tạm cho máy đang chạy script build tài liệu.
+
+## Quy ước trong tài liệu
+
+&gt; **Mẹo:** Gợi ý giúp bạn thao tác nhanh hơn.
+
+&gt; **Lưu ý:** Thông tin cần chú ý nhưng không gây hậu quả nghiêm trọng nếu bỏ qua.
+
+&gt; **Quan trọng:** Cảnh báo — bỏ qua có thể gây sai dữ liệu hoặc ảnh hưởng người khác.
+
+Ảnh chụp màn hình trong tài liệu dùng **dữ liệu demo** (tên, CCCD, số điện thoại đều là dữ liệu giả lập tạo riêng để minh hoạ) — không phải dữ liệu lao động thật. Giao diện thật có thể thay đổi nhẹ theo các bản cập nhật sau này.
+</code></pre>
+
+</section>
+<section class="doc-page" id="00-quick-start">
+<h1 id="00-quick-start-bắt-đầu-trong-5-phút">Bắt đầu trong 5 phút</h1>
+<p>Mục tiêu của trang này: giúp bạn thực hiện thành công công việc đầu tiên <strong>trước khi</strong> đọc toàn bộ cẩm nang.</p>
+<h2 id="00-quick-start-bước-1-đăng-nhập">Bước 1 — Đăng nhập</h2>
+<p>Mở địa chỉ nội bộ của hệ thống, nhập <strong>Tên tài khoản</strong> và <strong>Mật khẩu</strong> do Admin cấp, bấm <strong>Đăng nhập</strong>.</p>
+<img src="images/desktop/login.png" width="720" alt="Màn hình đăng nhập">
+
+<blockquote>
+<p><strong>Lưu ý:</strong> Hệ thống không có tài khoản demo sẵn trên giao diện. Nếu bạn chưa có tài khoản, liên hệ Admin để được tạo tại module <em>Phân quyền RBAC</em>.</p>
+</blockquote>
+<h2 id="00-quick-start-bước-2-mở-task-center">Bước 2 — Mở Task Center</h2>
+<p>Sau khi đăng nhập, hệ thống đưa bạn thẳng vào không gian làm việc. Việc đầu tiên nên làm mỗi ngày: bấm <strong>Task Center</strong> trên sidebar.</p>
+<img src="images/desktop/task-center.png" width="720" alt="Task Center">
+
+<p>Task Center gom toàn bộ việc đang chờ bạn xử lý — hồ sơ mới, yêu cầu nghỉ việc/thuyên chuyển, planning sắp hết hạn — vào một màn hình, để bạn không phải mở lần lượt từng module để kiểm tra còn việc gì chưa xử lý.</p>
+<h2 id="00-quick-start-bước-3-kiểm-tra-việc-chờ-xử-lý">Bước 3 — Kiểm tra việc chờ xử lý</h2>
+<p>Mỗi thẻ trong Task Center là một nhóm việc. Số trong ngoặc là số lượng đang chờ. Bấm <strong>&quot;Xem tất cả →&quot;</strong> trên bất kỳ thẻ nào để đi thẳng tới đúng màn hình xử lý việc đó.</p>
+<h2 id="00-quick-start-bước-4-mở-daily-application-nếu-bạn-là-hr">Bước 4 — Mở Daily Application (nếu bạn là HR)</h2>
+<p>Nếu vai trò của bạn là HR Tuyển dụng, đây là màn hình bạn dùng nhiều nhất trong ngày: xem ai vừa đăng ký hôm nay, đối chiếu DW Data, xếp bộ phận, duyệt hồ sơ.</p>
+<img src="images/desktop/daily-application.png" width="720" alt="Daily Application">
+
+<h2 id="00-quick-start-bước-5-xử-lý-task-đầu-tiên">Bước 5 — Xử lý task đầu tiên</h2>
+<p>Chọn một hồ sơ <strong>Chờ duyệt</strong>, kiểm tra thông tin, chọn <strong>Bộ phận + Nhóm</strong> phù hợp, đổi trạng thái sang <strong>Đã nhận việc</strong> (nếu nhận) hoặc <strong>Không nhận</strong> (nếu từ chối). Xong — bạn vừa hoàn thành thao tác nghiệp vụ đầu tiên trên hệ thống.</p>
+<hr>
+<h3 id="00-quick-start-bạn-không-phải-hr-đi-thẳng-tới-phần-dành-cho-vai-trò-của-bạn">Bạn không phải HR? Đi thẳng tới phần dành cho vai trò của bạn</h3>
+<ul>
+<li><strong>Quản lý bộ phận</strong> → đọc <a href="#role-manager">role-manager.md</a> và chương <a href="#06-department">06 — Department</a></li>
+<li><strong>Admin</strong> → đọc <a href="#role-admin">role-admin.md</a> và chương <a href="#10-permissions-data-scope">10 — Permissions &amp; Data Scope</a></li>
+<li><strong>Chỉ cần tra cứu kết quả đăng ký (không có tài khoản)</strong> → đọc chương <a href="#13-public-lookup">13 — Tra cứu công khai</a></li>
+</ul>
+<p>Muốn hiểu toàn bộ hệ thống trước khi thao tác? Đọc tiếp <a href="#01-gioi-thieu">01 — Giới thiệu hệ thống</a>.</p>
+
+</section>
+<section class="doc-page" id="01-gioi-thieu">
+<h1 id="01-gioi-thieu-1-giới-thiệu-hệ-thống">1. Giới thiệu hệ thống</h1>
+<h2 id="01-gioi-thieu-11-seasonal-worker-là-gì">1.1 Seasonal Worker là gì?</h2>
+<p><strong>Seasonal Worker</strong> là hệ thống nội bộ giúp Dalat Hasfarm quản lý toàn bộ vòng đời của một lao động thời vụ: từ lúc họ đăng ký tập nghề trên trang công khai, đến khi HR duyệt và xếp bộ phận, trong suốt thời gian làm việc, cho tới khi họ thuyên chuyển hoặc nghỉ việc.</p>
+<p>Hệ thống thay thế cho việc quản lý bằng Google Sheet rời rạc bằng một nơi duy nhất, có phân quyền rõ ràng, lưu lại lịch sử mọi thay đổi, và tự động đối chiếu để biết một người là lao động <strong>cũ</strong> (đã từng làm) hay <strong>mới</strong> (lần đầu) — không phụ thuộc vào lời tự khai của người đăng ký.</p>
+<h2 id="01-gioi-thieu-12-hệ-thống-dùng-cho-ai">1.2 Hệ thống dùng cho ai?</h2>
+<table>
+<thead>
+<tr>
+<th>Nhóm người dùng</th>
+<th>Vào hệ thống bằng</th>
+<th>Mục đích</th>
+</tr>
+</thead>
+<tbody><tr>
+<td>Người lao động thời vụ</td>
+<td>Trang công khai (không cần tài khoản)</td>
+<td>Đăng ký tập nghề, tra cứu kết quả xếp việc</td>
+</tr>
+<tr>
+<td>HR Tuyển dụng</td>
+<td>Tài khoản nội bộ</td>
+<td>Duyệt hồ sơ, xếp bộ phận, quản lý Planning và Nghỉ việc/Thuyên chuyển</td>
+</tr>
+<tr>
+<td>Quản đốc bộ phận</td>
+<td>Tài khoản nội bộ</td>
+<td>Theo dõi lao động thuộc bộ phận mình phụ trách</td>
+</tr>
+<tr>
+<td>Quản trị viên</td>
+<td>Tài khoản nội bộ</td>
+<td>Cấu hình toàn hệ thống, quản lý tài khoản và phân quyền</td>
+</tr>
+</tbody></table>
+<h2 id="01-gioi-thieu-13-lợi-ích-chính">1.3 Lợi ích chính</h2>
+<ul>
+<li><strong>Một nơi duy nhất</strong> — không phải tìm hồ sơ ở nhiều Sheet khác nhau.</li>
+<li><strong>Đối chiếu tự động</strong> — hệ thống tự xác định lao động cũ/mới qua CCCD, tên+năm sinh, hoặc tên+số điện thoại, không phụ thuộc lời tự khai.</li>
+<li><strong>Không tạo hồ sơ trùng</strong> — mỗi người chỉ có <strong>1</strong> hồ sơ điện tử duy nhất (Worker Profile) dù họ quay lại làm việc bao nhiêu lần.</li>
+<li><strong>Phân quyền rõ ràng</strong> — mỗi vai trò chỉ thấy đúng phần việc và đúng phạm vi dữ liệu của mình.</li>
+<li><strong>Có lịch sử</strong> — mọi thay đổi quan trọng (duyệt hồ sơ, sửa kế hoạch, xử lý thuyên chuyển) đều được ghi lại, không bị mất khi sửa.</li>
+</ul>
+<h2 id="01-gioi-thieu-14-luồng-nghiệp-vụ-tổng-thể">1.4 Luồng nghiệp vụ tổng thể</h2>
+<p>Đây là hành trình đầy đủ của một lao động thời vụ trong hệ thống:</p>
+<img src="diagrams/flow-overview.png" class="diagram" alt="Sơ đồ minh hoạ">
+
+<p>Vài điểm quan trọng cần hiểu ngay từ đầu:</p>
+<ul>
+<li><strong>Một người = một hồ sơ điện tử duy nhất.</strong> Dù họ đăng ký lại nhiều lần qua nhiều năm, hệ thống chỉ có 1 &quot;Worker Profile&quot; — mỗi lần đăng ký/làm việc là 1 &quot;Employment Session&quot; gắn vào hồ sơ đó. Xem chi tiết ở <a href="#05-dw-data-worker-profile">chương 5</a>.</li>
+<li><strong>Đối chiếu DW Data xảy ra ngay khi đăng ký</strong> — không phải sau khi HR duyệt. Cột &quot;DW Data&quot; trên Daily Application cho biết ngay người này cũ hay mới.</li>
+<li><strong>Duyệt xong không có nghĩa là hết trách nhiệm</strong> — một hồ sơ đã duyệt vẫn có thể phát sinh Thuyên chuyển hoặc Nghỉ việc sau này, và toàn bộ vẫn nằm trong cùng 1 hồ sơ điện tử.</li>
+<li><strong>Planning không bắt buộc mọi bộ phận phải dùng</strong> — đây là công cụ theo dõi &quot;cần bao nhiêu người trong khoảng ngày nào&quot;, tách biệt với việc duyệt hồ sơ hàng ngày.</li>
+</ul>
+<h2 id="01-gioi-thieu-15-các-module-chính">1.5 Các module chính</h2>
+<table>
+<thead>
+<tr>
+<th>Module</th>
+<th>Ai dùng</th>
+<th>Việc dùng để làm</th>
+</tr>
+</thead>
+<tbody><tr>
+<td>Task Center</td>
+<td>Cả 3 vai trò</td>
+<td>Tổng hợp mọi việc đang chờ xử lý</td>
+</tr>
+<tr>
+<td>Daily Application</td>
+<td>ADMIN, HR_RECRUITER</td>
+<td>Tiếp nhận &amp; duyệt hồ sơ đăng ký hàng ngày</td>
+</tr>
+<tr>
+<td>DW Data</td>
+<td>ADMIN, HR_RECRUITER</td>
+<td>Kho dữ liệu lao động dùng để đối chiếu cũ/mới</td>
+</tr>
+<tr>
+<td>Hồ sơ điện tử (Worker Profile)</td>
+<td>ADMIN, HR_RECRUITER</td>
+<td>Tra cứu lịch sử làm việc của 1 người theo CCCD</td>
+</tr>
+<tr>
+<td>Department</td>
+<td>ADMIN, HR_RECRUITER (quản lý toàn bộ) · DEPT_MANAGER (&quot;Bộ phận của tôi&quot;)</td>
+<td>Danh sách bộ phận &amp; nhóm, lao động đang thuộc từng bộ phận</td>
+</tr>
+<tr>
+<td>Planning</td>
+<td>Cả 3 vai trò (xem/tạo tuỳ quyền)</td>
+<td>Kế hoạch nhân lực theo giai đoạn</td>
+</tr>
+<tr>
+<td>Workforce Movement</td>
+<td>Cả 3 vai trò (tuỳ quyền)</td>
+<td>Xử lý Nghỉ việc &amp; Thuyên chuyển</td>
+</tr>
+<tr>
+<td>Users, Permissions, Data Scope</td>
+<td>ADMIN</td>
+<td>Quản lý tài khoản và phân quyền</td>
+</tr>
+<tr>
+<td>Form Builder, Field Definitions, Workflow, Rule Engine</td>
+<td>ADMIN (một phần mở cho HR_RECRUITER)</td>
+<td>Cấu hình nghiệp vụ không cần sửa code</td>
+</tr>
+<tr>
+<td>Import Data, Backup, Recycle Bin, Audit Log, System Control Center</td>
+<td>ADMIN</td>
+<td>Vận hành &amp; bảo trì hệ thống</td>
+</tr>
+<tr>
+<td>Tra cứu công khai (Lookup)</td>
+<td>Người lao động (không cần tài khoản)</td>
+<td>Kiểm tra kết quả xếp việc</td>
+</tr>
+</tbody></table>
+
+</section>
+<section class="doc-page" id="02-dang-nhap-giao-dien">
+<h1 id="02-dang-nhap-giao-dien-2-đăng-nhập-giao-diện-chung">2. Đăng nhập &amp; giao diện chung</h1>
+<h2 id="02-dang-nhap-giao-dien-21-đăng-nhập">2.1 Đăng nhập</h2>
+<ol>
+<li>Mở địa chỉ nội bộ của hệ thống — bạn sẽ được đưa tới trang <strong>Đăng nhập</strong>.</li>
+<li>Nhập <strong>Tên tài khoản</strong>.</li>
+<li>Nhập <strong>Mật khẩu</strong>.</li>
+<li>Bấm <strong>Đăng nhập</strong>.</li>
+</ol>
+<img src="images/desktop/login.png" width="720" alt="Màn hình đăng nhập">
+
+<p>Đăng nhập thành công, hệ thống đưa bạn thẳng vào không gian làm việc phù hợp với vai trò của bạn và hiện thông báo &quot;Chào mừng [vai trò] — đăng nhập thành công!&quot; ở góc màn hình.</p>
+<blockquote>
+<p><strong>Quan trọng:</strong> Không bao giờ dùng chung tài khoản với đồng nghiệp, kể cả khi cùng vai trò. Mọi thao tác (duyệt hồ sơ, tạo yêu cầu, xoá dữ liệu...) đều được ghi lại theo đúng tên tài khoản thực hiện ở Nhật ký hệ thống — dùng chung tài khoản làm mất khả năng truy vết ai đã làm gì.</p>
+</blockquote>
+<h3 id="02-dang-nhap-giao-dien-khi-đăng-nhập-thất-bại">Khi đăng nhập thất bại</h3>
+<table>
+<thead>
+<tr>
+<th>Tình huống</th>
+<th>Thông báo bạn sẽ thấy</th>
+<th>Nguyên nhân</th>
+</tr>
+</thead>
+<tbody><tr>
+<td>Sai tên tài khoản hoặc sai mật khẩu</td>
+<td><em>&quot;Sai tên đăng nhập hoặc mật khẩu.&quot;</em></td>
+<td>Kiểm tra lại chính tả; Caps Lock đang bật là lỗi phổ biến nhất</td>
+</tr>
+<tr>
+<td>Tài khoản đã bị Admin khoá</td>
+<td><em>&quot;Sai tên đăng nhập hoặc mật khẩu.&quot;</em> (giống hệt lỗi trên)</td>
+<td>Hệ thống <strong>cố ý</strong> không phân biệt hai lỗi này, để tránh lộ thông tin tài khoản nào tồn tại trong hệ thống cho người ngoài — nếu chắc chắn thông tin đúng mà vẫn không vào được, liên hệ Admin để kiểm tra</td>
+</tr>
+<tr>
+<td>Nhập sai liên tục nhiều lần trong thời gian ngắn</td>
+<td><em>&quot;Quá nhiều lần đăng nhập sai. Vui lòng thử lại sau ít phút.&quot;</em></td>
+<td>Hệ thống tạm khoá đăng nhập theo (địa chỉ mạng + tên tài khoản) sau 5 lần sai trong 15 phút, để chống dò mật khẩu. Đợi vài phút rồi thử lại</td>
+</tr>
+</tbody></table>
+<h3 id="02-dang-nhap-giao-dien-đăng-xuất">Đăng xuất</h3>
+<p>Bấm <strong>Đăng xuất</strong> ở cuối Sidebar. Luôn đăng xuất khi dùng máy tính/thiết bị dùng chung với người khác.</p>
+<h2 id="02-dang-nhap-giao-dien-22-sidebar-menu-điều-hướng">2.2 Sidebar (menu điều hướng)</h2>
+<p>Sidebar nằm bên trái màn hình (trên di động là menu ẩn — xem <a href="#14-mobile-guide">chương 14</a>), chia thành các nhóm theo nghiệp vụ:</p>
+<img src="images/annotated/sidebar-annotated.png" width="900" alt="Sidebar có chú thích">
+
+<p><strong>Các nhóm menu:</strong></p>
+<table>
+<thead>
+<tr>
+<th>Nhóm</th>
+<th>Gồm những mục</th>
+</tr>
+</thead>
+<tbody><tr>
+<td>Tổng quan</td>
+<td>Dashboard, Task Center</td>
+</tr>
+<tr>
+<td>Tuyển &amp; nhận lao động</td>
+<td>Daily Application, DW Data, Department, Bộ phận của tôi</td>
+</tr>
+<tr>
+<td>Quản lý lao động</td>
+<td>Hồ sơ điện tử, Nghỉ việc / Thuyên chuyển</td>
+</tr>
+<tr>
+<td>Kế hoạch</td>
+<td>Planning</td>
+</tr>
+<tr>
+<td>Cấu hình nghiệp vụ</td>
+<td>Câu hỏi động, Trường dữ liệu, Workflow, Rule Engine, Thông báo</td>
+</tr>
+<tr>
+<td>Quản trị</td>
+<td>Phân quyền RBAC, Phân quyền chi tiết, Data Scope, Control Center, Nhật ký hệ thống, Nhập dữ liệu ban đầu, Thùng rác</td>
+</tr>
+</tbody></table>
+<blockquote>
+<p><strong>Quan trọng:</strong> Menu bạn nhìn thấy <strong>phụ thuộc vào vai trò và quyền được cấp</strong> cho tài khoản của bạn. Đây không phải lỗi hiển thị — hệ thống chủ động ẩn đi những mục bạn không có quyền dùng. Ví dụ Quản đốc bộ phận sẽ không thấy nhóm &quot;Quản trị&quot; hay mục &quot;Daily Application&quot;, trong khi Admin thấy đầy đủ tất cả. Không có giả định &quot;mọi tài khoản đều thấy như nhau&quot;.</p>
+</blockquote>
+<p><strong>Thu gọn Sidebar:</strong> bấm mũi tên nhỏ ở cạnh phải Sidebar để thu gọn thành dải icon, tăng không gian làm việc cho màn hình rộng — di chuột vào icon để xem tên đầy đủ.</p>
+<h2 id="02-dang-nhap-giao-dien-23-không-có-thanh-điều-hướng-riêng-ở-đầu-trang">2.3 Không có thanh điều hướng riêng ở đầu trang</h2>
+<p>Khác với một số phần mềm khác, Seasonal Worker hiện <strong>không có</strong> thanh header/breadcrumb cố định ở đầu trang trên desktop. Thay vào đó:</p>
+<ul>
+<li>Tên trang, mô tả ngắn và các nút hành động chính nằm ngay đầu <strong>nội dung từng trang</strong> (không phải một thanh riêng).</li>
+<li>Tên tài khoản, vai trò và nút Đăng xuất nằm cố định trong Sidebar (xem ở trên) — không có menu &quot;hồ sơ cá nhân&quot; (profile dropdown) riêng.</li>
+<li>Không có ô tìm kiếm toàn hệ thống (global search) — mỗi màn hình có ô tìm kiếm riêng cho đúng phạm vi dữ liệu của màn hình đó (ví dụ ô tìm kiếm trên Task Center chỉ tìm trong các việc đang chờ xử lý, ô tìm kiếm trên Daily Application chỉ tìm trong hồ sơ ngày đang xem).</li>
+<li>Trên di động, nút mở menu (☰) ở góc trên-trái đóng vai trò gần giống một thanh header — xem <a href="#14-mobile-guide">chương 14</a>.</li>
+</ul>
+
+</section>
+<section class="doc-page" id="03-task-center">
+<h1 id="03-task-center-3-task-center">3. Task Center</h1>
+<blockquote>
+<p>Đây là màn hình quan trọng nhất trong hệ thống. <strong>Hãy tạo thói quen mở Task Center đầu tiên mỗi khi bắt đầu ngày làm việc.</strong></p>
+</blockquote>
+<h2 id="03-task-center-31-task-center-là-gì">3.1 Task Center là gì?</h2>
+<p>Task Center tổng hợp <strong>mọi việc đang chờ bạn xử lý</strong> vào một màn hình duy nhất, thay vì bắt bạn phải tự nhớ và tự mở lần lượt từng module (Daily Application, Workforce Movement, Planning...) để kiểm tra còn việc gì tồn đọng.</p>
+<img src="images/annotated/task-center-annotated.png" width="900" alt="Task Center có chú thích">
+
+<h2 id="03-task-center-32-bốn-nhóm-việc">3.2 Bốn nhóm việc</h2>
+<table>
+<thead>
+<tr>
+<th>Nhóm</th>
+<th>Ý nghĩa</th>
+<th>Bấm &quot;Xem tất cả&quot; sẽ đưa bạn tới</th>
+</tr>
+</thead>
+<tbody><tr>
+<td><strong>Người mới chờ duyệt</strong></td>
+<td>Hồ sơ Daily Application đang ở trạng thái Chờ duyệt</td>
+<td>Daily Application</td>
+</tr>
+<tr>
+<td><strong>Nghỉ việc chờ duyệt</strong></td>
+<td>Yêu cầu nghỉ việc đang chờ HR xử lý (trạng thái <em>Chờ HR duyệt</em>)</td>
+<td>Workforce Movement</td>
+</tr>
+<tr>
+<td><strong>Thuyên chuyển chờ xử lý</strong></td>
+<td>Yêu cầu thuyên chuyển đang chờ HR xác nhận <strong>hoặc</strong> đang chờ HR quyết định vì người lao động không đến</td>
+<td>Workforce Movement</td>
+</tr>
+<tr>
+<td><strong>Planning sắp hết hạn</strong></td>
+<td>Kế hoạch đang <strong>Đang áp dụng</strong> và sẽ hết hạn trong <strong>7 ngày tới</strong></td>
+<td>Planning</td>
+</tr>
+</tbody></table>
+<blockquote>
+<p><strong>Lưu ý:</strong> Yêu cầu thuyên chuyển đang ở trạng thái <em>Đã hoãn (chờ ngày mới)</em> <strong>không</strong> xuất hiện ở nhóm &quot;Thuyên chuyển chờ xử lý&quot; — vì đã có ngày hẹn mới, không cần HR xử lý thêm cho tới ngày đó. Đây là hành vi có chủ đích, không phải sai sót.</p>
+</blockquote>
+<p>Mỗi nhóm chỉ hiện một số dòng đầu tiên (ưu tiên việc cũ nhất/gấp nhất) kèm tổng số thực tế trong ngoặc — bấm <strong>&quot;Xem tất cả N →&quot;</strong> để mở đầy đủ.</p>
+<h2 id="03-task-center-33-tìm-nhanh">3.3 Tìm nhanh</h2>
+<p>Ô tìm kiếm ở đầu trang tìm theo <strong>tên</strong> hoặc <strong>CCCD</strong> trên <strong>tất cả 4 nhóm việc cùng lúc</strong> — không cần biết trước việc đó thuộc nhóm nào.</p>
+<h2 id="03-task-center-34-mức-ưu-tiên">3.4 Mức ưu tiên</h2>
+<p>Mỗi việc trong nhóm &quot;Người mới chờ duyệt&quot;, &quot;Nghỉ việc chờ duyệt&quot; và &quot;Thuyên chuyển chờ xử lý&quot; có một nhãn màu tính theo <strong>số ngày việc đã chờ xử lý</strong> kể từ khi phát sinh:</p>
+<table>
+<thead>
+<tr>
+<th>Nhãn</th>
+<th>Điều kiện</th>
+<th>Ý nghĩa</th>
+</tr>
+</thead>
+<tbody><tr>
+<td>🟢 Mới</td>
+<td>Dưới 1 ngày</td>
+<td>Vừa phát sinh</td>
+</tr>
+<tr>
+<td>🟠 <em>N ngày</em></td>
+<td>1 – 2 ngày</td>
+<td>Đang chờ, nên xử lý sớm</td>
+</tr>
+<tr>
+<td>🔴 Ưu tiên cao — <em>N ngày</em></td>
+<td>Từ 3 ngày trở lên</td>
+<td>Đã tồn đọng lâu, cần xử lý gấp</td>
+</tr>
+</tbody></table>
+<h2 id="03-task-center-35-khi-không-có-gì-cần-xử-lý">3.5 Khi không có gì cần xử lý</h2>
+<p>Nếu cả 4 nhóm đều trống, Task Center hiện thông báo <strong>&quot;Không còn công việc cần xử lý / Bạn đã xử lý hết các task hiện tại.&quot;</strong> — đây là trạng thái tốt, không phải lỗi.</p>
+<p>Nếu bạn gõ từ khoá vào ô tìm kiếm mà không có kết quả, thông báo sẽ là <strong>&quot;Không có việc nào khớp với &quot;[từ khoá]&quot;.&quot;</strong></p>
+<h2 id="03-task-center-36-khi-có-sự-cố">3.6 Khi có sự cố</h2>
+<table>
+<thead>
+<tr>
+<th>Thông báo</th>
+<th>Nguyên nhân</th>
+<th>Cách xử lý</th>
+</tr>
+</thead>
+<tbody><tr>
+<td><em>&quot;Phiên đăng nhập đã hết hạn. Vui lòng đăng nhập lại.&quot;</em></td>
+<td>Phiên làm việc quá hạn</td>
+<td>Bấm nút để đăng nhập lại</td>
+</tr>
+<tr>
+<td><em>&quot;Tài khoản của bạn không có quyền xem Task Center.&quot;</em></td>
+<td>Quyền <code>dashboard.manage</code> (hoặc quyền tương ứng) đang bị tắt cho vai trò của bạn</td>
+<td>Liên hệ Admin kiểm tra tại Phân quyền chi tiết</td>
+</tr>
+<tr>
+<td><em>&quot;Không kết nối được máy chủ. Kiểm tra mạng và thử lại.&quot;</em> / <em>&quot;Không thể tải dữ liệu&quot;</em></td>
+<td>Mất mạng hoặc lỗi máy chủ tạm thời</td>
+<td>Bấm <strong>Thử lại</strong></td>
+</tr>
+</tbody></table>
+<h2 id="03-task-center-37-phạm-vi-dữ-liệu-hiển-thị">3.7 Phạm vi dữ liệu hiển thị</h2>
+<p>Task Center chỉ hiện những việc <strong>thuộc phạm vi dữ liệu (Data Scope)</strong> của bạn. Với Quản đốc bộ phận, chỉ những việc liên quan tới bộ phận được phân công mới xuất hiện — xem <a href="#10-permissions-data-scope">chương 10</a>.</p>
+
+</section>
+<section class="doc-page" id="04-daily-application">
+<h1 id="04-daily-application-4-daily-application">4. Daily Application</h1>
+<p><strong>Ai dùng:</strong> <code>ADMIN</code>, <code>HR_RECRUITER</code>. Đây là màn hình HR dùng nhiều nhất trong ngày.</p>
+<h2 id="04-daily-application-41-mở-daily-application">4.1 Mở Daily Application</h2>
+<p>Vào Sidebar → nhóm <strong>Tuyển &amp; nhận lao động</strong> → <strong>Daily Application</strong>.</p>
+<img src="images/annotated/daily-application-annotated.png" width="900" alt="Bảng Daily Application có chú thích">
+
+<p>Mặc định màn hình <strong>chỉ hiện đơn đăng ký của hôm nay</strong> để gọn gàng, dễ xử lý trong ngày.</p>
+<h2 id="04-daily-application-42-chọn-ngày-xem-khoảng-ngày">4.2 Chọn ngày / xem khoảng ngày</h2>
+<p>Tick vào ô <strong>&quot;Xem khoảng ngày&quot;</strong> để chọn khoảng &quot;Từ ngày – Đến ngày&quot; và tra cứu lại các đơn ngày trước (chỉ để tham khảo — không nên duyệt hồ sơ của ngày cũ). Bỏ tick để quay về chế độ mặc định &quot;chỉ hôm nay&quot;, hoặc bấm <strong>&quot;Về hôm nay&quot;</strong>.</p>
+<h2 id="04-daily-application-43-tìm-ứng-viên-lao-động">4.3 Tìm ứng viên / lao động</h2>
+<p>Dùng ô <strong>&quot;Tìm nhanh&quot;</strong> — mặc định tìm theo Tên, CCCD, SĐT. Admin có thể mở rộng danh sách cột được phép tìm tại <a href="./09-admin-modules.md#tr%C6%B0%E1%BB%9Dng-d%E1%BB%AF-li%E1%BB%87u-metadata">Trường dữ liệu (Metadata)</a>.</p>
+<p>Ngoài ra có thể lọc theo <strong>Trạng thái</strong>, <strong>DW Data</strong> (Cũ/Mới), và <strong>Bộ phận</strong>.</p>
+<h2 id="04-daily-application-44-đọc-bảng-dữ-liệu">4.4 Đọc bảng dữ liệu</h2>
+<table>
+<thead>
+<tr>
+<th>Cột</th>
+<th>Ý nghĩa</th>
+</tr>
+</thead>
+<tbody><tr>
+<td>CCCD (bắt buộc)</td>
+<td>Số CCCD người đăng ký khai — bắt buộc phải có</td>
+</tr>
+<tr>
+<td>Họ và tên</td>
+<td>Tên đầy đủ</td>
+</tr>
+<tr>
+<td><strong>DW Data</strong></td>
+<td>Nhãn <strong>CŨ</strong> (đã có trong DW Data) hoặc <strong>MỚI</strong> (chưa từng có hồ sơ) — do hệ thống <strong>tự động đối chiếu</strong>, không phụ thuộc lời tự khai của người đăng ký. Dấu cảnh báo (⚠) xuất hiện khi người đăng ký <strong>tự khai là đã từng làm</strong> nhưng hệ thống không tìm thấy họ trong DW Data — cần kiểm tra kỹ trường hợp này</td>
+</tr>
+<tr>
+<td>SĐT, Giới tính, Tuổi</td>
+<td>Thông tin cá nhân người đăng ký khai</td>
+</tr>
+<tr>
+<td>Bộ phận + Nhóm</td>
+<td>Nơi dự kiến xếp việc — chọn qua dropdown</td>
+</tr>
+<tr>
+<td>Trạng thái</td>
+<td>Xem bảng trạng thái bên dưới</td>
+</tr>
+<tr>
+<td>Ghi chú</td>
+<td>Ghi chú nội bộ của HR về hồ sơ này</td>
+</tr>
+</tbody></table>
+<p>Nếu bạn có quyền sửa (<code>registrations.edit</code>), hầu hết các ô có thể <strong>bấm trực tiếp để sửa</strong> giống thao tác trên Google Sheet — gõ xong bấm Enter hoặc bấm ra ngoài ô để lưu.</p>
+<blockquote>
+<p><strong>Lưu ý về CCCD/SĐT/Địa chỉ:</strong> Trên màn hình nội bộ này, CCCD/SĐT hiển thị đầy đủ cho người có quyền xem hồ sơ (đúng như dữ liệu người đăng ký khai) — việc <strong>che (mask) thông tin</strong> chỉ áp dụng khi <strong>xuất Excel</strong>, tuỳ theo quyền <code>privacy.view_cccd</code> / <code>privacy.view_phone</code> / <code>privacy.view_address</code> của từng vai trò. Xem <a href="./11-import-export.md#che-th%C3%B4ng-tin-c%C3%A1-nh%C3%A2n-khi-xu%E1%BA%A5t-excel">chương 11</a>.</p>
+</blockquote>
+<h2 id="04-daily-application-45-các-trạng-thái">4.5 Các trạng thái</h2>
+<table>
+<thead>
+<tr>
+<th>Trạng thái</th>
+<th>Ý nghĩa</th>
+<th>Ai xử lý</th>
+</tr>
+</thead>
+<tbody><tr>
+<td><strong>Chờ duyệt</strong></td>
+<td>Vừa đăng ký, chưa được HR xử lý</td>
+<td>HR</td>
+</tr>
+<tr>
+<td><strong>Đã nhận việc</strong></td>
+<td>HR đã duyệt, người này được nhận vào làm</td>
+<td>HR</td>
+</tr>
+<tr>
+<td><strong>Không nhận</strong></td>
+<td>HR từ chối hồ sơ</td>
+<td>HR</td>
+</tr>
+<tr>
+<td><strong>Dự phòng</strong></td>
+<td>Đưa vào danh sách dự phòng, chưa xếp việc ngay</td>
+<td>HR</td>
+</tr>
+</tbody></table>
+<p>Đổi trạng thái bằng dropdown trên cột Trạng thái (nếu có quyền <code>registrations.approve</code>).</p>
+<blockquote>
+<p><strong>Quan trọng:</strong> Khi bạn duyệt một hồ sơ đang gắn nhãn <strong>MỚI</strong> vào một bộ phận (qua nút &quot;Duyệt Người Mới → DW Data&quot; bên dưới), hệ thống sẽ <strong>tự động thêm họ vào DW Data</strong> và đổi nhãn hồ sơ đó từ MỚI sang <strong>CŨ</strong> — vì từ giờ trở đi họ chính thức có trong kho dữ liệu gốc. Đây là hành vi đúng, không phải lỗi hiển thị.</p>
+</blockquote>
+<h2 id="04-daily-application-46-duyệt-hàng-loạt-người-mới-dw-data">4.6 Duyệt hàng loạt người mới → DW Data</h2>
+<p>Nút <strong>&quot;Duyệt Người Mới → DW Data (N)&quot;</strong> mở hộp thoại liệt kê tất cả người đang gắn nhãn MỚI trong ngày, cho phép:</p>
+<ul>
+<li>Tick chọn từng người, hoặc <strong>Chọn tất cả</strong>.</li>
+<li>Chọn <strong>1 bộ phận chung</strong> để xếp cả nhóm cùng lúc (tuỳ chọn — để trống nếu muốn giữ nguyên bộ phận đã xếp riêng cho từng người).</li>
+<li>Bấm <strong>Xác nhận Import</strong> — hệ thống duyệt tất cả, thêm vào DW Data, và báo kết quả (số đã duyệt / số đã thêm DW Data / số không thành công kèm lý do).</li>
+</ul>
+<p>Có thể chọn nhiều hồ sơ bất kỳ (không riêng nhóm &quot;người mới&quot;) ở bảng chính rồi dùng hai nút <strong>&quot;Duyệt &amp; Nhập DW Data&quot;</strong> / <strong>&quot;Từ chối&quot;</strong> xuất hiện khi có hồ sơ được tick chọn.</p>
+<blockquote>
+<p><strong>Quan trọng:</strong> Giới hạn tối đa <strong>500 hồ sơ mỗi lần</strong> duyệt hàng loạt.</p>
+</blockquote>
+<h2 id="04-daily-application-47-xem-chi-tiết-lịch-sử-chỉnh-sửa">4.7 Xem chi tiết &amp; lịch sử chỉnh sửa</h2>
+<ul>
+<li>Nút <strong>&quot;Chi tiết&quot;</strong> mở đầy đủ thông tin hồ sơ, bao gồm kết quả đối chiếu DW Data và các câu trả lời khảo sát (nếu có).</li>
+<li>Nút <strong>&quot;Lịch sử&quot;</strong> hiện toàn bộ các lần chỉnh sửa hồ sơ này — ai sửa, sửa gì, khi nào. Nếu bạn có quyền, có thể <strong>khôi phục về phiên bản trước</strong> ngay từ đây.</li>
+</ul>
+<h2 id="04-daily-application-48-xuất-excel">4.8 Xuất Excel</h2>
+<p>Bấm <strong>&quot;Xuất Excel&quot;</strong> để tải dữ liệu ra file, theo <strong>khoảng ngày</strong> và <strong>bộ phận</strong> đang chọn trên màn hình.</p>
+<blockquote>
+<p><strong>Lưu ý:</strong> File xuất ra theo đúng <strong>khoảng ngày</strong> và <strong>bộ phận</strong> đang lọc — nhưng <strong>không</strong> áp dụng thêm bộ lọc Trạng thái/DW Data hay từ khoá đang gõ ở ô Tìm nhanh. Ví dụ nếu bạn đang lọc &quot;Trạng thái = Chờ duyệt&quot; để xem trên màn hình, file xuất ra vẫn có đủ mọi trạng thái trong đúng khoảng ngày + bộ phận đó, không chỉ riêng &quot;Chờ duyệt&quot;.</p>
+</blockquote>
+<p>Xem quy tắc che thông tin cá nhân ở <a href="#11-import-export">chương 11</a>.</p>
+
+</section>
+<section class="doc-page" id="05-dw-data-worker-profile">
+<h1 id="05-dw-data-worker-profile-5-dw-data-worker-profile-employment-session">5. DW Data / Worker Profile / Employment Session</h1>
+<p>Đây là 3 khái niệm dễ nhầm lẫn nhất trong hệ thống. Hiểu đúng 3 khái niệm này giúp bạn đọc đúng ý nghĩa của cột &quot;DW Data&quot; trên Daily Application và không thắc mắc &quot;sao người này lại có 2 tên gần giống nhau trong hệ thống&quot;.</p>
+<h2 id="05-dw-data-worker-profile-51-ba-khái-niệm-ba-vai-trò-khác-nhau">5.1 Ba khái niệm, ba vai trò khác nhau</h2>
+<table>
+<thead>
+<tr>
+<th>Khái niệm</th>
+<th>Nó là gì</th>
+<th>Khi nào được tạo</th>
+</tr>
+</thead>
+<tbody><tr>
+<td><strong>DW Data</strong></td>
+<td>Kho dữ liệu lao động <strong>dùng để đối chiếu</strong> — trả lời câu hỏi &quot;người này đã từng có trong hệ thống chưa?&quot;</td>
+<td>Được nạp sẵn từ dữ liệu cũ, hoặc tự động thêm mới khi HR duyệt một người đang gắn nhãn MỚI</td>
+</tr>
+<tr>
+<td><strong>Worker Profile</strong> (Hồ sơ điện tử)</td>
+<td><strong>Hồ sơ duy nhất của một người</strong>, gộp toàn bộ lịch sử các lần đăng ký/làm việc</td>
+<td>Tự động tạo ngay khi người đó <strong>đăng ký lần đầu</strong> (kể cả trước khi HR duyệt)</td>
+</tr>
+<tr>
+<td><strong>Employment Session</strong> (Đợt làm việc)</td>
+<td>Một <strong>lần</strong> đăng ký/một đợt làm việc cụ thể, gắn vào đúng 1 Worker Profile</td>
+<td>Tự động tạo mỗi lần có một lượt đăng ký mới</td>
+</tr>
+</tbody></table>
+<p><strong>Ví dụ dễ hiểu:</strong> Chị A đăng ký làm việc lần đầu vào tháng 3 — hệ thống tạo 1 Worker Profile cho chị A và 1 Employment Session cho đợt làm tháng 3 đó. Tháng 8, chị A quay lại đăng ký lần nữa. Hệ thống <strong>nhận ra chị A đã có hồ sơ</strong> (qua đối chiếu DW Data / CCCD), nên <strong>không tạo người mới</strong> — chỉ thêm 1 Employment Session thứ hai vào đúng Worker Profile cũ của chị A. Kết quả: chị A luôn chỉ có <strong>1</strong> hồ sơ điện tử duy nhất, có thể xem lại toàn bộ 2 đợt làm việc của mình ở cùng một nơi.</p>
+<h2 id="05-dw-data-worker-profile-52-dw-data">5.2 DW Data</h2>
+<p>Vào Sidebar → <strong>DW Data</strong> (chỉ ADMIN, HR_RECRUITER).</p>
+<img src="images/desktop/dw-data.png" width="720" alt="Màn hình DW Data">
+
+<p>Đây là &quot;nguồn sự thật&quot; để trả lời câu hỏi cũ/mới. <strong>Ai không có trong bảng này là lao động MỚI.</strong> Nếu người mới khai sai CCCD, sửa lại CCCD ngay tại đây — hệ thống sẽ tự đồng bộ lại toàn bộ đơn đăng ký liên quan sang CCCD đúng.</p>
+<p>Tìm kiếm theo CCCD / Họ tên / SĐT / Mã CODE (ví dụ định dạng mã: <code>DR0001-D</code>).</p>
+<h2 id="05-dw-data-worker-profile-53-hồ-sơ-điện-tử-worker-profile">5.3 Hồ sơ điện tử (Worker Profile)</h2>
+<p>Vào Sidebar → nhóm <strong>Quản lý lao động</strong> → <strong>Hồ sơ điện tử</strong>.</p>
+<img src="images/desktop/worker-profile.png" width="720" alt="Tra cứu hồ sơ điện tử">
+
+<ol>
+<li>Nhập CCCD, bấm <strong>Tra cứu</strong>.</li>
+<li>Xem thông tin cá nhân, mục <strong>Biometric — Mã vân tay</strong> (trạng thái Đã cấp/Chưa cấp — HR có thể nhập/sửa mã và thiết bị vân tay tại đây), và <strong>Lịch sử làm việc</strong> — toàn bộ các Employment Session của người này, mới nhất trước.</li>
+</ol>
+<blockquote>
+<p><strong>Mẹo:</strong> Nếu hệ thống báo &quot;Không tìm thấy hồ sơ&quot;, rất có thể người này chưa từng đăng ký lần nào qua hệ thống này (kể cả đăng ký hôm nay chưa lưu xong) — kiểm tra lại số CCCD.</p>
+</blockquote>
+<p>Nút <strong>&quot;Đồng bộ dữ liệu cũ&quot;</strong> ở góc trên bên phải dùng để quét lại dữ liệu Daily Application cũ và tự tạo/liên kết Worker Profile + Employment Session còn thiếu — dùng khi nâng cấp hệ thống hoặc phát hiện dữ liệu cũ chưa được liên kết đầy đủ, không cần dùng hàng ngày.</p>
+
+</section>
+<section class="doc-page" id="06-department">
+<h1 id="06-department-6-department">6. Department</h1>
+<p>Có <strong>2 màn hình khác nhau</strong> tuỳ vai trò — đừng nhầm lẫn:</p>
+<table>
+<thead>
+<tr>
+<th>Màn hình</th>
+<th>Ai dùng</th>
+<th>Xem gì</th>
+</tr>
+</thead>
+<tbody><tr>
+<td><strong>Department</strong> (<code>/admin/departments</code>)</td>
+<td>ADMIN, HR_RECRUITER</td>
+<td>Quản lý <strong>toàn bộ</strong> danh sách bộ phận trong hệ thống</td>
+</tr>
+<tr>
+<td><strong>Bộ phận của tôi</strong> (<code>/department</code>)</td>
+<td>DEPT_MANAGER (ADMIN/HR_RECRUITER cũng xem được)</td>
+<td>Chỉ xem lao động thuộc (các) bộ phận <strong>được phân công</strong> cho tài khoản đang đăng nhập</td>
+</tr>
+</tbody></table>
+<h2 id="06-department-61-department-dành-cho-admin-hr">6.1 Department (dành cho Admin / HR)</h2>
+<img src="images/desktop/department-admin.png" width="720" alt="Quản lý Department">
+
+<ul>
+<li>Cấu trúc <strong>Dept. + Group</strong> (ví dụ <em>Packing – A</em>, <em>Packing – B</em>) tương ứng với cách tổ chức xưởng thực tế.</li>
+<li>Bấm <strong>&quot;+ Thêm bộ phận&quot;</strong> để tạo bộ phận mới — bộ phận vừa tạo <strong>sẽ tự động xuất hiện trong dropdown xếp việc</strong> ở Daily Application ngay lập tức, không cần cấu hình gì thêm.</li>
+<li>Có thể sửa trực tiếp trên bảng: <strong>Định mức lao động/ngày</strong>, bật/khoá bộ phận (nút <strong>Bật/Khoá</strong> ở cột trạng thái — khoá một bộ phận sẽ ẩn nó khỏi dropdown xếp việc mới nhưng không xoá dữ liệu cũ), và <strong>Xoá</strong> (xoá mềm — đưa vào Thùng rác, xem <a href="./09-admin-modules.md#th%C3%B9ng-r%C3%A1c">chương 9</a>).</li>
+<li>Các cột &quot;Hôm nay&quot; / &quot;Tổng&quot; cho biết số lao động đã được xếp vào bộ phận đó.</li>
+</ul>
+<blockquote>
+<p><strong>Lưu ý:</strong> Cột &quot;Định mức lao động/ngày&quot; (Quota) là cơ chế <strong>cũ</strong>, hiện phần lớn đã được thay bằng <a href="#07-planning">Planning theo giai đoạn</a> — vẫn hiển thị để tương thích ngược, không bắt buộc phải cập nhật nếu bộ phận của bạn đã dùng Planning.</p>
+</blockquote>
+<h2 id="06-department-62-bộ-phận-của-tôi-dành-cho-quản-đốc-bộ-phận">6.2 &quot;Bộ phận của tôi&quot; (dành cho Quản đốc bộ phận)</h2>
+<img src="images/desktop/department-manager.png" width="720" alt="Bộ phận của tôi">
+
+<p>Đây là &quot;cổng nhận lao động&quot; dành cho Quản đốc — chỉ hiện đúng những bộ phận được Admin gán cho tài khoản của bạn.</p>
+<ul>
+<li>Nếu bạn phụ trách <strong>nhiều bộ phận cùng lúc</strong>, chọn bộ phận muốn xem ở dropdown đầu trang.</li>
+<li>Chọn khoảng ngày để xem danh sách lao động được xếp vào bộ phận trong khoảng đó.</li>
+<li>4 chỉ số nhanh: <strong>Lao động nhận</strong>, <strong>Định mức/ngày</strong>, <strong>Người mới</strong>, <strong>Tỷ lệ lấp đầy</strong>.</li>
+<li>Bấm <strong>&quot;Tải Excel gửi Zalo&quot;</strong> để xuất nhanh danh sách gửi cho tổ trưởng/nhóm Zalo của bộ phận.</li>
+</ul>
+<blockquote>
+<p><strong>Quan trọng — Data Scope:</strong> Quản đốc bộ phận <strong>chỉ nhìn thấy lao động thuộc (các) bộ phận được phân công</strong> cho mình tại <a href="#10-permissions-data-scope">Data Scope</a>. Nếu bạn không thấy bộ phận cần tìm, hoặc màn hình báo &quot;Tài khoản chưa được gán bộ phận nào&quot;, đây <strong>không phải lỗi hệ thống</strong> — liên hệ Admin để được gán đúng bộ phận tại Data Scope. Quản đốc cũng <strong>không thể tự sửa</strong> thông tin bộ phận (tên, định mức, người phụ trách) từ màn hình này — việc đó thuộc quyền Admin/HR ở màn hình Department phía trên.</p>
+</blockquote>
+
+</section>
+<section class="doc-page" id="07-planning">
+<h1 id="07-planning-7-planning">7. Planning</h1>
+<p><strong>Ai dùng:</strong> xem được cả 3 vai trò (tuỳ Data Scope); tạo/sửa cần quyền <code>planning.manage</code> (mặc định ADMIN, HR_RECRUITER).</p>
+<h2 id="07-planning-71-planning-là-gì">7.1 Planning là gì?</h2>
+<p>Planning thay thế cho &quot;Định mức lao động/ngày&quot; cố định trên Department bằng cách quản lý nhu cầu nhân lực <strong>theo từng giai đoạn</strong> (khoảng ngày cụ thể), cho một bộ phận. Ví dụ thực tế:</p>
+<blockquote>
+<p><em>Bộ phận Cúc – Fast H cần 120 lao động, từ ngày 01/09 đến 15/09.</em></p>
+</blockquote>
+<p>Đây chính là một &quot;kế hoạch&quot; (Planning Period) — thay vì phải nhớ một con số quota cố định áp dụng mãi mãi, bạn khai báo rõ <strong>cần bao nhiêu người, trong khoảng thời gian nào</strong>.</p>
+<img src="images/desktop/planning-active.png" width="720" alt="Planning — Đang áp dụng">
+
+<h2 id="07-planning-72-ba-trạng-thái-của-một-kế-hoạch">7.2 Ba trạng thái của một kế hoạch</h2>
+<table>
+<thead>
+<tr>
+<th>Trạng thái</th>
+<th>Ý nghĩa</th>
+</tr>
+</thead>
+<tbody><tr>
+<td><strong>Nháp</strong> (Draft)</td>
+<td>Đã tạo nhưng chưa áp dụng — chưa tính vào số liệu vận hành</td>
+</tr>
+<tr>
+<td><strong>Đang áp dụng</strong> (Active)</td>
+<td>Kế hoạch đang có hiệu lực — hệ thống tính tỷ lệ lấp đầy thực tế cho kế hoạch này</td>
+</tr>
+<tr>
+<td><strong>Đã hết hạn</strong> (Expired)</td>
+<td>Kế hoạch cũ, đã bị thay thế bởi phiên bản mới hơn hoặc đã qua ngày kết thúc</td>
+</tr>
+</tbody></table>
+<p>Chuyển đổi giữa 3 tab <strong>Đang áp dụng / Nháp / Đã hết hạn</strong> ở đầu trang để xem từng nhóm.</p>
+<p><img src="images/desktop/planning-draft.png" width="720" alt="Planning — Nháp"><br>
+<img src="images/desktop/planning-expired.png" width="720" alt="Planning — Đã hết hạn"></p>
+<h2 id="07-planning-73-đọc-chỉ-số-lấp-đầy-fill-rate">7.3 Đọc chỉ số lấp đầy (Fill Rate)</h2>
+<p>Với kế hoạch <strong>Đang áp dụng</strong>, mỗi dòng hiện: <code>active/demand (percent%)</code>, kèm <code>· thiếu N</code> nếu chưa đủ.</p>
+<table>
+<thead>
+<tr>
+<th>Chỉ số</th>
+<th>Ý nghĩa</th>
+</tr>
+</thead>
+<tbody><tr>
+<td><strong>Nhu cầu (demand)</strong></td>
+<td>Số lượng lao động kế hoạch cần — đúng bằng &quot;Nhu cầu (số lượng)&quot; bạn khai khi tạo</td>
+</tr>
+<tr>
+<td><strong>Đang có (active)</strong></td>
+<td>Số lao động thực tế đã được phân bổ vào kế hoạch này</td>
+</tr>
+<tr>
+<td><strong>Thiếu (missing)</strong></td>
+<td><code>Nhu cầu − Đang có</code> (không bao giờ âm)</td>
+</tr>
+<tr>
+<td><strong>Tỷ lệ %</strong></td>
+<td><code>Đang có ÷ Nhu cầu</code>, làm tròn</td>
+</tr>
+</tbody></table>
+<p>Kế hoạch ở trạng thái Nháp/Đã hết hạn không hiện tỷ lệ lấp đầy — chỉ hiện &quot;Nhu cầu: N&quot; đơn thuần.</p>
+<h2 id="07-planning-74-tạo-kế-hoạch-mới">7.4 Tạo kế hoạch mới</h2>
+<p>Bấm <strong>&quot;+ Tạo kế hoạch&quot;</strong>, điền:</p>
+<ol>
+<li><strong>Bộ phận</strong> — bắt buộc.</li>
+<li><strong>Từ ngày / Đến ngày</strong> — bắt buộc, không được trùng khoảng ngày với một kế hoạch <strong>Đang áp dụng</strong> khác của cùng bộ phận + nhóm.</li>
+<li><strong>Nhu cầu (số lượng)</strong> — bắt buộc.</li>
+<li><strong>Ghi chú</strong> — tuỳ chọn.</li>
+<li>Tick <strong>&quot;Kích hoạt ngay&quot;</strong> để tạo thẳng ở trạng thái Đang áp dụng, hoặc bỏ tick để lưu Nháp trước.</li>
+</ol>
+<p>Nếu kích hoạt ngay và có lao động <strong>chưa thuộc kế hoạch nào</strong> (Unplanned) ở bộ phận đó, hệ thống sẽ tự mở hộp thoại <strong>&quot;Phân bổ lao động chưa có kế hoạch&quot;</strong> để bạn gán họ vào kế hoạch vừa tạo.</p>
+<h2 id="07-planning-75-sửa-kế-hoạch-giữ-nguyên-lịch-sử-versioning">7.5 Sửa kế hoạch — giữ nguyên lịch sử (Versioning)</h2>
+<p>Bấm <strong>&quot;Sửa (tạo version mới)&quot;</strong> trên một kế hoạch Đang áp dụng. Đây <strong>không phải</strong> sửa đè lên kế hoạch cũ — hệ thống:</p>
+<ol>
+<li>Tạo một <strong>phiên bản mới</strong> (version + 1) với thông tin bạn vừa sửa.</li>
+<li>Chuyển <strong>phiên bản cũ sang trạng thái &quot;Đã hết hạn&quot;</strong> — không xoá, vẫn xem lại được ở tab Đã hết hạn.</li>
+</ol>
+<blockquote>
+<p><strong>Mẹo:</strong> Nhờ cơ chế này, bạn luôn có thể xem lại &quot;kế hoạch ban đầu là gì, đã điều chỉnh những gì, khi nào&quot; mà không lo mất dữ liệu lịch sử.</p>
+</blockquote>
+<h2 id="07-planning-76-phân-bổ-lao-động-chưa-có-kế-hoạch">7.6 Phân bổ lao động chưa có kế hoạch</h2>
+<p>Bấm <strong>&quot;Phân bổ lao động&quot;</strong> trên một kế hoạch Đang áp dụng để xem danh sách lao động đang làm ở bộ phận đó nhưng <strong>chưa thuộc kế hoạch Đang áp dụng nào</strong> (Unplanned), tick chọn người cần gán, bấm <strong>&quot;Phân bổ đã chọn&quot;</strong>.</p>
+
+</section>
+<section class="doc-page" id="08-workforce-movement">
+<h1 id="08-workforce-movement-8-workforce-movement-nghỉ-việc-thuyên-chuyển">8. Workforce Movement (Nghỉ việc &amp; Thuyên chuyển)</h1>
+<p><strong>Ai dùng:</strong> xem/tạo yêu cầu — cả 3 vai trò (tuỳ quyền); HR (<code>ADMIN</code>, <code>HR_RECRUITER</code>) là người <strong>xác nhận</strong> cuối cùng.</p>
+<blockquote>
+<p><strong>Quan trọng:</strong> HR luôn là người xác nhận thuyên chuyển — <strong>không phải bộ phận mới xác nhận</strong>. Nếu bạn là Quản đốc bộ phận nhận người thuyên chuyển đến, bạn không cần (và không thể) tự xác nhận trên hệ thống — HR sẽ xử lý.</p>
+</blockquote>
+<img src="images/desktop/workforce-movement.png" width="900" alt="Workforce Movement">
+
+<h2 id="08-workforce-movement-81-hai-loại-yêu-cầu">8.1 Hai loại yêu cầu</h2>
+<h3 id="08-workforce-movement-nghỉ-việc-resignation">Nghỉ việc (Resignation)</h3>
+<img src="diagrams/flow-resignation.png" class="diagram" alt="Sơ đồ minh hoạ">
+
+<h3 id="08-workforce-movement-thuyên-chuyển-transfer">Thuyên chuyển (Transfer)</h3>
+<img src="diagrams/flow-transfer.png" class="diagram" alt="Sơ đồ minh hoạ">
+
+<h2 id="08-workforce-movement-82-tạo-yêu-cầu-mới">8.2 Tạo yêu cầu mới</h2>
+<p>Bấm <strong>&quot;+ Tạo yêu cầu&quot;</strong>:</p>
+<ol>
+<li><strong>Tìm lao động theo CCCD</strong> — bắt buộc tìm và chọn đúng người trước.</li>
+<li><strong>Loại yêu cầu</strong> — Nghỉ việc hoặc Thuyên chuyển.</li>
+<li>Nếu là Thuyên chuyển: chọn <strong>Bộ phận mới</strong> — bắt buộc.</li>
+<li><strong>Ngày hiệu lực</strong> — bắt buộc.</li>
+<li><strong>Lý do</strong>, <strong>Ghi chú</strong> — tuỳ chọn nhưng nên ghi rõ để HR xử lý nhanh và dễ tra cứu về sau.</li>
+<li>Bấm <strong>&quot;Gửi yêu cầu (chờ HR duyệt)&quot;</strong>.</li>
+</ol>
+<h2 id="08-workforce-movement-83-các-hành-động-hr-có-thể-thực-hiện">8.3 Các hành động HR có thể thực hiện</h2>
+<table>
+<thead>
+<tr>
+<th>Trạng thái hiện tại</th>
+<th>Hành động khả dụng</th>
+<th>Kết quả</th>
+</tr>
+</thead>
+<tbody><tr>
+<td>Nghỉ việc — Chờ HR duyệt</td>
+<td><strong>Duyệt nghỉ việc</strong></td>
+<td>Chuyển sang Đã nghỉ việc</td>
+</tr>
+<tr>
+<td></td>
+<td><strong>Từ chối</strong></td>
+<td>Chuyển sang HR từ chối</td>
+</tr>
+<tr>
+<td>Thuyên chuyển — Chờ HR xác nhận</td>
+<td><strong>Đã nhận việc</strong></td>
+<td>Chuyển sang Đã chuyển bộ phận</td>
+</tr>
+<tr>
+<td></td>
+<td><strong>Hoãn</strong> (nhập ngày chuyển mới)</td>
+<td>Chuyển sang Đã hoãn (chờ ngày mới)</td>
+</tr>
+<tr>
+<td></td>
+<td><strong>Không đến</strong></td>
+<td>Chuyển sang Không đến — chờ HR quyết định</td>
+</tr>
+<tr>
+<td></td>
+<td><strong>Từ chối</strong></td>
+<td>Chuyển sang HR từ chối</td>
+</tr>
+<tr>
+<td>Thuyên chuyển — Đã hoãn</td>
+<td><strong>Đã nhận việc</strong> / <strong>Hoãn tiếp</strong> / <strong>Không đến</strong> / <strong>Từ chối</strong></td>
+<td>Như trên</td>
+</tr>
+<tr>
+<td>Thuyên chuyển — Không đến, chờ quyết định</td>
+<td><strong>Huỷ thuyên chuyển</strong></td>
+<td>Chuyển sang Đã huỷ thuyên chuyển, không tạo gì thêm</td>
+</tr>
+<tr>
+<td></td>
+<td><strong>Sinh yêu cầu nghỉ việc</strong></td>
+<td>Tự động tạo <strong>một yêu cầu Nghỉ việc mới</strong>, liên kết với yêu cầu thuyên chuyển này, để xử lý tiếp theo hướng &quot;người này đã nghỉ hẳn&quot;</td>
+</tr>
+</tbody></table>
+<blockquote>
+<p><strong>Lưu ý:</strong> &quot;Sinh yêu cầu nghỉ việc&quot; chỉ tạo được <strong>đúng 1 lần</strong> cho mỗi yêu cầu thuyên chuyển — bấm lại nhiều lần (double-click, mạng chậm...) sẽ không tạo trùng thêm yêu cầu nghỉ việc thứ hai.</p>
+</blockquote>
+<h2 id="08-workforce-movement-84-xem-lịch-sử">8.4 Xem lịch sử</h2>
+<p>Toàn bộ lịch sử xử lý của một yêu cầu (ai tạo, ai xử lý, đổi trạng thái khi nào) được lưu lại — dùng nút <strong>&quot;Lịch sử&quot;</strong> trên mỗi dòng để xem lại.</p>
+<h2 id="08-workforce-movement-85-phạm-vi-dữ-liệu">8.5 Phạm vi dữ liệu</h2>
+<p>Danh sách yêu cầu hiển thị theo đúng Data Scope của bạn — Quản đốc bộ phận chỉ thấy yêu cầu liên quan tới bộ phận được phân công. Xem <a href="#10-permissions-data-scope">chương 10</a>.</p>
+
+</section>
+<section class="doc-page" id="09-admin-modules">
+<h1 id="09-admin-modules-9-các-module-admin">9. Các module Admin</h1>
+<p>Chương này hướng dẫn các module chỉ (hoặc chủ yếu) dành cho <strong>Quản trị viên</strong>. Không đi sâu vào cách hệ thống được lập trình — chỉ tập trung vào &quot;dùng khi nào, ai được dùng, thao tác chính, lưu ý&quot;.</p>
+<h2 id="09-admin-modules-users-phân-quyền-rbac">Users (Phân quyền RBAC)</h2>
+<img src="images/desktop/users.png" width="720" alt="Quản lý tài khoản">
+
+<p><strong>Dùng khi nào:</strong> cấp/thu hồi tài khoản cho nhân viên nội bộ.
+<strong>Ai được dùng:</strong> chỉ <code>ADMIN</code>.
+<strong>Thao tác chính:</strong></p>
+<ul>
+<li>Bấm <strong>&quot;+ Tạo tài khoản&quot;</strong>, nhập Tên tài khoản, Mật khẩu, Họ tên, chọn <strong>Vai trò</strong> (<code>ADMIN</code> / <code>HR_RECRUITER</code> / <code>DEPT_MANAGER</code>) và <strong>Bộ phận</strong> (chỉ áp dụng khi vai trò là <code>DEPT_MANAGER</code>).</li>
+<li>Đổi vai trò, đổi bộ phận, bật/khoá tài khoản, đổi mật khẩu trực tiếp trên bảng.</li>
+</ul>
+<blockquote>
+<p><strong>Lưu ý:</strong> Mật khẩu tối thiểu 8 ký tự. Khoá tài khoản (thay vì xoá) là cách được khuyến khích khi nhân viên nghỉ việc — giữ lại được lịch sử thao tác của họ trong Nhật ký hệ thống.</p>
+</blockquote>
+<h2 id="09-admin-modules-phân-quyền-chi-tiết-permissions">Phân quyền chi tiết (Permissions)</h2>
+<img src="images/desktop/permissions.png" width="900" alt="Ma trận phân quyền chi tiết">
+
+<p><strong>Dùng khi nào:</strong> cần <strong>bật/tắt một chức năng cụ thể</strong> cho một vai trò, mà không muốn đổi hẳn vai trò của người đó.
+<strong>Ai được dùng:</strong> chỉ <code>ADMIN</code>.
+<strong>Thao tác chính:</strong> bấm vào từng công tắc trong ma trận (hàng = chức năng, cột = vai trò) để bật/tắt ngay lập tức, không cần lưu riêng.</p>
+<blockquote>
+<p><strong>Quan trọng:</strong> Đây là lớp phân quyền <strong>bổ sung song song</strong> với 3 vai trò gốc — không thay thế vai trò. Một ô <strong>chưa từng được đụng tới</strong> mặc định luôn là <strong>cho phép</strong> (để admin không lỡ tay tự khoá cả hệ thống). Chỉ khi bạn chủ động tắt một ô, chức năng đó mới bị chặn cho đúng vai trò ở ô đó. Xem mô hình đầy đủ ở <a href="#10-permissions-data-scope">chương 10</a>.</p>
+</blockquote>
+<h2 id="09-admin-modules-data-scope">Data Scope</h2>
+<img src="images/desktop/data-scopes.png" width="900" alt="Ma trận Data Scope">
+
+<p><strong>Dùng khi nào:</strong> giới hạn một Quản đốc bộ phận chỉ được xem dữ liệu của (các) bộ phận cụ thể.
+<strong>Ai được dùng:</strong> chỉ <code>ADMIN</code>. Chỉ áp dụng cho vai trò <code>DEPT_MANAGER</code> — <code>ADMIN</code>/<code>HR_RECRUITER</code> luôn xem toàn bộ, không cần cấu hình ở đây.
+<strong>Thao tác chính:</strong> bật công tắc ở ô giao giữa 1 tài khoản và 1 bộ phận để cấp quyền xem bộ phận đó — một tài khoản có thể được bật nhiều bộ phận cùng lúc.</p>
+<h2 id="09-admin-modules-câu-hỏi-động-form-builder">Câu hỏi động (Form Builder)</h2>
+<img src="images/desktop/form-builder.png" width="720" alt="Form Builder">
+
+<p><strong>Dùng khi nào:</strong> cần thêm/sửa/xoá câu hỏi trên form đăng ký công khai mà không cần lập trình viên can thiệp.
+<strong>Ai được dùng:</strong> <code>ADMIN</code>, <code>HR_RECRUITER</code>.
+<strong>Thao tác chính:</strong> tạo câu hỏi mới với: <strong>Field Key</strong> (mã định danh nội bộ), <strong>Câu hỏi hiển thị</strong>, <strong>Loại</strong> (Nhập văn bản / Nhập số / Chọn từ danh sách), <strong>Bắt buộc trả lời hay không</strong>, <strong>Thứ tự hiển thị</strong>, <strong>Ngày áp dụng</strong> (câu hỏi chỉ hiện từ ngày này trở đi — form cũ không bị ảnh hưởng).</p>
+<blockquote>
+<p><strong>Lưu ý:</strong> Câu hỏi <strong>bắt buộc</strong> chỉ áp dụng cho người đăng ký <strong>lần đầu</strong> — lao động cũ xác nhận nhanh không phải trả lời lại các câu hỏi này.</p>
+</blockquote>
+<h2 id="09-admin-modules-trường-dữ-liệu-metadata-engine">Trường dữ liệu (Metadata Engine)</h2>
+<img src="images/desktop/field-definitions.png" width="900" alt="Quản lý trường dữ liệu">
+
+<p><strong>Dùng khi nào:</strong> đổi tên cột khi Import/Export, hoặc bật/tắt một cột trong ô &quot;Tìm nhanh&quot; — tất cả <strong>không cần sửa code</strong>.
+<strong>Ai được dùng:</strong> chỉ <code>ADMIN</code>.
+<strong>Thao tác chính:</strong> với mỗi trường, khai báo: <strong>Tên cột khi Import</strong>, <strong>Tên cột khi Export</strong>, <strong>Alias</strong> (các tên gọi khác cách nhau bằng dấu phẩy — giúp Import nhận diện file có tên cột khác chuẩn), bật/tắt <strong>Tìm kiếm</strong>, <strong>Lọc</strong>, <strong>Hiển thị</strong>, <strong>Bắt buộc</strong>, và <strong>Thứ tự</strong> cột.</p>
+<h2 id="09-admin-modules-workflow">Workflow</h2>
+<img src="images/desktop/workflow.png" width="900" alt="Workflow Engine">
+
+<p><strong>Dùng khi nào:</strong> thêm/sửa/đổi thứ tự các bước trạng thái cho Daily Application, Nghỉ việc, hoặc Thuyên chuyển — <strong>dùng chung một engine cho cả 3 luồng</strong>, không có state machine viết riêng cho từng module.
+<strong>Ai được dùng:</strong> chỉ <code>ADMIN</code>.
+<strong>Thao tác chính:</strong> chọn 1 trong 3 luồng (tab ở đầu trang), với mỗi bước khai báo: <strong>Nhãn hiển thị</strong>, <strong>Màu</strong> (gray/green/amber/red/blue/gold), có phải <strong>Bước bắt đầu</strong>/<strong>Bước kết thúc</strong>, <strong>Vai trò được xử lý</strong> bước này, <strong>Thứ tự</strong>.</p>
+<blockquote>
+<p><strong>Quan trọng:</strong> Đổi tên/màu một bước ở đây <strong>không cần</strong> cập nhật lại dữ liệu cũ — giá trị trạng thái lưu trong dữ liệu không đổi, Workflow chỉ mô tả &quot;bước này hiển thị ra sao&quot;.</p>
+</blockquote>
+<h2 id="09-admin-modules-rule-engine">Rule Engine</h2>
+<img src="images/desktop/rules.png" width="720" alt="Rule Engine">
+
+<p><strong>Dùng khi nào:</strong> cần tự động hoá kiểu <strong>&quot;nếu ... thì ...&quot;</strong> khi có đăng ký mới hoặc khi duyệt, mà không cần viết code — ví dụ &quot;nếu tuổi dưới 18 thì tự động đánh dấu ghi chú cảnh báo&quot;.
+<strong>Ai được dùng:</strong> chỉ <code>ADMIN</code>.
+<strong>Thao tác chính:</strong> tạo rule gồm: <strong>Tên rule</strong>, <strong>Áp dụng cho</strong> (Daily Application), <strong>Thời điểm chạy</strong> (Khi đăng ký / Khi duyệt), một hoặc nhiều <strong>Điều kiện</strong> (nối bằng AND), và <strong>Hành động</strong> (Đổi trạng thái tự động, hoặc Gắn ghi chú cảnh báo).</p>
+<blockquote>
+<p><strong>Lưu ý:</strong> Muốn có hiệu ứng OR (hoặc điều kiện này, hoặc điều kiện kia) — tạo <strong>nhiều rule riêng</strong> thay vì gộp vào 1 rule, vì các điều kiện trong cùng 1 rule luôn được nối bằng AND.</p>
+</blockquote>
+<h2 id="09-admin-modules-thông-báo-notifications">Thông báo (Notifications)</h2>
+<img src="images/desktop/notifications.png" width="900" alt="Hàng đợi thông báo">
+
+<p><strong>Dùng khi nào:</strong> theo dõi các sự kiện hệ thống đã tạo ra thông báo (duyệt hồ sơ, tạo yêu cầu nghỉ việc/thuyên chuyển...).
+<strong>Ai được dùng:</strong> <code>ADMIN</code>, <code>HR_RECRUITER</code>.</p>
+<blockquote>
+<p><strong>Lưu ý quan trọng:</strong> Chỉ kênh <strong>IN_APP</strong> (thông báo trong hệ thống) hoạt động thật ở thời điểm hiện tại. Các kênh <strong>ZALO / SMS / EMAIL</strong> hiện <strong>chỉ xếp vào hàng đợi</strong> (trạng thái <em>Đã xếp hàng</em>) — hệ thống <strong>chưa thực sự gửi ra ngoài</strong> vì chưa kết nối tài khoản dịch vụ gửi tin. Không nên báo với người lao động/đồng nghiệp rằng họ &quot;sẽ nhận SMS/Zalo tự động&quot; cho tới khi tính năng này được xác nhận đã kết nối dịch vụ thật.</p>
+</blockquote>
+<h2 id="09-admin-modules-nhập-dữ-liệu-ban-đầu-import-data">Nhập dữ liệu ban đầu (Import Data)</h2>
+<p>Xem chi tiết ở <a href="#11-import-export">chương 11 — Import/Export</a>.</p>
+<h2 id="09-admin-modules-thùng-rác-recycle-bin">Thùng rác (Recycle Bin)</h2>
+<img src="images/desktop/recycle-bin.png" width="720" alt="Thùng rác">
+
+<p><strong>Dùng khi nào:</strong> khôi phục một bản ghi vừa bị xoá nhầm.
+<strong>Ai được dùng:</strong> chỉ <code>ADMIN</code>.
+<strong>Phạm vi:</strong> chỉ áp dụng cho 3 loại dữ liệu — <strong>Daily Application</strong>, <strong>DW Data</strong>, <strong>Department</strong>. (Không áp dụng cho Worker Profile hay Workforce Movement — các loại dữ liệu này hiện chưa có thao tác xoá trên giao diện.)
+<strong>Thao tác chính:</strong> chọn tab loại dữ liệu, bấm <strong>Khôi phục</strong> để đưa bản ghi trở lại hoạt động bình thường, hoặc <strong>Xoá vĩnh viễn</strong> nếu chắc chắn không cần nữa.</p>
+<blockquote>
+<p><strong>Quan trọng:</strong> &quot;Xoá vĩnh viễn&quot; <strong>không thể hoàn tác</strong>. Chỉ dùng khi chắc chắn 100%.</p>
+</blockquote>
+<h2 id="09-admin-modules-control-center-system">Control Center (System)</h2>
+<img src="images/desktop/system-control-center.png" width="900" alt="Control Center">
+
+<p><strong>Dùng khi nào:</strong> kiểm tra sức khoẻ hệ thống định kỳ, hoặc tải bản sao lưu dữ liệu.
+<strong>Ai được dùng:</strong> chỉ <code>ADMIN</code>.
+<strong>Gồm:</strong> dung lượng &amp; số bảng dữ liệu (Neon Database), phiên bản cấu hình Workflow/Metadata hiện tại, hàng đợi thông báo, lịch chạy các tác vụ nền (job tự động hết hạn Planning, xử lý hàng đợi thông báo, giám sát Import job bị treo), thông tin bản build đang chạy trên Vercel, hoạt động gần nhất, và nút <strong>Backup</strong>.</p>
+<blockquote>
+<p><strong>Lưu ý:</strong> Các chỉ số CPU/RAM/uptime <strong>không hiển thị ở đây</strong> vì Vercel (nền tảng serverless) không cấp quyền đọc chỉ số phần cứng máy chủ — cần xem trực tiếp trên Vercel Dashboard/Neon Dashboard (có link tắt ngay trong trang này).</p>
+</blockquote>
+<h2 id="09-admin-modules-nhật-ký-hệ-thống-audit-log">Nhật ký hệ thống (Audit Log)</h2>
+<img src="images/desktop/audit-log.png" width="900" alt="Audit Log">
+
+<p><strong>Dùng khi nào:</strong> tra cứu &quot;ai đã làm gì, khi nào&quot; — đăng nhập, duyệt hồ sơ, sửa dữ liệu, xoá, khôi phục...
+<strong>Ai được dùng:</strong> chỉ <code>ADMIN</code>.
+<strong>Hiển thị:</strong> 200 hoạt động gần nhất — Thời gian, Người thực hiện, Hành động, Đối tượng bị tác động, Chi tiết (dạng dữ liệu thô, hữu ích khi cần tra cứu chính xác giá trị trước/sau).</p>
+
+</section>
+<section class="doc-page" id="10-permissions-data-scope">
+<h1 id="10-permissions-data-scope-10-permissions-data-scope">10. Permissions &amp; Data Scope</h1>
+<p>Đây là phần <strong>quan trọng nhất</strong> để hiểu &quot;vì sao tôi thấy/không thấy cái này&quot;. Hệ thống phân quyền theo <strong>3 lớp độc lập</strong>, không phải 1 lớp duy nhất:</p>
+<img src="diagrams/flow-permissions.png" class="diagram" alt="Sơ đồ minh hoạ">
+
+<h2 id="10-permissions-data-scope-101-lớp-1-role-bạn-là-ai">10.1 Lớp 1 — Role (Bạn là ai)</h2>
+<p>3 vai trò cố định: <code>ADMIN</code>, <code>HR_RECRUITER</code>, <code>DEPT_MANAGER</code>. Vai trò quyết định <strong>về tổng thể</strong> bạn thuộc nhóm nào và thấy nhóm menu nào trên Sidebar — xem bảng chi tiết ở <a href="#23-appendix-role-matrix">Phụ lục — Role matrix</a>.</p>
+<h2 id="10-permissions-data-scope-102-lớp-2-permission-bạn-được-làm-gì">10.2 Lớp 2 — Permission (Bạn được làm gì)</h2>
+<p>Trên nền vai trò, hệ thống có <strong>29 quyền chi tiết</strong> (ví dụ: <em>Duyệt/Từ chối hồ sơ</em>, <em>Sửa/Xoá DW Data</em>, <em>Backup dữ liệu</em>, <em>Xem CCCD khi Export</em>...), mỗi quyền bật/tắt <strong>độc lập cho từng vai trò</strong> tại <strong>Phân quyền chi tiết</strong> (<code>/admin/permissions</code>).</p>
+<ul>
+<li><strong>Mặc định</strong> (chưa từng cấu hình) = <strong>cho phép</strong> — Admin không cần bật tay từng ô, hệ thống hoạt động đầy đủ ngay từ đầu.</li>
+<li>Admin <strong>tắt</strong> một ô cụ thể để <strong>chặn thêm</strong> một chức năng cho một vai trò — ví dụ tắt &quot;Tạo yêu cầu Nghỉ việc/Thuyên chuyển&quot; cho <code>DEPT_MANAGER</code> nếu công ty muốn chỉ HR mới được tạo yêu cầu, quản đốc chỉ được xem.</li>
+<li>Danh sách đầy đủ 29 quyền: <a href="#23-appendix-permission-overview">Phụ lục — Permission overview</a>.</li>
+</ul>
+<blockquote>
+<p><strong>Lưu ý:</strong> Permission là lớp <strong>bổ sung</strong>, không thay thế Role. Một quyền bị tắt chỉ chặn đúng thao tác đó cho đúng vai trò đó — không ảnh hưởng tới các vai trò khác hay các quyền khác.</p>
+</blockquote>
+<h2 id="10-permissions-data-scope-103-lớp-3-data-scope-bạn-được-xem-dữ-liệu-nào">10.3 Lớp 3 — Data Scope (Bạn được xem dữ liệu nào)</h2>
+<p>Data Scope trả lời câu hỏi <strong>&quot;được thao tác Ở ĐÂU&quot;</strong> — tách biệt hoàn toàn khỏi Role và Permission.</p>
+<ul>
+<li><code>ADMIN</code> và <code>HR_RECRUITER</code>: <strong>luôn xem toàn bộ</strong>, không cần cấu hình gì.</li>
+<li><code>DEPT_MANAGER</code>: <strong>chỉ xem được (các) bộ phận được gán riêng</strong> tại <strong>Data Scope</strong> (<code>/admin/data-scopes</code>). Một Quản đốc có thể được gán <strong>nhiều bộ phận cùng lúc</strong>.</li>
+</ul>
+<p><strong>Ví dụ cụ thể:</strong> Một tài khoản có vai trò <code>DEPT_MANAGER</code> nhưng chỉ được gán <strong>Packing – A</strong> và <strong>Packing – B</strong> tại Data Scope thì <strong>không thể xem được dữ liệu của Cẩm Chướng</strong> — dù họ có đầy đủ quyền <code>DEPT_MANAGER</code> thông thường. Đây không phải lỗi hệ thống, mà đúng theo thiết kế.</p>
+<p>Data Scope ảnh hưởng tới hầu hết màn hình: &quot;Bộ phận của tôi&quot;, Task Center, Daily Application (khi xem theo bộ phận), Workforce Movement, Planning...</p>
+<blockquote>
+<p><strong>Quan trọng:</strong> Nếu một tài khoản <code>DEPT_MANAGER</code> chưa được gán bộ phận nào ở Data Scope, một số màn hình sẽ hiện <strong>danh sách trống</strong> hoặc thông báo &quot;chưa được gán bộ phận nào&quot; — đây là hành vi <strong>an toàn theo mặc định</strong> (không gán = không xem được gì), không phải lỗi.</p>
+</blockquote>
+<h2 id="10-permissions-data-scope-104-vì-sao-tôi-không-thấy-một-menunút-nào-đó">10.4 Vì sao tôi không thấy một menu/nút nào đó?</h2>
+<p>Kiểm tra theo đúng thứ tự 3 lớp:</p>
+<ol>
+<li><strong>Role</strong> — menu đó có thuộc nhóm dành cho vai trò của bạn không? (xem <a href="#23-appendix-role-matrix">Role matrix</a>)</li>
+<li><strong>Permission</strong> — quyền tương ứng có đang bị Admin tắt cho vai trò của bạn không? (kiểm tra tại Phân quyền chi tiết)</li>
+<li><strong>Data Scope</strong> — nếu bạn là Quản đốc bộ phận, dữ liệu bạn cần tìm có thuộc bộ phận được gán cho bạn không?</li>
+</ol>
+
+</section>
+<section class="doc-page" id="11-import-export">
+<h1 id="11-import-export-11-import-export">11. Import / Export</h1>
+<h2 id="11-import-export-111-import-dữ-liệu">11.1 Import dữ liệu</h2>
+<p><strong>Ai dùng:</strong> chỉ <code>ADMIN</code>. Vào Sidebar → <strong>Nhập dữ liệu ban đầu</strong>.</p>
+<img src="images/desktop/import-data.png" width="720" alt="Import Data">
+
+<h3 id="11-import-export-file-nào-được-import">File nào được import?</h3>
+<p>3 loại dữ liệu: <strong>Department</strong> (bộ phận), <strong>DW Data</strong> (kho lao động gốc), <strong>Daily Application</strong> (đơn đăng ký). Chọn đúng loại trước khi tải file lên.</p>
+<h3 id="11-import-export-định-dạng">Định dạng</h3>
+<p>Chấp nhận <strong>CSV, XLSX, XLS</strong>. Bấm <strong>&quot;Tải file mẫu&quot;</strong> để lấy đúng cấu trúc cột trước khi chuẩn bị dữ liệu.</p>
+<h3 id="11-import-export-alias-tên-cột-thay-thế">Alias (tên cột thay thế)</h3>
+<p>Nếu file của bạn dùng tên cột khác chuẩn (ví dụ file cũ ghi &quot;Phone&quot; thay vì &quot;SĐT&quot;), hệ thống vẫn nhận diện được nhờ <strong>Alias</strong> — danh sách tên gọi khác được Admin khai báo sẵn cho từng trường tại <a href="./09-admin-modules.md#tr%C6%B0%E1%BB%9Dng-d%E1%BB%AF-li%E1%BB%87u-metadata">Trường dữ liệu (Metadata)</a>. Nếu file bị báo &quot;không nhận diện được cột&quot;, kiểm tra và bổ sung alias tương ứng trước khi import lại.</p>
+<h3 id="11-import-export-các-bước-xử-lý-của-một-job-import">Các bước xử lý của một Job Import</h3>
+<p>Sau khi tải file lên, hệ thống xử lý tuần tự theo 5 bước, chạy nền (bạn có thể đóng trang, quay lại sau để xem tiến trình):</p>
+<ol>
+<li><strong>STAGING</strong> — nạp toàn bộ dòng dữ liệu thô vào hệ thống.</li>
+<li><strong>VALIDATING</strong> — kiểm tra định dạng từng dòng, đánh dấu dòng lỗi/cảnh báo.</li>
+<li><strong>MATCHING</strong> — (chỉ với Daily Application) đối chiếu với DW Data để xác định cũ/mới.</li>
+<li><strong>MERGING</strong> — ghi chính thức vào dữ liệu hệ thống.</li>
+<li><strong>BUILDING_STATS</strong> — tổng hợp số liệu cuối cùng.</li>
+</ol>
+<h3 id="11-import-export-đọc-kết-quả-job">Đọc kết quả Job</h3>
+<table>
+<thead>
+<tr>
+<th>Chỉ số</th>
+<th>Ý nghĩa</th>
+</tr>
+</thead>
+<tbody><tr>
+<td>Tổng dòng</td>
+<td>Tổng số dòng trong file</td>
+</tr>
+<tr>
+<td>Đã thêm mới</td>
+<td>Số bản ghi hoàn toàn mới</td>
+</tr>
+<tr>
+<td>Đã cập nhật</td>
+<td>Số bản ghi đã có, được cập nhật thông tin</td>
+</tr>
+<tr>
+<td>Trùng lặp</td>
+<td>Số dòng bị bỏ qua vì đã tồn tại giống hệt</td>
+</tr>
+<tr>
+<td>Cảnh báo</td>
+<td>Dòng import được nhưng có điểm cần chú ý</td>
+</tr>
+<tr>
+<td>Lỗi</td>
+<td>Dòng không import được — xem log job để biết lý do cụ thể từng dòng</td>
+</tr>
+</tbody></table>
+<blockquote>
+<p><strong>Mẹo:</strong> Nếu tải nhầm đúng file đã import trước đó (checksum trùng), hệ thống sẽ cảnh báo tránh việc bạn vô tình import trùng dữ liệu 2 lần.</p>
+</blockquote>
+<blockquote>
+<p><strong>Lưu ý:</strong> Nếu một Job bị treo do sự cố mạng/máy chủ, hệ thống có một tác vụ nền tự kiểm tra và khôi phục Job — bạn không cần tự huỷ và làm lại ngay lập tức, hãy đợi vài phút và kiểm tra lại trạng thái Job trước.</p>
+</blockquote>
+<h2 id="11-import-export-112-export-dữ-liệu">11.2 Export dữ liệu</h2>
+<p>Nút <strong>&quot;Xuất Excel&quot;</strong> có ở Daily Application, &quot;Bộ phận của tôi&quot;, và một số màn hình khác — luôn xuất <strong>theo đúng khoảng ngày và bộ phận đang chọn</strong>, không phải toàn bộ dữ liệu hệ thống. Các bộ lọc khác trên màn hình (Trạng thái, DW Data, từ khoá tìm kiếm) <strong>không</strong> được mang theo khi xuất — xem lưu ý chi tiết ở <a href="./04-daily-application.md#48-xu%E1%BA%A5t-excel">chương 4</a>.</p>
+<h3 id="11-import-export-che-thông-tin-cá-nhân-khi-xuất-excel">Che thông tin cá nhân khi xuất Excel</h3>
+<blockquote>
+<p><strong>Quan trọng:</strong> CCCD, Số điện thoại, Địa chỉ khi xuất Excel <strong>có thể bị che (mask)</strong> tuỳ theo quyền của vai trò bạn đang dùng:</p>
+</blockquote>
+<table>
+<thead>
+<tr>
+<th>Quyền</th>
+<th>Nếu <strong>được phép</strong></th>
+<th>Nếu <strong>không được phép</strong></th>
+</tr>
+</thead>
+<tbody><tr>
+<td><code>privacy.view_cccd</code></td>
+<td>CCCD xuất đầy đủ</td>
+<td>Hiện <code>•••• (ẩn theo quyền)</code></td>
+</tr>
+<tr>
+<td><code>privacy.view_phone</code></td>
+<td>SĐT xuất đầy đủ</td>
+<td>Hiện <code>•••• (ẩn theo quyền)</code></td>
+</tr>
+<tr>
+<td><code>privacy.view_address</code></td>
+<td>Địa chỉ xuất đầy đủ</td>
+<td>Hiện <code>•••• (ẩn theo quyền)</code></td>
+</tr>
+</tbody></table>
+<p>3 quyền này cấu hình tại <a href="#09-admin-modules">Phân quyền chi tiết</a> — mặc định <strong>cho phép</strong> cho tới khi Admin chủ động tắt.</p>
+<blockquote>
+<p><strong>Quan trọng:</strong> Việc che thông tin chỉ áp dụng cho <strong>file xuất ra</strong>. Nếu bạn cần một bản ghi CCCD/SĐT/Địa chỉ đầy đủ, hãy vào đúng hồ sơ trên hệ thống thay vì tìm cách &quot;gỡ mask&quot; trên file Excel — không có thao tác nào trên giao diện được thiết kế để bỏ qua quy tắc che thông tin này.</p>
+</blockquote>
+
+</section>
+<section class="doc-page" id="12-backup">
+<h1 id="12-backup-12-backup">12. Backup</h1>
+<p><strong>Ai dùng:</strong> chỉ <code>ADMIN</code>. Vào <strong>Control Center</strong> (<code>/admin/system</code>) → mục <strong>Backup</strong>.</p>
+<h2 id="12-backup-121-backup-dùng-để-làm-gì">12.1 Backup dùng để làm gì?</h2>
+<p>Nút <strong>&quot;Export Database (JSON)&quot;</strong> tải về <strong>toàn bộ dữ liệu nghiệp vụ</strong> của hệ thống dưới dạng 1 file JSON — dùng làm bản sao lưu thủ công, hoặc để đưa cho lập trình viên/AI viết script khôi phục khi cần.</p>
+<h2 id="12-backup-122-phạm-vi-dữ-liệu">12.2 Phạm vi dữ liệu</h2>
+<p>Bao gồm: Department, DW Data, Daily Application, Worker Profile, Employment Session, Planning (kế hoạch + phân bổ), Workforce Movement, Data Scope, Phân quyền chi tiết, Form Builder, Trường dữ liệu, Workflow, Rule Engine, Thông báo, Nhật ký hệ thống.</p>
+<blockquote>
+<p><strong>Quan trọng:</strong> File backup <strong>KHÔNG bao gồm bảng tài khoản (<code>users</code>)</strong> — vì bảng này chứa mật khẩu đã mã hoá (password hash). Đây là quyết định bảo mật có chủ đích, không phải thiếu sót. Nếu cần sao lưu danh sách tài khoản, ghi chú lại thủ công tại module Users.</p>
+</blockquote>
+<h2 id="12-backup-123-đây-không-phải-tính-năng-restore-tự-động">12.3 Đây KHÔNG phải tính năng Restore tự động</h2>
+<blockquote>
+<p><strong>Quan trọng:</strong> Hệ thống hiện <strong>chưa có nút &quot;Khôi phục&quot; tự động</strong> từ file backup này. Muốn khôi phục dữ liệu từ file JSON đã tải, cần đưa file cho lập trình viên/AI viết script import thủ công <strong>một lần</strong>.</p>
+</blockquote>
+<p>Với nhu cầu sao lưu định kỳ thật sự / khôi phục về đúng một thời điểm trong quá khứ (point-in-time recovery), tài liệu chính thức khuyến nghị dùng <strong>Neon Branches</strong> (chức năng chụp nhanh cấp cơ sở dữ liệu của nhà cung cấp Neon, có link tắt ngay tại Control Center) — vì cách này chụp lại đầy đủ cả index/ràng buộc dữ liệu mà file JSON xuất từ đây không thay thế được.</p>
+<h2 id="12-backup-124-khi-nào-nên-backup">12.4 Khi nào nên backup?</h2>
+<ul>
+<li>Trước khi thực hiện một đợt Import dữ liệu lớn.</li>
+<li>Trước khi Admin thực hiện các thay đổi cấu hình lớn (đổi Workflow, xoá hàng loạt ở Recycle Bin...).</li>
+<li>Định kỳ theo chu kỳ công ty quy định (ví dụ hàng tuần/hàng tháng) — xem gợi ý ở <a href="#22-checklists">Checklist vận hành</a>.</li>
+</ul>
+
+</section>
+<section class="doc-page" id="13-public-lookup">
+<h1 id="13-public-lookup-13-tra-cứu-công-khai-public-lookup">13. Tra cứu công khai (Public Lookup)</h1>
+<p>Đây là trang <strong>dành cho người lao động</strong>, không cần tài khoản đăng nhập. Có 2 trang công khai: <strong>Trang đăng ký</strong> (nộp đơn) và <strong>Trang tra cứu</strong> (xem kết quả).</p>
+<h2 id="13-public-lookup-131-trang-đăng-ký">13.1 Trang đăng ký</h2>
+<p>Trang chủ hệ thống (<code>/</code>) — nơi người lao động tự đăng ký thông tin tập nghề.</p>
+<img src="images/desktop/public-registration-form.png" width="720" alt="Trang đăng ký công khai">
+
+<ol>
+<li>Nhập <strong>Số CCCD/CMND</strong> (bắt buộc, 9 hoặc 12 số) và <strong>Số điện thoại</strong>.</li>
+<li>Có thể bấm <strong>&quot;Quét QR CCCD&quot;</strong> để tự động điền thông tin từ mã QR trên thẻ CCCD, hạn chế gõ tay sai sót.</li>
+<li>Hệ thống tự kiểm tra: nếu bạn đã từng làm việc tại Dalat Hasfarm, thông tin sẽ <strong>tự động nhận diện và điền lại hồ sơ cũ</strong> — không phải khai lại từ đầu; nếu là lần đầu, bạn cần khai đầy đủ các câu hỏi bắt buộc (Giới tính, Dân tộc, Thời gian đăng ký làm, Kênh giới thiệu, và cam kết thông tin chính xác).</li>
+<li>Nộp đơn.</li>
+</ol>
+<blockquote>
+<p><strong>Lưu ý:</strong> Mỗi số CCCD chỉ được đăng ký <strong>1 lần trong cùng 1 ngày</strong>. Đăng ký lần thứ hai trong ngày sẽ báo &quot;Đã xác nhận đăng ký hôm nay&quot; — đây không phải lỗi, đăng ký đầu tiên trong ngày đã được ghi nhận.</p>
+</blockquote>
+<h2 id="13-public-lookup-132-trang-tra-cứu-kết-quả">13.2 Trang tra cứu kết quả</h2>
+<p>Vào <code>/lookup</code> (hoặc bấm <strong>&quot;Tra cứu kết quả&quot;</strong> từ trang đăng ký).</p>
+<img src="images/desktop/public-lookup-empty.png" width="720" alt="Trang tra cứu — trống">
+
+<ol>
+<li>Nhập <strong>Số CCCD/CMND</strong> đã dùng để đăng ký.</li>
+<li>Nhập <strong>Số điện thoại đã đăng ký</strong>.</li>
+<li>Bấm <strong>Tra cứu</strong>.</li>
+</ol>
+<h3 id="13-public-lookup-kết-quả-tìm-thấy">Kết quả tìm thấy</h3>
+<img src="images/desktop/public-lookup-result.png" width="720" alt="Trang tra cứu — có kết quả">
+
+<p>Hiện: hồ sơ đã xác minh hay chưa, tổng số lần đăng ký, và kết quả <strong>hôm nay</strong> — nếu đã được nhận, hệ thống hiện rõ <strong>bộ phận được xếp</strong> và giờ hẹn có mặt.</p>
+<h3 id="13-public-lookup-không-tìm-thấy-kết-quả">Không tìm thấy kết quả</h3>
+<img src="images/desktop/public-lookup-notfound.png" width="720" alt="Không tìm thấy hồ sơ">
+
+<h2 id="13-public-lookup-133-vì-sao-cần-cả-cccd-lẫn-số-điện-thoại">13.3 Vì sao cần cả CCCD lẫn số điện thoại?</h2>
+<blockquote>
+<p><strong>Quan trọng:</strong> Hệ thống yêu cầu nhập <strong>đúng cả hai</strong> thông tin (CCCD + số điện thoại đã đăng ký) mới cho xem kết quả — đây là cơ chế <strong>xác minh 2 yếu tố</strong> để bảo vệ thông tin cá nhân của bạn khỏi bị người khác dò xem bằng cách chỉ cần biết số CCCD. Trang tra cứu này <strong>không hiển thị bất kỳ dữ liệu nội bộ nào khác</strong> (không có tên bộ phận đầy đủ danh sách, không có thông tin lao động khác, không có dữ liệu quản trị).</p>
+</blockquote>
+<p>Nếu bạn chắc chắn cả hai thông tin đều đúng mà vẫn báo &quot;Không tìm thấy hồ sơ&quot;, có thể do:</p>
+<ul>
+<li>CCCD hoặc số điện thoại gõ sai khi đăng ký ban đầu — liên hệ HR để kiểm tra và sửa lại.</li>
+<li>Hồ sơ vừa nộp chưa được hệ thống xử lý xong (hiếm khi xảy ra, đợi vài phút và thử lại).</li>
+</ul>
+
+</section>
+<section class="doc-page" id="14-mobile-guide">
+<h1 id="14-mobile-guide-14-hướng-dẫn-dùng-trên-điện-thoại">14. Hướng dẫn dùng trên điện thoại</h1>
+<p>Hệ thống hoạt động tốt trên điện thoại (đã kiểm tra ở độ rộng 390px — kích thước phổ biến của điện thoại thông thường). Một số thao tác có khác biệt nhỏ so với máy tính.</p>
+<h2 id="14-mobile-guide-141-mở-menu-điều-hướng">14.1 Mở menu điều hướng</h2>
+<p>Trên di động, Sidebar được ẩn thành <strong>menu trượt (drawer)</strong>. Bấm nút ☰ ở góc trên-trái để mở, bấm dấu ✕ hoặc chạm ra ngoài để đóng.</p>
+<table><tr>
+<td><img src="images/mobile/mobile-task-center.png" width="280" alt="Task Center trên di động"></td>
+<td><img src="images/mobile/mobile-sidebar-drawer.png" width="280" alt="Menu trượt trên di động"></td>
+</tr></table>
+
+<h2 id="14-mobile-guide-142-cuộn-bảng-dữ-liệu">14.2 Cuộn bảng dữ liệu</h2>
+<p>Các bảng nhiều cột (Daily Application, Department...) sẽ <strong>cuộn ngang</strong> trên màn hình hẹp thay vì bị vỡ layout hay ẩn bớt cột. Vuốt sang trái/phải trên bảng để xem hết các cột.</p>
+<img src="images/mobile/mobile-daily-application.png" width="280" alt="Daily Application trên di động">
+
+<blockquote>
+<p><strong>Lưu ý:</strong> Không có cột dữ liệu nghiệp vụ nào bị ẩn đi trên di động để &quot;cho gọn&quot; — mọi thông tin đều xem được, chỉ khác cách cuộn.</p>
+</blockquote>
+<h2 id="14-mobile-guide-143-thao-tác-task-center-trên-di-động">14.3 Thao tác Task Center trên di động</h2>
+<p>Task Center hiển thị các thẻ nhóm việc xếp chồng theo chiều dọc thay vì 2 cột như trên máy tính — thao tác tìm kiếm, xem chi tiết, bấm &quot;Xem tất cả&quot; hoạt động giống hệt bản desktop.</p>
+<h2 id="14-mobile-guide-144-tra-cứu-công-khai-trên-di-động">14.4 Tra cứu công khai trên di động</h2>
+<p>Trang tra cứu và trang đăng ký công khai được thiết kế ưu tiên cho di động (nhiều người lao động dùng điện thoại là chính) — form nhập liệu lớn, dễ chạm, không cần zoom.</p>
+<table><tr>
+<td><img src="images/mobile/mobile-lookup.png" width="280" alt="Tra cứu trên di động"></td>
+<td><img src="images/mobile/mobile-registration-form.png" width="280" alt="Đăng ký trên di động"></td>
+</tr></table>
+
+
+</section>
+<section class="doc-page" id="15-best-practices">
+<h1 id="15-best-practices-15-thói-quen-làm-việc-hiệu-quả">15. Thói quen làm việc hiệu quả</h1>
+<p>5 thói quen giúp bạn thao tác nhanh hơn và ít sai sót hơn:</p>
+<ol>
+<li><p><strong>Mở Task Center đầu ngày.</strong> Đây là nơi tổng hợp mọi việc đang chờ — kiểm tra ở đây trước, thay vì đoán xem hôm nay có gì cần làm bằng cách mở lần lượt từng module.</p>
+</li>
+<li><p><strong>Dùng ô tìm kiếm thay vì cuộn tay.</strong> Với danh sách dài (Daily Application nhiều đơn, DW Data hàng nghìn dòng), gõ CCCD hoặc tên vào ô tìm kiếm luôn nhanh và chính xác hơn cuộn/dò bằng mắt.</p>
+</li>
+<li><p><strong>Kiểm tra đúng bộ phận trước khi duyệt.</strong> Xếp nhầm bộ phận là lỗi phổ biến và khó phát hiện ngay — xem kỹ tên Dept. + Group trước khi bấm duyệt, đặc biệt khi hai bộ phận có tên gần giống nhau (ví dụ <em>Packing – A</em> và <em>Packing – B</em>).</p>
+</li>
+<li><p><strong>Ghi Ghi chú/Lý do rõ ràng khi tạo yêu cầu.</strong> Khi tạo yêu cầu Nghỉ việc/Thuyên chuyển, ghi lý do cụ thể — người xử lý sau (có thể không phải bạn) sẽ cần thông tin này, và nó cũng được lưu vĩnh viễn trong lịch sử.</p>
+</li>
+<li><p><strong>Đăng xuất khi dùng máy dùng chung.</strong> Đặc biệt quan trọng ở máy tính văn phòng nhiều người cùng dùng — không đăng xuất nghĩa là người sau có thể thao tác dưới tên bạn.</p>
+</li>
+</ol>
+
+</section>
+<section class="doc-page" id="16-common-mistakes">
+<h1 id="16-common-mistakes-16-lỗi-thường-gặp-khi-thao-tác">16. Lỗi thường gặp khi thao tác</h1>
+<table>
+<thead>
+<tr>
+<th>Lỗi</th>
+<th>Vì sao xảy ra</th>
+<th>Cách xử lý</th>
+</tr>
+</thead>
+<tbody><tr>
+<td><strong>Chọn sai bộ phận khi duyệt</strong></td>
+<td>Hai bộ phận tên gần giống nhau (<em>Packing – A</em> / <em>Packing – B</em>), hoặc chọn nhanh không nhìn kỹ dropdown</td>
+<td>Kiểm tra lại tên đầy đủ Dept. + Group trước khi bấm duyệt; nếu đã lỡ duyệt sai, sửa lại cột &quot;Bộ phận + Nhóm&quot; ngay trên bảng Daily Application (nếu vẫn còn trong ngày) hoặc tạo yêu cầu Thuyên chuyển để chuyển đúng bộ phận</td>
+</tr>
+<tr>
+<td><strong>Nhập sai CCCD</strong></td>
+<td>Gõ tay thay vì quét QR, hoặc nhầm giữa CCCD 9 số (CMND cũ) và 12 số</td>
+<td>Sửa trực tiếp tại DW Data hoặc Daily Application nếu phát hiện sớm — hệ thống sẽ tự đồng bộ lại các hồ sơ liên quan sang CCCD đúng. Luôn kiểm tra kỹ trước khi duyệt hàng loạt</td>
+</tr>
+<tr>
+<td><strong>Tạo Planning bị chồng lấn thời gian</strong></td>
+<td>Cố tạo 2 kế hoạch <strong>Đang áp dụng</strong> cùng bộ phận + nhóm với khoảng ngày trùng nhau</td>
+<td>Hệ thống sẽ từ chối tạo — dùng chức năng <strong>&quot;Sửa (tạo version mới)&quot;</strong> trên kế hoạch hiện có thay vì tạo kế hoạch mới chồng lên</td>
+</tr>
+<tr>
+<td><strong>Tạo Workforce Movement nhầm người lao động</strong></td>
+<td>Tìm theo tên trùng, không kiểm tra kỹ CCCD trước khi xác nhận</td>
+<td>Luôn đọc kỹ tên + CCCD hiển thị sau khi tìm kiếm trước khi bấm &quot;Gửi yêu cầu&quot;; nếu đã lỡ tạo nhầm, dùng nút <strong>&quot;Từ chối&quot;</strong>/<strong>&quot;Huỷ&quot;</strong> tương ứng để đóng yêu cầu sai rồi tạo lại đúng</td>
+</tr>
+<tr>
+<td><strong>Dùng chung tài khoản với đồng nghiệp</strong></td>
+<td>Tiện lợi trước mắt (không phải đăng nhập riêng)</td>
+<td>Không nên — mọi thao tác ghi lại đúng tên tài khoản thực hiện; dùng chung làm mất khả năng truy vết trách nhiệm và vi phạm nguyên tắc bảo mật cơ bản</td>
+</tr>
+<tr>
+<td><strong>Tưởng &quot;không thấy menu&quot; là lỗi hệ thống</strong></td>
+<td>Không hiểu rằng menu hiển thị theo Role + Permission</td>
+<td>Đây gần như luôn là <strong>đúng thiết kế</strong>, không phải lỗi — xem <a href="#10-permissions-data-scope">chương 10</a> để tự kiểm tra, hoặc hỏi Admin nếu vẫn không chắc</td>
+</tr>
+</tbody></table>
+
+</section>
+<section class="doc-page" id="17-troubleshooting">
+<h1 id="17-troubleshooting-17-xử-lý-sự-cố-troubleshooting">17. Xử lý sự cố (Troubleshooting)</h1>
+<table>
+<thead>
+<tr>
+<th>Vấn đề</th>
+<th>Nguyên nhân có thể</th>
+<th>Cách xử lý</th>
+</tr>
+</thead>
+<tbody><tr>
+<td><strong>Không đăng nhập được</strong></td>
+<td>Sai tên tài khoản/mật khẩu; tài khoản bị Admin khoá; nhập sai quá 5 lần nên bị tạm khoá 15 phút</td>
+<td>Kiểm tra lại thông tin, thử lại sau vài phút nếu bị báo &quot;Quá nhiều lần đăng nhập sai&quot;; nếu chắc chắn thông tin đúng, liên hệ Admin kiểm tra trạng thái tài khoản tại module Users</td>
+</tr>
+<tr>
+<td><strong>Không thấy một menu nào đó</strong></td>
+<td>Vai trò của bạn không có menu này; hoặc quyền tương ứng đang bị tắt</td>
+<td>Đọc <a href="#10-permissions-data-scope">chương 10</a>; nếu vẫn không rõ, hỏi Admin kiểm tra tại Phân quyền chi tiết</td>
+</tr>
+<tr>
+<td><strong>Không tìm thấy một lao động cụ thể</strong></td>
+<td>Người đó chưa từng đăng ký qua hệ thống; CCCD tra cứu không khớp với CCCD đã lưu; hoặc bạn là Quản đốc bộ phận và người đó không thuộc phạm vi Data Scope của bạn</td>
+<td>Kiểm tra lại CCCD; thử tìm trên DW Data (ADMIN/HR_RECRUITER); nếu là Quản đốc bộ phận, xác nhận với Admin về Data Scope đã gán cho bạn</td>
+</tr>
+<tr>
+<td><strong>Không tạo được yêu cầu Nghỉ việc/Thuyên chuyển</strong></td>
+<td>Chưa tìm và chọn đúng lao động trước; thiếu Bộ phận mới (bắt buộc với Thuyên chuyển) hoặc thiếu Ngày hiệu lực; hoặc quyền <code>workforce_movements.create</code> đang bị tắt cho vai trò của bạn</td>
+<td>Kiểm tra đã điền đủ các trường bắt buộc (*); nếu vẫn không được, hỏi Admin kiểm tra quyền</td>
+</tr>
+<tr>
+<td><strong>Không tạo được Planning mới (báo lỗi chồng lấn)</strong></td>
+<td>Đã có 1 kế hoạch <strong>Đang áp dụng</strong> cùng bộ phận + nhóm với khoảng ngày trùng</td>
+<td>Dùng <strong>&quot;Sửa (tạo version mới)&quot;</strong> trên kế hoạch hiện có, hoặc chọn khoảng ngày khác không trùng</td>
+</tr>
+<tr>
+<td><strong>File Export thiếu CCCD/SĐT/Địa chỉ (hiện <code>••••</code>)</strong></td>
+<td>Vai trò của bạn đang bị tắt quyền <code>privacy.view_cccd</code> / <code>privacy.view_phone</code> / <code>privacy.view_address</code></td>
+<td>Đây là hành vi <strong>đúng theo thiết kế bảo mật</strong>, không phải lỗi — liên hệ Admin nếu công việc của bạn thực sự cần xem đầy đủ các trường này</td>
+</tr>
+<tr>
+<td><strong>Đang thao tác thì bị đẩy về trang đăng nhập</strong></td>
+<td>Phiên đăng nhập đã hết hạn, hoặc tài khoản vừa bị đổi mật khẩu/khoá ở nơi khác</td>
+<td>Đăng nhập lại; nếu việc này xảy ra thường xuyên bất thường, báo Admin kiểm tra</td>
+</tr>
+<tr>
+<td><strong>Task Center báo lỗi hoặc không tải được</strong></td>
+<td>Mất kết nối mạng tạm thời, lỗi máy chủ, hoặc phiên đăng nhập hết hạn</td>
+<td>Bấm <strong>Thử lại</strong>; nếu báo hết quyền/hết phiên, làm theo hướng dẫn tương ứng trên màn hình</td>
+</tr>
+<tr>
+<td><strong>Trang tra cứu công khai báo &quot;Không tìm thấy hồ sơ&quot;</strong></td>
+<td>CCCD hoặc số điện thoại nhập không khớp với lúc đăng ký; hoặc hồ sơ chưa được xử lý xong</td>
+<td>Kiểm tra lại chính xác cả 2 thông tin; nếu chắc chắn đúng, liên hệ HR để kiểm tra hồ sơ</td>
+</tr>
+</tbody></table>
+<p>Không tìm thấy sự cố của bạn ở đây? Xem tiếp <a href="#18-faq">18 — FAQ</a> hoặc liên hệ Admin/bộ phận IT nội bộ.</p>
+
+</section>
+<section class="doc-page" id="18-faq">
+<h1 id="18-faq-18-câu-hỏi-thường-gặp-faq">18. Câu hỏi thường gặp (FAQ)</h1>
+<p><strong>1. Vì sao tôi không thấy menu Admin (Users, Permissions, Data Scope...)?</strong>
+Vì tài khoản của bạn không có vai trò <code>ADMIN</code>. Các mục này chỉ hiện với vai trò Quản trị viên — đây là thiết kế bảo mật, không phải lỗi hiển thị.</p>
+<p><strong>2. Vì sao tôi chỉ thấy một số bộ phận chứ không phải tất cả?</strong>
+Nếu bạn là Quản đốc bộ phận (<code>DEPT_MANAGER</code>), bạn chỉ xem được (các) bộ phận được Admin gán riêng cho tài khoản của mình tại Data Scope. <code>ADMIN</code> và <code>HR_RECRUITER</code> luôn xem toàn bộ. Xem <a href="#10-permissions-data-scope">chương 10</a>.</p>
+<p><strong>3. Tôi có thể sửa CCCD của một hồ sơ đã đăng ký không?</strong>
+Có, nếu bạn có quyền <code>registrations.edit</code>/<code>workers.edit</code> — sửa trực tiếp tại Daily Application hoặc DW Data. Hệ thống sẽ tự đồng bộ CCCD mới sang các hồ sơ liên quan.</p>
+<p><strong>4. Xoá dữ liệu trên hệ thống có mất vĩnh viễn ngay không?</strong>
+Không. Xoá thông thường (Department, DW Data, Daily Application) là <strong>xoá mềm</strong> — dữ liệu chuyển vào Thùng rác và khôi phục được bất cứ lúc nào. Chỉ khi Admin chủ động bấm <strong>&quot;Xoá vĩnh viễn&quot;</strong> trong Thùng rác thì dữ liệu mới thực sự mất, không thể hoàn tác.</p>
+<p><strong>5. Lao động cũ quay lại làm việc thì hồ sơ của họ ra sao?</strong>
+Hệ thống tự nhận diện qua CCCD/tên+năm sinh/tên+SĐT và <strong>gắn vào đúng hồ sơ điện tử (Worker Profile) cũ</strong> — không tạo người mới. Xem <a href="#05-dw-data-worker-profile">chương 5</a>.</p>
+<p><strong>6. Planning hết hạn thì dữ liệu có bị xoá không?</strong>
+Không. Kế hoạch hết hạn (Expired) vẫn giữ nguyên trong hệ thống, xem lại được ở tab &quot;Đã hết hạn&quot; — chỉ không còn tính là &quot;đang áp dụng&quot; nữa.</p>
+<p><strong>7. Tôi có thể xuất Excel toàn bộ dữ liệu hệ thống không?</strong>
+Không qua nút &quot;Xuất Excel&quot; thông thường — nút này chỉ xuất đúng dữ liệu <strong>đang lọc/hiển thị trên màn hình</strong>. Muốn có bản sao lưu toàn bộ dữ liệu nghiệp vụ, dùng chức năng <strong>Backup</strong> (chỉ Admin) — xem <a href="#12-backup">chương 12</a>.</p>
+<p><strong>8. Vì sao CCCD/SĐT trong file Excel xuất ra bị ẩn (hiện dấu chấm)?</strong>
+Vì vai trò của bạn đang không có quyền <code>privacy.view_cccd</code>/<code>privacy.view_phone</code> — đây là quy tắc bảo vệ thông tin cá nhân, do Admin cấu hình tại Phân quyền chi tiết.</p>
+<p><strong>9. Tài khoản của tôi bị khoá thì có mất dữ liệu lịch sử không?</strong>
+Không. Khoá tài khoản chỉ chặn đăng nhập — mọi hành động đã thực hiện trước đó vẫn được giữ nguyên trong Nhật ký hệ thống.</p>
+<p><strong>10. Tôi có thể dùng chung một tài khoản với đồng nghiệp không?</strong>
+Không nên. Mọi thao tác được ghi lại theo đúng tên tài khoản thực hiện — dùng chung làm mất khả năng xác định ai đã làm gì khi cần tra soát.</p>
+<p><strong>11. HR có bắt buộc phải dùng Planning không?</strong>
+Không bắt buộc. Planning là công cụ tuỳ chọn để quản lý nhu cầu nhân lực theo giai đoạn — bộ phận nào chưa dùng Planning vẫn hoạt động bình thường với Định mức/ngày cũ trên Department.</p>
+<p><strong>12. Vì sao yêu cầu Thuyên chuyển của tôi không thấy HR xử lý ngay?</strong>
+HR xử lý thủ công từng yêu cầu tại Workforce Movement — không có xử lý tự động. Nếu quá lâu chưa được xử lý, có thể liên hệ trực tiếp HR phụ trách.</p>
+<p><strong>13. Người lao động có tự xem được lịch sử làm việc của mình không?</strong>
+Không có tính năng đăng nhập cho người lao động. Họ chỉ tra cứu được <strong>kết quả xếp việc hôm nay và tổng số lần đăng ký</strong> qua trang Tra cứu công khai — không xem được toàn bộ hồ sơ nội bộ.</p>
+<p><strong>14. Kênh thông báo Zalo/SMS/Email đã hoạt động chưa?</strong>
+Chưa. Hiện chỉ kênh <strong>IN_APP</strong> (thông báo trong hệ thống) hoạt động thật; Zalo/SMS/Email mới dừng ở bước xếp hàng đợi, chưa thực sự gửi ra ngoài.</p>
+<p><strong>15. Tôi có thể khôi phục hệ thống về đúng một ngày trong quá khứ không?</strong>
+Chức năng Backup hiện tại chỉ xuất file JSON để tham khảo/khôi phục thủ công qua script — không có nút &quot;Khôi phục về ngày X&quot; tự động trên giao diện. Muốn khôi phục điểm-trong-thời-gian thực sự, dùng Neon Branches (xem <a href="#12-backup">chương 12</a>).</p>
+<p><strong>16. Vì sao hồ sơ tôi vừa duyệt lại đổi từ nhãn &quot;MỚI&quot; sang &quot;CŨ&quot;?</strong>
+Vì khi bạn duyệt một người đang gắn nhãn MỚI, hệ thống tự thêm họ vào DW Data — từ thời điểm đó họ chính thức &quot;đã có trong hệ thống&quot;, nên nhãn chuyển sang CŨ. Đây là hành vi đúng.</p>
+<p><strong>17. Tôi có thể xem được mật khẩu của tài khoản khác không?</strong>
+Không, kể cả Admin. Mật khẩu chỉ lưu dưới dạng đã mã hoá một chiều — không ai xem lại được mật khẩu gốc, kể cả trong file Backup.</p>
+
+</section>
+<section class="doc-page" id="19-glossary">
+<h1 id="19-glossary-19-thuật-ngữ-glossary">19. Thuật ngữ (Glossary)</h1>
+<table>
+<thead>
+<tr>
+<th>Thuật ngữ</th>
+<th>Giải thích dễ hiểu</th>
+</tr>
+</thead>
+<tbody><tr>
+<td><strong>Daily Application</strong></td>
+<td>Sổ ghi nhận đơn đăng ký làm việc theo từng ngày — nơi HR duyệt và xếp bộ phận</td>
+</tr>
+<tr>
+<td><strong>DW Data</strong></td>
+<td>Kho dữ liệu lao động dùng để đối chiếu — trả lời &quot;người này đã từng có trong hệ thống chưa&quot;</td>
+</tr>
+<tr>
+<td><strong>Worker Profile</strong> (Hồ sơ điện tử)</td>
+<td>Hồ sơ <strong>duy nhất</strong> của một người, gộp toàn bộ các lần đăng ký/làm việc của họ</td>
+</tr>
+<tr>
+<td><strong>Employment Session</strong> (Đợt làm việc)</td>
+<td>Một lần đăng ký/một đợt làm việc cụ thể, gắn vào đúng 1 Worker Profile</td>
+</tr>
+<tr>
+<td><strong>Department</strong> (Bộ phận)</td>
+<td>Nơi lao động được xếp vào làm việc, có thể chia nhỏ thành Group (Nhóm)</td>
+</tr>
+<tr>
+<td><strong>Data Scope</strong></td>
+<td>Phạm vi (các) bộ phận mà một tài khoản Quản đốc được phép xem dữ liệu</td>
+</tr>
+<tr>
+<td><strong>Permission</strong> (Phân quyền chi tiết)</td>
+<td>Công tắc bật/tắt một chức năng cụ thể cho một vai trò</td>
+</tr>
+<tr>
+<td><strong>Planning Period</strong> (Kế hoạch)</td>
+<td>Khai báo &quot;cần bao nhiêu lao động, trong khoảng ngày nào&quot; cho một bộ phận</td>
+</tr>
+<tr>
+<td><strong>Target</strong> (Nhu cầu)</td>
+<td>Số lượng lao động một kế hoạch cần</td>
+</tr>
+<tr>
+<td><strong>Fill Rate</strong> (Tỷ lệ lấp đầy)</td>
+<td>Tỷ lệ giữa số lao động thực tế đã có và số lượng cần (target)</td>
+</tr>
+<tr>
+<td><strong>Workforce Movement</strong></td>
+<td>Tên chung cho 2 loại yêu cầu: Nghỉ việc và Thuyên chuyển</td>
+</tr>
+<tr>
+<td><strong>Resignation</strong> (Nghỉ việc)</td>
+<td>Yêu cầu kết thúc làm việc của một lao động</td>
+</tr>
+<tr>
+<td><strong>Transfer</strong> (Thuyên chuyển)</td>
+<td>Yêu cầu chuyển một lao động từ bộ phận này sang bộ phận khác</td>
+</tr>
+<tr>
+<td><strong>Task Center</strong></td>
+<td>Màn hình tổng hợp mọi việc đang chờ xử lý của bạn</td>
+</tr>
+<tr>
+<td><strong>Workflow</strong></td>
+<td>Cấu hình các bước trạng thái (ví dụ Chờ duyệt → Đã nhận việc) cho từng loại hồ sơ, chỉnh được không cần sửa code</td>
+</tr>
+<tr>
+<td><strong>Audit Log</strong> (Nhật ký hệ thống)</td>
+<td>Bản ghi lại &quot;ai đã làm gì, khi nào&quot; trên toàn hệ thống</td>
+</tr>
+<tr>
+<td><strong>Rule Engine</strong></td>
+<td>Công cụ cấu hình quy tắc tự động kiểu &quot;nếu ... thì ...&quot; khi có đăng ký/duyệt hồ sơ</td>
+</tr>
+<tr>
+<td><strong>Recycle Bin</strong> (Thùng rác)</td>
+<td>Nơi lưu tạm dữ liệu đã &quot;xoá&quot; — khôi phục được cho tới khi bị xoá vĩnh viễn</td>
+</tr>
+</tbody></table>
+
+</section>
+<section class="doc-page" id="20-sop">
+<h1 id="20-sop-20-quy-trình-xử-lý-tình-huống-sop">20. Quy trình xử lý tình huống (SOP)</h1>
+<h2 id="20-sop-sop-1-lao-động-mới-đăng-ký-lần-đầu">SOP 1 — Lao động mới đăng ký lần đầu</h2>
+<ul>
+<li><strong>Tình huống:</strong> Một người chưa từng làm việc tại Dalat Hasfarm, đăng ký tập nghề lần đầu.</li>
+<li><strong>Ai xử lý:</strong> Người lao động (tự đăng ký) → HR duyệt.</li>
+<li><strong>Các bước:</strong><ol>
+<li>Người lao động vào trang đăng ký công khai, khai CCCD/SĐT và trả lời các câu hỏi bắt buộc.</li>
+<li>Hệ thống đối chiếu DW Data, không tìm thấy → gắn nhãn <strong>MỚI</strong>.</li>
+<li>HR mở Daily Application, thấy hồ sơ ở trạng thái Chờ duyệt, nhãn MỚI.</li>
+<li>HR kiểm tra thông tin, xếp Bộ phận + Nhóm, đổi trạng thái sang Đã nhận việc (dùng nút đơn lẻ hoặc &quot;Duyệt Người Mới → DW Data&quot; nếu duyệt hàng loạt).</li>
+</ol>
+</li>
+<li><strong>Kết quả mong đợi:</strong> Hồ sơ chuyển Đã nhận việc; người này <strong>tự động được thêm vào DW Data</strong> (nhãn đổi sang CŨ); Worker Profile + Employment Session đầu tiên được tạo.</li>
+<li><strong>Lỗi thường gặp:</strong> Duyệt nhầm bộ phận; quên kiểm tra dấu cảnh báo ⚠ nếu người này tự khai &quot;đã từng làm&quot; nhưng không khớp DW Data.</li>
+</ul>
+<h2 id="20-sop-sop-2-lao-động-cũ-quay-lại">SOP 2 — Lao động cũ quay lại</h2>
+<ul>
+<li><strong>Tình huống:</strong> Một người đã từng làm việc trước đây, nay đăng ký lại.</li>
+<li><strong>Ai xử lý:</strong> Người lao động → HR xác nhận.</li>
+<li><strong>Các bước:</strong><ol>
+<li>Người lao động nhập CCCD — nếu trùng dữ liệu cũ, hệ thống <strong>tự động điền lại thông tin</strong>, không cần khai lại từ đầu.</li>
+<li>Hồ sơ được gắn nhãn <strong>CŨ</strong> ngay từ khi đăng ký.</li>
+<li>HR xác nhận nhanh, xếp bộ phận (có thể khác bộ phận lần trước).</li>
+</ol>
+</li>
+<li><strong>Kết quả mong đợi:</strong> Một Employment Session <strong>mới</strong> được thêm vào <strong>đúng</strong> Worker Profile cũ của người này — không tạo hồ sơ trùng.</li>
+<li><strong>Lỗi thường gặp:</strong> Nhầm tưởng hệ thống tạo &quot;người mới&quot; — kiểm tra tại Hồ sơ điện tử để thấy rõ toàn bộ lịch sử làm việc gộp vào 1 hồ sơ.</li>
+</ul>
+<h2 id="20-sop-sop-3-hr-duyệt-và-phân-bộ-phận">SOP 3 — HR duyệt và phân bộ phận</h2>
+<ul>
+<li><strong>Tình huống:</strong> Cuối buổi sáng, còn nhiều hồ sơ Chờ duyệt cần xử lý nhanh.</li>
+<li><strong>Ai xử lý:</strong> HR Tuyển dụng.</li>
+<li><strong>Các bước:</strong><ol>
+<li>Mở Daily Application, lọc Trạng thái = &quot;Chờ duyệt&quot; nếu cần.</li>
+<li>Tick chọn nhiều hồ sơ cùng lúc (thanh hành động xuất hiện khi có hồ sơ được chọn).</li>
+<li>Bấm &quot;Duyệt &amp; Nhập DW Data&quot; (nếu duyệt) hoặc &quot;Từ chối&quot;.</li>
+</ol>
+</li>
+<li><strong>Kết quả mong đợi:</strong> Toàn bộ hồ sơ được chọn chuyển trạng thái cùng lúc; kết quả chi tiết (số thành công/thất bại + lý do) hiện ngay sau khi xử lý.</li>
+<li><strong>Lỗi thường gặp:</strong> Chọn nhầm cả hồ sơ chưa xếp bộ phận rồi duyệt — kiểm tra cột Bộ phận + Nhóm trước khi duyệt hàng loạt.</li>
+</ul>
+<h2 id="20-sop-sop-4-người-lao-động-đổi-bộ-phận">SOP 4 — Người lao động đổi bộ phận</h2>
+<ul>
+<li><strong>Tình huống:</strong> Một lao động đang làm ở bộ phận A cần chuyển sang bộ phận B.</li>
+<li><strong>Ai xử lý:</strong> Người tạo yêu cầu (HR hoặc Quản đốc, tuỳ quyền) → HR xác nhận.</li>
+<li><strong>Các bước:</strong> Xem chi tiết đầy đủ ở <a href="#08-workforce-movement">chương 8</a>.</li>
+<li><strong>Kết quả mong đợi:</strong> Yêu cầu Thuyên chuyển đi qua đúng luồng trạng thái tới &quot;Đã chuyển bộ phận&quot;.</li>
+<li><strong>Lỗi thường gặp:</strong> Quên ghi ngày hiệu lực đúng thực tế; tạo nhầm lao động do không kiểm tra kỹ CCCD sau khi tìm kiếm.</li>
+</ul>
+<h2 id="20-sop-sop-5-người-lao-động-nghỉ-việc">SOP 5 — Người lao động nghỉ việc</h2>
+<ul>
+<li><strong>Tình huống:</strong> Một lao động xin nghỉ hẳn, không quay lại.</li>
+<li><strong>Ai xử lý:</strong> Người tạo yêu cầu → HR duyệt.</li>
+<li><strong>Các bước:</strong> Tạo yêu cầu Nghỉ việc với ngày hiệu lực + lý do → HR &quot;Duyệt nghỉ việc&quot; hoặc &quot;Từ chối&quot;.</li>
+<li><strong>Kết quả mong đợi:</strong> Trạng thái chuyển &quot;Đã nghỉ việc&quot;; hồ sơ Worker Profile vẫn giữ nguyên lịch sử (không xoá), chỉ dừng ở đó.</li>
+<li><strong>Lỗi thường gặp:</strong> Nhầm giữa &quot;Nghỉ việc&quot; và &quot;Thuyên chuyển&quot; khi tạo yêu cầu.</li>
+</ul>
+<h2 id="20-sop-sop-6-planning-thiếu-người">SOP 6 — Planning thiếu người</h2>
+<ul>
+<li><strong>Tình huống:</strong> Một kế hoạch Đang áp dụng có tỷ lệ lấp đầy thấp, ví dụ chỉ đạt 60/120 (50%).</li>
+<li><strong>Ai xử lý:</strong> HR Tuyển dụng.</li>
+<li><strong>Các bước:</strong><ol>
+<li>Vào Planning, xem cột tỷ lệ lấp đầy để phát hiện kế hoạch thiếu người.</li>
+<li>Bấm &quot;Phân bổ lao động&quot; để gán thêm lao động Unplanned (nếu có) vào kế hoạch.</li>
+<li>Nếu vẫn thiếu, phối hợp tuyển thêm qua Daily Application/trang đăng ký công khai.</li>
+</ol>
+</li>
+<li><strong>Kết quả mong đợi:</strong> Tỷ lệ lấp đầy tăng dần theo số lao động được phân bổ/tuyển thêm.</li>
+<li><strong>Lỗi thường gặp:</strong> Quên rằng &quot;Nhu cầu&quot; chỉ là con số khai báo — hệ thống không tự tuyển người, chỉ theo dõi tiến độ.</li>
+</ul>
+<h2 id="20-sop-sop-7-quản-lý-không-tìm-thấy-lao-động-cần-tìm">SOP 7 — Quản lý không tìm thấy lao động cần tìm</h2>
+<ul>
+<li><strong>Tình huống:</strong> Quản đốc bộ phận tìm một lao động nhưng không thấy trên hệ thống.</li>
+<li><strong>Ai xử lý:</strong> Quản đốc bộ phận, có thể cần Admin hỗ trợ.</li>
+<li><strong>Các bước:</strong><ol>
+<li>Kiểm tra lại chính tả tên/CCCD đang tìm.</li>
+<li>Kiểm tra người đó có thực sự thuộc (các) bộ phận đã được gán ở Data Scope không.</li>
+<li>Nếu chắc chắn đúng phạm vi mà vẫn không thấy, báo Admin kiểm tra Data Scope hoặc hỏi HR xem hồ sơ đã được duyệt/xếp bộ phận chưa.</li>
+</ol>
+</li>
+<li><strong>Kết quả mong đợi:</strong> Xác định được nguyên nhân — sai chính tả, ngoài phạm vi Data Scope, hoặc hồ sơ chưa được xử lý.</li>
+<li><strong>Lỗi thường gặp:</strong> Cho rằng đây luôn là lỗi hệ thống trong khi phần lớn trường hợp là do Data Scope.</li>
+</ul>
+<h2 id="20-sop-sop-8-hr-phát-hiện-cccd-sai">SOP 8 — HR phát hiện CCCD sai</h2>
+<ul>
+<li><strong>Tình huống:</strong> Một hồ sơ đã lưu với CCCD bị gõ sai.</li>
+<li><strong>Ai xử lý:</strong> HR Tuyển dụng (cần quyền <code>workers.edit</code>/<code>registrations.edit</code>).</li>
+<li><strong>Các bước:</strong> Sửa trực tiếp CCCD tại Daily Application hoặc DW Data — hệ thống tự đồng bộ các hồ sơ liên quan.</li>
+<li><strong>Kết quả mong đợi:</strong> CCCD đúng trên toàn bộ hồ sơ liên quan tới người này.</li>
+<li><strong>Lỗi thường gặp:</strong> Chỉ sửa ở 1 chỗ (ví dụ chỉ sửa ở Daily Application) rồi cho rằng DW Data cũng đã đúng — nên kiểm tra lại cả hai nơi nếu nghi ngờ.</li>
+</ul>
+<h2 id="20-sop-sop-9-người-dùng-không-thấy-menu">SOP 9 — Người dùng không thấy menu</h2>
+<ul>
+<li><strong>Tình huống:</strong> Một nhân viên báo &quot;tôi không thấy menu X&quot; và nghĩ đây là lỗi.</li>
+<li><strong>Ai xử lý:</strong> Người dùng tự kiểm tra trước, sau đó Admin nếu cần.</li>
+<li><strong>Các bước:</strong> Xem <a href="#10-permissions-data-scope">chương 10</a> mục 10.4 — kiểm tra lần lượt Role → Permission → Data Scope.</li>
+<li><strong>Kết quả mong đợi:</strong> Xác định menu đó có đúng là không dành cho vai trò/quyền của họ hay không.</li>
+<li><strong>Lỗi thường gặp:</strong> Báo cáo ngay là &quot;lỗi hệ thống&quot; khi thực ra là đúng thiết kế phân quyền.</li>
+</ul>
+<h2 id="20-sop-sop-10-lookup-công-khai-không-tìm-thấy-kết-quả">SOP 10 — Lookup công khai không tìm thấy kết quả</h2>
+<ul>
+<li><strong>Tình huống:</strong> Người lao động tra cứu nhưng hệ thống báo không tìm thấy.</li>
+<li><strong>Ai xử lý:</strong> Người lao động, có thể cần HR hỗ trợ.</li>
+<li><strong>Các bước:</strong> Xem <a href="#13-public-lookup">chương 13</a> mục 13.3 — kiểm tra lại CCCD + SĐT đã nhập đúng lúc đăng ký chưa; nếu chắc chắn đúng, liên hệ HR kiểm tra hồ sơ.</li>
+<li><strong>Kết quả mong đợi:</strong> Xác định nguyên nhân — sai thông tin nhập, hoặc hồ sơ chưa xử lý xong.</li>
+<li><strong>Lỗi thường gặp:</strong> Nhầm số điện thoại hiện tại với số điện thoại đã khai lúc đăng ký (nếu đã đổi số).</li>
+</ul>
+
+</section>
+<section class="doc-page" id="21-do-dont">
+<h1 id="21-do-dont-21-nên-làm-không-nên-làm-theo-vai-trò">21. Nên làm / Không nên làm theo vai trò</h1>
+<h2 id="21-do-dont-admin">ADMIN</h2>
+<p><strong>Nên làm:</strong></p>
+<ul>
+<li>Backup dữ liệu trước khi thực hiện thay đổi cấu hình lớn (Workflow, xoá hàng loạt ở Thùng rác...).</li>
+<li>Dùng &quot;Xoá vĩnh viễn&quot; ở Thùng rác thật thận trọng — hành động này không thể hoàn tác.</li>
+<li>Kiểm tra Nhật ký hệ thống định kỳ, đặc biệt sau khi có thay đổi phân quyền.</li>
+<li>Khoá tài khoản (thay vì xoá) khi nhân viên nghỉ việc, để giữ lịch sử thao tác của họ.</li>
+</ul>
+<p><strong>Không nên làm:</strong></p>
+<ul>
+<li>Tắt hàng loạt permission mà không hiểu rõ tác động — có thể khiến cả một vai trò không thao tác được gì.</li>
+<li>Chia sẻ tài khoản Admin cho người khác dùng tạm.</li>
+<li>Xoá vĩnh viễn dữ liệu khi chưa chắc chắn 100%.</li>
+</ul>
+<h2 id="21-do-dont-hrrecruiter-nhân-sự-tuyển-dụng">HR_RECRUITER (Nhân sự tuyển dụng)</h2>
+<p><strong>Nên làm:</strong></p>
+<ul>
+<li>Kiểm tra Task Center đầu mỗi ngày làm việc.</li>
+<li>Kiểm tra kỹ cột DW Data (CŨ/MỚI) và dấu cảnh báo ⚠ trước khi duyệt.</li>
+<li>Chọn đúng bộ phận trước khi duyệt, đặc biệt với các bộ phận tên gần giống nhau.</li>
+<li>Ghi lý do rõ ràng khi tạo/xử lý yêu cầu Nghỉ việc, Thuyên chuyển.</li>
+</ul>
+<p><strong>Không nên làm:</strong></p>
+<ul>
+<li>Duyệt hàng loạt mà không xem qua danh sách trước.</li>
+<li>Sửa CCCD/thông tin cá nhân mà không kiểm tra lại với chính người lao động khi có nghi ngờ.</li>
+<li>Bỏ qua dấu cảnh báo &quot;tự khai đã từng làm nhưng không khớp DW Data&quot; mà không kiểm tra kỹ.</li>
+</ul>
+<h2 id="21-do-dont-deptmanager-quản-đốc-bộ-phận">DEPT_MANAGER (Quản đốc bộ phận)</h2>
+<p><strong>Nên làm:</strong></p>
+<ul>
+<li>Kiểm tra &quot;Bộ phận của tôi&quot; thường xuyên để nắm số lao động thực tế được xếp.</li>
+<li>Tạo yêu cầu Nghỉ việc/Thuyên chuyển sớm khi có phát sinh, ghi rõ lý do để HR xử lý nhanh.</li>
+<li>Liên hệ Admin nếu phát hiện Data Scope của mình chưa đúng (thiếu/thừa bộ phận).</li>
+</ul>
+<p><strong>Không nên làm:</strong></p>
+<ul>
+<li>Cho rằng mình có thể tự xác nhận thuyên chuyển — việc này luôn thuộc về HR.</li>
+<li>Dùng tài khoản của quản đốc khác để xem dữ liệu bộ phận không thuộc phạm vi của mình.</li>
+<li>Coi việc &quot;không thấy bộ phận X&quot; là lỗi hệ thống mà không kiểm tra Data Scope trước.</li>
+</ul>
+
+</section>
+<section class="doc-page" id="22-checklists">
+<h1 id="22-checklists-22-checklist-vận-hành">22. Checklist vận hành</h1>
+<h2 id="22-checklists-checklist-đầu-ngày-hr">Checklist đầu ngày (HR)</h2>
+<ul>
+<li><input disabled="" type="checkbox"> Mở Task Center, kiểm tra 4 nhóm việc đang chờ.</li>
+<li><input disabled="" type="checkbox"> Kiểm tra hồ sơ <strong>Chờ duyệt</strong> mới phát sinh trên Daily Application.</li>
+<li><input disabled="" type="checkbox"> Xem có yêu cầu Nghỉ việc/Thuyên chuyển nào tồn đọng nhiều ngày (nhãn 🔴 Ưu tiên cao) không.</li>
+<li><input disabled="" type="checkbox"> Xem Planning có kế hoạch nào sắp hết hạn trong 7 ngày tới không.</li>
+</ul>
+<h2 id="22-checklists-checklist-cuối-ngày-hr">Checklist cuối ngày (HR)</h2>
+<ul>
+<li><input disabled="" type="checkbox"> Đảm bảo mọi hồ sơ đăng ký hôm nay đã được xử lý (duyệt/từ chối), không để tồn Chờ duyệt qua ngày nếu không cần thiết.</li>
+<li><input disabled="" type="checkbox"> Xuất Excel danh sách hôm nay nếu cần gửi báo cáo.</li>
+<li><input disabled="" type="checkbox"> Đăng xuất nếu dùng máy dùng chung.</li>
+</ul>
+<h2 id="22-checklists-checklist-hàng-tuần-hr-quản-đốc">Checklist hàng tuần (HR / Quản đốc)</h2>
+<ul>
+<li><input disabled="" type="checkbox"> Rà soát các kế hoạch Planning Đang áp dụng — tỷ lệ lấp đầy có đang thấp bất thường không.</li>
+<li><input disabled="" type="checkbox"> Rà soát yêu cầu Thuyên chuyển ở trạng thái &quot;Không đến — chờ HR quyết định&quot; quá lâu chưa xử lý.</li>
+<li><input disabled="" type="checkbox"> Đối chiếu nhanh vài hồ sơ DW Data mới thêm trong tuần để phát hiện sai sót nhập liệu sớm.</li>
+</ul>
+<h2 id="22-checklists-checklist-hàng-tháng-admin">Checklist hàng tháng (Admin)</h2>
+<ul>
+<li><input disabled="" type="checkbox"> Backup dữ liệu (Export Database JSON) hoặc dùng Neon Branches để chụp nhanh dữ liệu.</li>
+<li><input disabled="" type="checkbox"> Rà soát danh sách tài khoản tại Users — khoá tài khoản của nhân viên đã nghỉ việc.</li>
+<li><input disabled="" type="checkbox"> Xem lại Ma trận phân quyền chi tiết — có ô nào bị tắt không còn hợp lý nữa không.</li>
+<li><input disabled="" type="checkbox"> Rà soát Thùng rác — dọn (xoá vĩnh viễn) những bản ghi chắc chắn không cần khôi phục nữa.</li>
+<li><input disabled="" type="checkbox"> Kiểm tra Nhật ký hệ thống để phát hiện hoạt động bất thường (đăng nhập thất bại nhiều lần, thao tác ngoài giờ...).</li>
+</ul>
+
+</section>
+<section class="doc-page" id="23-appendix">
+<h1 id="23-appendix-23-phụ-lục-tham-chiếu-nhanh">23. Phụ lục tham chiếu nhanh</h1>
+<h2 id="23-appendix-role-matrix">Role matrix</h2>
+<p>Menu hiển thị theo Sidebar, nhóm theo nghiệp vụ. Đánh dấu ✓ = vai trò thấy được mục này (trước khi tính thêm lớp Permission/Data Scope).</p>
+<table>
+<thead>
+<tr>
+<th>Mục menu</th>
+<th align="center">ADMIN</th>
+<th align="center">HR_RECRUITER</th>
+<th align="center">DEPT_MANAGER</th>
+</tr>
+</thead>
+<tbody><tr>
+<td>Dashboard</td>
+<td align="center">✓</td>
+<td align="center">✓</td>
+<td align="center">✓</td>
+</tr>
+<tr>
+<td>Task Center</td>
+<td align="center">✓</td>
+<td align="center">✓</td>
+<td align="center">✓</td>
+</tr>
+<tr>
+<td>Daily Application</td>
+<td align="center">✓</td>
+<td align="center">✓</td>
+<td align="center"></td>
+</tr>
+<tr>
+<td>DW Data</td>
+<td align="center">✓</td>
+<td align="center">✓</td>
+<td align="center"></td>
+</tr>
+<tr>
+<td>Department</td>
+<td align="center">✓</td>
+<td align="center">✓</td>
+<td align="center"></td>
+</tr>
+<tr>
+<td>Bộ phận của tôi</td>
+<td align="center">✓</td>
+<td align="center">✓</td>
+<td align="center">✓</td>
+</tr>
+<tr>
+<td>Hồ sơ điện tử</td>
+<td align="center">✓</td>
+<td align="center">✓</td>
+<td align="center"></td>
+</tr>
+<tr>
+<td>Nghỉ việc / Thuyên chuyển</td>
+<td align="center">✓</td>
+<td align="center">✓</td>
+<td align="center">✓</td>
+</tr>
+<tr>
+<td>Planning</td>
+<td align="center">✓</td>
+<td align="center">✓</td>
+<td align="center">✓</td>
+</tr>
+<tr>
+<td>Câu hỏi động (Form Builder)</td>
+<td align="center">✓</td>
+<td align="center">✓</td>
+<td align="center"></td>
+</tr>
+<tr>
+<td>Trường dữ liệu</td>
+<td align="center">✓</td>
+<td align="center"></td>
+<td align="center"></td>
+</tr>
+<tr>
+<td>Workflow</td>
+<td align="center">✓</td>
+<td align="center"></td>
+<td align="center"></td>
+</tr>
+<tr>
+<td>Rule Engine</td>
+<td align="center">✓</td>
+<td align="center"></td>
+<td align="center"></td>
+</tr>
+<tr>
+<td>Thông báo</td>
+<td align="center">✓</td>
+<td align="center">✓</td>
+<td align="center"></td>
+</tr>
+<tr>
+<td>Phân quyền RBAC (Users)</td>
+<td align="center">✓</td>
+<td align="center"></td>
+<td align="center"></td>
+</tr>
+<tr>
+<td>Phân quyền chi tiết</td>
+<td align="center">✓</td>
+<td align="center"></td>
+<td align="center"></td>
+</tr>
+<tr>
+<td>Data Scope</td>
+<td align="center">✓</td>
+<td align="center"></td>
+<td align="center"></td>
+</tr>
+<tr>
+<td>Control Center</td>
+<td align="center">✓</td>
+<td align="center"></td>
+<td align="center"></td>
+</tr>
+<tr>
+<td>Nhật ký hệ thống</td>
+<td align="center">✓</td>
+<td align="center"></td>
+<td align="center"></td>
+</tr>
+<tr>
+<td>Nhập dữ liệu ban đầu</td>
+<td align="center">✓</td>
+<td align="center"></td>
+<td align="center"></td>
+</tr>
+<tr>
+<td>Thùng rác</td>
+<td align="center">✓</td>
+<td align="center"></td>
+<td align="center"></td>
+</tr>
+</tbody></table>
+<h2 id="23-appendix-permission-overview">Permission overview</h2>
+<p>29 quyền chi tiết cấu hình tại <strong>Phân quyền chi tiết</strong> (<code>/admin/permissions</code>). Mặc định <strong>cho phép</strong> cho tới khi Admin chủ động tắt.</p>
+<table>
+<thead>
+<tr>
+<th>Mã quyền</th>
+<th>Tên hiển thị</th>
+</tr>
+</thead>
+<tbody><tr>
+<td><code>registrations.view</code></td>
+<td>Xem Daily Application</td>
+</tr>
+<tr>
+<td><code>registrations.edit</code></td>
+<td>Sửa Daily Application</td>
+</tr>
+<tr>
+<td><code>registrations.approve</code></td>
+<td>Duyệt/Từ chối hồ sơ</td>
+</tr>
+<tr>
+<td><code>registrations.export</code></td>
+<td>Xuất Excel</td>
+</tr>
+<tr>
+<td><code>workers.view</code></td>
+<td>Xem DW Data</td>
+</tr>
+<tr>
+<td><code>workers.edit</code></td>
+<td>Sửa/Xoá DW Data</td>
+</tr>
+<tr>
+<td><code>departments.manage</code></td>
+<td>Quản lý Department</td>
+</tr>
+<tr>
+<td><code>questions.manage</code></td>
+<td>Quản lý Câu hỏi động (Form Builder)</td>
+</tr>
+<tr>
+<td><code>users.manage</code></td>
+<td>Quản lý tài khoản</td>
+</tr>
+<tr>
+<td><code>field_definitions.manage</code></td>
+<td>Quản lý Trường dữ liệu (Metadata)</td>
+</tr>
+<tr>
+<td><code>import.run</code></td>
+<td>Nhập dữ liệu (Import)</td>
+</tr>
+<tr>
+<td><code>recycle_bin.manage</code></td>
+<td>Quản lý Thùng rác</td>
+</tr>
+<tr>
+<td><code>history.manage</code></td>
+<td>Xem/Khôi phục Lịch sử</td>
+</tr>
+<tr>
+<td><code>workflow.manage</code></td>
+<td>Quản lý Workflow</td>
+</tr>
+<tr>
+<td><code>rules.manage</code></td>
+<td>Quản lý Rule Engine</td>
+</tr>
+<tr>
+<td><code>permissions.manage</code></td>
+<td>Quản lý Phân quyền chi tiết</td>
+</tr>
+<tr>
+<td><code>notifications.manage</code></td>
+<td>Quản lý hàng đợi Thông báo</td>
+</tr>
+<tr>
+<td><code>dashboard.manage</code></td>
+<td>Quản lý Dashboard</td>
+</tr>
+<tr>
+<td><code>backup.manage</code></td>
+<td>Backup dữ liệu</td>
+</tr>
+<tr>
+<td><code>system.view</code></td>
+<td>Xem Health Monitor</td>
+</tr>
+<tr>
+<td><code>privacy.view_cccd</code></td>
+<td>Xem CCCD khi Export</td>
+</tr>
+<tr>
+<td><code>privacy.view_phone</code></td>
+<td>Xem SĐT khi Export</td>
+</tr>
+<tr>
+<td><code>privacy.view_address</code></td>
+<td>Xem Địa chỉ khi Export</td>
+</tr>
+<tr>
+<td><code>data_scopes.manage</code></td>
+<td>Quản lý Data Scope</td>
+</tr>
+<tr>
+<td><code>workforce_movements.view</code></td>
+<td>Xem yêu cầu Nghỉ việc/Thuyên chuyển</td>
+</tr>
+<tr>
+<td><code>workforce_movements.create</code></td>
+<td>Tạo yêu cầu Nghỉ việc/Thuyên chuyển</td>
+</tr>
+<tr>
+<td><code>workforce_movements.manage</code></td>
+<td>HR xử lý yêu cầu Nghỉ việc/Thuyên chuyển</td>
+</tr>
+<tr>
+<td><code>planning.view</code></td>
+<td>Xem Planning</td>
+</tr>
+<tr>
+<td><code>planning.manage</code></td>
+<td>Quản lý Planning (tạo/sửa/kích hoạt)</td>
+</tr>
+</tbody></table>
+<h2 id="23-appendix-status-dictionary">Status dictionary</h2>
+<p><strong>Daily Application:</strong></p>
+<table>
+<thead>
+<tr>
+<th>Trạng thái</th>
+<th>Nhãn hiển thị</th>
+</tr>
+</thead>
+<tbody><tr>
+<td><code>PENDING</code></td>
+<td>Chờ duyệt</td>
+</tr>
+<tr>
+<td><code>APPROVED</code></td>
+<td>Đã nhận việc</td>
+</tr>
+<tr>
+<td><code>WAITLIST</code></td>
+<td>Dự phòng</td>
+</tr>
+<tr>
+<td><code>REJECTED</code></td>
+<td>Không nhận</td>
+</tr>
+</tbody></table>
+<p><strong>Nghỉ việc (Resignation):</strong></p>
+<table>
+<thead>
+<tr>
+<th>Trạng thái</th>
+<th>Nhãn hiển thị</th>
+</tr>
+</thead>
+<tbody><tr>
+<td><code>PENDING_HR</code></td>
+<td>Chờ HR duyệt</td>
+</tr>
+<tr>
+<td><code>INACTIVE</code></td>
+<td>Đã nghỉ việc</td>
+</tr>
+<tr>
+<td><code>REJECTED</code></td>
+<td>HR từ chối</td>
+</tr>
+</tbody></table>
+<p><strong>Thuyên chuyển (Transfer):</strong></p>
+<table>
+<thead>
+<tr>
+<th>Trạng thái</th>
+<th>Nhãn hiển thị</th>
+</tr>
+</thead>
+<tbody><tr>
+<td><code>PENDING_HR</code></td>
+<td>Chờ HR xác nhận</td>
+</tr>
+<tr>
+<td><code>TRANSFER_COMPLETED</code></td>
+<td>Đã chuyển bộ phận</td>
+</tr>
+<tr>
+<td><code>TRANSFER_RESCHEDULED</code></td>
+<td>Đã hoãn (chờ ngày mới)</td>
+</tr>
+<tr>
+<td><code>WAITING_DECISION</code></td>
+<td>Không đến — chờ HR quyết định</td>
+</tr>
+<tr>
+<td><code>CANCELLED</code></td>
+<td>Đã huỷ thuyên chuyển</td>
+</tr>
+<tr>
+<td><code>REJECTED</code></td>
+<td>HR từ chối</td>
+</tr>
+</tbody></table>
+<p><strong>Planning:</strong> <code>DRAFT</code> (Nháp) · <code>ACTIVE</code> (Đang áp dụng) · <code>EXPIRED</code> (Đã hết hạn)</p>
+<p><strong>DW Match (đối chiếu):</strong> <code>MATCHED</code> (Lao động CŨ) · <code>NEW</code> (Lao động MỚI) · <code>MISMATCH</code> (tự khai CŨ nhưng không khớp DW Data)</p>
+<p><strong>Import Job:</strong> <code>QUEUED</code> (Trong hàng đợi) · <code>RUNNING</code> (Đang xử lý) · <code>PAUSED</code> (Tạm dừng) · <code>DONE</code> (Hoàn tất) · <code>FAILED</code> (Thất bại) · <code>CANCELLED</code> (Đã huỷ)</p>
+<blockquote>
+<p><strong>Lưu ý:</strong> Admin có thể đổi tên/màu hiển thị các trạng thái Daily Application, Nghỉ việc, Thuyên chuyển tại module <strong>Workflow</strong> — bảng trên là cấu hình mặc định ban đầu, tên hiển thị thực tế trên hệ thống của bạn có thể đã được đổi khác.</p>
+</blockquote>
+<h2 id="23-appendix-workflow-overview">Workflow overview</h2>
+<p>3 luồng dùng chung một Workflow Engine, không viết state machine riêng cho từng module: <strong>Daily Application</strong>, <strong>Nghỉ việc</strong> (<code>resignation</code>), <strong>Thuyên chuyển</strong> (<code>transfer</code>). Cấu hình tại <code>/admin/workflow</code>.</p>
+<h2 id="23-appendix-error-messages-thường-gặp">Error messages thường gặp</h2>
+<table>
+<thead>
+<tr>
+<th>Thông báo</th>
+<th>Ý nghĩa</th>
+</tr>
+</thead>
+<tbody><tr>
+<td>&quot;Sai tên đăng nhập hoặc mật khẩu.&quot;</td>
+<td>Sai thông tin đăng nhập, hoặc tài khoản bị khoá (không phân biệt để tránh lộ thông tin)</td>
+</tr>
+<tr>
+<td>&quot;Quá nhiều lần đăng nhập sai. Vui lòng thử lại sau ít phút.&quot;</td>
+<td>Bị tạm khoá đăng nhập sau 5 lần sai trong 15 phút</td>
+</tr>
+<tr>
+<td>&quot;Từ chối truy cập! Quyền hạn không hợp lệ.&quot;</td>
+<td>Vai trò của bạn không được phép thực hiện thao tác này</td>
+</tr>
+<tr>
+<td>&quot;Tài khoản của bạn không có quyền thực hiện thao tác này.&quot;</td>
+<td>Permission chi tiết đang bị tắt cho vai trò của bạn</td>
+</tr>
+<tr>
+<td>&quot;Đã xác nhận đăng ký hôm nay.&quot;</td>
+<td>CCCD này đã đăng ký 1 lần trong ngày hôm nay</td>
+</tr>
+<tr>
+<td>&quot;Không tìm thấy hồ sơ khớp với CCCD và số điện thoại đã nhập.&quot;</td>
+<td>Lookup công khai không khớp dữ liệu</td>
+</tr>
+</tbody></table>
+<h2 id="23-appendix-contact-escalation-guide">Contact / escalation guide</h2>
+<table>
+<thead>
+<tr>
+<th>Vấn đề</th>
+<th>Liên hệ</th>
+</tr>
+</thead>
+<tbody><tr>
+<td>Quên mật khẩu, tài khoản bị khoá nhầm</td>
+<td>Admin hệ thống</td>
+</tr>
+<tr>
+<td>Cần thêm/sửa quyền, Data Scope</td>
+<td>Admin hệ thống</td>
+</tr>
+<tr>
+<td>Sai dữ liệu hồ sơ cá nhân (CCCD/tên/SĐT)</td>
+<td>HR Tuyển dụng phụ trách</td>
+</tr>
+<tr>
+<td>Yêu cầu Nghỉ việc/Thuyên chuyển chưa được xử lý</td>
+<td>HR Tuyển dụng</td>
+</tr>
+<tr>
+<td>Lỗi kỹ thuật (trang trắng, không tải được) lặp lại</td>
+<td>Bộ phận IT/kỹ thuật nội bộ</td>
+</tr>
+</tbody></table>
+<h2 id="23-appendix-release-version-notes">Release / version notes</h2>
+<p>Xem <a href="#CHANGELOG">CHANGELOG.md</a>.</p>
+
+</section>
+<section class="doc-page" id="role-hr">
+<h1 id="role-hr-cheat-sheet-hr-tuyển-dụng">Cheat sheet — HR Tuyển dụng</h1>
+<h2 id="role-hr-tôi-cần-làm-gì-mỗi-ngày">Tôi cần làm gì mỗi ngày?</h2>
+<ol>
+<li><strong>Mở Task Center</strong> — kiểm tra hồ sơ mới chờ duyệt, yêu cầu nghỉ việc/thuyên chuyển tồn đọng. → <a href="#03-task-center">Chi tiết</a></li>
+<li><strong>Mở Daily Application</strong> — duyệt/từ chối hồ sơ hôm nay, xếp bộ phận. → <a href="#04-daily-application">Chi tiết</a></li>
+<li><strong>Kiểm tra dấu cảnh báo ⚠</strong> trên cột DW Data — người tự khai &quot;đã từng làm&quot; nhưng không khớp dữ liệu gốc.</li>
+<li><strong>Xử lý yêu cầu Nghỉ việc/Thuyên chuyển</strong> đang chờ HR duyệt/xác nhận. → <a href="#08-workforce-movement">Chi tiết</a></li>
+<li><strong>Theo dõi Planning</strong> — kiểm tra tỷ lệ lấp đầy các kế hoạch Đang áp dụng. → <a href="#07-planning">Chi tiết</a></li>
+<li><strong>Xuất Excel</strong> báo cáo nếu cần gửi cho bộ phận/quản lý.</li>
+</ol>
+<h2 id="role-hr-việc-thường-làm-khác">Việc thường làm khác</h2>
+<ul>
+<li>Duyệt hàng loạt người mới → DW Data (tick chọn nhiều hồ sơ cùng lúc).</li>
+<li>Tra cứu hồ sơ điện tử một người qua CCCD khi cần xem lại lịch sử làm việc.</li>
+<li>Sửa CCCD/thông tin sai ngay khi phát hiện.</li>
+<li>Cấu hình câu hỏi form đăng ký (nếu được giao quyền Form Builder).</li>
+</ul>
+<h2 id="role-hr-checklist-nhanh">Checklist nhanh</h2>
+<ul>
+<li><input disabled="" type="checkbox"> Task Center — 0 việc tồn đọng quá 3 ngày (nhãn 🔴)</li>
+<li><input disabled="" type="checkbox"> Daily Application hôm nay — không còn hồ sơ Chờ duyệt cuối ngày</li>
+<li><input disabled="" type="checkbox"> Workforce Movement — không có yêu cầu &quot;Không đến — chờ quyết định&quot; quá lâu chưa xử lý</li>
+<li><input disabled="" type="checkbox"> Planning — không có kế hoạch tỷ lệ lấp đầy quá thấp gần ngày kết thúc</li>
+</ul>
+<h2 id="role-hr-đọc-thêm">Đọc thêm</h2>
+<p><a href="#04-daily-application">04 — Daily Application</a> · <a href="#05-dw-data-worker-profile">05 — DW Data/Worker Profile</a> · <a href="#07-planning">07 — Planning</a> · <a href="#08-workforce-movement">08 — Workforce Movement</a> · <a href="#11-import-export">11 — Import/Export</a> · <a href="#21-do-dont">21 — Do/Don&#39;t</a></p>
+
+</section>
+<section class="doc-page" id="role-manager">
+<h1 id="role-manager-cheat-sheet-quản-lý-bộ-phận-quản-đốc">Cheat sheet — Quản lý bộ phận (Quản đốc)</h1>
+<h2 id="role-manager-tôi-cần-làm-gì-mỗi-ngày">Tôi cần làm gì mỗi ngày?</h2>
+<ol>
+<li><strong>Mở Task Center</strong> — xem có yêu cầu Thuyên chuyển/Nghỉ việc nào liên quan tới bộ phận của bạn đang chờ xử lý không. → <a href="#03-task-center">Chi tiết</a></li>
+<li><strong>Mở &quot;Bộ phận của tôi&quot;</strong> — kiểm tra danh sách lao động thực tế được xếp vào bộ phận hôm nay. → <a href="#06-department">Chi tiết</a></li>
+<li><strong>Tạo yêu cầu Nghỉ việc/Thuyên chuyển</strong> ngay khi có phát sinh, ghi rõ lý do. → <a href="#08-workforce-movement">Chi tiết</a></li>
+<li><strong>Tải Excel gửi Zalo</strong> nếu cần chia sẻ danh sách cho tổ trưởng/nhóm phụ trách.</li>
+</ol>
+<h2 id="role-manager-điều-cần-nhớ">Điều cần nhớ</h2>
+<ul>
+<li><strong>Bạn không tự xác nhận Thuyên chuyển</strong> — HR luôn là người xác nhận cuối cùng, kể cả với lao động chuyển đến bộ phận bạn.</li>
+<li><strong>Bạn chỉ xem được (các) bộ phận được Admin gán riêng</strong> tại Data Scope — không thấy bộ phận khác không phải lỗi. → <a href="#10-permissions-data-scope">Chi tiết</a></li>
+<li><strong>Bạn không thể tự sửa</strong> thông tin bộ phận (tên, định mức, người phụ trách) — việc đó thuộc Admin/HR.</li>
+</ul>
+<h2 id="role-manager-checklist-nhanh">Checklist nhanh</h2>
+<ul>
+<li><input disabled="" type="checkbox"> &quot;Bộ phận của tôi&quot; — số liệu Lao động nhận khớp thực tế</li>
+<li><input disabled="" type="checkbox"> Không có yêu cầu Thuyên chuyển/Nghỉ việc nào bạn tạo bị treo quá lâu chưa được HR xử lý</li>
+<li><input disabled="" type="checkbox"> Data Scope của bạn đúng — nếu thiếu bộ phận, báo Admin</li>
+</ul>
+<h2 id="role-manager-đọc-thêm">Đọc thêm</h2>
+<p><a href="#06-department">06 — Department</a> · <a href="#08-workforce-movement">08 — Workforce Movement</a> · <a href="#10-permissions-data-scope">10 — Permissions &amp; Data Scope</a> · <a href="#21-do-dont">21 — Do/Don&#39;t</a></p>
+
+</section>
+<section class="doc-page" id="role-admin">
+<h1 id="role-admin-cheat-sheet-admin">Cheat sheet — Admin</h1>
+<h2 id="role-admin-tôi-cần-kiểm-tra-gì-định-kỳ">Tôi cần kiểm tra gì định kỳ?</h2>
+<ol>
+<li><strong>Users</strong> — tài khoản nào cần khoá (nhân viên đã nghỉ), tài khoản mới cần tạo. → <a href="./09-admin-modules.md#users-ph%C3%A2n-quy%E1%BB%81n-rbac">Chi tiết</a></li>
+<li><strong>Phân quyền chi tiết &amp; Data Scope</strong> — có ô cấu hình nào không còn hợp lý theo tình hình nhân sự hiện tại. → <a href="#10-permissions-data-scope">Chi tiết</a></li>
+<li><strong>Control Center</strong> — sức khoẻ hệ thống, dung lượng database, job nền có chạy đúng lịch không. → <a href="#09-admin-modules-control-center-system">Chi tiết</a></li>
+<li><strong>Nhật ký hệ thống</strong> — hoạt động bất thường (đăng nhập thất bại nhiều lần, thao tác ngoài giờ...).</li>
+<li><strong>Thùng rác</strong> — dọn định kỳ những bản ghi chắc chắn không cần khôi phục.</li>
+<li><strong>Backup</strong> — xuất dữ liệu định kỳ theo chu kỳ công ty quy định. → <a href="#12-backup">Chi tiết</a></li>
+</ol>
+<h2 id="role-admin-việc-thường-làm-khác">Việc thường làm khác</h2>
+<ul>
+<li>Cấu hình Workflow/Rule Engine/Trường dữ liệu khi nghiệp vụ thay đổi.</li>
+<li>Quản lý danh sách bộ phận (tạo mới, khoá bộ phận ngừng hoạt động).</li>
+<li>Import dữ liệu ban đầu khi triển khai/di chuyển dữ liệu lớn.</li>
+<li>Hỗ trợ HR/Quản đốc khi họ báo &quot;không thấy menu/dữ liệu&quot; — kiểm tra theo mô hình 3 lớp Role → Permission → Data Scope.</li>
+</ul>
+<h2 id="role-admin-checklist-nhanh-xem-đầy-đủ-ở-chương-2222-checklists">Checklist nhanh (xem đầy đủ ở <a href="#22-checklists">chương 22</a>)</h2>
+<ul>
+<li><input disabled="" type="checkbox"> Không còn tài khoản của nhân viên đã nghỉ việc ở trạng thái Hoạt động</li>
+<li><input disabled="" type="checkbox"> Đã backup trong tháng</li>
+<li><input disabled="" type="checkbox"> Không có ô Permission bị tắt nhầm gây ảnh hưởng vận hành</li>
+<li><input disabled="" type="checkbox"> Thùng rác không tồn quá nhiều bản ghi cũ không cần thiết</li>
+</ul>
+<h2 id="role-admin-đọc-thêm">Đọc thêm</h2>
+<p><a href="#09-admin-modules">09 — Các module Admin</a> · <a href="#10-permissions-data-scope">10 — Permissions &amp; Data Scope</a> · <a href="#11-import-export">11 — Import/Export</a> · <a href="#12-backup">12 — Backup</a> · <a href="#21-do-dont">21 — Do/Don&#39;t</a> · <a href="#23-appendix">23 — Phụ lục</a></p>
+
+</section>
+<section class="doc-page" id="CHANGELOG">
+<h1 id="CHANGELOG-changelog-tài-liệu-hướng-dẫn-sử-dụng">Changelog — Tài liệu hướng dẫn sử dụng</h1>
+<p>Ghi lại lịch sử cập nhật của <strong>tài liệu</strong> (không phải lịch sử cập nhật hệ thống). Cập nhật file này mỗi khi giao diện/nghiệp vụ thay đổi đủ nhiều để ảnh hưởng tới nội dung hướng dẫn.</p>
+<h2 id="CHANGELOG-10-12082026">1.0 — 12/08/2026</h2>
+<ul>
+<li>Phát hành bộ tài liệu hướng dẫn sử dụng đầy đủ đầu tiên.</li>
+<li>Dựa trên mã nguồn nhánh <code>main</code> tại thời điểm viết (sau khi PR <em>Professional UI/UX redesign</em> đã được merge).</li>
+<li>Ảnh chụp màn hình dùng dữ liệu demo tạo riêng cho tài liệu (không phải dữ liệu lao động thật).</li>
+<li>Bao gồm: Quick Start, 23 chương nội dung, 3 cheat sheet theo vai trò, bản HTML in được ra PDF.</li>
+</ul>
+<hr>
+<p><strong>Ghi chú bảo trì:</strong> Ảnh chụp màn hình trong tài liệu này có thể lệch nhẹ so với giao diện thật sau các bản cập nhật UI sau này (<em>&quot;Screenshots may change slightly after UI updates&quot;</em>) — nếu phát hiện sai lệch, cập nhật lại ảnh và mô tả tương ứng, tăng số phiên bản tài liệu ở đầu file này.</p>
+<p><strong>Người phụ trách tài liệu (Maintainer):</strong> cập nhật theo phân công nội bộ — hiện chưa có tên cụ thể.</p>
+<p><strong>Phiên bản mã nguồn tương ứng khi viết tài liệu 1.0:</strong> nhánh <code>main</code>, sau commit merge <em>Professional UI/UX redesign</em> (<code>9eef8a6</code> trở lên).</p>
+
+</section>
+
+
+</body>
+</html>
