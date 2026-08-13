@@ -12,6 +12,24 @@ export const metadata: Metadata = {
 export default function RootLayout({ children }: { children: ReactNode }) {
   return (
     <html lang="vi">
+      <head>
+        <style>{`
+          /* Premium flat brand treatment: shared legacy classes must not
+             reintroduce gradients or agricultural grid textures. */
+          .hasfarm-hero,
+          .hasfarm-hero.field-rows {
+            background-color: #0b4527 !important;
+            background-image: none !important;
+          }
+          .hasfarm-hero::after {
+            display: none !important;
+          }
+          .field-rows,
+          .field-rows-light {
+            background-image: none !important;
+          }
+        `}</style>
+      </head>
       <body className="bg-bg text-fg antialiased">
         {children}
         <Toaster />
