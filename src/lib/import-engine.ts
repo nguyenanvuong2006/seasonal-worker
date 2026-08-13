@@ -3,6 +3,7 @@ import { and, asc, eq, sql } from "drizzle-orm";
 import { db, pool } from "@/db";
 import { formQuestions, importBatches, importStagingRows } from "@/db/schema";
 import { buildHeaderIndex, getFieldDefinitions, makeFieldPicker, normalizeHeader, type Group } from "@/lib/metadata";
+import { CCCD_ERROR_MESSAGE, isValidCccd } from "@/lib/validators";
 
 /**
  * IMPORT ENGINE v2 — service layer dùng chung cho:
@@ -150,7 +151,12 @@ export async function mergeNextChunk(batchId: string, importType: Group, mapping
             errorC++;
             continue;
           }
-          const cccd = digits(pick("dw_cccd", ["ID No", "CCCD"]));
+          const cccd = clean(pick("dw_cccd", ["ID No", "CCCD"]));
+          if (!isValidCccd(cccd)) {
+            await markRow(client, row.id, "ERROR", CCCD_ERROR_MESSAGE);
+            errorC++;
+            continue;
+          }
           try {
             const res = await client.query(
               `INSERT INTO dw_data (code, it_code, old_dw_code, id_vlookup, full_name, gender, bod, profile, dktn,
@@ -198,11 +204,16 @@ export async function mergeNextChunk(batchId: string, importType: Group, mapping
           const pick = makeFieldPicker(r, defs);
           const headerIndex = buildHeaderIndex(r);
 
-          const cccd = digits(pick("da_cccd", ["CCCD"]));
+          const cccd = clean(pick("da_cccd", ["CCCD"]));
           const fullName = clean(pick("da_full_name", ["Họ và tên"]));
           const phone = digits(pick("da_phone", ["SĐT"]));
           if (!cccd || !fullName || !phone) {
             await markRow(client, row.id, "ERROR", "Thiếu CCCD / Họ tên / SĐT (bắt buộc)");
+            errorC++;
+            continue;
+          }
+          if (!isValidCccd(cccd)) {
+            await markRow(client, row.id, "ERROR", CCCD_ERROR_MESSAGE);
             errorC++;
             continue;
           }
@@ -222,7 +233,6 @@ export async function mergeNextChunk(batchId: string, importType: Group, mapping
           const ageRaw = pick("da_age", ["Tuổi"]);
 
           const warnings: string[] = [];
-          if (!/^\d{9,12}$/.test(cccd)) warnings.push(`CCCD "${cccd}" không đúng định dạng`);
           if (!/^0\d{8,10}$/.test(phone)) warnings.push(`SĐT "${phone}" có thể sai định dạng`);
           const ageNum = birthYear ? new Date().getFullYear() - parseInt(birthYear) : ageRaw ? parseFloat(ageRaw) : null;
           if (ageNum !== null && (ageNum < 15 || ageNum > 70)) warnings.push(`Tuổi ${ageNum} bất thường`);

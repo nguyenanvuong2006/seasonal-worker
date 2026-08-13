@@ -17,6 +17,7 @@ const digits = (v) => {
   const s = String(v ?? "").replace(/\D/g, "");
   return s.length ? s : null;
 };
+const isValidCccd = (v) => /^\d{12}$/.test(String(v ?? ""));
 
 async function main() {
   const c = await pool.connect();
@@ -77,12 +78,11 @@ async function main() {
     for (const r of dw) {
       const fullName = clean(r["HỌ TÊN"]);
       if (!fullName) continue;
-      const cccd = digits(r["ID No"]);
+      const cccd = clean(r["ID No"]);
+      if (!isValidCccd(cccd)) continue;
       // CCCD là khoá đối chiếu — bỏ qua bản ghi trùng CCCD trong file
-      if (cccd) {
-        if (seen.has(cccd)) continue;
-        seen.add(cccd);
-      }
+      if (seen.has(cccd)) continue;
+      seen.add(cccd);
       batch.push([
         clean(r["CODE"]),
         clean(r["IT CODE"]),
@@ -118,11 +118,11 @@ async function main() {
     let acount = 0;
     const dupDate = new Set();
     for (const r of apps) {
-      const cccd = digits(r["CCCD"]);
+      const cccd = clean(r["CCCD"]);
       const fullName = clean(r["Họ và tên"]);
       const phone = digits(r["SĐT"]);
-      // YÊU CẦU MỚI: CCCD BẮT BUỘC — bỏ qua bản ghi thiếu CCCD (dữ liệu cũ lỗi)
-      if (!cccd || !fullName || !phone) continue;
+      // CCCD bắt buộc đúng 12 chữ số; dòng sai định dạng không được đưa vào bảng nghiệp vụ.
+      if (!isValidCccd(cccd) || !fullName || !phone) continue;
 
       const ts = String(r["Timepstamp"] ?? "");
       const regDate = toISO(ts);
@@ -184,7 +184,7 @@ async function main() {
         /* skip bad row */
       }
     }
-    console.log(`✓ Daily Applications: ${acount} (đã loại bỏ bản ghi thiếu CCCD)`);
+    console.log(`✓ Daily Applications: ${acount} (đã loại bỏ bản ghi có CCCD thiếu hoặc sai định dạng)`);
 
     /* ---------- 4. Cập nhật ngày công vào DW Data ---------- */
     await c.query(`

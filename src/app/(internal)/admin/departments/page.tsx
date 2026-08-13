@@ -262,7 +262,7 @@ export default function DepartmentsAdminPage() {
                 placeholder="VD: Chrysanth Spray"
               />
             </FormField>
-            <FormField label="Section (Phân xưởng / Mảng)">
+            <FormField label="Section (Phân khu / Mảng)">
               <Input
                 value={form.section}
                 onChange={(e) => setForm({ ...form, section: e.target.value })}

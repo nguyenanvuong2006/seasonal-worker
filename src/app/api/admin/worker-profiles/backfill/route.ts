@@ -3,6 +3,7 @@ import { isNull } from "drizzle-orm";
 import { db, pool } from "@/db";
 import { dailyApplications, dwData } from "@/db/schema";
 import { requireRoleAndPermission, writeAudit } from "@/lib/auth";
+import { isValidCccd, normalizeCccd } from "@/lib/validators";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -24,13 +25,14 @@ export async function POST() {
     const dwRows = await db.select().from(dwData).where(isNull(dwData.deletedAt));
     let profilesFromDw = 0;
     for (const w of dwRows) {
-      if (!w.cccd) continue;
+      if (!isValidCccd(w.cccd) || w.cccd !== normalizeCccd(w.cccd)) continue;
+      const cccd = normalizeCccd(w.cccd);
       const res = await client.query(
         `INSERT INTO worker_profiles (cccd, full_name, gender, dob, phone, permanent_address, residential_address, dw_id)
          VALUES ($1,$2,$3,$4,$5,$6,$7,$8)
          ON CONFLICT (cccd) WHERE deleted_at IS NULL DO UPDATE SET dw_id = EXCLUDED.dw_id
          RETURNING id`,
-        [w.cccd, w.fullName, w.gender, w.bod, w.phone, w.permanentAddress, w.residentialAddress, w.id],
+        [cccd, w.fullName, w.gender, w.bod, w.phone, w.permanentAddress, w.residentialAddress, w.id],
       );
       if (res.rowCount) profilesFromDw++;
     }
@@ -40,12 +42,14 @@ export async function POST() {
     let profilesFromApps = 0;
     let sessionsCreated = 0;
     for (const a of appRows) {
+      if (!isValidCccd(a.cccd) || a.cccd !== normalizeCccd(a.cccd)) continue;
+      const cccd = normalizeCccd(a.cccd);
       const pRes = await client.query(
         `INSERT INTO worker_profiles (cccd, full_name, gender, dob, phone, permanent_address, residential_address, dw_id)
          VALUES ($1,$2,$3,$4,$5,$6,$7,$8)
          ON CONFLICT (cccd) WHERE deleted_at IS NULL DO UPDATE SET updated_at = now()
          RETURNING id`,
-        [a.cccd, a.fullName, a.gender, a.dob, a.phone, a.permanentAddress, a.residentialAddress, a.dwId],
+        [cccd, a.fullName, a.gender, a.dob, a.phone, a.permanentAddress, a.residentialAddress, a.dwId],
       );
       const profileId = pRes.rows[0]?.id;
       if (!profileId) continue;

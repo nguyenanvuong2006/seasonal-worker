@@ -9,7 +9,7 @@
 | **Đợt Tập nghề (Internship Session)** | Một đợt tập nghề cụ thể của một người, gắn liền với một bộ phận và khoảng thời gian làm việc. |
 | **Daily Application** | Sổ ghi nhận đơn đăng ký tập nghề hằng ngày — nơi HR tiếp nhận, đối chiếu DW Data và xếp bộ phận. |
 | **DW Data** | Nguồn dữ liệu đối chiếu Tập nghề và lịch sử công ty — dùng để xác định người cũ / người mới. |
-| **Cơ cấu tổ chức (Org Hierarchy)** | Cấu trúc phân cấp 5 tầng chuẩn của Dalat Hasfarm: **Location → Division → Department → Section → Group** (không dùng từ "Xưởng/Workshop"). |
+| **Cơ cấu tổ chức (Org Hierarchy)** | Cấu trúc phân cấp 5 tầng chuẩn của Dalat Hasfarm: **Location → Division → Department → Section → Group**. |
 | **Planning (Kế hoạch nhu cầu)** | Quản lý nhu cầu tuyển dụng tập nghề theo giai đoạn và theo giới tính (Nam / Nữ) cho từng bộ phận. |
 | **Nhu cầu nhân lực (Demand)** | Số lượng người tập nghề cần tiếp nhận, phân tách Nhu cầu Nam và Nhu cầu Nữ (thay thế cho thuật ngữ Quota cũ). |
 | **Kế hoạch gốc (Original)** | Kế hoạch nhu cầu nhân lực ban đầu của một đợt tập nghề. |

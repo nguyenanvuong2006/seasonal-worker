@@ -3,6 +3,7 @@ import { and, desc, eq, isNull } from "drizzle-orm";
 import { db } from "@/db";
 import { departments, employmentSessions, workerProfiles } from "@/db/schema";
 import { requireRoleAndPermission, writeAudit } from "@/lib/auth";
+import { CCCD_ERROR_MESSAGE, isValidCccd, normalizeCccd } from "@/lib/validators";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -12,7 +13,9 @@ export async function GET(_req: Request, ctx: { params: Promise<{ cccd: string }
   const guard = await requireRoleAndPermission(["ADMIN", "HR_RECRUITER"], "workers.view");
   if (!guard.ok) return NextResponse.json({ error: guard.error }, { status: guard.status });
 
-  const { cccd } = await ctx.params;
+  const params = await ctx.params;
+  if (!isValidCccd(params.cccd)) return NextResponse.json({ error: CCCD_ERROR_MESSAGE }, { status: 400 });
+  const cccd = normalizeCccd(params.cccd);
   const [profile] = await db
     .select()
     .from(workerProfiles)
@@ -44,7 +47,9 @@ export async function PATCH(req: Request, ctx: { params: Promise<{ cccd: string 
   const guard = await requireRoleAndPermission(["ADMIN"], "workers.edit");
   if (!guard.ok) return NextResponse.json({ error: guard.error }, { status: guard.status });
 
-  const { cccd } = await ctx.params;
+  const params = await ctx.params;
+  if (!isValidCccd(params.cccd)) return NextResponse.json({ error: CCCD_ERROR_MESSAGE }, { status: 400 });
+  const cccd = normalizeCccd(params.cccd);
   const body = (await req.json()) as { fingerprintCode?: string; fingerprintDevice?: string; fingerprintStatus?: string };
 
   const [row] = await db

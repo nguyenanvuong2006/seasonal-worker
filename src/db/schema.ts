@@ -10,6 +10,7 @@ import {
   jsonb,
   index,
   uniqueIndex,
+  check,
 } from "drizzle-orm/pg-core";
 import { sql } from "drizzle-orm";
 
@@ -60,7 +61,7 @@ export const dwData = pgTable(
     bod: varchar("bod", { length: 20 }),
     profile: varchar("profile", { length: 120 }),
     dktn: varchar("dktn", { length: 40 }),
-    cccd: varchar("cccd", { length: 20 }),
+    cccd: varchar("cccd", { length: 20 }).notNull(),
     dateOfIssue: varchar("date_of_issue", { length: 20 }),
     placeOfIssue: varchar("place_of_issue", { length: 160 }),
     permanentAddress: text("permanent_address"),
@@ -82,6 +83,7 @@ export const dwData = pgTable(
   },
   (t) => [
     uniqueIndex("dw_cccd_uq").on(t.cccd).where(sql`deleted_at is null`),
+    check("dw_data_cccd_exact_12_chk", sql`${t.cccd} ~ '^[0-9]{12}$'`),
     index("dw_name_idx").on(t.fullName),
     index("dw_phone_idx").on(t.phone),
   ],
@@ -112,7 +114,7 @@ export const dailyApplications = pgTable(
     permanentAddress: text("permanent_address"),
     residentialAddress: text("residential_address"),
 
-    // Tự khai (phụ thuộc trung thực) + đối chiếu tự động với DW Data
+    // Phân loại phía máy chủ từ kết quả đối chiếu CCCD với DW Data
     declaredType: varchar("declared_type", { length: 20 }).notNull().default("NEW"), // OLD | NEW
     dwMatch: varchar("dw_match", { length: 20 }).notNull().default("NEW"), // MATCHED | NEW | MISMATCH
     dwId: uuid("dw_id").references(() => dwData.id, { onDelete: "set null" }),
@@ -141,6 +143,7 @@ export const dailyApplications = pgTable(
   },
   (t) => [
     uniqueIndex("daily_app_cccd_date_uq").on(t.cccd, t.regDate).where(sql`deleted_at is null`),
+    check("daily_applications_cccd_exact_12_chk", sql`${t.cccd} ~ '^[0-9]{12}$'`),
     index("daily_app_date_status_idx").on(t.regDate, t.status),
     index("daily_app_name_idx").on(t.fullName),
   ],
@@ -149,21 +152,33 @@ export const dailyApplications = pgTable(
 /* ============================================================
    Câu hỏi động do Admin thêm (áp dụng từ ngày chỉ định)
    ============================================================ */
-export const formQuestions = pgTable("form_questions", {
-  id: uuid("id").defaultRandom().primaryKey(),
-  fieldKey: varchar("field_key", { length: 64 }).notNull().unique(),
-  questionText: text("question_text").notNull(),
-  fieldType: varchar("field_type", { length: 24 }).notNull().default("TEXT"),
-  options: jsonb("options").$type<string[]>().default([]),
-  isRequired: boolean("is_required").notNull().default(false),
-  sortOrder: integer("sort_order").notNull().default(0),
-  isActive: boolean("is_active").notNull().default(true),
-  applyFrom: date("apply_from"),
-  // --- Metadata Engine: cho phép import/export nhận diện câu hỏi động theo nhiều tên cột ---
-  aliases: jsonb("aliases").$type<string[]>().default([]),
-  exportColumnName: varchar("export_column_name", { length: 160 }),
-  createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
-});
+export const formQuestions = pgTable(
+  "form_questions",
+  {
+    id: uuid("id").defaultRandom().primaryKey(),
+    fieldKey: varchar("field_key", { length: 64 }).notNull().unique(),
+    questionText: text("question_text").notNull(),
+    fieldType: varchar("field_type", { length: 24 }).notNull().default("TEXT"),
+    options: jsonb("options").$type<string[]>().default([]),
+    isRequired: boolean("is_required").notNull().default(false),
+    sortOrder: integer("sort_order").notNull().default(0),
+    isActive: boolean("is_active").notNull().default(true),
+    visibleToApplicants: boolean("visible_to_applicants").notNull().default(true),
+    targetAudience: varchar("target_audience", { length: 20 }).notNull().default("ALL"),
+    skipForReturning: boolean("skip_for_returning").notNull().default(false),
+    applyFrom: date("apply_from"),
+    // --- Metadata Engine: cho phép import/export nhận diện câu hỏi động theo nhiều tên cột ---
+    aliases: jsonb("aliases").$type<string[]>().default([]),
+    exportColumnName: varchar("export_column_name", { length: 160 }),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [
+    check(
+      "form_questions_target_audience_chk",
+      sql`${t.targetAudience} IN ('ALL', 'NEW_ONLY', 'RETURNING_ONLY')`,
+    ),
+  ],
+);
 
 /* ============================================================
    METADATA ENGINE — cấu hình tập trung cho các trường "lõi"
@@ -409,7 +424,10 @@ export const workerProfiles = pgTable(
     createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
     updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
   },
-  (t) => [uniqueIndex("worker_profile_cccd_uq").on(t.cccd).where(sql`deleted_at is null`)],
+  (t) => [
+    uniqueIndex("worker_profile_cccd_uq").on(t.cccd).where(sql`deleted_at is null`),
+    check("worker_profiles_cccd_exact_12_chk", sql`${t.cccd} ~ '^[0-9]{12}$'`),
+  ],
 );
 
 /** 1 lần đăng ký / 1 đợt làm việc = 1 employment session, gắn vào đúng 1 worker_profiles. */

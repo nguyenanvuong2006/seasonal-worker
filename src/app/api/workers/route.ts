@@ -4,6 +4,7 @@ import { db } from "@/db";
 import { dailyApplications, dwData } from "@/db/schema";
 import { requireRoleAndPermission, writeAudit } from "@/lib/auth";
 import { getFieldDefinitions } from "@/lib/metadata";
+import { CCCD_ERROR_MESSAGE, isValidCccd } from "@/lib/validators";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -83,10 +84,9 @@ export async function PATCH(req: Request) {
     if (k in body) patch[k] = body[k] || null;
   }
   if ("cccd" in body) {
-    const c = String(body.cccd ?? "").replace(/\D/g, "");
-    if (c && !/^\d{9,12}$/.test(c))
-      return NextResponse.json({ error: "CCCD phải 9-12 số." }, { status: 400 });
-    patch.cccd = c || null;
+    const c = String(body.cccd ?? "").trim();
+    if (!isValidCccd(c)) return NextResponse.json({ error: CCCD_ERROR_MESSAGE }, { status: 400 });
+    patch.cccd = c;
   }
   if ("isActive" in body) patch.isActive = Boolean(body.isActive);
 

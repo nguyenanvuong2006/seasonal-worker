@@ -16,6 +16,7 @@ import {
   toast,
 } from "@/components/ui";
 import { Fingerprint, RefreshCw, Search, UserX } from "lucide-react";
+import { CCCD_ERROR_MESSAGE, isValidCccd } from "@/lib/validators";
 
 type Session = {
   id: string;
@@ -53,7 +54,10 @@ export default function WorkerProfilesPage() {
   const [fp, setFp] = useState({ fingerprintCode: "", fingerprintDevice: "" });
 
   const search = async () => {
-    if (!cccd.trim()) return;
+    if (!isValidCccd(cccd)) {
+      toast({ title: CCCD_ERROR_MESSAGE, variant: "destructive" });
+      return;
+    }
     setLoading(true);
     setNotFound(false);
     setProfile(null);
@@ -131,7 +135,9 @@ export default function WorkerProfilesPage() {
         <CardContent className="flex gap-2 pt-6">
           <Input
             value={cccd}
-            onChange={(e) => setCccd(e.target.value)}
+            inputMode="numeric"
+            maxLength={12}
+            onChange={(e) => setCccd(e.target.value.replace(/\D/g, ""))}
             onKeyDown={(e) => e.key === "Enter" && search()}
             placeholder="Nhập số CCCD để tra cứu hồ sơ Tập nghề..."
             className="h-11 flex-1"

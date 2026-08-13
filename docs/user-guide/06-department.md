@@ -6,7 +6,7 @@ Hệ thống quản lý cơ cấu tổ chức Dalat Hasfarm theo chuẩn 5 tần
 
 $$\text{Location} \longrightarrow \text{Division} \longrightarrow \text{Department} \longrightarrow \text{Section} \longrightarrow \text{Group}$$
 
-Không sử dụng các thuật ngữ không chuẩn như "Xưởng", "Workshop" khi diễn đạt cơ cấu phòng ban.
+Sử dụng nhất quán tên gọi chuẩn khi diễn đạt cơ cấu phòng ban.
 
 Có **2 màn hình khác nhau** tuỳ vai trò:
 
@@ -19,7 +19,7 @@ Có **2 màn hình khác nhau** tuỳ vai trò:
 
 <img src="images/desktop/department-admin.png" width="720" alt="Quản lý Cơ cấu tổ chức">
 
-- Phân cấp chuẩn: **Location** (Vùng/Trại) → **Division** (Khối) → **Department** (Tên bộ phận) → **Section** (Phân xưởng/Mảng) → **Group** (Tổ/Nhóm).
+- Phân cấp chuẩn: **Location** (Vùng/Trại) → **Division** (Khối) → **Department** (Tên bộ phận) → **Section** (Phân khu/Mảng) → **Group** (Tổ/Nhóm).
 - Bấm **"+ Thêm bộ phận"** để tạo bộ phận mới — bộ phận vừa tạo **sẽ tự động xuất hiện trong dropdown xếp việc** ở Daily Application và Data Scope ngay lập tức.
 - Có thể sửa trực tiếp trên bảng: **Nhu cầu nhân lực dự kiến/ngày**, bật/khoá bộ phận (nút **Bật/Khoá** ở cột trạng thái — khoá một bộ phận sẽ ẩn nó khỏi dropdown xếp việc mới nhưng không xoá dữ liệu cũ), và **Xoá** (xoá mềm — đưa vào Thùng rác).
 - Các cột "Hôm nay" / "Tổng" cho biết số người tập nghề đã được xếp vào bộ phận đó.
@@ -38,7 +38,7 @@ Bạn có thể nhanh chóng thu hẹp danh sách theo:
 - **Location** (Địa điểm / Trại)
 - **Division** (Khối)
 - **Department** (Bộ phận)
-- **Section** (Phân xưởng / Mảng)
+- **Section** (Phân khu / Mảng)
 - **Group** (Tổ / Nhóm)
 - **Khoảng ngày** (Từ ngày → Đến ngày)
 - **Tìm kiếm nhanh** theo Họ tên, CCCD, Số điện thoại.

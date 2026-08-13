@@ -18,6 +18,7 @@ import {
   toast,
 } from "@/components/ui";
 import { ArrowLeftRight, Check, Clock, Search, X, type LucideIcon } from "lucide-react";
+import { CCCD_ERROR_MESSAGE, isValidCccd } from "@/lib/validators";
 
 type Movement = {
   id: string;
@@ -130,7 +131,10 @@ export default function WorkforceMovementsPage() {
   };
 
   const searchWorker = async () => {
-    if (!cccdSearch.trim()) return;
+    if (!isValidCccd(cccdSearch)) {
+      toast({ title: CCCD_ERROR_MESSAGE, variant: "destructive" });
+      return;
+    }
     setSearching(true);
     try {
       const res = await fetch(`/api/worker-profiles/${cccdSearch.trim()}`);
@@ -279,7 +283,7 @@ export default function WorkforceMovementsPage() {
         <div className="space-y-4">
           <FormField label="Tìm người tập nghề theo CCCD" required>
             <div className="flex gap-2">
-              <Input value={cccdSearch} onChange={(e) => setCccdSearch(e.target.value.replace(/\D/g, ""))} placeholder="Nhập số CCCD..." />
+              <Input value={cccdSearch} inputMode="numeric" maxLength={12} onChange={(e) => setCccdSearch(e.target.value.replace(/\D/g, ""))} placeholder="Nhập đúng 12 chữ số CCCD..." />
               <Button onClick={searchWorker} loading={searching}>
                 <Search className="h-4 w-4" /> Tìm
               </Button>

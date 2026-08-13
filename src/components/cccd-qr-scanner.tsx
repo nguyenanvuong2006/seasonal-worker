@@ -5,7 +5,7 @@
  * -------------------------------
  * Chuẩn QR trên CCCD gắn chip Việt Nam (Thông tư 59/2021/TT-BCA) là 1 chuỗi text
  * thuần, các trường cách nhau bằng dấu "|":
- *   Số CCCD|Số CMND cũ (nếu có)|Họ và tên|Ngày sinh (ddmmyyyy)|Giới tính|Địa chỉ thường trú|Ngày cấp (ddmmyyyy)
+ *   Số CCCD|Trường định danh dự phòng|Họ và tên|Ngày sinh (ddmmyyyy)|Giới tính|Địa chỉ thường trú|Ngày cấp (ddmmyyyy)
  *
  * Toàn bộ việc giải mã chạy NGAY TRÊN TRÌNH DUYỆT bằng "@zxing/browser" +
  * "@zxing/library" — không gọi server, không lưu ảnh CCCD ở đâu cả. ZXing tự
@@ -21,6 +21,7 @@
 import { useEffect, useRef, useState } from "react";
 import { Button, Modal, toast } from "@/components/ui";
 import { Camera, ImageUp, ScanLine } from "lucide-react";
+import { isValidCccd } from "@/lib/validators";
 
 // ============================== Types ==============================
 export type CccdQrData = {
@@ -48,7 +49,7 @@ function parseCccdQr(text: string): CccdQrData | null {
   const parts = text.split("|");
   if (parts.length < 6) return null;
   const [cccd, , fullName, dobRaw, gender, address, issueDateRaw] = parts;
-  if (!/^\d{9,12}$/.test(cccd)) return null;
+  if (!isValidCccd(cccd)) return null;
   return {
     cccd,
     fullName: (fullName || "").trim(),
@@ -202,7 +203,6 @@ export function CccdQrScanner({ onResult }: { onResult: (data: CccdQrData) => vo
   useEffect(() => {
     if (!open) stopCamera();
     return () => stopCamera();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [open]);
 
   // ============================== UI ==============================

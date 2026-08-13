@@ -10,7 +10,7 @@ Trang chủ hệ thống (`/`) — nơi người lao động tự đăng ký th�
 
 <img src="images/desktop/public-registration-form.png" width="720" alt="Trang đăng ký công khai">
 
-1. Nhập **Số CCCD/CMND** (bắt buộc, 9 hoặc 12 số) và **Số điện thoại**.
+1. Nhập **Số CCCD** (bắt buộc, đúng 12 chữ số) và **Số điện thoại**.
 2. Có thể bấm **"Quét QR CCCD"** để tự động điền thông tin từ mã QR trên thẻ CCCD, hạn chế gõ tay sai sót.
 3. Hệ thống tự kiểm tra: nếu bạn đã từng làm việc tại Dalat Hasfarm, thông tin sẽ **tự động nhận diện và điền lại hồ sơ cũ** — không phải khai lại từ đầu; nếu là lần đầu, bạn cần khai đầy đủ các câu hỏi bắt buộc (Giới tính, Dân tộc, Thời gian đăng ký làm, Kênh giới thiệu, và cam kết thông tin chính xác).
 4. Nộp đơn.
@@ -23,7 +23,7 @@ Vào `/lookup` (hoặc bấm **"Tra cứu kết quả"** từ trang đăng ký).
 
 <img src="images/desktop/public-lookup-empty.png" width="720" alt="Trang tra cứu — trống">
 
-1. Nhập **Số CCCD/CMND** đã dùng để đăng ký.
+1. Nhập **Số CCCD** đã dùng để đăng ký.
 2. Nhập **Số điện thoại đã đăng ký**.
 3. Bấm **Tra cứu**.
 

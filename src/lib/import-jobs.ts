@@ -101,7 +101,7 @@ export async function stageRows(jobId: string, jobType: JobType, rows: Record<st
           chunk.map((r) => pickers.dw_bod(r)),
           chunk.map((r) => pickers.dw_profile(r)),
           chunk.map((r) => pickers.dw_dktn(r)),
-          chunk.map((r) => digitsOnly(pickers.dw_cccd(r))),
+          chunk.map((r) => identityValue(pickers.dw_cccd(r))),
           chunk.map((r) => pickers.dw_date_of_issue(r)),
           chunk.map((r) => pickers.dw_place_of_issue(r)),
           chunk.map((r) => pickers.dw_permanent_address(r)),
@@ -144,7 +144,7 @@ export async function stageRows(jobId: string, jobType: JobType, rows: Record<st
         [
           jobId,
           rn,
-          chunk.map((r) => digitsOnly(pickers.da_cccd(r))),
+          chunk.map((r) => identityValue(pickers.da_cccd(r))),
           chunk.map((r) => pickers.da_full_name(r)),
           chunk.map((r) => pickers.da_gender(r)),
           chunk.map((r) => pickers.da_dob(r)),
@@ -175,6 +175,11 @@ export async function stageRows(jobId: string, jobType: JobType, rows: Record<st
       );
     }
   }
+}
+
+function identityValue(v: string | undefined): string | null {
+  const value = (v ?? "").trim();
+  return value || null;
 }
 
 function digitsOnly(v: string | undefined): string | null {
@@ -217,11 +222,23 @@ async function runValidating(jobId: string, jobType: JobType) {
        WHERE job_id = $1 AND (full_name IS NULL OR btrim(full_name) = '')`,
       [jobId],
     );
+    await pool.query(
+      `UPDATE staging_dw_data SET valid = false,
+         invalid_reason = 'CCCD là bắt buộc và phải gồm đúng 12 chữ số — giá trị: "' || coalesce(cccd, '(trống)') || '"'
+       WHERE job_id = $1 AND valid = true AND (cccd IS NULL OR cccd !~ $2)`,
+      [jobId, CCCD_PATTERN],
+    );
   } else {
     await pool.query(
       `UPDATE staging_daily_application SET valid = false, invalid_reason = 'Thiếu CCCD / Họ tên / SĐT (bắt buộc)'
        WHERE job_id = $1 AND (cccd IS NULL OR full_name IS NULL OR btrim(full_name) = '' OR phone IS NULL)`,
       [jobId],
+    );
+    await pool.query(
+      `UPDATE staging_daily_application SET valid = false,
+         invalid_reason = 'CCCD là bắt buộc và phải gồm đúng 12 chữ số — giá trị: "' || coalesce(cccd, '(trống)') || '"'
+       WHERE job_id = $1 AND valid = true AND cccd !~ $2`,
+      [jobId, CCCD_PATTERN],
     );
     await pool.query(
       `UPDATE staging_daily_application SET valid = false,
@@ -281,21 +298,19 @@ async function runMatching(jobId: string) {
     [jobId],
   );
 
-  // Data Quality — cảnh báo (không chặn) cho CCCD/SĐT sai định dạng — set-based, dùng ĐÚNG
-  // pattern từ src/lib/validators.ts (CCCD_PATTERN/VN_PHONE_PATTERN) — không viết lại regex.
+  // CCCD sai đã bị chặn ở VALIDATING. SĐT và tuổi bất thường vẫn là cảnh báo dữ liệu.
   const warn = await pool.query(
     `SELECT row_number, cccd, phone, age,
-        CASE WHEN cccd !~ $2 THEN 'CCCD "' || coalesce(cccd,'') || '" không đúng định dạng' END AS r1,
-        CASE WHEN phone !~ $3 THEN 'SĐT "' || coalesce(phone,'') || '" có thể sai định dạng' END AS r2,
-        CASE WHEN age ~ $4 AND (age::numeric < 15 OR age::numeric > 70) THEN 'Tuổi ' || age || ' bất thường (dưới 15 hoặc trên 70)' END AS r3
+        CASE WHEN phone !~ $2 THEN 'SĐT "' || coalesce(phone,'') || '" có thể sai định dạng' END AS r1,
+        CASE WHEN age ~ $3 AND (age::numeric < 15 OR age::numeric > 70) THEN 'Tuổi ' || age || ' bất thường (dưới 15 hoặc trên 70)' END AS r2
       FROM staging_daily_application
       WHERE job_id = $1 AND valid = true
-        AND (cccd !~ $2 OR phone !~ $3 OR (age ~ $4 AND (age::numeric < 15 OR age::numeric > 70)))`,
-    [jobId, CCCD_PATTERN, VN_PHONE_PATTERN, NUMBER_PATTERN],
+        AND (phone !~ $2 OR (age ~ $3 AND (age::numeric < 15 OR age::numeric > 70)))`,
+    [jobId, VN_PHONE_PATTERN, NUMBER_PATTERN],
   );
   if (warn.rows.length > 0) {
-    const errs = warn.rows.flatMap((r: { row_number: number; r1: string | null; r2: string | null; r3: string | null; cccd: string; phone: string; age: string }) => {
-      const reasons = [r.r1, r.r2, r.r3].filter(Boolean) as string[];
+    const errs = warn.rows.flatMap((r: { row_number: number; r1: string | null; r2: string | null; cccd: string; phone: string; age: string }) => {
+      const reasons = [r.r1, r.r2].filter(Boolean) as string[];
       return reasons.length ? [{ rowNumber: r.row_number, reason: reasons.join("; "), data: { cccd: r.cccd, phone: r.phone, age: r.age }, severity: "WARNING" as const }] : [];
     });
     await logErrors(jobId, errs);

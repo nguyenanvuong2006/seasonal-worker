@@ -5,6 +5,7 @@ import Link from "next/link";
 import { Badge, Button, Card, CardContent, Input, Label, toast } from "@/components/ui";
 import { BrandLogo } from "@/components/brand-logo";
 import { formatDate, STATUS_META, todayStr } from "@/lib/helpers";
+import { CCCD_ERROR_MESSAGE, isValidCccd } from "@/lib/validators";
 import { ArrowLeft, CheckCircle2, Clock, Search, ShieldCheck, XCircle } from "lucide-react";
 
 type HistoryRow = { id: string; regDate: string; status: string; deptName: string | null; startingDate: string | null };
@@ -21,8 +22,8 @@ export default function LookupPage() {
   const [notFound, setNotFound] = useState(false);
 
   const search = async () => {
-    if (!/^\d{9,12}$/.test(cccd)) {
-      toast({ title: "CCCD phải chứa 9 - 12 chữ số", variant: "destructive" });
+    if (!isValidCccd(cccd)) {
+      toast({ title: CCCD_ERROR_MESSAGE, variant: "destructive" });
       return;
     }
     if (!/^0\d{8,10}$/.test(phone)) {
@@ -77,14 +78,14 @@ export default function LookupPage() {
       <section className="mx-auto -mt-10 max-w-4xl space-y-5 px-4 pb-20">
         <Card className="rounded-[20px] border-0 shadow-[0_16px_40px_rgba(8,50,27,0.14)]">
           <CardContent className="space-y-4 p-6">
-            <Label className="text-[12px] font-black uppercase tracking-widest">Số CCCD / CMND để tra cứu</Label>
+            <Label className="text-[12px] font-black uppercase tracking-widest">Số CCCD để tra cứu</Label>
             <Input
               type="tel"
               inputMode="numeric"
               maxLength={12}
               value={cccd}
               onChange={(e) => setCccd(e.target.value.replace(/\D/g, ""))}
-              placeholder="VD: 0790..."
+              placeholder="Nhập đúng 12 chữ số CCCD"
               className="h-[56px] rounded-[14px] text-[18px] font-black tracking-widest"
             />
             <Label className="text-[12px] font-black uppercase tracking-widest">Số điện thoại đã đăng ký</Label>

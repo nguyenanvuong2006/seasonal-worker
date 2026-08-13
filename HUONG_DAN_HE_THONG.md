@@ -25,13 +25,13 @@ Công nghệ: **Next.js 16 (React 19) + PostgreSQL + Drizzle ORM**, chạy đư�
 ## 2. TÍNH NĂNG ĐÃ HOÀN THÀNH (tính đến bản này)
 
 ### 2.1 Trang đăng ký cho lao động (`/`)
-- Bắt buộc nhập **CCCD (9–12 số)** và **số điện thoại** trước tiên, không còn lựa chọn "không mang CCCD".
+- Bắt buộc nhập **CCCD (đúng 12 chữ số)** và **số điện thoại** trước tiên, không còn lựa chọn "không mang CCCD".
 - Hệ thống tự kiểm tra: đã đăng ký hôm nay chưa → đã có trong DW Data (lao động cũ) chưa → nếu là lao động cũ thì tự điền sẵn họ tên/ngày sinh/địa chỉ.
 - Sau bước kiểm tra CCCD + SĐT, mới hiển thị **các câu hỏi động** (xem 2.4).
-- Trường "Cũ / Mới" vẫn để người lao động tự khai (phụ thuộc sự trung thực), đồng thời hệ thống **tự đối chiếu ngầm** với DW Data theo 3 tầng để HR có căn cứ kiểm tra chéo:
+- Trạng thái "Cũ / Mới" do máy chủ phân loại: chỉ CCCD khớp chính xác với DW Data mới được xem là người cũ. Hệ thống vẫn **tự đối chiếu ngầm** thêm các tầng Họ tên + Năm sinh và Họ tên + SĐT để HR có căn cứ kiểm tra chéo, nhưng các tầng phụ không làm thay đổi nhóm biểu mẫu dành cho người cũ.
   1. Khớp CCCD tuyệt đối
   2. Khớp Họ tên + Năm sinh
-  3. Khớp Họ tên + 9 số cuối SĐT
+  3. Khớp Họ tên + phần số thuê bao cuối
   → Kết quả lưu vào cột `dwMatch` (MATCHED/NEW) hiển thị cho HR, không hiện cho lao động.
 
 ### 2.2 Màn hình HR sắp xếp việc (`/hr/registrations`)
@@ -232,7 +232,7 @@ YÊU CẦU TIẾP THEO CỦA TÔI:
 
 ## 8. KẾ HOẠCH GIAI ĐOẠN 2 — PHÂN TÍCH & LỘ TRÌNH TRIỂN KHAI
 
-Yêu cầu gốc "Giai đoạn 2" (Workflow Engine, Rule Engine, Versioning, Dashboard Builder, Notification Engine, phân quyền chi tiết, Soft Delete, Backup & Restore, Health Monitor, Job Scheduler, Plugin/Event Bus, Logging, API versioning) là một nền tảng cấp doanh nghiệp — nếu làm hết cùng lúc trên hệ thống **đang chạy thật** với 1 database Postgres free-tier (Neon) và hosting serverless free-tier (Vercel), rủi ro phá vỡ nghiệp vụ và vượt quá năng lực hạ tầng miễn phí là rất cao. Vì vậy đã chia thành 3 giai đoạn nhỏ theo mức ảnh hưởng/rủi ro tăng dần:
+Yêu cầu gốc "Giai đoạn 2" (Workflow Engine, Rule Engine, Versioning, Dashboard Builder, Notification Engine, phân quyền chi tiết, Soft Delete, Backup &t nền tảng cấp doanh nghiệp — nếu làm hết cùng lúc trên hệ thống **đang chạy thật** với 1 database Postgres free-tier (Neon) và hosting serverless free-tier (Vercel), rủi ro phá vỡ nghiệp vụ và vượt quá năng lực hạ tầng miễn phí là rất cao. Vì vậy đã chia thành 3 giai đoạn nhỏ theo mức ảnh hưởng/rủi ro tăng dần:
 
 ### Phase 1 — ĐÃ TRIỂN KHAI (bản này)
 Tiêu chí chọn: an toàn với dữ liệu đang chạy thật, không cần hạ tầng ngoài Neon/Vercel, giá trị sử dụng ngay.
@@ -576,3 +576,4 @@ Mỗi request trong chuỗi chỉ tồn tại vài giây — Job không phụ th
 ---
 
 *Cập nhật lần cuối: theo lần chỉnh sửa gần nhất của dự án — luôn sửa trực tiếp file này, không tạo bản mới.*
+n nhất của dự án — luôn sửa trực tiếp file này, không tạo bản mới.*

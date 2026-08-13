@@ -5,6 +5,7 @@ import { dailyApplications, employmentSessions, workerProfiles } from "@/db/sche
 import { requireRoleAndPermission, writeAudit } from "@/lib/auth";
 import { getWorkflowStages } from "@/lib/workflow";
 import { autoAllocateInternship } from "@/lib/planning";
+import { CCCD_ERROR_MESSAGE, isValidCccd, normalizeCccd } from "@/lib/validators";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -59,8 +60,11 @@ export async function PATCH(req: Request, ctx: { params: Promise<{ id: string }>
     if (Object.keys(patch).length === 1) {
       return NextResponse.json({ error: "Không có dữ liệu cập nhật." }, { status: 400 });
     }
-    if (typeof patch.cccd === "string" && !/^\d{9,12}$/.test(patch.cccd)) {
-      return NextResponse.json({ error: "CCCD phải từ 9-12 chữ số." }, { status: 400 });
+    if ("cccd" in patch) {
+      if (!isValidCccd(patch.cccd)) {
+        return NextResponse.json({ error: CCCD_ERROR_MESSAGE }, { status: 400 });
+      }
+      patch.cccd = normalizeCccd(patch.cccd);
     }
 
     // P1-3 (Production Hardening Audit) — TRƯỚC ĐÂY `status` là 1 trong các field EDITABLE tự
