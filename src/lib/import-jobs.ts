@@ -31,6 +31,28 @@ export async function createJob(jobType: JobType, fileName: string, checksum: st
   return job;
 }
 
+/**
+ * Xóa nguyên tử mọi dấu vết của một Job chưa staging xong. Worker chỉ được kích
+ * hoạt sau stageRows nên tại thời điểm này không có tiến trình merge cạnh tranh.
+ */
+export async function cleanupPartialImportJob(jobId: string) {
+  const client = await pool.connect();
+  try {
+    await client.query("BEGIN");
+    await client.query("DELETE FROM import_job_errors WHERE job_id = $1", [jobId]);
+    await client.query("DELETE FROM staging_department WHERE job_id = $1", [jobId]);
+    await client.query("DELETE FROM staging_dw_data WHERE job_id = $1", [jobId]);
+    await client.query("DELETE FROM staging_daily_application WHERE job_id = $1", [jobId]);
+    await client.query("DELETE FROM import_jobs WHERE id = $1", [jobId]);
+    await client.query("COMMIT");
+  } catch (error) {
+    await client.query("ROLLBACK");
+    throw error;
+  } finally {
+    client.release();
+  }
+}
+
 async function touch(jobId: string, patch: Record<string, unknown>) {
   await db
     .update(importJobs)

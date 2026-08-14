@@ -13,8 +13,9 @@ Nếu vùng được dán có hàng tiêu đề, hệ thống tự nhận diện
 
 ## 2. Thêm, xoá cột và đồng bộ câu hỏi form tập nghề
 
-- Bấm dấu **×** trên header để bỏ một cột khỏi bảng nhập hiện tại. Thao tác này không xoá dữ liệu hay câu hỏi trong hệ thống.
-- Dùng ô **Thêm lại cột đã xoá / cột chưa hiển thị** để đưa cột trở lại.
+- Bấm dấu **×** trên header để bỏ một cột khỏi bố cục. Bố cục được lưu bằng `localStorage` riêng cho từng loại dữ liệu, nên reload hoặc quay lại bằng cùng trình duyệt vẫn giữ nguyên. Thao tác này không xoá metadata, dữ liệu hay câu hỏi trong hệ thống.
+- Dùng ô **Thêm lại cột đã xoá / cột chưa hiển thị** để đưa cột trở lại; thay đổi này cũng được lưu.
+- **Khôi phục cột mặc định** đưa các cột mặc định trở lại và lưu bố cục mới.
 - Với bảng **Đăng ký tập nghề**, các cột màu cam là câu hỏi đang hiển thị trên form công khai.
 - Bấm **Tạo cột = câu hỏi mới** để tạo một câu hỏi mới trên form đăng ký và thêm ngay cột tương ứng vào bảng.
 - Những câu hỏi trùng với trường lõi như Giới tính, Dân tộc, Thời gian đăng ký làm hoặc Kênh giới thiệu được ghép thành một cột, tránh header trùng nhưng vẫn lưu đủ dữ liệu.
@@ -27,7 +28,11 @@ Nếu vùng được dán có hàng tiêu đề, hệ thống tự nhận diện
 - **Thêm 10 dòng**: thêm vùng nhập thủ công.
 - **Điền ngày hôm nay**: chỉ có ở bảng Đăng ký tập nghề; điền ngày cho các dòng có dữ liệu nhưng còn trống Ngày đăng ký.
 - **Xoá dòng**: biểu tượng thùng rác ở cuối mỗi dòng.
-- **Làm mới bảng**: khôi phục cột mặc định và xoá dữ liệu đang nhập.
+- **Tải template hiện tại**: tải CSV chỉ gồm đúng các cột đang hiển thị trong bố cục đã lưu.
+- **Xóa dữ liệu trong bảng**: chỉ xoá nội dung ô/dòng, không đổi bố cục cột.
+- **Khôi phục cột mặc định**: phục hồi và lưu lại bố cục cột ban đầu.
+
+Khi paste có hàng tiêu đề, hệ thống nhận diện cả alias của cột đang ẩn để giữ đúng vị trí, nhưng bỏ qua dữ liệu cột ẩn và không tự thêm cột đó trở lại. Nếu không có tiêu đề mà vùng copy nhiều cột hơn phần bảng còn lại, thao tác sẽ bị chặn để tránh lệch dữ liệu.
 
 ## 4. Định dạng ngày/giờ được hỗ trợ
 
@@ -45,6 +50,8 @@ Giá trị ngày sai ở trường bắt buộc khiến riêng dòng đó vào E
 
 ## 5. Xử lý nền bằng Import Engine
 
+Bảng trực tiếp được gửi dưới dạng JSON tới `POST /api/import/paste` (không chuyển thành file CSV/multipart). Endpoint kiểm tra quyền, loại dữ liệu, column ID, cột bắt buộc, tối đa 10.000 dòng/150 cột và độ dài ô trước khi tạo Job. Nếu staging lỗi, Job/staging dở được dọn hoặc khóa để Retry không xử lý dữ liệu thiếu.
+
 Sau khi gửi bảng, dữ liệu vẫn chạy qua pipeline an toàn:
 
 ```
@@ -60,7 +67,7 @@ Có thể đóng trang sau khi Job được tạo. Dùng **Job Queue** để the
 
 ## 6. Khi nào dùng file CSV / Excel?
 
-Nếu dữ liệu rất lớn hoặc trình duyệt chặn clipboard, mở khối **"Dữ liệu rất lớn? Dùng file CSV / Excel"** cuối trang. Hệ thống vẫn nhận `.csv`, `.xlsx`, `.xls`; file CSV nên dùng UTF-8. Nút **Tải file mẫu** tạo file từ đúng cấu hình đang dùng cho bảng trực tiếp.
+Nếu dữ liệu rất lớn hoặc trình duyệt chặn clipboard, mở khối **"Dữ liệu rất lớn? Dùng file CSV / Excel"** cuối trang. Hệ thống vẫn nhận `.csv`, `.xlsx`, `.xls`; file CSV nên dùng UTF-8. Để tải file mẫu đúng bố cục cột đã lưu, luôn dùng nút **Tải template hiện tại** trên thanh công cụ của bảng.
 
 Nếu file có trường bắt buộc chưa tự nhận diện, màn hình **Map Columns** sẽ yêu cầu chọn cột tương ứng trước khi tạo Job.
 

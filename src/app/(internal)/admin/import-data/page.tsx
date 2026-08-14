@@ -63,6 +63,18 @@ type Job = {
 };
 type JobStatusResp = { job: Job; stageLabel: string; rowsPerSec: number; etaSec: number | null; errorSample: { rowNumber: number; reason: string; originalData: Record<string, string> }[]; warningSample: { rowNumber: number; reason: string; originalData: Record<string, string> }[] };
 
+function responseError(status: number, body: string, action: string): string {
+  if (status === 413) return "Dữ liệu vượt giới hạn HTTP 413. Hãy chia bảng hoặc file thành các phần nhỏ hơn rồi thử lại.";
+  if (!body.trim()) return `${action} thất bại (HTTP ${status}, phản hồi rỗng).`;
+  try {
+    const parsed = JSON.parse(body) as { error?: unknown };
+    if (typeof parsed.error === "string" && parsed.error.trim()) return `${parsed.error} (HTTP ${status})`;
+  } catch {
+    // Gateway/proxy có thể trả HTML thay vì JSON.
+  }
+  return `${action} thất bại (HTTP ${status}). Máy chủ không trả về JSON hợp lệ.`;
+}
+
 function CountUp({ value, className }: { value: number; className?: string }) {
   const [display, setDisplay] = useState(0);
   const prevRef = useRef(0);
@@ -146,6 +158,8 @@ export default function ImportDataPage() {
   }, []);
 
   useEffect(() => {
+    // Lần tải ban đầu đồng bộ danh sách Job từ API vào state hiển thị.
+    // eslint-disable-next-line react-hooks/set-state-in-effect
     void loadHistory();
   }, [loadHistory]);
 
@@ -191,21 +205,24 @@ export default function ImportDataPage() {
     };
     xhr.onload = () => {
       setUploading(false);
+      const text = xhr.responseText ?? "";
+      if (xhr.status < 200 || xhr.status >= 300) {
+        toast({ title: responseError(xhr.status, text, "Upload file"), variant: "destructive" });
+        return;
+      }
       try {
-        const d = JSON.parse(xhr.responseText) as UploadResponse & { error?: string };
-        if (xhr.status >= 200 && xhr.status < 300) {
-          if (d.needsMapping) {
-            setMappingInfo(d);
-          } else if ("jobId" in d) {
-            setMappingInfo(null);
-            setActiveJobId(d.jobId);
-            toast({ title: "Đã tạo Job — xử lý chạy nền, có thể đóng trang này" });
-          }
+        const d = JSON.parse(text) as UploadResponse;
+        if (d.needsMapping) {
+          setMappingInfo(d);
+        } else if ("jobId" in d) {
+          setMappingInfo(null);
+          setActiveJobId(d.jobId);
+          toast({ title: "Đã tạo Job — xử lý chạy nền, có thể đóng trang này" });
         } else {
-          toast({ title: (d as { error?: string }).error ?? "Lỗi upload", variant: "destructive" });
+          toast({ title: `Upload file thất bại (HTTP ${xhr.status}): phản hồi thiếu jobId.`, variant: "destructive" });
         }
       } catch {
-        toast({ title: "Lỗi không xác định khi upload", variant: "destructive" });
+        toast({ title: `Upload file thất bại (HTTP ${xhr.status}). Máy chủ không trả về JSON hợp lệ.`, variant: "destructive" });
       }
     };
     xhr.onerror = () => {
@@ -213,6 +230,33 @@ export default function ImportDataPage() {
       toast({ title: "Lỗi kết nối khi upload", variant: "destructive" });
     };
     xhr.send(fd);
+  };
+
+  const submitPastedGrid = async (payload: { columnIds: string[]; rows: string[][] }) => {
+    setUploading(true);
+    setUploadPct(0);
+    try {
+      const res = await fetch("/api/import/paste", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ jobType, ...payload }),
+      });
+      const text = await res.text();
+      if (!res.ok) throw new Error(responseError(res.status, text, "Xử lý bảng"));
+      let data: { jobId?: string };
+      try {
+        data = JSON.parse(text) as { jobId?: string };
+      } catch {
+        throw new Error(`Xử lý bảng thất bại (HTTP ${res.status}). Máy chủ không trả về JSON hợp lệ.`);
+      }
+      if (!data.jobId) throw new Error(`Xử lý bảng thất bại (HTTP ${res.status}): phản hồi thiếu jobId.`);
+      setActiveJobId(data.jobId);
+      toast({ title: "Đã tạo Job từ bảng — xử lý chạy nền, có thể đóng trang này" });
+    } catch (error) {
+      toast({ title: (error as Error).message || "Không thể gửi bảng. Hãy kiểm tra kết nối và thử lại.", variant: "destructive" });
+    } finally {
+      setUploading(false);
+    }
   };
 
   const hasUnmapped = mappingInfo ? mappingInfo.unmatchedRequiredFields.some((f) => !mapping[f.fieldKey]) : false;
@@ -343,7 +387,7 @@ export default function ImportDataPage() {
             jobType={jobType}
             submitting={uploading}
             uploadPct={uploadPct}
-            onSubmit={(generatedFile) => doUpload(undefined, generatedFile)}
+            onSubmit={(payload) => void submitPastedGrid(payload)}
           />
 
           {/* File upload chỉ còn là phương án phụ cho bộ dữ liệu quá lớn. */}
@@ -352,11 +396,9 @@ export default function ImportDataPage() {
               Dữ liệu rất lớn? Dùng file CSV / Excel thay cho dán trực tiếp
             </summary>
             <div className="space-y-4 border-t border-border p-5">
-              <div className="flex justify-end">
-                <a href={`/api/admin/field-definitions/template?group=${jobType}`} className="inline-flex items-center gap-1 text-xs font-bold text-primary hover:underline">
-                  <Download className="h-3 w-3" /> Tải file mẫu
-                </a>
-              </div>
+              <p className="text-xs leading-5 text-fg-secondary">
+                Cần file mẫu theo bố cục đang dùng? Hãy dùng nút <b>“Tải template hiện tại”</b> trên thanh công cụ của bảng phía trên.
+              </p>
               <label className={`flex cursor-pointer flex-col items-center justify-center gap-3 rounded-[18px] border-2 border-dashed p-7 text-center transition-colors ${file ? "border-primary/50 bg-primary-tint/50" : "border-border-strong hover:border-primary/40 hover:bg-primary-tint/30"}`}>
                 <input
                   type="file"

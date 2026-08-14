@@ -75,3 +75,42 @@ export function normalizeGridHeader(value: string): string {
     .replace(/đ/g, "d")
     .replace(/[^a-z0-9]+/g, "");
 }
+
+/**
+ * Quyết định cột đích mà không làm lệch dữ liệu. Với header, matchedIds giữ
+ * nguyên vị trí mọi cột nguồn nhưng cột đang ẩn thành null. Không có header thì
+ * vùng copy rộng hơn phần bảng còn lại bị từ chối thay vì âm thầm cắt bớt.
+ */
+export function resolvePasteTargetIds({
+  copiedColumnCount,
+  hasHeader,
+  matchedIds,
+  visibleIds,
+  startColumn,
+}: {
+  copiedColumnCount: number;
+  hasHeader: boolean;
+  matchedIds: (string | null)[];
+  visibleIds: string[];
+  startColumn: number;
+}): { targetIds: (string | null)[]; error: string | null } {
+  if (hasHeader) {
+    const visibleSet = new Set(visibleIds);
+    return {
+      targetIds: matchedIds.map((id) => id && visibleSet.has(id) ? id : null),
+      error: null,
+    };
+  }
+
+  const available = Math.max(0, visibleIds.length - startColumn);
+  if (copiedColumnCount > available) {
+    return {
+      targetIds: [],
+      error: `Vùng copy có ${copiedColumnCount} cột nhưng bảng chỉ còn ${available} cột. Hãy copy kèm hàng tiêu đề để hệ thống ghép đúng cột.`,
+    };
+  }
+  return {
+    targetIds: Array.from({ length: copiedColumnCount }, (_, index) => visibleIds[startColumn + index] ?? null),
+    error: null,
+  };
+}
