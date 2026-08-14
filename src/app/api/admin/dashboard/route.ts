@@ -2,7 +2,7 @@ import { NextResponse } from "next/server";
 import { asc, eq } from "drizzle-orm";
 import { db } from "@/db";
 import { dashboardWidgets } from "@/db/schema";
-import { getUserScope, requireRoleAndPermission, writeAudit } from "@/lib/auth";
+import { getUserScope, requirePermission, writeAudit } from "@/lib/auth";
 import { getKpiValue, getRecentApplicationsTable } from "@/lib/dashboard";
 
 export const runtime = "nodejs";
@@ -11,7 +11,7 @@ export const dynamic = "force-dynamic";
 /** Trả về widget đã cấu hình KÈM dữ liệu đã tính sẵn (KPI: số; TABLE: headers+rows).
  *  DEPT_MANAGER chỉ thấy số liệu trong Data Scope của mình (Phase 2, Step 6). */
 export async function GET() {
-  const guard = await requireRoleAndPermission(["ADMIN", "HR_RECRUITER", "DEPT_MANAGER"], "dashboard.manage");
+  const guard = await requirePermission(["ADMIN", "HR_RECRUITER", "DEPT_MANAGER", "HR_DIRECTOR"], "dashboard.view");
   if (!guard.ok) return NextResponse.json({ error: guard.error }, { status: guard.status });
 
   const scope = await getUserScope(guard.session);
@@ -37,7 +37,7 @@ export async function GET() {
 }
 
 export async function POST(req: Request) {
-  const guard = await requireRoleAndPermission(["ADMIN"], "dashboard.manage");
+  const guard = await requirePermission(["ADMIN"], "dashboard.manage");
   if (!guard.ok) return NextResponse.json({ error: guard.error }, { status: guard.status });
 
   const body = await req.json();
@@ -59,7 +59,7 @@ export async function POST(req: Request) {
 }
 
 export async function PATCH(req: Request) {
-  const guard = await requireRoleAndPermission(["ADMIN"], "dashboard.manage");
+  const guard = await requirePermission(["ADMIN"], "dashboard.manage");
   if (!guard.ok) return NextResponse.json({ error: guard.error }, { status: guard.status });
 
   const body = await req.json();
@@ -75,7 +75,7 @@ export async function PATCH(req: Request) {
 }
 
 export async function DELETE(req: Request) {
-  const guard = await requireRoleAndPermission(["ADMIN"], "dashboard.manage");
+  const guard = await requirePermission(["ADMIN"], "dashboard.manage");
   if (!guard.ok) return NextResponse.json({ error: guard.error }, { status: guard.status });
   const id = new URL(req.url).searchParams.get("id");
   if (!id) return NextResponse.json({ error: "Thiếu ID." }, { status: 400 });

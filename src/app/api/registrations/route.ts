@@ -191,9 +191,11 @@ export async function GET(req: Request) {
   if (status && status !== "ALL") filters.push(eq(dailyApplications.status, status));
   if (matchParam && matchParam !== "ALL") filters.push(eq(dailyApplications.dwMatch, matchParam));
 
-  if (session.role === "DEPT_MANAGER") {
-    const scope = await getUserScope(session);
-    if (!scope || scope.length === 0) return NextResponse.json({ rows: [] });
+  // DYNAMIC RBAC V2 — bỏ proxy role === DEPT_MANAGER: scope do getUserScope quyết định
+  // (role-independent; null = không giới hạn, [] = không thấy gì, list = đúng các bộ phận).
+  const scope = await getUserScope(session);
+  if (scope) {
+    if (scope.length === 0) return NextResponse.json({ rows: [] });
     filters.push(inArray(dailyApplications.deptId, scope));
     filters.push(eq(dailyApplications.status, "APPROVED"));
   } else if (deptParam && deptParam !== "ALL") {

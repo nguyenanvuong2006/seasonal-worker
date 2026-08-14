@@ -2,7 +2,7 @@ import { NextResponse } from "next/server";
 import { and, desc, eq, inArray } from "drizzle-orm";
 import { db } from "@/db";
 import { employmentSessions, workerProfiles, workforceMovements } from "@/db/schema";
-import { getUserScope, requireRoleAndPermission, writeAudit } from "@/lib/auth";
+import { getUserScope, requirePermission, writeAudit } from "@/lib/auth";
 import { queueNotification } from "@/lib/notifications";
 import { todayStr } from "@/lib/helpers";
 
@@ -11,7 +11,7 @@ export const dynamic = "force-dynamic";
 
 /** Danh sách yêu cầu Nghỉ việc/Thuyên chuyển — lọc theo Data Scope cho DEPT_MANAGER. */
 export async function GET(req: Request) {
-  const guard = await requireRoleAndPermission(["ADMIN", "HR_RECRUITER", "DEPT_MANAGER"], "workforce_movements.view");
+  const guard = await requirePermission(["ADMIN", "HR_RECRUITER", "DEPT_MANAGER", "HR_DIRECTOR"], "workforce_movements.view");
   if (!guard.ok) return NextResponse.json({ error: guard.error }, { status: guard.status });
 
   const url = new URL(req.url);
@@ -22,9 +22,10 @@ export async function GET(req: Request) {
   if (statusParam && statusParam !== "ALL") filters.push(eq(workforceMovements.status, statusParam));
   if (typeParam && typeParam !== "ALL") filters.push(eq(workforceMovements.movementType, typeParam));
 
-  if (guard.session.role === "DEPT_MANAGER") {
-    const scope = await getUserScope(guard.session);
-    if (!scope || scope.length === 0) return NextResponse.json({ rows: [] });
+  // DYNAMIC RBAC V2 — bỏ proxy role === DEPT_MANAGER: scope role-independent.
+  const scope = await getUserScope(guard.session);
+  if (scope) {
+    if (scope.length === 0) return NextResponse.json({ rows: [] });
     filters.push(inArray(workforceMovements.fromDeptId, scope));
   }
 
@@ -56,7 +57,7 @@ export async function GET(req: Request) {
 
 /** Tạo yêu cầu mới (Manager/Nhân viên hành chính) — RESIGNATION hoặc TRANSFER. */
 export async function POST(req: Request) {
-  const guard = await requireRoleAndPermission(["ADMIN", "HR_RECRUITER", "DEPT_MANAGER"], "workforce_movements.create");
+  const guard = await requirePermission(["ADMIN", "HR_RECRUITER", "DEPT_MANAGER"], "workforce_movements.create");
   if (!guard.ok) return NextResponse.json({ error: guard.error }, { status: guard.status });
 
   const body = (await req.json()) as {
@@ -89,11 +90,11 @@ export async function POST(req: Request) {
     .limit(1);
   const actualFromDeptId = latestSession?.deptId ?? null;
 
-  if (guard.session.role === "DEPT_MANAGER") {
-    const scope = await getUserScope(guard.session);
-    if (!actualFromDeptId || !scope || !scope.includes(actualFromDeptId)) {
-      return NextResponse.json({ error: "Lao động này không thuộc bộ phận bạn quản lý." }, { status: 403 });
-    }
+  // DYNAMIC RBAC V2 — bỏ proxy role === DEPT_MANAGER: user có Data Scope (scope != null) chỉ
+  // được tạo yêu cầu cho lao động thuộc bộ phận mình quản lý.
+  const scope = await getUserScope(guard.session);
+  if (scope && !scope.includes(actualFromDeptId ?? "")) {
+    return NextResponse.json({ error: "Lao động này không thuộc bộ phận bạn quản lý." }, { status: 403 });
   }
 
   const [row] = await db

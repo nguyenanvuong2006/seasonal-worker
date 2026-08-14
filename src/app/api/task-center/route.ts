@@ -2,7 +2,7 @@ import { NextResponse } from "next/server";
 import { and, desc, eq, gte, ilike, inArray, isNull, lte, or, sql } from "drizzle-orm";
 import { db } from "@/db";
 import { dailyApplications, departments, planningPeriods, planningTargets, workerProfiles, workforceMovements } from "@/db/schema";
-import { getUserScope, hasPermission, requireRole } from "@/lib/auth";
+import { getUserScope, hasPermission, requirePermission } from "@/lib/auth";
 import { todayStr } from "@/lib/helpers";
 
 export const runtime = "nodejs";
@@ -27,7 +27,7 @@ const SECTION_LIMIT = 50;
  *       frontend biết còn dữ liệu ngoài 50 dòng đầu hay không (không còn fetch-rồi-lọc-client).
  */
 export async function GET(req: Request) {
-  const guard = await requireRole(["ADMIN", "HR_RECRUITER", "DEPT_MANAGER"]);
+  const guard = await requirePermission(["ADMIN", "HR_RECRUITER", "DEPT_MANAGER", "HR_DIRECTOR"], "dashboard.view");
   if (!guard.ok) return NextResponse.json({ error: guard.error }, { status: guard.status });
 
   const url = new URL(req.url);
@@ -39,10 +39,11 @@ export async function GET(req: Request) {
   const in7days = new Date(Date.now() + 7 * 86400000).toISOString().slice(0, 10);
   const hiddenSections: string[] = [];
 
-  // 1) Người mới chờ duyệt (Daily Application, PENDING) — chỉ ADMIN/HR_RECRUITER có thể xử lý.
+  // 1) Người mới chờ duyệt (Daily Application, PENDING) — quyền registrations.approve quyết định
+  //    (Dynamic RBAC V2: bỏ điều kiện role !== DEPT_MANAGER — baseline DEPT_MANAGER không có quyền này).
   let newApplicants: { id: string; fullName: string; cccd: string; submittedAt: string }[] = [];
   let newApplicantsTotal = 0;
-  const canSeeNewApplicants = role !== "DEPT_MANAGER" && (await hasPermission(role, "registrations.approve"));
+  const canSeeNewApplicants = await hasPermission(role, "registrations.approve");
   if (canSeeNewApplicants) {
     const filters = [eq(dailyApplications.status, "PENDING"), isNull(dailyApplications.deletedAt)];
     if (scope) filters.push(inArray(dailyApplications.deptId, scope.length ? scope : ["__none__"]));

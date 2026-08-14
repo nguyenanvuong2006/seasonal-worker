@@ -1,15 +1,15 @@
 import { NextResponse } from "next/server";
-import { and, eq, inArray, isNull } from "drizzle-orm";
+import { and, eq, inArray, isNull, ne } from "drizzle-orm";
 import { db } from "@/db";
 import { departments, userDepartmentScopes, users } from "@/db/schema";
-import { requireRoleAndPermission, writeAudit } from "@/lib/auth";
+import { requirePermission, writeAudit } from "@/lib/auth";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
 /** Danh sách User (DEPT_MANAGER) và bộ phận với đầy đủ cơ cấu tổ chức (Location -> Division -> Department -> Section -> Group). */
 export async function GET() {
-  const guard = await requireRoleAndPermission(["ADMIN"], "data_scopes.manage");
+  const guard = await requirePermission(["ADMIN"], "data_scope.view");
   if (!guard.ok) return NextResponse.json({ error: guard.error }, { status: guard.status });
 
   const [scopeUsers, allDepts, scopes] = await Promise.all([
@@ -21,7 +21,7 @@ export async function GET() {
         role: users.role,
       })
       .from(users)
-      .where(eq(users.role, "DEPT_MANAGER")),
+      .where(ne(users.role, "ADMIN")),
     db
       .select({
         id: departments.id,
@@ -45,7 +45,7 @@ export async function GET() {
 
 /** Cập nhật hàng loạt danh sách bộ phận cho 1 user (Transactional replacement). */
 export async function PUT(req: Request) {
-  const guard = await requireRoleAndPermission(["ADMIN"], "data_scopes.manage");
+  const guard = await requirePermission(["ADMIN"], "data_scope.manage");
   if (!guard.ok) return NextResponse.json({ error: guard.error }, { status: guard.status });
 
   const body = (await req.json()) as { userId?: string; departmentIds?: string[] };
@@ -102,7 +102,7 @@ export async function PUT(req: Request) {
 
 /** Gán 1 department cho 1 user (Single). */
 export async function POST(req: Request) {
-  const guard = await requireRoleAndPermission(["ADMIN"], "data_scopes.manage");
+  const guard = await requirePermission(["ADMIN"], "data_scope.manage");
   if (!guard.ok) return NextResponse.json({ error: guard.error }, { status: guard.status });
 
   const body = (await req.json()) as { userId?: string; departmentId?: string };
@@ -115,7 +115,7 @@ export async function POST(req: Request) {
 
 /** Bỏ gán 1 department khỏi 1 user (Single). */
 export async function DELETE(req: Request) {
-  const guard = await requireRoleAndPermission(["ADMIN"], "data_scopes.manage");
+  const guard = await requirePermission(["ADMIN"], "data_scope.manage");
   if (!guard.ok) return NextResponse.json({ error: guard.error }, { status: guard.status });
 
   const url = new URL(req.url);

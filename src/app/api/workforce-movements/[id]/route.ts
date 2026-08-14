@@ -1,5 +1,5 @@
 import { NextResponse } from "next/server";
-import { requireRoleAndPermission, writeAudit } from "@/lib/auth";
+import { requirePermission, writeAudit } from "@/lib/auth";
 import { applyMovementAction, type MovementAction } from "@/lib/workforce-movements";
 
 export const runtime = "nodejs";
@@ -7,7 +7,7 @@ export const dynamic = "force-dynamic";
 
 /** HR xử lý 1 yêu cầu Nghỉ việc/Thuyên chuyển — action nào hợp lệ do lib/workforce-movements.ts kiểm tra. */
 export async function PATCH(req: Request, ctx: { params: Promise<{ id: string }> }) {
-  const guard = await requireRoleAndPermission(["ADMIN", "HR_RECRUITER"], "workforce_movements.manage");
+  const guard = await requirePermission(["ADMIN", "HR_RECRUITER"], "workforce_movements.manage");
   if (!guard.ok) return NextResponse.json({ error: guard.error }, { status: guard.status });
 
   const { id } = await ctx.params;

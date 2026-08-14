@@ -2,7 +2,7 @@ import { NextResponse } from "next/server";
 import { and, asc, desc, eq, ilike, isNull, or, sql } from "drizzle-orm";
 import { db } from "@/db";
 import { dailyApplications, dwData } from "@/db/schema";
-import { requireRoleAndPermission, writeAudit } from "@/lib/auth";
+import { requirePermission, writeAudit } from "@/lib/auth";
 import { getFieldDefinitions } from "@/lib/metadata";
 import { CCCD_ERROR_MESSAGE, isValidCccd } from "@/lib/validators";
 
@@ -24,7 +24,7 @@ const DW_SEARCHABLE_COLUMNS = {
 
 /** Sheet "DW Data" — tra cứu & chỉnh sửa hồ sơ lao động chính thức */
 export async function GET(req: Request) {
-  const guard = await requireRoleAndPermission(["ADMIN", "HR_RECRUITER"], "workers.view");
+  const guard = await requirePermission(["ADMIN", "HR_RECRUITER", "HR_DIRECTOR"], "dw.view");
   if (!guard.ok) return NextResponse.json({ error: guard.error }, { status: guard.status });
 
   const url = new URL(req.url);
@@ -61,7 +61,7 @@ export async function GET(req: Request) {
 }
 
 export async function PATCH(req: Request) {
-  const guard = await requireRoleAndPermission(["ADMIN", "HR_RECRUITER"], "workers.edit");
+  const guard = await requirePermission(["ADMIN", "HR_RECRUITER"], "dw.edit");
   if (!guard.ok) return NextResponse.json({ error: guard.error }, { status: guard.status });
 
   const body = await req.json();
@@ -111,7 +111,7 @@ export async function PATCH(req: Request) {
 
 /** Xoá mềm — hồ sơ ẩn khỏi DW Data nhưng vẫn còn trong database, khôi phục tại /admin/recycle-bin. */
 export async function DELETE(req: Request) {
-  const guard = await requireRoleAndPermission(["ADMIN"], "workers.edit");
+  const guard = await requirePermission(["ADMIN"], "dw.edit");
   if (!guard.ok) return NextResponse.json({ error: guard.error }, { status: guard.status });
   const id = new URL(req.url).searchParams.get("id");
   if (!id) return NextResponse.json({ error: "Thiếu ID." }, { status: 400 });

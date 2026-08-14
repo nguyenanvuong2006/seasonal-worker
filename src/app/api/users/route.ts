@@ -2,11 +2,11 @@ import { NextResponse } from "next/server";
 import { asc, eq, sql } from "drizzle-orm";
 import { db } from "@/db";
 import { departments, users } from "@/db/schema";
-import { hashPassword, requireRoleAndPermission, writeAudit } from "@/lib/auth";
+import { hashPassword, requirePermission, writeAudit } from "@/lib/auth";
+import { isKnownRoleKey, listRoles } from "@/lib/rbac";
 import {
   buildPatch,
   changedFields,
-  isRole,
   lastActiveAdminError,
   selectAuditAction,
   selfProtectionError,
@@ -35,7 +35,7 @@ function toSnapshot(row: typeof users.$inferSelect): UserSnapshot {
 }
 
 export async function GET() {
-  const guard = await requireRoleAndPermission(["ADMIN"], "users.manage");
+  const guard = await requirePermission(["ADMIN"], "users.view");
   if (!guard.ok) return NextResponse.json({ error: guard.error }, { status: guard.status });
 
   const rows = await db
@@ -55,12 +55,17 @@ export async function GET() {
     .orderBy(asc(users.username));
 
   // Trả kèm id của Admin đang đăng nhập để frontend disable/hide các action self-protection
-  // (lớp bảo vệ CHÍNH vẫn nằm ở backend).
-  return NextResponse.json({ rows, currentUserId: guard.session.id });
+  // (lớp bảo vệ CHÍNH vẫn nằm ở backend) + danh mục vai trò cho dropdown (Dynamic RBAC V2).
+  const roleCatalog = await listRoles();
+  return NextResponse.json({
+    rows,
+    currentUserId: guard.session.id,
+    roles: roleCatalog.map((r) => ({ key: r.key, name: r.name, isActive: r.isActive, memberCount: r.memberCount })),
+  });
 }
 
 export async function POST(req: Request) {
-  const guard = await requireRoleAndPermission(["ADMIN"], "users.manage");
+  const guard = await requirePermission(["ADMIN"], "users.manage");
   if (!guard.ok) return NextResponse.json({ error: guard.error }, { status: guard.status });
 
   try {
@@ -76,7 +81,7 @@ export async function POST(req: Request) {
     }
     const pwError = validatePassword(password);
     if (pwError) return NextResponse.json({ error: pwError }, { status: 400 });
-    if (!isRole(body.role)) {
+    if (!(await isKnownRoleKey(String(body.role)))) {
       return NextResponse.json({ error: "Vai trò không hợp lệ." }, { status: 400 });
     }
 
@@ -102,7 +107,7 @@ export async function POST(req: Request) {
 }
 
 export async function PATCH(req: Request) {
-  const guard = await requireRoleAndPermission(["ADMIN"], "users.manage");
+  const guard = await requirePermission(["ADMIN"], "users.manage");
   if (!guard.ok) return NextResponse.json({ error: guard.error }, { status: guard.status });
 
   let body: Record<string, unknown>;
@@ -123,7 +128,7 @@ export async function PATCH(req: Request) {
   if ("isActive" in body) change.isActive = Boolean(body.isActive);
   if ("password" in body && body.password) change.password = String(body.password);
 
-  if (change.role !== undefined && !isRole(change.role)) {
+  if (change.role !== undefined && !(await isKnownRoleKey(change.role))) {
     return NextResponse.json({ error: "Vai trò không hợp lệ." }, { status: 400 });
   }
 
@@ -150,7 +155,9 @@ export async function PATCH(req: Request) {
     if (pwError) return NextResponse.json({ error: pwError }, { status: 400 });
   }
 
-  const { patch, password } = buildPatch(change);
+  // change.role ĐÃ được kiểm tra ở trên (isKnownRoleKey async — gồm catalog + bảng roles).
+  // buildPatch giữ chữ ký đồng bộ nên truyền validator "luôn hợp lệ" cho đúng giá trị đã kiểm tra.
+  const { patch, password } = buildPatch(change, () => true);
   if (password) patch.passwordHash = hashPassword(password);
 
   // 4) Đổi role/khoá tài khoản/đổi mật khẩu -> tăng sessionVersion để mọi JWT cũ hết hiệu lực ngay.
@@ -206,7 +213,7 @@ export async function PATCH(req: Request) {
  *    thị "Đã khoá"), có thể "Kích hoạt lại" bất cứ lúc nào.
  */
 export async function DELETE(req: Request) {
-  const guard = await requireRoleAndPermission(["ADMIN"], "users.manage");
+  const guard = await requirePermission(["ADMIN"], "users.manage");
   if (!guard.ok) return NextResponse.json({ error: guard.error }, { status: guard.status });
 
   const id = new URL(req.url).searchParams.get("id");

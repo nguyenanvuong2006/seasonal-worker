@@ -51,9 +51,12 @@ export async function GET(req: Request) {
   let deptLabel = "Tất cả bộ phận";
   let managerScope: string[] | null = null;
 
-  if (session.role === "DEPT_MANAGER") {
-    managerScope = await getUserScope(session);
-    if (!managerScope || managerScope.length === 0) {
+  // DYNAMIC RBAC V2 — bỏ proxy role === DEPT_MANAGER: scope do getUserScope quyết định
+  // (role-independent; null = không giới hạn, [] = không thấy gì, list = đúng các bộ phận).
+  const scope = await getUserScope(session);
+  if (scope) {
+    managerScope = scope;
+    if (managerScope.length === 0) {
       return NextResponse.json({ error: "Chưa gán bộ phận." }, { status: 400 });
     }
     if (deptParam && deptParam !== "ALL" && managerScope.includes(deptParam)) {
@@ -100,12 +103,11 @@ export async function GET(req: Request) {
     .where(and(...filters))
     .orderBy(asc(departments.deptName), asc(dailyApplications.fullName));
 
-  const targetDeptId =
-    session.role === "DEPT_MANAGER" && deptParam && managerScope?.includes(deptParam) ? deptParam : null;
+  const targetDeptId = managerScope && deptParam && managerScope.includes(deptParam) ? deptParam : null;
   if (targetDeptId) {
     const [d] = await db.select().from(departments).where(eq(departments.id, targetDeptId));
     if (d) deptLabel = `${d.deptName}${d.groupName ? " — " + d.groupName : ""}`;
-  } else if (session.role === "DEPT_MANAGER" && managerScope) {
+  } else if (managerScope) {
     deptLabel = managerScope.length === 1 ? deptLabel : `${managerScope.length} bộ phận được phân công`;
     if (managerScope.length === 1) {
       const [d] = await db.select().from(departments).where(eq(departments.id, managerScope[0]));

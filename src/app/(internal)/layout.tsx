@@ -1,6 +1,6 @@
 import type { ReactNode } from "react";
 import { redirect } from "next/navigation";
-import { getSession } from "@/lib/auth";
+import { getSession, getSessionPermissionKeys } from "@/lib/auth";
 import { getPublicBranding } from "@/lib/branding";
 import { Sidebar } from "@/components/sidebar";
 import { AppHeader } from "@/components/app-header";
@@ -11,11 +11,11 @@ export default async function InternalLayout({ children }: { children: ReactNode
   const session = await getSession();
   if (!session) redirect("/login");
 
-  const branding = await getPublicBranding();
+  const [branding, permissions] = await Promise.all([getPublicBranding(), getSessionPermissionKeys(session)]);
 
   return (
     <div className="flex min-h-screen bg-bg">
-      <Sidebar session={session} branding={branding} />
+      <Sidebar session={session} branding={branding} permissions={permissions} />
       <div className="flex min-w-0 flex-1 flex-col">
         <AppHeader session={session} branding={branding} />
         <main className="mx-auto w-full max-w-[1400px] flex-1 p-4 lg:p-8">{children}</main>

@@ -5,8 +5,17 @@ import { randomBytes, scryptSync, timingSafeEqual } from "crypto";
 import { and, eq } from "drizzle-orm";
 import { db } from "@/db";
 import { auditLogs, rolePermissions, userDepartmentScopes, users, type RolePermission } from "@/db/schema";
+import { ENFORCED_PERMISSION_KEYS, PERMISSION_CATALOG, SYSTEM_ROLE_KEYS } from "@/lib/rbac-catalog";
 
-export type Role = "ADMIN" | "HR_RECRUITER" | "DEPT_MANAGER";
+/**
+ * DYNAMIC RBAC V2 — Role không còn là enum 3 giá trị hardcode. users.role (varchar) giữ nguyên
+ * là role key; danh mục vai trò nằm ở bảng `roles` (+ baseline in-memory trong rbac-catalog).
+ * Mọi chỗ so sánh chuỗi (vd session.role === "ADMIN") vẫn hoạt động; vai trò tuỳ chỉnh chỉ
+ * cần có dòng trong roles + role_permissions là được.
+ */
+export type Role = string;
+
+export const LEGACY_ROLES: readonly Role[] = ["ADMIN", "HR_RECRUITER", "DEPT_MANAGER"] as const;
 
 export type Session = {
   id: string;
@@ -169,15 +178,16 @@ export async function writeAudit(
 }
 
 /* ============================================================
-   RBAC CHI TIẾT (#11) — bổ sung SONG SONG với requireRole() theo Role.
-   requireRole() vẫn là lớp bảo vệ CHÍNH cho mọi route (không đổi, để
-   không phá hệ thống đang chạy). hasPermission() là lớp kiểm tra BỔ
-   SUNG, dùng ở nơi cần bật/tắt 1 chức năng cụ thể cho 1 Role mà không
-   cần đổi code (cấu hình tại /admin/permissions).
-   Nếu bảng role_permissions chưa có dòng nào cho (role, key) → mặc
-   định TRUE cho ADMIN, và TRUE cho HR_RECRUITER/DEPT_MANAGER nếu role
-   đó đã qua được requireRole() của route (tức là không mặc định khoá
-   ai khi admin chưa cấu hình gì — tránh tự khoá hệ thống của mình).
+   DYNAMIC RBAC V2 — PERMISSION CHECK (fail-closed + ADMIN bypass).
+   ---------------------------------------------------------------
+   Thay mô hình cũ "chưa cấu hình = mặc định CHO PHÉP (fail-open)" bằng
+   FAIL-CLOSED: quyền nằm trong ENFORCED_PERMISSION_KEYS (toàn bộ catalog)
+   mà role KHÔNG có dòng cấu hình → TỪ CHỐI. ADMIN luôn bypass (true) —
+   không bao giờ tự khoá quản trị viên.
+   Vai trò tuỳ chỉnh mới tạo: chưa có dòng role_permissions nào → bị
+   chặn mọi quyền cho tới khi admin gán quyền (fail-closed đúng nghĩa).
+   requireRole() vẫn là lớp bảo vệ CHÍNH đầu tiên (danh sách role cho
+   phép ở từng route); hasPermission() là lớp bảo vệ THỨ HAI theo quyền.
    ============================================================ */
 let permCache: { at: number; rows: RolePermission[] } | null = null;
 const PERM_CACHE_MS = 15_000;
@@ -196,37 +206,60 @@ export function invalidatePermissionCache() {
 }
 
 export async function hasPermission(role: Role, permissionKey: string): Promise<boolean> {
+  if (role === "ADMIN") return true; // ADMIN bypass — quyền tối cao, không bị chặn bởi cấu hình
   const rows = await loadPermissions();
   const row = rows.find((r) => r.role === role && r.permissionKey === permissionKey);
   if (row) return row.allowed;
-  return true; // chưa cấu hình = không chặn (an toàn theo mặc định "mở" để không tự khoá hệ thống)
+  // FAIL-CLOSED: chưa cấu hình = TỪ CHỐI với mọi quyền được enforce (kể cả key không nằm
+  // trong catalog — tránh lỗ hổng "quyền mới chưa ai cấu hình thì ai cũng qua").
+  void ENFORCED_PERMISSION_KEYS;
+  return false;
+}
+
+/** Tập quyền hiệu lực của 1 phiên (dùng cho sidebar/page render server-side). */
+export async function getSessionPermissionKeys(session: Session): Promise<string[]> {
+  if (session.role === "ADMIN") return PERMISSION_CATALOG.map((p) => p.key);
+  const rows = await loadPermissions();
+  const out: string[] = [];
+  for (const p of PERMISSION_CATALOG) {
+    const row = rows.find((r) => r.role === session.role && r.permissionKey === p.key);
+    if (row ? row.allowed : false) out.push(p.key);
+  }
+  return out;
 }
 
 /* ============================================================
-   DATA SCOPE (Phase 2, Step 1) — trả lời "được thao tác Ở ĐÂU", tách biệt
-   khỏi Role ("được làm GÌ") và Permission ("được làm chức năng nào"). Dùng
-   ở mọi nơi đang lọc dữ liệu theo department: thay
+   DATA SCOPE (Phase 2, Step 1 + DYNAMIC RBAC V2) — trả lời "được thao tác
+   Ở ĐÂU", tách biệt khỏi Role ("được làm GÌ") và Permission ("được làm chức
+   năng nào"). Dùng ở mọi nơi đang lọc dữ liệu theo department: thay
      eq(table.deptId, session.deptId)
    bằng
      inArray(table.deptId, await getUserScope(session))
-   ADMIN luôn có scope = toàn bộ department (không cần cấu hình) — kiểm tra
-   bằng cách trả về null (nghĩa là "không giới hạn", nơi gọi tự bỏ điều kiện
-   lọc khi nhận null). HR_RECRUITER mặc định cũng KHÔNG giới hạn (đúng vai
-   trò hiện có — xử lý toàn bộ hồ sơ, không riêng theo bộ phận) trừ khi admin
-   chủ động gán scope cụ thể. DEPT_MANAGER: dùng user_department_scopes nếu
-   có, dự phòng session.deptId cũ nếu chưa được gán (không tự khoá ai trong
-   lúc chuyển đổi từ cột deptId đơn sang bảng scope nhiều-nhiều).
+   Quy ước giá trị trả về (KHÔNG đổi so với trước, nơi gọi đã quen):
+     - string[]  → CHỈ được thao tác trên các department trong danh sách.
+     - []        → không được thấy gì (safety net).
+     - null      → KHÔNG giới hạn (bỏ điều kiện lọc).
+   DYNAMIC RBAC V2 — "role-independent": scope giờ ĐỌC user_department_scopes
+   CHO MỌI VAI TRÒ trước (kể cả ADMIN/HR nếu admin chủ động gán — bảng scope
+   độc lập vai trò), chỉ còn 1 nhánh fallback cuối dùng role để giữ nguyên
+   hành vi cũ khi user CHƯA được gán scope nào: ADMIN/HR không giới hạn (null),
+   các vai trò còn lại (vd manager chưa gán scope) → [] (safety net cũ, không
+   tự mở khoá ai trong lúc chuyển đổi). Mọi call site (export/registrations/
+   planning/workforce/global-search/task-center) đã bỏ proxy `role ===
+   "DEPT_MANAGER"` và gọi thẳng hàm này.
    ============================================================ */
 export async function getUserScope(session: Session): Promise<string[] | null> {
-  if (session.role === "ADMIN" || session.role === "HR_RECRUITER") return null; // không giới hạn
-
   const rows = await db
     .select({ departmentId: userDepartmentScopes.departmentId })
     .from(userDepartmentScopes)
     .where(eq(userDepartmentScopes.userId, session.id));
 
   if (rows.length > 0) return rows.map((r) => r.departmentId);
-  return session.deptId ? [session.deptId] : []; // dự phòng cột deptId cũ; [] = không được xem gì
+
+  // Legacy fallback (chưa gán scope nào): deptId cột cũ → scope đơn; nếu không có gì thì
+  // ADMIN/HR không giới hạn (null), các vai trò khác [] = không thấy gì (safety net cũ).
+  if (session.deptId) return [session.deptId];
+  return session.role === "ADMIN" || session.role === "HR_RECRUITER" ? null : [];
 }
 
 /**
@@ -236,15 +269,37 @@ export async function getUserScope(session: Session): Promise<string[] | null> {
  * bắt buộc qua hasPermission() — admin có thể tắt 1 quyền cụ thể cho 1 Role
  * tại /admin/permissions mà không cần sửa code route.
  */
-export async function requireRoleAndPermission(
+/**
+ * DYNAMIC RBAC V2 — điểm vào DUY NHẤT cho mọi route cần kiểm tra quyền chi tiết:
+ *   1. requireRole(roles) — lớp CHÍNH (đăng nhập + vai trò cho phép tới route);
+ *   2. hasPermission(role, permissionKey) — lớp THỨ HAI (fail-closed, ADMIN bypass).
+ * Tham số `roles` là danh sách vai trò HỆ THỐNG cho phép tới route (defense-in-depth:
+ * kể cả cấu hình quyền sai, ADMIN/HR/MANAGER/HR_DIRECTOR vẫn bị chặn nếu không nằm
+ * trong danh sách). Vai trò TUỲ CHỈNH (key không thuộc bộ vai trò hệ thống) KHÔNG bị
+ * chặn ở lớp này — quyền truy cập của chúng do chính permissionKey quyết định, đúng
+ * bản chất Dynamic RBAC: admin tạo vai trò + gán quyền là đủ, không cần sửa code.
+ */
+export async function requirePermission(
   roles: Role[],
   permissionKey: string,
 ): Promise<{ ok: true; session: Session } | { ok: false; status: number; error: string }> {
   const guard = await requireRole(roles);
   if (!guard.ok) return guard;
+  const isSystemRole = SYSTEM_ROLE_KEYS.includes(guard.session.role);
+  if (isSystemRole && !roles.includes(guard.session.role)) {
+    return { ok: false, status: 403, error: "Từ chối truy cập! Quyền hạn không hợp lệ." };
+  }
   const allowed = await hasPermission(guard.session.role, permissionKey);
   if (!allowed) {
     return { ok: false, status: 403, error: "Tài khoản của bạn không có quyền thực hiện thao tác này." };
   }
   return guard;
+}
+
+/** @deprecated Tên cũ — giữ alias để không phá các route đang dùng; dùng requirePermission() cho code mới. */
+export async function requireRoleAndPermission(
+  roles: Role[],
+  permissionKey: string,
+): Promise<{ ok: true; session: Session } | { ok: false; status: number; error: string }> {
+  return requirePermission(roles, permissionKey);
 }

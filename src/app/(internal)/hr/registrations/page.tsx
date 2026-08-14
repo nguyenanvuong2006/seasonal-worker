@@ -2,7 +2,7 @@ import { redirect } from "next/navigation";
 import { and, asc, eq, sql } from "drizzle-orm";
 import { db } from "@/db";
 import { dailyApplications, departments, dwData } from "@/db/schema";
-import { getSession } from "@/lib/auth";
+import { getSession, hasPermission } from "@/lib/auth";
 import { todayStr } from "@/lib/helpers";
 import RegistrationsGrid from "@/components/registrations-grid";
 import { Badge, MetricStrip, MetricStripItem, PageHeader, SectionLabel } from "@/components/ui";
@@ -13,7 +13,8 @@ export const dynamic = "force-dynamic";
 export default async function HrRegistrationsPage() {
   const session = await getSession();
   if (!session) redirect("/login");
-  if (!["ADMIN", "HR_RECRUITER"].includes(session.role)) redirect("/department");
+  // DYNAMIC RBAC V2 — thay danh sách role hardcode bằng quyền registrations.view.
+  if (!(await hasPermission(session.role, "registrations.view"))) redirect("/admin/dashboard");
 
   const depts = await db
     .select({
