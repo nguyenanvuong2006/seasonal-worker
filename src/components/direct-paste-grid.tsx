@@ -9,6 +9,7 @@ import {
   Loader2,
   Plus,
   RotateCcw,
+  Download,
   Sparkles,
   Table2,
   Trash2,
@@ -16,7 +17,7 @@ import {
 } from "lucide-react";
 import { Badge, Button, Card, CardContent, Input, Label, Modal, Textarea, toast } from "@/components/ui";
 import { todayStr } from "@/lib/helpers";
-import { normalizeGridHeader, parseClipboardTable, serializeCsv } from "@/lib/paste-grid";
+import { normalizeGridHeader, parseClipboardTable, resolvePasteTargetIds, serializeCsv } from "@/lib/paste-grid";
 
 export type PasteJobType = "department" | "dw_data" | "daily_application";
 
@@ -43,6 +44,7 @@ type GridRow = Record<string, string>;
 const INITIAL_ROWS = 15;
 const PAGE_SIZE = 50;
 const MAX_PASTE_ROWS = 10_000;
+const LAYOUT_STORAGE_PREFIX = "seasonal-worker:import-grid-columns:v1:";
 const FIELD_TYPES = [
   { value: "TEXT", label: "Văn bản" },
   { value: "NUMBER", label: "Số" },
@@ -81,7 +83,7 @@ export function DirectPasteGrid({
   jobType: PasteJobType;
   submitting: boolean;
   uploadPct: number;
-  onSubmit: (file: File) => void;
+  onSubmit: (payload: { columnIds: string[]; rows: string[][] }) => void;
 }) {
   const [columns, setColumns] = useState<TemplateColumn[]>([]);
   const [visibleIds, setVisibleIds] = useState<string[]>([]);
@@ -90,6 +92,8 @@ export function DirectPasteGrid({
   const [addColumnId, setAddColumnId] = useState("");
   const [page, setPage] = useState(0);
   const activeCellRef = useRef({ row: 0, column: 0 });
+  const layoutReadyRef = useRef(false);
+  const storageKey = `${LAYOUT_STORAGE_PREFIX}${jobType}`;
 
   const [questionOpen, setQuestionOpen] = useState(false);
   const [savingQuestion, setSavingQuestion] = useState(false);
@@ -109,16 +113,25 @@ export function DirectPasteGrid({
       const nextColumns = (data.columns ?? []) as TemplateColumn[];
       setColumns(nextColumns);
       setVisibleIds((current) => {
-        // Khi đổi loại dữ liệu, current thuộc template cũ và phải reset. Khi vừa
-        // tạo câu hỏi, giữ bố cục hiện tại rồi thêm cột liên quan vào cuối.
-        if (!preferQuestionFieldKey) return nextColumns.filter((column) => column.defaultVisible).map((column) => column.id);
-        const validCurrent = current.filter((id) => nextColumns.some((column) => column.id === id));
-        const createdColumn = nextColumns.find((column) =>
-          column.questionFieldKeys.includes(preferQuestionFieldKey),
-        );
-        return createdColumn && !validCurrent.includes(createdColumn.id)
-          ? [...validCurrent, createdColumn.id]
-          : validCurrent;
+        let next: string[];
+        if (!preferQuestionFieldKey) {
+          let stored: unknown = null;
+          try {
+            stored = JSON.parse(window.localStorage.getItem(storageKey) ?? "null");
+          } catch {
+            stored = null;
+          }
+          next = Array.isArray(stored)
+            ? stored.filter((id): id is string => typeof id === "string" && nextColumns.some((column) => column.id === id))
+            : nextColumns.filter((column) => column.defaultVisible).map((column) => column.id);
+        } else {
+          next = current.filter((id) => nextColumns.some((column) => column.id === id));
+          const createdColumn = nextColumns.find((column) => column.questionFieldKeys.includes(preferQuestionFieldKey));
+          if (createdColumn && !next.includes(createdColumn.id)) next.push(createdColumn.id);
+        }
+        window.localStorage.setItem(storageKey, JSON.stringify(next));
+        layoutReadyRef.current = true;
+        return next;
       });
     } catch (error) {
       setColumns([]);
@@ -127,12 +140,17 @@ export function DirectPasteGrid({
     } finally {
       setLoading(false);
     }
-  }, [jobType]);
+  }, [jobType, storageKey]);
 
   useEffect(() => {
     const timer = window.setTimeout(() => void loadTemplate(), 0);
     return () => window.clearTimeout(timer);
   }, [loadTemplate]);
+
+  useEffect(() => {
+    if (!layoutReadyRef.current) return;
+    window.localStorage.setItem(storageKey, JSON.stringify(visibleIds));
+  }, [storageKey, visibleIds]);
 
   const visibleColumns = useMemo(
     () => visibleIds.map((id) => columns.find((column) => column.id === id)).filter(Boolean) as TemplateColumn[],
@@ -181,20 +199,25 @@ export function DirectPasteGrid({
       (matrix[0].length === 1 && recognizedHeaders === 1)
     ) && recognizedHeaders / Math.max(1, matrix[0].length) >= 0.6;
 
-    let targetIds: (string | null)[];
-    let dataRows: string[][];
+    const resolved = resolvePasteTargetIds({
+      copiedColumnCount: matrix[0].length,
+      hasHeader: looksLikeHeader,
+      matchedIds: possibleHeaderColumns.map((column) => column?.id ?? null),
+      visibleIds,
+      startColumn,
+    });
+    if (resolved.error) {
+      toast({ title: resolved.error, variant: "destructive" });
+      return;
+    }
+    const targetIds = resolved.targetIds;
+    const dataRows = looksLikeHeader
+      ? matrix.slice(1, MAX_PASTE_ROWS + 1)
+      : matrix.slice(0, MAX_PASTE_ROWS);
     if (looksLikeHeader) {
-      targetIds = possibleHeaderColumns.map((column) => column?.id ?? null);
-      dataRows = matrix.slice(1, MAX_PASTE_ROWS + 1);
-      setVisibleIds((current) => {
-        const next = current.slice();
-        for (const id of targetIds) if (id && !next.includes(id)) next.push(id);
-        return next;
-      });
-      toast({ title: `Đã nhận diện ${recognizedHeaders} cột theo hàng tiêu đề` });
-    } else {
-      targetIds = matrix[0].map((_, index) => visibleColumns[startColumn + index]?.id ?? null);
-      dataRows = matrix.slice(0, MAX_PASTE_ROWS);
+      // Header được nhận diện trên toàn template, nhưng helper chỉ giữ cột đang
+      // hiển thị: cột đã xóa giữ đúng vị trí nguồn mà không tự xuất hiện lại.
+      toast({ title: `Đã nhận diện ${recognizedHeaders} cột theo hàng tiêu đề; cột đang ẩn được bỏ qua` });
     }
 
     if (targetIds.every((id) => !id)) {
@@ -221,7 +244,7 @@ export function DirectPasteGrid({
     if (matrixInput.length > MAX_PASTE_ROWS) {
       toast({ title: `Bảng trực tiếp nhận tối đa ${MAX_PASTE_ROWS.toLocaleString("vi-VN")} dòng mỗi lần dán.`, variant: "destructive" });
     }
-  }, [findColumnForHeader, visibleColumns]);
+  }, [findColumnForHeader, visibleIds]);
 
   const handleCellPaste = (event: ClipboardEvent<HTMLInputElement>, rowIndex: number, columnIndex: number) => {
     const text = event.clipboardData.getData("text/plain");
@@ -285,10 +308,25 @@ export function DirectPasteGrid({
     });
   };
 
-  const resetTable = () => {
-    setVisibleIds(columns.filter((column) => column.defaultVisible).map((column) => column.id));
+  const clearTableData = () => {
     setRows(makeBlankRows());
     setPage(0);
+  };
+
+  const restoreDefaultColumns = () => {
+    const defaults = columns.filter((column) => column.defaultVisible).map((column) => column.id);
+    setVisibleIds(defaults);
+    toast({ title: "Đã khôi phục và lưu bố cục cột mặc định" });
+  };
+
+  const downloadCurrentTemplate = () => {
+    const csv = serializeCsv(visibleColumns.map((column) => column.header), []);
+    const url = URL.createObjectURL(new Blob([csv], { type: "text/csv;charset=utf-8" }));
+    const link = document.createElement("a");
+    link.href = url;
+    link.download = `Template-hien-tai-${jobType}-${todayStr()}.csv`;
+    link.click();
+    URL.revokeObjectURL(url);
   };
 
   const fillToday = () => {
@@ -318,12 +356,10 @@ export function DirectPasteGrid({
       return;
     }
 
-    const csvRows = populatedRows.map((row) => visibleColumns.map((column) => row[column.id] ?? ""));
-    const csv = serializeCsv(visibleColumns.map((column) => column.header), csvRows);
-    const file = new File([csv], `Bang-dan-truc-tiep-${jobType}-${todayStr()}.csv`, {
-      type: "text/csv;charset=utf-8",
+    onSubmit({
+      columnIds: visibleColumns.map((column) => column.id),
+      rows: populatedRows.map((row) => visibleColumns.map((column) => row[column.id] ?? "")),
     });
-    onSubmit(file);
   };
 
   const createQuestion = async () => {
@@ -406,8 +442,14 @@ export function DirectPasteGrid({
                 <CalendarDays className="h-4 w-4" /> Điền ngày hôm nay
               </Button>
             )}
-            <Button type="button" variant="ghost" onClick={resetTable} className="gap-2 text-fg-secondary">
-              <RotateCcw className="h-4 w-4" /> Làm mới bảng
+            <Button type="button" variant="secondary" onClick={downloadCurrentTemplate} className="gap-2">
+              <Download className="h-4 w-4" /> Tải template hiện tại
+            </Button>
+            <Button type="button" variant="ghost" onClick={clearTableData} className="gap-2 text-fg-secondary">
+              <Trash2 className="h-4 w-4" /> Xóa dữ liệu trong bảng
+            </Button>
+            <Button type="button" variant="ghost" onClick={restoreDefaultColumns} className="gap-2 text-fg-secondary">
+              <RotateCcw className="h-4 w-4" /> Khôi phục cột mặc định
             </Button>
           </div>
 
@@ -544,7 +586,7 @@ export function DirectPasteGrid({
             </Button>
           </div>
           <p className="text-[11px] leading-5 text-fg-muted">
-            Dấu * cho biết trường/câu hỏi bắt buộc. Nút × chỉ bỏ cột khỏi bảng nhập hiện tại, không xoá câu hỏi khỏi form. Các dòng lỗi vẫn được tách riêng trong Job Log như quy trình Import Engine.
+            Dấu * cho biết trường/câu hỏi bắt buộc. Nút × lưu việc ẩn cột trên trình duyệt này, không xoá câu hỏi khỏi form hoặc metadata trong hệ thống. Các dòng lỗi vẫn được tách riêng trong Job Log như quy trình Import Engine.
           </p>
         </CardContent>
       </Card>

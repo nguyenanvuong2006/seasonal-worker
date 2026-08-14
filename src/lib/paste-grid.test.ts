@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { normalizeGridHeader, parseClipboardTable, serializeCsv } from "./paste-grid.ts";
+import { normalizeGridHeader, parseClipboardTable, resolvePasteTargetIds, serializeCsv } from "./paste-grid.ts";
 
 test("parseClipboardTable reads Excel/Google Sheets tab-separated cells", () => {
   assert.deepEqual(parseClipboardTable("A\tB\n1\t2\n3\t4\n"), [
@@ -31,4 +31,29 @@ test("serializeCsv escapes Vietnamese text, commas, quotes, and newlines", () =>
 test("normalizeGridHeader matches Vietnamese headers without accents", () => {
   assert.equal(normalizeGridHeader("  Số CCCD  "), "socccd");
   assert.equal(normalizeGridHeader("Địa chỉ hiện tại"), "diachihientai");
+});
+
+test("paste có header giữ vị trí nhưng bỏ qua cột đã ẩn", () => {
+  assert.deepEqual(resolvePasteTargetIds({
+    copiedColumnCount: 3,
+    hasHeader: true,
+    matchedIds: ["name", "deleted-phone", "address"],
+    visibleIds: ["name", "address"],
+    startColumn: 0,
+  }), {
+    targetIds: ["name", null, "address"],
+    error: null,
+  });
+});
+
+test("paste không header bị chặn khi rộng hơn phần bảng còn lại", () => {
+  const result = resolvePasteTargetIds({
+    copiedColumnCount: 3,
+    hasHeader: false,
+    matchedIds: [],
+    visibleIds: ["name", "phone"],
+    startColumn: 0,
+  });
+  assert.deepEqual(result.targetIds, []);
+  assert.match(result.error ?? "", /Vùng copy có 3 cột nhưng bảng chỉ còn 2 cột/);
 });

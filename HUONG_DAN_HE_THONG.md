@@ -586,5 +586,15 @@ Mỗi request trong chuỗi chỉ tồn tại vài giây — Job không phụ th
 
 ---
 
-*Cập nhật lần cuối: theo lần chỉnh sửa gần nhất của dự án — luôn sửa trực tiếp file này, không tạo bản mới.*
-n nhất của dự án — luôn sửa trực tiếp file này, không tạo bản mới.*
+## 15. PASTE GRID — BỐ CỤC CỤC BỘ VÀ ENDPOINT JSON (2026-08-14)
+
+- Bảng tại `/admin/import-data` gửi trực tiếp JSON `{ jobType, columnIds, rows }` tới `POST /api/import/paste`; không còn dựng File CSV/multipart cho luồng paste. Endpoint yêu cầu quyền `import.run`, chỉ nhận 3 job type import, kiểm tra template/column ID/cột bắt buộc, tối đa 10.000 dòng và 150 cột, rồi dùng lại Import Engine v3 (`createJob` → `stageRows` → `triggerWorker`). Nếu staging lỗi, dữ liệu staging và Job dở được dọn trong transaction; safety net khóa Job để Retry/watchdog không xử lý dữ liệu thiếu.
+- Bố cục cột được lưu bằng `localStorage` với key riêng cho `daily_application`, `dw_data`, `department`. Xóa/thêm cột không sửa metadata hoặc câu hỏi database. **Xóa dữ liệu trong bảng** chỉ xóa ô/dòng; **Khôi phục cột mặc định** phục hồi và lưu bố cục.
+- **Tải template hiện tại** sinh CSV phía client từ đúng `visibleColumns`; phần upload file không còn link template mặc định có thể lệch bố cục local.
+- Paste có header nhận diện alias trên toàn template nhưng chỉ ghi cột đang hiển thị, không tự phục hồi cột đã ẩn. Paste không header có nhiều cột hơn vùng bảng còn lại bị chặn để tránh lệch cột.
+- Client đọc response dạng text rồi parse JSON an toàn. Response rỗng/HTML hiển thị HTTP status; HTTP 413 hướng dẫn chia dữ liệu. Upload CSV/XLSX vẫn được giữ làm phương án phụ và dùng cùng nguyên tắc báo lỗi rõ status.
+- Không có thay đổi schema và **không cần database migration**.
+
+---
+
+*Cập nhật lần cuối: 2026-08-14 — luôn sửa trực tiếp file này, không tạo bản mới.*
