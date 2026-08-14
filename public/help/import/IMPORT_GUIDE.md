@@ -1,15 +1,35 @@
-# Hướng dẫn Import dữ liệu
+# Hướng dẫn nhập dữ liệu
 
-## 1. Chuẩn bị file
+## 1. Cách nhanh nhất: copy và dán thẳng vào bảng
 
-- Định dạng chấp nhận: **CSV**, **XLSX**, **XLS**.
-- Encoding: file CSV nên lưu ở **UTF-8** (Excel/Google Sheets xuất CSV mặc định đã đúng UTF-8, có thể kèm BOM — hệ thống tự nhận diện và loại bỏ BOM, không cần bạn xử lý gì thêm).
-- Dòng đầu tiên phải là **tên cột** (header) — hệ thống tự nhận diện tên cột theo nhiều cách viết khác nhau (có dấu/không dấu, hoa/thường, có khoảng trắng thừa). Ví dụ các cách viết sau đều được nhận diện là cùng 1 cột "Họ và tên": `Họ và tên`, `Ho va ten`, `HO VA TEN`, `Tên`, `Full Name`, `Worker Name` (miễn là đã được khai báo làm alias ở `/admin/field-definitions`).
-- Tải file mẫu đúng chuẩn tại nút **"Tải file mẫu"** trên trang Import — file mẫu luôn khớp với cấu hình cột hiện tại của hệ thống.
+Trang `/admin/import-data` mở sẵn một bảng template giống spreadsheet. Không cần tải file trung gian.
 
-## 2. Định dạng ngày/giờ được hỗ trợ
+1. Chọn đúng loại dữ liệu: **Đăng ký tập nghề**, **Hồ sơ lao động (DW Data)** hoặc **Cơ cấu bộ phận**.
+2. Trong Excel/Google Sheets, chọn vùng dữ liệu cần nhập rồi bấm **Copy**. Có thể copy cả hàng tiêu đề.
+3. Quay lại trang Import, bấm ô bắt đầu rồi nhấn **Ctrl+V**. Có thể dùng nút **Dán từ clipboard** nếu trình duyệt cho phép.
+4. Kiểm tra số cột và số dòng có dữ liệu, sau đó bấm **Xử lý ... dòng trong bảng**.
 
-Hệ thống tự nhận diện các định dạng sau (không cần chỉnh sửa file trước khi import):
+Nếu vùng được dán có hàng tiêu đề, hệ thống tự nhận diện tên cột/alias (không phân biệt dấu, hoa thường hoặc khoảng trắng) và ghép dữ liệu vào đúng cột. Bảng tự thêm dòng và phân trang khi dữ liệu dài; tối đa 10.000 dòng cho mỗi lần dán.
+
+## 2. Thêm, xoá cột và đồng bộ câu hỏi form tập nghề
+
+- Bấm dấu **×** trên header để bỏ một cột khỏi bảng nhập hiện tại. Thao tác này không xoá dữ liệu hay câu hỏi trong hệ thống.
+- Dùng ô **Thêm lại cột đã xoá / cột chưa hiển thị** để đưa cột trở lại.
+- Với bảng **Đăng ký tập nghề**, các cột màu cam là câu hỏi đang hiển thị trên form công khai.
+- Bấm **Tạo cột = câu hỏi mới** để tạo một câu hỏi mới trên form đăng ký và thêm ngay cột tương ứng vào bảng.
+- Những câu hỏi trùng với trường lõi như Giới tính, Dân tộc, Thời gian đăng ký làm hoặc Kênh giới thiệu được ghép thành một cột, tránh header trùng nhưng vẫn lưu đủ dữ liệu.
+- Nếu bỏ một trường lõi bắt buộc (Ngày đăng ký, CCCD, Họ tên, SĐT...), hệ thống sẽ yêu cầu thêm lại trước khi xử lý.
+
+## 3. Công cụ trong bảng
+
+- **Dán từ clipboard**: dán tại ô đang được chọn.
+- **Sao chép bảng**: copy hàng tiêu đề và mọi dòng có dữ liệu để dán ngược về Excel/Google Sheets.
+- **Thêm 10 dòng**: thêm vùng nhập thủ công.
+- **Điền ngày hôm nay**: chỉ có ở bảng Đăng ký tập nghề; điền ngày cho các dòng có dữ liệu nhưng còn trống Ngày đăng ký.
+- **Xoá dòng**: biểu tượng thùng rác ở cuối mỗi dòng.
+- **Làm mới bảng**: khôi phục cột mặc định và xoá dữ liệu đang nhập.
+
+## 4. Định dạng ngày/giờ được hỗ trợ
 
 | Định dạng | Ví dụ |
 |---|---|
@@ -19,34 +39,32 @@ Hệ thống tự nhận diện các định dạng sau (không cần chỉnh s�
 | `yyyy-MM-dd` | `2024-08-13` |
 | `yyyy-MM-dd HH:mm:ss` | `2024-08-13 07:08:45` |
 | ISO 8601 | `2024-08-13T07:08:45+07:00` |
-| Số serial ngày của Excel | (tự động, khi cột được định dạng Date trong Excel) |
+| Số serial ngày của Excel | Hệ thống tự nhận diện |
 
-Nếu 1 giá trị ngày không khớp bất kỳ định dạng nào ở trên, dòng đó sẽ được đánh dấu lỗi (nếu là trường bắt buộc) hoặc cảnh báo (nếu không bắt buộc) — xem mục Error Report bên dưới, không làm hỏng toàn bộ file.
+Giá trị ngày sai ở trường bắt buộc khiến riêng dòng đó vào Error Log; ngày không bắt buộc sai định dạng chỉ tạo cảnh báo.
 
-## 3. Quy trình Import (5 bước, chạy nền)
+## 5. Xử lý nền bằng Import Engine
+
+Sau khi gửi bảng, dữ liệu vẫn chạy qua pipeline an toàn:
 
 ```
-Upload → Validate → Staging → Matching (Daily Application) → Merge → Hoàn tất
+Staging → Validate → Matching (Daily Application) → Merge → Hoàn tất
 ```
 
-1. **Upload** — chọn loại dữ liệu (Department / DW Data / Daily Application), chọn file, bấm "Tải lên & Tạo Job". Bạn có thể đóng trang ngay sau bước này — hệ thống tiếp tục xử lý ở phía server.
-2. **Staging** — dữ liệu được nạp vào khu vực trung gian, chưa ảnh hưởng tới dữ liệu chính.
-3. **Validate** — kiểm tra định dạng (ngày, CCCD, SĐT, số, các trường bắt buộc) trước khi ghi vào bảng chính. Dòng lỗi bị loại, dòng cảnh báo vẫn được nhập kèm ghi chú.
-4. **Matching** (chỉ với Daily Application) — đối chiếu CCCD với DW Data và tên Bộ phận để tự động xác định lao động cũ/mới và xếp bộ phận.
-5. **Merge** — ghi chính thức vào bảng dữ liệu, theo từng lô nhỏ để không giới hạn số dòng.
+- **Staging**: nạp vào khu vực trung gian, chưa ảnh hưởng dữ liệu chính.
+- **Validate**: kiểm tra ngày, CCCD, SĐT và trường bắt buộc.
+- **Matching**: với Đăng ký tập nghề, đối chiếu CCCD với DW Data và nhận diện Bộ phận.
+- **Merge**: ghi vào bảng chính theo lô; dữ liệu trùng được bỏ qua.
 
-Bạn có thể theo dõi tiến trình theo thời gian thực (tốc độ, ETA, số dòng đã xử lý) ngay trên trang Import, hoặc đóng trang và quay lại xem sau qua **Job Queue**.
+Có thể đóng trang sau khi Job được tạo. Dùng **Job Queue** để theo dõi tốc độ, ETA, lỗi/cảnh báo, huỷ, Retry hoặc Resume.
 
-## 4. Map Columns (khi cần)
+## 6. Khi nào dùng file CSV / Excel?
 
-Nếu file có cột **bắt buộc** mà hệ thống chưa tự nhận diện được (tên cột quá khác biệt), màn hình sẽ hiện bước "Map Columns" — bạn chỉ cần chọn đúng cột trong file tương ứng với từng trường bắt buộc, rồi tiếp tục. Việc này chỉ xảy ra 1 lần cho mỗi file có cấu trúc cột lạ.
+Nếu dữ liệu rất lớn hoặc trình duyệt chặn clipboard, mở khối **"Dữ liệu rất lớn? Dùng file CSV / Excel"** cuối trang. Hệ thống vẫn nhận `.csv`, `.xlsx`, `.xls`; file CSV nên dùng UTF-8. Nút **Tải file mẫu** tạo file từ đúng cấu hình đang dùng cho bảng trực tiếp.
 
-## 5. Retry / Resume
+Nếu file có trường bắt buộc chưa tự nhận diện, màn hình **Map Columns** sẽ yêu cầu chọn cột tương ứng trước khi tạo Job.
 
-- **Resume**: nếu 1 Job đang xử lý bị gián đoạn (mất mạng, deploy mới…), bấm "Resume" trong Job Queue — hệ thống tiếp tục đúng từ điểm dừng, không xử lý lại từ đầu.
-- **Retry**: áp dụng cho Job bị lỗi (Failed) — tiếp tục từ giai đoạn bị lỗi, không chạy lại toàn bộ.
-
-## 6. Xem thêm
+## 7. Xem thêm
 
 - [Câu hỏi thường gặp](/help/import/IMPORT_FAQ.md)
 - [Xử lý sự cố](/help/import/IMPORT_TROUBLESHOOTING.md)

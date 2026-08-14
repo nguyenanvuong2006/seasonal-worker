@@ -77,6 +77,9 @@ export function acceptedColumnNames(def: FieldDefinition | FormQuestion, isQuest
   if (isQuestion) {
     const q = def as FormQuestion;
     names.push(q.questionText);
+    // fieldKey là alias kỹ thuật luôn ổn định, giúp template vẫn tạo được header
+    // duy nhất khi hai câu hỏi vô tình có cùng nội dung/alias hiển thị.
+    names.push(q.fieldKey);
     if (Array.isArray(q.aliases)) names.push(...q.aliases);
   } else {
     const f = def as FieldDefinition;
@@ -97,6 +100,18 @@ export function pickByDef(
   isQuestion = false,
 ): string | undefined {
   const names = acceptedColumnNames(def, isQuestion);
+  // Ưu tiên toàn bộ tên cột khớp NGUYÊN VĂN trước khi chuẩn hoá. Điều này rất
+  // quan trọng với sheet cũ từng có đồng thời " Địa chỉ" và "Địa chỉ": nếu dò
+  // normalized ngay ở alias đầu tiên thì cả hai field sẽ lấy nhầm cùng một ô.
+  for (const name of names) {
+    if (
+      Object.prototype.hasOwnProperty.call(row, name) &&
+      row[name] !== undefined &&
+      String(row[name]).trim() !== ""
+    ) {
+      return String(row[name]);
+    }
+  }
   for (const name of names) {
     const original = headerIndex.get(normalizeHeader(name));
     if (original !== undefined && row[original] !== undefined && String(row[original]).trim() !== "") {

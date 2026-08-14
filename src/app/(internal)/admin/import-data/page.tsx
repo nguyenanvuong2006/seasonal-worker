@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Button, Card, CardContent, Label, toast } from "@/components/ui";
+import { DirectPasteGrid, type PasteJobType } from "@/components/direct-paste-grid";
 import {
   UploadCloud,
   CheckCircle2,
@@ -19,11 +20,11 @@ import {
   HelpCircle,
 } from "lucide-react";
 
-type JobType = "department" | "dw_data" | "daily_application";
-const TYPES: { key: JobType; title: string }[] = [
-  { key: "department", title: "Department" },
-  { key: "dw_data", title: "DW Data" },
-  { key: "daily_application", title: "Daily Application" },
+type JobType = PasteJobType;
+const TYPES: { key: JobType; title: string; subtitle: string }[] = [
+  { key: "daily_application", title: "Đăng ký tập nghề", subtitle: "Daily Application + câu hỏi trên form" },
+  { key: "dw_data", title: "Hồ sơ lao động", subtitle: "DW Data đối chiếu lịch sử" },
+  { key: "department", title: "Cơ cấu bộ phận", subtitle: "Department" },
 ];
 
 const STAGES = ["STAGING", "VALIDATING", "MATCHING", "MERGING", "BUILDING_STATS", "DONE"];
@@ -123,7 +124,7 @@ const STATUS_LABEL: Record<string, string> = {
 };
 
 export default function ImportDataPage() {
-  const [jobType, setJobType] = useState<JobType>("department");
+  const [jobType, setJobType] = useState<JobType>("daily_application");
   const [file, setFile] = useState<File | null>(null);
   const [uploading, setUploading] = useState(false);
   const [uploadPct, setUploadPct] = useState(0);
@@ -136,7 +137,8 @@ export default function ImportDataPage() {
   const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
   const [history, setHistory] = useState<Job[]>([]);
-  const [historyOpen, setHistoryOpen] = useState(true);
+  // Để bảng template xuất hiện ngay khi mở trang; Job Queue vẫn truy cập bằng nút ở hero.
+  const [historyOpen, setHistoryOpen] = useState(false);
 
   const loadHistory = useCallback(async () => {
     const res = await fetch("/api/import/jobs");
@@ -167,15 +169,18 @@ export default function ImportDataPage() {
     };
   }, [activeJobId, loadHistory]);
 
-  const doUpload = (mappingToSend?: Record<string, string>) => {
-    if (!file) {
-      toast({ title: "Chưa chọn file", variant: "destructive" });
+  const doUpload = (mappingToSend?: Record<string, string>, sourceFile?: File) => {
+    const uploadFile = sourceFile ?? file;
+    if (!uploadFile) {
+      toast({ title: "Chưa có dữ liệu hoặc file để xử lý", variant: "destructive" });
       return;
     }
+    // Ghi nhớ file được dựng từ bảng để bước Map Columns (nếu có) vẫn có thể gửi lại.
+    if (sourceFile) setFile(sourceFile);
     setUploading(true);
     setUploadPct(0);
     const fd = new FormData();
-    fd.append("file", file);
+    fd.append("file", uploadFile);
     fd.append("jobType", jobType);
     if (mappingToSend) fd.append("mapping", JSON.stringify(mappingToSend));
 
@@ -237,7 +242,7 @@ export default function ImportDataPage() {
   const activeIncomplete = useMemo(() => history.filter((j) => ["QUEUED", "RUNNING", "PAUSED", "FAILED"].includes(j.status)), [history]);
 
   return (
-    <div className="mx-auto max-w-5xl space-y-6 pb-16">
+    <div className="mx-auto max-w-[1400px] space-y-6 pb-16">
       {/* HERO */}
       <div className="hasfarm-hero animate-slide-up overflow-hidden rounded-[24px] p-6 text-white shadow-[0_20px_50px_rgba(8,50,27,0.35)] sm:p-8">
         <div className="flex flex-wrap items-center justify-between gap-4">
@@ -246,8 +251,8 @@ export default function ImportDataPage() {
               <Sparkles className="h-7 w-7 text-gold-300" />
             </div>
             <div>
-              <p className="text-[11px] font-black uppercase tracking-[0.3em] text-gold-300">Import Engine v3</p>
-              <h1 className="text-2xl font-black tracking-tight sm:text-[28px]">Nhập dữ liệu</h1>
+              <p className="text-[11px] font-black uppercase tracking-[0.3em] text-gold-300">Paste Grid + Import Engine v3</p>
+              <h1 className="text-2xl font-black tracking-tight sm:text-[28px]">Nhập dữ liệu trực tiếp vào bảng</h1>
             </div>
           </div>
           <div className="flex items-center gap-2">
@@ -312,71 +317,66 @@ export default function ImportDataPage() {
         </Card>
       )}
 
-      {/* UPLOAD FORM (chỉ hiện khi không có job đang theo dõi) */}
+      {/* BẢNG TEMPLATE TRỰC TIẾP (chỉ hiện khi không có job đang theo dõi) */}
       {!activeJobId && !mappingInfo && (
-        <Card className="hasfarm-card animate-slide-up rounded-[22px] border-0 p-1">
-          <CardContent className="space-y-5 p-6">
-            <div>
-              <Label className="mb-2 block text-xs font-black uppercase tracking-widest text-fg-muted">Loại dữ liệu</Label>
+        <div className="animate-slide-up space-y-4">
+          <Card className="hasfarm-card rounded-[20px] border-0 p-0">
+            <CardContent className="p-4">
+              <Label className="mb-2 block text-xs font-black uppercase tracking-widest text-fg-muted">Chọn bảng dữ liệu</Label>
               <div className="grid gap-3 sm:grid-cols-3">
                 {TYPES.map((t) => (
                   <button
                     key={t.key}
                     onClick={() => setJobType(t.key)}
-                    className={`rounded-2xl border-2 p-4 text-left transition-all ${jobType === t.key ? "border-primary bg-primary-tint shadow-[0_8px_20px_rgba(17,88,48,0.12)]" : "border-border hover:border-primary/40"}`}
+                    className={`rounded-2xl border-2 p-4 text-left transition-all ${jobType === t.key ? "border-accent bg-accent-tint shadow-[0_8px_20px_rgba(226,109,28,0.12)]" : "border-border bg-white hover:border-primary/40"}`}
                   >
                     <p className="font-black text-fg">{t.title}</p>
+                    <p className="mt-1 text-xs text-fg-secondary">{t.subtitle}</p>
                   </button>
                 ))}
               </div>
-            </div>
+            </CardContent>
+          </Card>
 
-            <div className="flex justify-end">
-              <a href={`/api/admin/field-definitions/template?group=${jobType}`} className="inline-flex items-center gap-1 text-xs font-bold text-primary hover:underline">
-                <Download className="h-3 w-3" /> Tải file mẫu
-              </a>
-            </div>
+          <DirectPasteGrid
+            key={jobType}
+            jobType={jobType}
+            submitting={uploading}
+            uploadPct={uploadPct}
+            onSubmit={(generatedFile) => doUpload(undefined, generatedFile)}
+          />
 
-            <label className={`flex flex-col items-center justify-center gap-3 rounded-[20px] border-2 border-dashed p-10 text-center transition-colors ${file ? "border-primary/50 bg-primary-tint/50" : "border-border-strong hover:border-primary/40 hover:bg-primary-tint/30"}`}>
-              <input
-                type="file"
-                className="hidden"
-                accept=".csv,text/csv,.xlsx,.xls,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet,application/vnd.ms-excel"
-                onChange={(e) => setFile(e.target.files?.[0] ?? null)}
-              />
-              {file ? (
-                <>
-                  <FileSpreadsheet className="h-10 w-10 text-primary" />
-                  <div>
-                    <p className="font-bold text-fg">{file.name}</p>
-                    <p className="text-xs text-fg-secondary">{(file.size / 1024).toFixed(0)} KB — bấm để chọn file khác</p>
-                  </div>
-                </>
-              ) : (
-                <>
-                  <UploadCloud className="h-10 w-10 text-fg-muted" />
-                  <div>
-                    <p className="font-bold text-fg-secondary">Kéo thả hoặc bấm để chọn file CSV / XLSX / XLS</p>
-                  </div>
-                </>
-              )}
-            </label>
-
-            {uploading && (
-              <div className="space-y-1.5">
-                <div className="h-2.5 w-full overflow-hidden rounded-full bg-surface-hover">
-                  <div className="progress-glow h-full rounded-full bg-primary transition-all duration-300" style={{ width: `${uploadPct}%` }} />
-                </div>
-                <p className="text-center text-xs font-bold text-primary">Đang tải lên… {uploadPct}%</p>
+          {/* File upload chỉ còn là phương án phụ cho bộ dữ liệu quá lớn. */}
+          <details className="hasfarm-card overflow-hidden rounded-[20px] border-0 bg-surface">
+            <summary className="cursor-pointer list-none px-5 py-4 text-sm font-bold text-fg-secondary hover:bg-surface-hover">
+              Dữ liệu rất lớn? Dùng file CSV / Excel thay cho dán trực tiếp
+            </summary>
+            <div className="space-y-4 border-t border-border p-5">
+              <div className="flex justify-end">
+                <a href={`/api/admin/field-definitions/template?group=${jobType}`} className="inline-flex items-center gap-1 text-xs font-bold text-primary hover:underline">
+                  <Download className="h-3 w-3" /> Tải file mẫu
+                </a>
               </div>
-            )}
-
-            <Button onClick={() => doUpload()} disabled={uploading || !file} className="w-full gap-2" size="lg">
-              {uploading ? <Loader2 className="h-4 w-4 animate-spin" /> : <UploadCloud className="h-4 w-4" />}
-              {uploading ? "Đang tải lên…" : "Tải lên & Tạo Job"}
-            </Button>
-          </CardContent>
-        </Card>
+              <label className={`flex cursor-pointer flex-col items-center justify-center gap-3 rounded-[18px] border-2 border-dashed p-7 text-center transition-colors ${file ? "border-primary/50 bg-primary-tint/50" : "border-border-strong hover:border-primary/40 hover:bg-primary-tint/30"}`}>
+                <input
+                  type="file"
+                  className="hidden"
+                  accept=".csv,text/csv,.xlsx,.xls,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet,application/vnd.ms-excel"
+                  onChange={(e) => setFile(e.target.files?.[0] ?? null)}
+                />
+                <FileSpreadsheet className="h-8 w-8 text-primary" />
+                <div>
+                  <p className="font-bold text-fg">{file ? file.name : "Bấm để chọn file CSV / XLSX / XLS"}</p>
+                  {file && <p className="text-xs text-fg-secondary">{(file.size / 1024).toFixed(0)} KB — bấm để chọn file khác</p>}
+                </div>
+              </label>
+              <Button onClick={() => doUpload()} disabled={uploading || !file} className="w-full gap-2" size="lg">
+                {uploading ? <Loader2 className="h-4 w-4 animate-spin" /> : <UploadCloud className="h-4 w-4" />}
+                {uploading ? `Đang tải lên… ${uploadPct}%` : "Tải file lên & Tạo Job"}
+              </Button>
+            </div>
+          </details>
+        </div>
       )}
 
       {/* MAP COLUMNS (nếu cần) */}

@@ -51,6 +51,7 @@ export async function getAcceptedColumnNames(importType: Group): Promise<Set<str
     const questions = await db.select().from(formQuestions);
     for (const q of questions) {
       accepted.add(normalizeHeader(q.questionText));
+      accepted.add(normalizeHeader(q.fieldKey));
       (q.aliases ?? []).forEach((a) => accepted.add(normalizeHeader(a)));
     }
   }
@@ -242,7 +243,7 @@ export async function mergeNextChunk(batchId: string, importType: Group, mapping
 
           const customAnswers: Record<string, string> = {};
           for (const q of questions) {
-            for (const name of [q.questionText, ...((q.aliases as string[] | null) ?? [])]) {
+            for (const name of [q.questionText, q.fieldKey, ...((q.aliases as string[] | null) ?? [])]) {
               const original = headerIndex.get(normalizeHeader(name));
               if (original !== undefined && String(r[original] ?? "").trim() !== "") {
                 customAnswers[q.fieldKey] = String(r[original]);
