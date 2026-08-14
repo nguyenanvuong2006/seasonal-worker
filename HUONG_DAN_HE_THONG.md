@@ -71,11 +71,14 @@ Công nghệ: **Next.js 16 (React 19) + PostgreSQL + Drizzle ORM**, chạy đư�
 ### 2.7 Audit log (`/admin/audit`)
 Ghi lại mọi hành động duyệt/sửa/xoá quan trọng kèm người thực hiện — phục vụ truy vết khi có sai sót.
 
-### 2.8 Nhập dữ liệu ban đầu — 100% qua trình duyệt (`/admin/import-data`)
-- Trang admin cho phép **tải trực tiếp 3 file CSV** (Department, DW Data, Daily Application) từ máy/điện thoại lên hệ thống bằng nút chọn file — **không cần cài Node.js, không cần chạy lệnh gì trên máy tính**.
-- Trình duyệt tự đọc và tách nhỏ file CSV thành từng lô (vd DW Data ~20.7k dòng được chia lô 800 dòng/lần) rồi gửi tuần tự lên máy chủ, tránh giới hạn dung lượng và thời gian xử lý của Vercel.
-- Có nhật ký tiến trình ngay trên trang, dữ liệu trùng (theo CCCD) sẽ tự động được bỏ qua, không nhập lại.
-- File `scripts/import-sheets.mjs` cũ (chạy bằng Node.js trên máy) vẫn được giữ lại trong repo để tham khảo/dự phòng, nhưng **không cần dùng nữa** — dùng `/admin/import-data` thay thế hoàn toàn.
+### 2.8 Nhập dữ liệu ban đầu — bảng template copy/paste trực tiếp (`/admin/import-data`)
+- Khi mở trang, hệ thống **hiện ngay bảng template dạng spreadsheet** cho 3 nhóm: Đăng ký tập nghề (Daily Application), Hồ sơ lao động (DW Data), Cơ cấu bộ phận (Department). Người vận hành copy vùng dữ liệu từ Excel/Google Sheets, bấm ô bắt đầu và nhấn `Ctrl+V`; không cần tải file lên trước.
+- Bảng tự mở rộng theo số dòng được dán (tối đa 10.000 dòng/lần dán), tự nhận diện hàng tiêu đề/alias, có phân trang để không treo trình duyệt, cho phép nhập sửa từng ô, xoá dòng, xoá cột khỏi bảng hiện tại và thêm lại cột.
+- Với Daily Application, mọi **câu hỏi đang hoạt động và hiển thị trên form đăng ký tập nghề** tự xuất hiện thành cột màu cam. Các câu hỏi trùng nghĩa với trường lõi (Giới tính, Dân tộc, Thời gian làm, Kênh giới thiệu...) được ghép thành một cột duy nhất để tránh trùng header nhưng vẫn lưu đồng thời vào trường lõi và `custom_answers`.
+- Nút **"Tạo cột = câu hỏi mới"** tạo trực tiếp một câu hỏi động đang hoạt động trên form công khai và thêm cột tương ứng vào bảng; không còn tình trạng câu hỏi form bị ẩn khỏi template.
+- Nút × ở header chỉ bỏ cột khỏi lần nhập hiện tại, không xoá cấu hình/câu hỏi trong database. Trường lõi bắt buộc bị xoá sẽ được yêu cầu thêm lại trước khi xử lý.
+- Sau khi bấm xử lý, dữ liệu vẫn đi qua Import Engine v3 (staging → validate → matching → merge), có Job Queue, tiến trình, retry/resume và log lỗi như trước. Upload CSV/XLSX/XLS được giữ trong khối thu gọn chỉ làm phương án phụ cho dữ liệu rất lớn.
+- File `scripts/import-sheets.mjs` cũ (chạy bằng Node.js trên máy) vẫn chỉ để tham khảo/dự phòng; thao tác chính hoàn toàn qua trình duyệt.
 
 ### 2.9 Tạo cấu trúc database không cần cài phần mềm
 File `schema.sql` ở gốc dự án chứa toàn bộ lệnh tạo bảng — chỉ cần **dán vào SQL Editor trên website Neon** và bấm Run (xem mục 5, Bước 3). Không cần cài `drizzle-kit` hay bất kỳ công cụ nào trên máy.
@@ -86,7 +89,7 @@ File `schema.sql` ở gốc dự án chứa toàn bộ lệnh tạo bảng — c
 - **Câu hỏi động** (`form_questions`, quản lý ở `/admin/form-builder`) nay cũng có thêm **alias import** và **tên cột export riêng** — admin có thể thêm bao nhiêu tên cột tương đương tuỳ ý cho 1 câu hỏi.
 - **Import CSV/XLSX thông minh**: `/api/admin/import-data` không còn dò tên cột cố định trong code — mọi cột được dò qua `field_definitions`/`form_questions` (tên chính + alias, không phân biệt hoa/thường/khoảng trắng thừa). Cột không nhận diện được sẽ bị bỏ qua (không dừng import, chỉ cảnh báo). Hỗ trợ cả `.csv` và `.xlsx`/`.xls` (đọc bằng thư viện `xlsx` ngay trên trình duyệt, không cần chuyển đổi định dạng).
 - **Báo cáo import chi tiết**: sau khi nhập hiển thị số dòng thành công / trùng dữ liệu (CCCD) / lỗi, kèm nút **Download Error Report** để tải các dòng lỗi (CSV) ra sửa và nhập lại riêng.
-- **File mẫu (Template)**: nút "Tải file mẫu" ở trang Import và trang Field Definitions sinh CSV header trực tiếp từ metadata hiện tại (kể cả các câu hỏi động đang bật) — không phải file tĩnh, nên luôn khớp với cấu hình mới nhất.
+- **Bảng/File mẫu (Template)**: trang Import dựng bảng copy/paste trực tiếp từ metadata hiện tại; CSV tải xuống cũng dùng đúng cùng một nguồn `getImportTemplate`. Câu hỏi công khai đang bật luôn xuất hiện thành cột, header trùng được ghép/chọn alias duy nhất nên bảng và file mẫu luôn khớp cấu hình mới nhất.
 - **Export Excel động**: `/api/export` build cột từ `field_definitions` (exportable=true, theo `sortOrder`) + tất cả câu hỏi động đang Active — thêm câu hỏi mới ở form-builder thì lần export kế tiếp tự có thêm cột, không cần sửa code.
 - **Tìm kiếm động (một phần)**: màn hình `/hr/workers` (DW Data) build điều kiện tìm kiếm từ các trường được đánh dấu `searchable=true` trong `field_definitions` (nhóm `dw_data`) — bật/tắt cột nào được tìm kiếm ngay tại `/admin/field-definitions`, không cần sửa code. **Chưa làm**: áp dụng tương tự cho các bộ lọc nâng cao ở `/hr/registrations` (mục 3).
 - Không mất dữ liệu cũ: khi đổi tên câu hỏi/trường, ẩn/hiện, hay đổi thứ tự — dữ liệu đã lưu trong `customAnswers` hoặc các cột gốc vẫn giữ nguyên, chỉ có cách hiển thị/đặt tên thay đổi.
@@ -172,10 +175,11 @@ Chi tiết đầy đủ từng cột: xem `src/db/schema.ts`.
 3. Xoá `INITIAL_ADMIN_USERNAME`/`INITIAL_ADMIN_PASSWORD` khỏi Vercel Environment Variables (không bắt buộc, nhưng nên làm — 2 biến này không còn tác dụng gì sau khi `users` đã có dữ liệu, vì hệ thống chỉ bootstrap khi bảng còn trống).
 
 ### Bước 5 — Nhập dữ liệu gốc từ Google Sheet, qua website
-1. Mở Google Sheet hiện tại → từng tab (Department, DW Data, Daily Application) → **File → Download → Comma-separated values (.csv)** → tải về máy/điện thoại.
-2. Đăng nhập app bằng `admin` → vào menu **"Nhập dữ liệu ban đầu"** (`/admin/import-data`).
-3. Chọn lần lượt 3 file CSV vừa tải, bấm **Bắt đầu nhập dữ liệu**. Theo dõi nhật ký tiến trình ngay trên màn hình tới khi báo "Hoàn tất toàn bộ".
-   → Không cần cài phần mềm, không cần mở terminal — xử lý ngay trên trình duyệt + máy chủ Vercel.
+1. Mở Google Sheet hiện tại, chọn vùng dữ liệu cần nhập (có thể chọn cả hàng tiêu đề) và bấm **Copy**.
+2. Đăng nhập app bằng `admin` → vào menu **"Nhập dữ liệu ban đầu"** (`/admin/import-data`) → chọn đúng bảng: Đăng ký tập nghề / Hồ sơ lao động / Cơ cấu bộ phận.
+3. Bấm ô đầu tiên trong bảng template rồi nhấn **Ctrl+V** (hoặc nút "Dán từ clipboard"). Kiểm tra nhanh các cột/dòng và bấm **Xử lý ... dòng trong bảng**. Theo dõi Job Queue tới khi báo "Hoàn tất".
+4. Nếu bộ dữ liệu quá lớn hoặc trình duyệt chặn clipboard, mở khối **"Dữ liệu rất lớn?"** cuối trang để tải CSV/XLSX/XLS như cách cũ.
+   → Không cần cài phần mềm, không cần mở terminal và không bắt buộc phải tải file trung gian về máy.
 
 > Chi phí = 0đ ở quy mô hiện tại (Vercel Free: đủ cho vài trăm lượt/ngày; Neon Free: 0.5 GB — dư cho ~21.000 dòng DW Data + dữ liệu hằng ngày nhiều năm).
 

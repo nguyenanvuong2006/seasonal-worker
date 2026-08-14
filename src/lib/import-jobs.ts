@@ -120,7 +120,7 @@ export async function stageRows(jobId: string, jobType: JobType, rows: Record<st
         const fuzzyIdx = new Map(Object.keys(r).map((k) => [normalizeHeaderFuzzy(k), k]));
         const ans: Record<string, string> = {};
         for (const q of questions) {
-          const names = [q.questionText, ...((q.aliases as string[] | null) ?? [])];
+          const names = [q.questionText, q.fieldKey, ...((q.aliases as string[] | null) ?? [])];
           let original = names.map((n) => headerIdx.get(normalizeHeader(n))).find((v) => v !== undefined);
           if (original === undefined) {
             original = names.map((n) => fuzzyIdx.get(normalizeHeaderFuzzy(n))).find((v) => v !== undefined);
