@@ -1060,7 +1060,18 @@ export function ErrorState({
 }
 
 /* ---------------- RowMenu (overflow row actions) ---------------- */
-export function RowMenu({ items }: { items: { label: string; onClick: () => void; danger?: boolean; disabled?: boolean }[] }) {
+export function RowMenu({
+  items,
+}: {
+  items: {
+    label: string;
+    icon?: React.ReactNode;
+    onClick: () => void;
+    danger?: boolean;
+    disabled?: boolean;
+    separated?: boolean;
+  }[];
+}) {
   const [open, setOpen] = React.useState(false);
   const ref = React.useRef<HTMLDivElement>(null);
 
@@ -1078,23 +1089,26 @@ export function RowMenu({ items }: { items: { label: string; onClick: () => void
         <MoreHorizontal className="h-4 w-4" aria-hidden />
       </IconButton>
       {open && (
-        <div role="menu" className="animate-menu-in absolute right-0 z-40 mt-1 min-w-[160px] overflow-hidden rounded-[10px] border border-border bg-surface py-1 shadow-lg">
+        <div role="menu" className="animate-menu-in absolute right-0 z-40 mt-1 min-w-[176px] overflow-hidden rounded-[10px] border border-border bg-surface py-1 shadow-lg">
           {items.map((item) => (
-            <button
-              key={item.label}
-              role="menuitem"
-              disabled={item.disabled}
-              onClick={() => {
-                setOpen(false);
-                item.onClick();
-              }}
-              className={cn(
-                "block w-full px-3.5 py-2 text-left text-[13px] font-medium transition-colors disabled:cursor-not-allowed disabled:opacity-40",
-                item.danger ? "text-danger hover:bg-danger-tint" : "text-fg hover:bg-surface-hover",
-              )}
-            >
-              {item.label}
-            </button>
+            <React.Fragment key={item.label}>
+              {item.separated ? <div role="separator" className="my-1 h-px bg-border" /> : null}
+              <button
+                role="menuitem"
+                disabled={item.disabled}
+                onClick={() => {
+                  setOpen(false);
+                  item.onClick();
+                }}
+                className={cn(
+                  "flex w-full items-center gap-2 px-3.5 py-2 text-left text-[13px] font-medium transition-colors disabled:cursor-not-allowed disabled:opacity-40",
+                  item.danger ? "text-danger hover:bg-danger-tint" : "text-fg hover:bg-surface-hover",
+                )}
+              >
+                {item.icon ? <span className="shrink-0 opacity-80">{item.icon}</span> : null}
+                <span className="flex-1">{item.label}</span>
+              </button>
+            </React.Fragment>
           ))}
         </div>
       )}

@@ -1,6 +1,5 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-// @ts-expect-error Node's native TypeScript test runner requires the explicit extension.
 import { isQuestionForAudience, normalizeTargetAudience, type TargetedQuestion } from "./form-targeting.ts";
 
 const question = (overrides: Partial<TargetedQuestion> = {}): TargetedQuestion => ({
