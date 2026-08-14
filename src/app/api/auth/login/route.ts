@@ -3,6 +3,7 @@ import { and, eq, gte, sql } from "drizzle-orm";
 import { db } from "@/db";
 import { auditLogs, users } from "@/db/schema";
 import { createSession, verifyPassword, writeAudit, type Role } from "@/lib/auth";
+import { isRoleActive } from "@/lib/rbac";
 import { ensureSeed } from "@/lib/seed";
 
 export const runtime = "nodejs";
@@ -91,6 +92,12 @@ export async function POST(req: Request) {
       );
     }
 
+    // DYNAMIC RBAC V2 — vai trò bị TẮT (roles.is_active=false) thì chặn đăng nhập (mục J:
+    // disable role đã bump session_version khiến phiên cũ hết hạn; chặn thêm ở login).
+    if (!(await isRoleActive(user.role))) {
+      return NextResponse.json({ error: "Vai trò của tài khoản đã bị vô hiệu hoá. Liên hệ quản trị viên." }, { status: 403 });
+    }
+
     await createSession({
       id: user.id,
       username: user.username,
@@ -108,7 +115,11 @@ export async function POST(req: Request) {
     );
 
     const redirect =
-      user.role === "DEPT_MANAGER" ? "/department" : "/task-center";
+      user.role === "DEPT_MANAGER"
+        ? "/department"
+        : user.role === "HR_DIRECTOR"
+          ? "/admin/dashboard"
+          : "/task-center";
 
     return NextResponse.json({ success: true, role: user.role, redirect });
   } catch (error) {

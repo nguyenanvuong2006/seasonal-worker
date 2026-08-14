@@ -2,7 +2,7 @@ import { NextResponse } from "next/server";
 import { and, desc, eq, isNull } from "drizzle-orm";
 import { db } from "@/db";
 import { departments, employmentSessions, workerProfiles } from "@/db/schema";
-import { requireRoleAndPermission, writeAudit } from "@/lib/auth";
+import { requirePermission, writeAudit } from "@/lib/auth";
 import { CCCD_ERROR_MESSAGE, isValidCccd, normalizeCccd } from "@/lib/validators";
 
 export const runtime = "nodejs";
@@ -10,7 +10,7 @@ export const dynamic = "force-dynamic";
 
 /** Hồ sơ điện tử (Digital Worker File) — 1 người, toàn bộ lịch sử các đợt làm việc. */
 export async function GET(_req: Request, ctx: { params: Promise<{ cccd: string }> }) {
-  const guard = await requireRoleAndPermission(["ADMIN", "HR_RECRUITER"], "workers.view");
+  const guard = await requirePermission(["ADMIN", "HR_RECRUITER", "HR_DIRECTOR"], "worker_profile.view");
   if (!guard.ok) return NextResponse.json({ error: guard.error }, { status: guard.status });
 
   const params = await ctx.params;
@@ -44,7 +44,7 @@ export async function GET(_req: Request, ctx: { params: Promise<{ cccd: string }
 
 /** Cập nhật thông tin Biometric (#16) cho 1 hồ sơ điện tử. */
 export async function PATCH(req: Request, ctx: { params: Promise<{ cccd: string }> }) {
-  const guard = await requireRoleAndPermission(["ADMIN"], "workers.edit");
+  const guard = await requirePermission(["ADMIN"], "worker_profile.edit");
   if (!guard.ok) return NextResponse.json({ error: guard.error }, { status: guard.status });
 
   const params = await ctx.params;

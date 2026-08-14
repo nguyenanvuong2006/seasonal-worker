@@ -46,6 +46,7 @@ type UserRow = {
 };
 
 type Dept = { id: string; deptName: string; groupName: string };
+type RoleOption = { key: string; name: string; isActive: boolean; memberCount: number };
 
 function deptLabel(d?: { deptName: string; groupName: string } | null): string {
   if (!d) return "—";
@@ -54,6 +55,7 @@ function deptLabel(d?: { deptName: string; groupName: string } | null): string {
 
 export default function UsersAdminPage() {
   const [rows, setRows] = useState<UserRow[]>([]);
+  const [roles, setRoles] = useState<RoleOption[]>([]);
   const [depts, setDepts] = useState<Dept[]>([]);
   const [currentUserId, setCurrentUserId] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
@@ -105,8 +107,15 @@ export default function UsersAdminPage() {
     setRows(uData.rows ?? []);
     setCurrentUserId(uData.currentUserId ?? null);
     setDepts(dData.rows ?? []);
+    // Dynamic RBAC V2 — danh mục vai trò do server trả (catalog roles + vai trò tuỳ chỉnh).
+    setRoles(uData.roles ?? []);
     setLoading(false);
   }, []);
+
+  const roleName = useCallback(
+    (key: string) => roles.find((r) => r.key === key)?.name ?? ROLE_LABEL[key] ?? key,
+    [roles],
+  );
 
   useEffect(() => {
     void load();
@@ -288,7 +297,7 @@ export default function UsersAdminPage() {
               onChange={setRoleFilter}
               options={[
                 { value: "ALL", label: "Tất cả vai trò" },
-                ...Object.entries(ROLE_LABEL).map(([value, label]) => ({ value, label })),
+                ...roles.map((r) => ({ value: r.key, label: r.isActive ? r.name : `${r.name} (đã tắt)` })),
               ]}
             />
             <FilterSelect
@@ -337,7 +346,7 @@ export default function UsersAdminPage() {
                         )}
                       </td>
                       <td className="px-3 py-2">{u.fullName}</td>
-                      <td className="px-3 py-2 font-semibold">{ROLE_LABEL[u.role] ?? u.role}</td>
+                      <td className="px-3 py-2 font-semibold">{roleName(u.role)}</td>
                       <td className="px-3 py-2 text-fg-secondary">
                         {u.role === "DEPT_MANAGER" ? deptLabel(u.deptName ? { deptName: u.deptName, groupName: u.groupName ?? "" } : null) : "—"}
                       </td>
@@ -443,9 +452,9 @@ export default function UsersAdminPage() {
               onChange={(e) => setCreateForm({ ...createForm, role: e.target.value })}
               className="h-11 w-full rounded-xl border-2 border-border-strong px-2 font-semibold"
             >
-              {Object.entries(ROLE_LABEL).map(([k, v]) => (
-                <option key={k} value={k}>
-                  {v}
+              {roles.map((r) => (
+                <option key={r.key} value={r.key}>
+                  {r.isActive ? r.name : `${r.name} (đã tắt)`}
                 </option>
               ))}
             </select>
@@ -510,9 +519,9 @@ export default function UsersAdminPage() {
               disabled={isSelf(editUser) || isLastActiveAdmin(editUser)}
               className="h-11 w-full rounded-xl border-2 border-border-strong px-2 font-semibold disabled:cursor-not-allowed disabled:opacity-50"
             >
-              {Object.entries(ROLE_LABEL).map(([k, v]) => (
-                <option key={k} value={k}>
-                  {v}
+              {roles.map((r) => (
+                <option key={r.key} value={r.key}>
+                  {r.isActive ? r.name : `${r.name} (đã tắt)`}
                 </option>
               ))}
             </select>

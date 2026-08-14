@@ -36,75 +36,93 @@ import { cn } from "@/components/ui";
 import type { Session } from "@/lib/auth";
 import type { PublicBranding } from "@/lib/branding";
 
-type NavItem = { href: string; label: string; icon: LucideIcon; roles: string[] };
+type NavItem = { href: string; label: string; icon: LucideIcon; roles: string[]; permission?: string };
 type NavGroup = { group: string; items: NavItem[] };
 
 const NAV_GROUPS: NavGroup[] = [
   {
     group: "Tổng quan",
     items: [
-      { href: "/admin/dashboard", label: "Dashboard", icon: LayoutDashboard, roles: ["ADMIN", "HR_RECRUITER", "DEPT_MANAGER"] },
-      { href: "/task-center", label: "Task Center", icon: ListChecks, roles: ["ADMIN", "HR_RECRUITER", "DEPT_MANAGER"] },
+      { href: "/admin/dashboard", label: "Dashboard", icon: LayoutDashboard, roles: ["ADMIN", "HR_RECRUITER", "DEPT_MANAGER"], permission: "dashboard.view" },
+      { href: "/task-center", label: "Task Center", icon: ListChecks, roles: ["ADMIN", "HR_RECRUITER", "DEPT_MANAGER"], permission: "dashboard.view" },
     ],
   },
   {
     group: "Tuyển & Tiếp nhận Tập nghề",
     items: [
-      { href: "/hr/registrations", label: "Daily Application", icon: ClipboardList, roles: ["ADMIN", "HR_RECRUITER"] },
-      { href: "/hr/workers", label: "DW Data (Đối chiếu)", icon: Database, roles: ["ADMIN", "HR_RECRUITER"] },
-      { href: "/admin/departments", label: "Cơ cấu tổ chức", icon: Building2, roles: ["ADMIN", "HR_RECRUITER"] },
+      { href: "/hr/registrations", label: "Daily Application", icon: ClipboardList, roles: ["ADMIN", "HR_RECRUITER"], permission: "registrations.view" },
+      { href: "/hr/workers", label: "DW Data (Đối chiếu)", icon: Database, roles: ["ADMIN", "HR_RECRUITER"], permission: "dw.view" },
+      { href: "/admin/departments", label: "Cơ cấu tổ chức", icon: Building2, roles: ["ADMIN", "HR_RECRUITER"], permission: "departments.manage" },
       { href: "/department", label: "Bộ phận của tôi", icon: Factory, roles: ["DEPT_MANAGER", "ADMIN", "HR_RECRUITER"] },
     ],
   },
   {
     group: "Quản lý Tập nghề",
     items: [
-      { href: "/admin/worker-profiles", label: "Hồ sơ Tập nghề", icon: IdCard, roles: ["ADMIN", "HR_RECRUITER"] },
-      { href: "/admin/workforce-movements", label: "Nghỉ việc / Thuyên chuyển", icon: ArrowLeftRight, roles: ["ADMIN", "HR_RECRUITER", "DEPT_MANAGER"] },
+      { href: "/admin/worker-profiles", label: "Hồ sơ Tập nghề", icon: IdCard, roles: ["ADMIN", "HR_RECRUITER"], permission: "worker_profile.view" },
+      { href: "/admin/workforce-movements", label: "Nghỉ việc / Thuyên chuyển", icon: ArrowLeftRight, roles: ["ADMIN", "HR_RECRUITER", "DEPT_MANAGER"], permission: "workforce_movements.view" },
     ],
   },
   {
     group: "Kế hoạch nhu cầu",
-    items: [{ href: "/admin/planning", label: "Planning (Nhu cầu)", icon: CalendarRange, roles: ["ADMIN", "HR_RECRUITER", "DEPT_MANAGER"] }],
+    items: [{ href: "/admin/planning", label: "Planning (Nhu cầu)", icon: CalendarRange, roles: ["ADMIN", "HR_RECRUITER", "DEPT_MANAGER"], permission: "planning.view" }],
   },
   {
     group: "Cấu hình nghiệp vụ",
     items: [
-      { href: "/admin/form-builder", label: "Câu hỏi động", icon: FormInput, roles: ["ADMIN", "HR_RECRUITER"] },
-      { href: "/admin/field-definitions", label: "Trường dữ liệu", icon: Layers, roles: ["ADMIN"] },
-      { href: "/admin/workflow", label: "Workflow", icon: GitBranch, roles: ["ADMIN"] },
-      { href: "/admin/rules", label: "Rule Engine", icon: SlidersHorizontal, roles: ["ADMIN"] },
-      { href: "/admin/notifications", label: "Thông báo", icon: Bell, roles: ["ADMIN", "HR_RECRUITER"] },
+      { href: "/admin/form-builder", label: "Câu hỏi động", icon: FormInput, roles: ["ADMIN", "HR_RECRUITER"], permission: "questions.manage" },
+      { href: "/admin/field-definitions", label: "Trường dữ liệu", icon: Layers, roles: ["ADMIN"], permission: "field_definitions.manage" },
+      { href: "/admin/workflow", label: "Workflow", icon: GitBranch, roles: ["ADMIN"], permission: "workflow.manage" },
+      { href: "/admin/rules", label: "Rule Engine", icon: SlidersHorizontal, roles: ["ADMIN"], permission: "rules.manage" },
+      { href: "/admin/notifications", label: "Thông báo", icon: Bell, roles: ["ADMIN", "HR_RECRUITER"], permission: "notifications.manage" },
     ],
   },
   {
     group: "Quản trị",
     items: [
-      { href: "/admin/users", label: "Phân quyền RBAC", icon: Users, roles: ["ADMIN"] },
-      { href: "/admin/permissions", label: "Phân quyền chi tiết", icon: ShieldCheck, roles: ["ADMIN"] },
-      { href: "/admin/data-scopes", label: "Data Scope", icon: MapIcon, roles: ["ADMIN"] },
-      { href: "/admin/system", label: "Control Center", icon: Gauge, roles: ["ADMIN"] },
-      { href: "/admin/audit", label: "Nhật ký hệ thống", icon: ScrollText, roles: ["ADMIN"] },
-      { href: "/admin/import-data", label: "Nhập dữ liệu ban đầu", icon: UploadCloud, roles: ["ADMIN"] },
-      { href: "/admin/recycle-bin", label: "Thùng rác", icon: Trash2, roles: ["ADMIN"] },
+      { href: "/admin/users", label: "Quản lý thành viên", icon: Users, roles: ["ADMIN"], permission: "users.manage" },
+      { href: "/admin/permissions", label: "Phân quyền chi tiết", icon: ShieldCheck, roles: ["ADMIN"], permission: "rbac.manage" },
+      { href: "/admin/data-scopes", label: "Data Scope", icon: MapIcon, roles: ["ADMIN"], permission: "data_scope.manage" },
+      { href: "/admin/system", label: "Control Center", icon: Gauge, roles: ["ADMIN"], permission: "system.view" },
+      { href: "/admin/audit", label: "Nhật ký hệ thống", icon: ScrollText, roles: ["ADMIN"], permission: "audit.view" },
+      { href: "/admin/import-data", label: "Nhập dữ liệu ban đầu", icon: UploadCloud, roles: ["ADMIN"], permission: "import.run" },
+      { href: "/admin/recycle-bin", label: "Thùng rác", icon: Trash2, roles: ["ADMIN"], permission: "recycle_bin.manage" },
     ],
   },
 ];
 
-function filterGroups(role: string): NavGroup[] {
-  return NAV_GROUPS.map((g) => ({ ...g, items: g.items.filter((i) => i.roles.includes(role)) })).filter((g) => g.items.length > 0);
+/**
+ * DYNAMIC RBAC V2 — hiển thị nav theo QUYỀN (không còn hardcode 3 role):
+ * mục hiện ra nếu (a) role nằm trong danh sách legacy `roles`, HOẶC (b) session có quyền
+ * `permission` tương ứng (tập quyền do layout server-side tính từ role_permissions).
+ * ADMIN luôn có đủ mọi quyền (bypass) nên vẫn thấy toàn bộ như trước.
+ */
+function filterGroups(role: string, permissions: ReadonlySet<string>): NavGroup[] {
+  return NAV_GROUPS.map((g) => ({
+    ...g,
+    items: g.items.filter((i) => i.roles.includes(role) || (i.permission !== undefined && permissions.has(i.permission))),
+  })).filter((g) => g.items.length > 0);
 }
 
 const SIDEBAR_BG = "bg-[#083d24]";
 
-export function Sidebar({ session, branding }: { session: Session; branding?: PublicBranding }) {
+export function Sidebar({
+  session,
+  branding,
+  permissions = [],
+}: {
+  session: Session;
+  branding?: PublicBranding;
+  /** Tập quyền hiệu lực (do layout server-side truyền xuống) — quyết định mục nào hiện ra. */
+  permissions?: string[];
+}) {
   const pathname = usePathname();
   const [mobileOpen, setMobileOpen] = useState(false);
   const [collapsed, setCollapsed] = useState(false);
   const navRef = useRef<HTMLElement>(null);
   const menuButtonRef = useRef<HTMLButtonElement>(null);
 
-  const groups = filterGroups(session.role);
+  const groups = filterGroups(session.role, new Set(permissions));
 
   useEffect(() => {
     setMobileOpen(false);

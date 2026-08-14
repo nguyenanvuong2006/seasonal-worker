@@ -2,7 +2,7 @@ import { NextResponse } from "next/server";
 import { and, desc, eq, sql } from "drizzle-orm";
 import { db } from "@/db";
 import { auditLogs, dailyApplications, departments, dwData } from "@/db/schema";
-import { requireRoleAndPermission, writeAudit } from "@/lib/auth";
+import { requirePermission, writeAudit } from "@/lib/auth";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -22,7 +22,7 @@ const TABLES = {
 type TableKey = keyof typeof TABLES;
 
 export async function GET(req: Request) {
-  const guard = await requireRoleAndPermission(["ADMIN", "HR_RECRUITER"], "history.manage");
+  const guard = await requirePermission(["ADMIN", "HR_RECRUITER", "HR_DIRECTOR"], "history.view");
   if (!guard.ok) return NextResponse.json({ error: guard.error }, { status: guard.status });
 
   const url = new URL(req.url);
@@ -42,7 +42,7 @@ export async function GET(req: Request) {
 
 /** Khôi phục 1 phiên bản cũ: áp lại các giá trị "before" đã lưu trong 1 dòng audit log. */
 export async function POST(req: Request) {
-  const guard = await requireRoleAndPermission(["ADMIN", "HR_RECRUITER"], "history.manage");
+  const guard = await requirePermission(["ADMIN", "HR_RECRUITER"], "history.restore");
   if (!guard.ok) return NextResponse.json({ error: guard.error }, { status: guard.status });
 
   const body = (await req.json()) as { targetType?: string; id?: string; auditLogId?: string };

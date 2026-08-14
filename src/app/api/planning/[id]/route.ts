@@ -1,5 +1,5 @@
 import { NextResponse } from "next/server";
-import { requireRoleAndPermission, writeAudit } from "@/lib/auth";
+import { requirePermission, writeAudit } from "@/lib/auth";
 import { activatePeriod, reviseActivePeriod } from "@/lib/planning";
 
 export const runtime = "nodejs";
@@ -7,9 +7,6 @@ export const dynamic = "force-dynamic";
 
 /** action: "activate" (Draft -> Active) | "revise" (Active -> version mới, giữ lịch sử bản cũ). */
 export async function PATCH(req: Request, ctx: { params: Promise<{ id: string }> }) {
-  const guard = await requireRoleAndPermission(["ADMIN", "HR_RECRUITER"], "planning.manage");
-  if (!guard.ok) return NextResponse.json({ error: guard.error }, { status: guard.status });
-
   const { id } = await ctx.params;
   const body = (await req.json()) as {
     action?: "activate" | "revise";
@@ -20,6 +17,12 @@ export async function PATCH(req: Request, ctx: { params: Promise<{ id: string }>
     targetCount?: number;
     note?: string;
   };
+
+  // DYNAMIC RBAC V2 — tách quyền theo hành động: activate cần planning.activate, revise cần planning.edit.
+  const permissionKey = body.action === "activate" ? "planning.activate" : body.action === "revise" ? "planning.edit" : "";
+  if (!permissionKey) return NextResponse.json({ error: "Thiếu action hợp lệ." }, { status: 400 });
+  const guard = await requirePermission(["ADMIN", "HR_RECRUITER"], permissionKey);
+  if (!guard.ok) return NextResponse.json({ error: guard.error }, { status: guard.status });
 
   try {
     if (body.action === "activate") {

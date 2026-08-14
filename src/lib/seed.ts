@@ -6,6 +6,7 @@ import { DEFAULT_FIELD_DEFINITIONS } from "@/lib/metadata";
 import { DEFAULT_WORKFLOW_STAGES, DEFAULT_MOVEMENT_WORKFLOW_STAGES } from "@/lib/workflow";
 import { DEFAULT_SCHEDULED_JOBS } from "@/lib/scheduler";
 import { eq, isNotNull, sql } from "drizzle-orm";
+import { seedRbacCatalog } from "@/lib/rbac";
 
 let seeded = false;
 const MIN_INITIAL_ADMIN_PASSWORD_LENGTH = 8;
@@ -205,6 +206,11 @@ export async function ensureSeed() {
     // "recompute_dw_workdays" (nếu đã seed từ bản trước) không còn handler tương ứng —
     // tắt (không xoá, giữ lịch sử) để /admin/system không còn hiển thị job "NO_HANDLER".
     await db.update(scheduledJobs).set({ isActive: false }).where(eq(scheduledJobs.jobKey, "recompute_dw_workdays"));
+
+    // DYNAMIC RBAC V2 — seed catalog roles/permissions + baseline role_permissions (idempotent,
+    // ON CONFLICT DO NOTHING). Chạy TRƯỚC khi seed user department scope (không phụ thuộc nhau,
+    // nhưng đảm bảo role HR_DIRECTOR/roles catalog tồn tại sớm cho mọi luồng).
+    await seedRbacCatalog();
 
     // RBAC — DATA SCOPE (Phase 2, Step 1): di trú 1 lần users.deptId (cột cũ, đơn) sang
     // user_department_scopes (nhiều-nhiều). An toàn chạy lại nhiều lần (ON CONFLICT DO NOTHING) —

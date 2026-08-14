@@ -57,9 +57,16 @@ Công nghệ: **Next.js 16 (React 19) + PostgreSQL + Drizzle ORM**, chạy đư�
 - `/lookup`: trang cho lao động tự tra cứu trạng thái hồ sơ của mình.
 
 ### 2.6 Phân quyền & bảo mật (RBAC)
-Có 3 vai trò, đăng nhập bằng cookie JWT (12 giờ): Quản trị viên (ADMIN), Nhân sự tuyển dụng (HR_RECRUITER), Phụ trách bộ phận (DEPT_MANAGER).
+Đăng nhập bằng cookie JWT (12 giờ). **Dynamic RBAC V2** (2026-08-14) thay mô hình 3 vai trò cứng bằng catalog động:
 
-> ⚠️ **KHÔNG còn tài khoản mặc định hardcode trong source.** Tài khoản ADMIN đầu tiên được tạo từ 2 biến môi trường `INITIAL_ADMIN_USERNAME`/`INITIAL_ADMIN_PASSWORD` (xem mục 5, Bước 3) — hệ thống chỉ tạo tài khoản này đúng 1 lần, khi bảng `users` còn trống. Tài khoản HR_RECRUITER/DEPT_MANAGER không còn được seed sẵn — sau khi đăng nhập bằng ADMIN, tự tạo thêm tại `/admin/users`.
+- **Vai trò hệ thống (seed sẵn):** Quản trị viên (ADMIN), Nhân sự tuyển dụng (HR_RECRUITER), Quản lý bộ phận (DEPT_MANAGER), Giám đốc Nhân sự (HR_DIRECTOR — quyền nghiệp vụ cấp cao: xem hồ sơ/Planning/Nghỉ việc/Xuất Excel/Nhật ký; KHÔNG quản lý người dùng/Phân quyền/Backup).
+- **Vai trò tuỳ chỉnh:** ADMIN tạo thêm tại `/admin/permissions` (tab "Vai trò") — tạo mới hoặc nhân bản từ vai trò có sẵn, sau đó gán quyền ở tab "Ma trận". **Vai trò mới bắt đầu với 0 quyền (fail-closed)** — gán quyền nào mới dùng được chức năng đó, không cần sửa code.
+- **Quyền chi tiết (~42 quyền / 15 nhóm):** route thật sự kiểm tra quyền; chưa cấu hình = TỪ CHỐI (trừ ADMIN luôn có toàn quyền). Tắt 1 vai trò → toàn bộ thành viên của vai trò bị đăng xuất ngay lập tức.
+- **Data Scope độc lập vai trò:** ai cũng có thể được gán phạm vi bộ phận tại `/admin/data-scopes` (không chỉ Quản lý bộ phận); người được gán scope chỉ thấy dữ liệu trong phạm vi đó.
+
+> ⚠️ **KHÔNG còn tài khoản mặc định hardcode trong source.** Tài khoản ADMIN đầu tiên được tạo từ 2 biến môi trường `INITIAL_ADMIN_USERNAME`/`INITIAL_ADMIN_PASSWORD` (xem mục 5, Bước 3) — hệ thống chỉ tạo tài khoản này đúng 1 lần, khi bảng `users` còn trống. Tài khoản HR_RECRUITER/DEPT_MANAGER/HR_DIRECTOR không còn được seed sẵn (vai trò thì có, tài khoản thì không) — sau khi đăng nhập bằng ADMIN, tự tạo tài khoản tại `/admin/users`.
+
+> 📄 Chi tiết kỹ thuật: `docs/RBAC_V2_AUDIT.md`, catalog tại `src/lib/rbac-catalog.ts`.
 
 ### 2.7 Audit log (`/admin/audit`)
 Ghi lại mọi hành động duyệt/sửa/xoá quan trọng kèm người thực hiện — phục vụ truy vết khi có sai sót.

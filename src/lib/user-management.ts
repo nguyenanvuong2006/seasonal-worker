@@ -123,7 +123,10 @@ export function shouldBumpSessionVersion(target: UserSnapshot, change: ChangeInt
 }
 
 /** Tổng hợp các field thành patch DB an toàn (role không hợp lệ bị bỏ qua). */
-export function buildPatch(change: ChangeIntent): {
+export function buildPatch(
+  change: ChangeIntent,
+  roleValidator: (r: string) => boolean = isRole,
+): {
   patch: Record<string, unknown>;
   password: string | null;
 } {
@@ -131,7 +134,7 @@ export function buildPatch(change: ChangeIntent): {
   let password: string | null = null;
 
   if (change.fullName !== undefined) patch.fullName = change.fullName;
-  if (change.role !== undefined && isRole(change.role)) patch.role = change.role;
+  if (change.role !== undefined && roleValidator(change.role)) patch.role = change.role;
   if (change.deptId !== undefined) {
     // Role mới (nếu có) KHÔNG phải DEPT_MANAGER -> buộc deptId = null (không để lại scope rác).
     const explicitlyNonManager = change.role !== undefined && change.role !== "DEPT_MANAGER";

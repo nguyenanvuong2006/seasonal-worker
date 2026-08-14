@@ -46,12 +46,13 @@ export async function GET(req: Request) {
 
   const canViewCccd = await hasPermission(session.role, "privacy.view_cccd");
   const canViewPhone = await hasPermission(session.role, "privacy.view_phone");
-  const scope = session.role === "DEPT_MANAGER" ? await getUserScope(session) : null; // null = không giới hạn
+  // DYNAMIC RBAC V2 — bỏ proxy role === DEPT_MANAGER: scope role-independent.
+  const scope = await getUserScope(session); // null = không giới hạn
 
-  /* ---------------- Người lao động (worker_profiles) — chỉ ADMIN/HR_RECRUITER có workers.view,
-     giống hệt GET /api/worker-profiles/[cccd]. Không Data Scope (worker_profiles không gắn
-     department cố định — đúng kiến trúc hiện có, không phát minh thêm). ---------------- */
-  if (["ADMIN", "HR_RECRUITER"].includes(session.role) && (await hasPermission(session.role, "workers.view"))) {
+  /* ---------------- Người lao động (worker_profiles) — worker_profile.view (Dynamic RBAC V2:
+     tách từ workers.view cũ), giống hệt GET /api/worker-profiles/[cccd]. Không Data Scope
+     (worker_profiles không gắn department cố định — đúng kiến trúc hiện có). ---------------- */
+  if (await hasPermission(session.role, "worker_profile.view")) {
     const rows = await db
       .select({ id: workerProfiles.id, cccd: workerProfiles.cccd, fullName: workerProfiles.fullName, phone: workerProfiles.phone })
       .from(workerProfiles)
@@ -77,10 +78,10 @@ export async function GET(req: Request) {
     }
   }
 
-  /* ---------------- Daily Application — chỉ ADMIN/HR_RECRUITER (đúng trang /hr/registrations
-     hiện có; DEPT_MANAGER bị chính trang đó redirect sang /department nên không đưa vào kết quả
-     tìm kiếm để tránh dẫn tới đường cụt). ---------------- */
-  if (["ADMIN", "HR_RECRUITER"].includes(session.role)) {
+  /* ---------------- Daily Application — registrations.view (Dynamic RBAC V2; DEPT_MANAGER bị
+     chính trang /hr/registrations redirect sang /department nên không đưa vào kết quả tìm kiếm
+     để tránh dẫn tới đường cụt). ---------------- */
+  if (await hasPermission(session.role, "registrations.view")) {
     const rows = await db
       .select({
         id: dailyApplications.id,

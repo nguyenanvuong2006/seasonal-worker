@@ -1,14 +1,14 @@
 import { NextResponse } from "next/server";
 import { db } from "@/db";
 import { planningAllocations } from "@/db/schema";
-import { requireRoleAndPermission, writeAudit } from "@/lib/auth";
+import { requirePermission, writeAudit } from "@/lib/auth";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
 /** Phân bổ danh sách employment_session (lao động UNPLANNED) vào 1 kế hoạch. */
 export async function POST(req: Request, ctx: { params: Promise<{ id: string }> }) {
-  const guard = await requireRoleAndPermission(["ADMIN", "HR_RECRUITER"], "planning.manage");
+  const guard = await requirePermission(["ADMIN", "HR_RECRUITER"], "planning.edit");
   if (!guard.ok) return NextResponse.json({ error: guard.error }, { status: guard.status });
 
   const { id } = await ctx.params;

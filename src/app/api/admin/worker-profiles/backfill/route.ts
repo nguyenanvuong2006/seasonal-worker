@@ -2,7 +2,7 @@ import { NextResponse } from "next/server";
 import { isNull } from "drizzle-orm";
 import { db, pool } from "@/db";
 import { dailyApplications, dwData } from "@/db/schema";
-import { requireRoleAndPermission, writeAudit } from "@/lib/auth";
+import { requirePermission, writeAudit } from "@/lib/auth";
 import { isValidCccd, normalizeCccd } from "@/lib/validators";
 
 export const runtime = "nodejs";
@@ -16,7 +16,7 @@ export const maxDuration = 60;
  * nào — chỉ đọc và tổng hợp thêm.
  */
 export async function POST() {
-  const guard = await requireRoleAndPermission(["ADMIN"], "workers.edit");
+  const guard = await requirePermission(["ADMIN"], "worker_profile.edit");
   if (!guard.ok) return NextResponse.json({ error: guard.error }, { status: guard.status });
 
   const client = await pool.connect();
@@ -76,7 +76,7 @@ export async function POST() {
 }
 
 export async function GET() {
-  const guard = await requireRoleAndPermission(["ADMIN"], "workers.edit");
+  const guard = await requirePermission(["ADMIN"], "worker_profile.edit");
   if (!guard.ok) return NextResponse.json({ error: guard.error }, { status: guard.status });
   const client = await pool.connect();
   try {

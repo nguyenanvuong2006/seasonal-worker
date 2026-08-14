@@ -292,6 +292,51 @@ export const rules = pgTable("rules", {
 });
 
 /* ============================================================
+   DYNAMIC RBAC V2 — CATALOG ROLE / PERMISSION (nền tảng)
+   ---------------------------------------------------------------
+   Thay mô hình cũ "3 Role hardcode trong code + permission là lớp
+   phủ (fail-open)" bằng catalog động:
+     - roles:       danh mục vai trò (4 vai trò hệ thống + vai trò
+                    tuỳ chỉnh do admin tạo). users.role (varchar)
+                    VẪN GIỮ NGUYÊN là role key — không destructive.
+     - permissions: danh mục quyền (~42 quyền / 15 nhóm) mà route
+                    thật sự kiểm tra (ENFORCED, fail-closed).
+     - role_permissions: bảng cũ GIỮ NGUYÊN cấu trúc (role +
+                    permission_key + allowed) — là nguồn sự thật cho
+                    hasPermission(); chỉ thêm 2 bảng catalog ở trên.
+   ============================================================ */
+export const roles = pgTable(
+  "roles",
+  {
+    id: uuid("id").defaultRandom().primaryKey(),
+    key: varchar("key", { length: 32 }).notNull(),
+    name: varchar("name", { length: 120 }).notNull(),
+    description: text("description"),
+    isSystem: boolean("is_system").notNull().default(false), // vai trò hệ thống không xoá được
+    isActive: boolean("is_active").notNull().default(true),
+    sortOrder: integer("sort_order").notNull().default(0),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+    updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [uniqueIndex("roles_key_uq").on(t.key)],
+);
+
+export const permissions = pgTable(
+  "permissions",
+  {
+    id: uuid("id").defaultRandom().primaryKey(),
+    key: varchar("key", { length: 64 }).notNull(),
+    name: varchar("name", { length: 160 }).notNull(),
+    groupName: varchar("group_name", { length: 40 }).notNull(),
+    description: text("description"),
+    isSystem: boolean("is_system").notNull().default(true),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+    updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [uniqueIndex("permissions_key_uq").on(t.key)],
+);
+
+/* ============================================================
    RBAC CHI TIẾT (nền tảng) — bổ sung song song với requireRole()
    theo Role hiện có (không thay thế, để không phá các route đang
    chạy thật). Mỗi (role, permissionKey) bật/tắt độc lập.
@@ -770,6 +815,8 @@ export type ImportJob = typeof importJobs.$inferSelect;
 export type ImportJobError = typeof importJobErrors.$inferSelect;
 
 export type User = typeof users.$inferSelect;
+export type Role = typeof roles.$inferSelect;
+export type Permission = typeof permissions.$inferSelect;
 export type FieldDefinition = typeof fieldDefinitions.$inferSelect;
 export type WorkflowStage = typeof workflowStages.$inferSelect;
 export type Rule = typeof rules.$inferSelect;

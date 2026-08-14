@@ -51,6 +51,7 @@ export const ROLE_LABEL: Record<string, string> = {
   ADMIN: "Quản trị viên",
   HR_RECRUITER: "Nhân sự tuyển dụng",
   DEPT_MANAGER: "Quản lý bộ phận",
+  HR_DIRECTOR: "Giám đốc Nhân sự",
 };
 
 export { isValidCccd } from "@/lib/validators";

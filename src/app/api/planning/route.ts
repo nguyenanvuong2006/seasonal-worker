@@ -2,7 +2,7 @@ import { NextResponse } from "next/server";
 import { and, desc, eq, inArray } from "drizzle-orm";
 import { db } from "@/db";
 import { departments, planningPeriods, planningTargets } from "@/db/schema";
-import { getUserScope, requireRoleAndPermission, writeAudit } from "@/lib/auth";
+import { getUserScope, requirePermission, writeAudit } from "@/lib/auth";
 import { batchComputePlanningMetrics, createPeriod } from "@/lib/planning";
 
 export const runtime = "nodejs";
@@ -10,7 +10,7 @@ export const dynamic = "force-dynamic";
 
 /** Danh sách kế hoạch — lọc theo Data Scope cho DEPT_MANAGER, kèm nhu cầu Nam/Nữ, phân bổ, nghỉ việc, cần tuyển. */
 export async function GET(req: Request) {
-  const guard = await requireRoleAndPermission(["ADMIN", "HR_RECRUITER", "DEPT_MANAGER"], "planning.view");
+  const guard = await requirePermission(["ADMIN", "HR_RECRUITER", "DEPT_MANAGER", "HR_DIRECTOR"], "planning.view");
   if (!guard.ok) return NextResponse.json({ error: guard.error }, { status: guard.status });
 
   const url = new URL(req.url);
@@ -105,7 +105,7 @@ export async function GET(req: Request) {
 
 /** Tạo kế hoạch mới (Kế hoạch gốc hoặc Yêu cầu bổ sung). */
 export async function POST(req: Request) {
-  const guard = await requireRoleAndPermission(["ADMIN", "HR_RECRUITER"], "planning.manage");
+  const guard = await requirePermission(["ADMIN", "HR_RECRUITER", "DEPT_MANAGER"], "planning.request");
   if (!guard.ok) return NextResponse.json({ error: guard.error }, { status: guard.status });
 
   const body = (await req.json()) as {
@@ -137,6 +137,17 @@ export async function POST(req: Request) {
     return NextResponse.json({ error: "Vui lòng nhập nhu cầu tuyển dụng (Nam hoặc Nữ > 0)." }, { status: 400 });
   }
 
+  // DYNAMIC RBAC V2 (mục I) — DEPT_MANAGER có planning.request nhưng CHỈ tạo DRAFT và CHỈ
+  // cho bộ phận trong Data Scope của mình (không được kích hoạt / không vượt scope).
+  let activateNow = body.activateNow !== false;
+  if (guard.session.role === "DEPT_MANAGER") {
+    const scope = await getUserScope(guard.session);
+    if (!scope || scope.length === 0 || !scope.includes(body.departmentId)) {
+      return NextResponse.json({ error: "Bộ phận này không thuộc phạm vi quản lý của bạn." }, { status: 403 });
+    }
+    activateNow = false; // Manager chỉ tạo DRAFT — HR/Admin kích hoạt.
+  }
+
   try {
     const period = await createPeriod({
       departmentId: body.departmentId,
@@ -151,7 +162,7 @@ export async function POST(req: Request) {
       parentPeriodId: body.parentPeriodId ?? null,
       note: body.note,
       createdBy: guard.session.username,
-      activateNow: body.activateNow !== false,
+      activateNow,
     });
 
     await writeAudit(guard.session, "CREATE_PLANNING_PERIOD", "planning_periods", {

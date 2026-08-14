@@ -1,6 +1,6 @@
 import { redirect } from "next/navigation";
 import Link from "next/link";
-import { getSession } from "@/lib/auth";
+import { getSession, hasPermission } from "@/lib/auth";
 import { getDashboardOverview } from "@/lib/dashboard";
 import { getPublicBranding } from "@/lib/branding";
 import {
@@ -64,18 +64,27 @@ function dateInVietnam(): string {
 export default async function DashboardPage() {
   const session = await getSession();
   if (!session) redirect("/login");
+  // DYNAMIC RBAC V2 — Dashboard mở cho mọi role có dashboard.view (fail-closed).
+  if (!(await hasPermission(session.role, "dashboard.view"))) redirect("/login");
 
   const [overview, branding] = await Promise.all([getDashboardOverview(session), getPublicBranding()]);
   const hour = hourInVietnam();
   const t = overview.today;
   const p = overview.planning;
 
+  const [canRegistrations, canPlanning, canProfiles, canMovements] = await Promise.all([
+    hasPermission(session.role, "registrations.view"),
+    hasPermission(session.role, "planning.view"),
+    hasPermission(session.role, "worker_profile.view"),
+    hasPermission(session.role, "workforce_movements.view"),
+  ]);
+
   const quickLinks = [
-    { href: "/hr/registrations", label: "Daily Application", desc: "Tiếp nhận & xếp việc hôm nay", icon: ClipboardList, roles: ["ADMIN", "HR_RECRUITER"] },
-    { href: "/admin/planning", label: "Planning nhu cầu", desc: "Kế hoạch theo giai đoạn", icon: CalendarRange, roles: ["ADMIN", "HR_RECRUITER", "DEPT_MANAGER"] },
-    { href: "/admin/worker-profiles", label: "Hồ sơ tập nghề", desc: "DW Data & hồ sơ lao động", icon: Database, roles: ["ADMIN", "HR_RECRUITER"] },
-    { href: "/admin/workforce-movements", label: "Nghỉ việc / Chuyển", desc: "Duyệt yêu cầu chờ HR", icon: ArrowLeftRight, roles: ["ADMIN", "HR_RECRUITER", "DEPT_MANAGER"] },
-  ].filter((q) => q.roles.includes(session.role));
+    { href: "/hr/registrations", label: "Daily Application", desc: "Tiếp nhận & xếp việc hôm nay", icon: ClipboardList, visible: canRegistrations },
+    { href: "/admin/planning", label: "Planning nhu cầu", desc: "Kế hoạch theo giai đoạn", icon: CalendarRange, visible: canPlanning },
+    { href: "/admin/worker-profiles", label: "Hồ sơ tập nghề", desc: "DW Data & hồ sơ lao động", icon: Database, visible: canProfiles },
+    { href: "/admin/workforce-movements", label: "Nghỉ việc / Chuyển", desc: "Duyệt yêu cầu chờ HR", icon: ArrowLeftRight, visible: canMovements },
+  ].filter((q) => q.visible);
 
   const attention: string[] = [];
   if (t.pending > 0) attention.push(`${t.pending} đơn chờ duyệt hôm nay`);
@@ -110,10 +119,10 @@ export default async function DashboardPage() {
               </span>
             ) : null}
             <Link
-              href={session.role === "DEPT_MANAGER" ? "/admin/planning" : "/hr/registrations"}
+              href={session.role === "DEPT_MANAGER" || !canRegistrations ? "/admin/planning" : "/hr/registrations"}
               className="inline-flex items-center gap-1.5 rounded-full bg-accent px-3.5 py-1.5 text-[12px] font-bold text-white shadow-[0_6px_16px_rgba(226,109,28,0.35)] transition-colors hover:bg-accent-hover"
             >
-              <ClipboardList className="h-3.5 w-3.5" aria-hidden /> {session.role === "DEPT_MANAGER" ? "Mở Planning" : "Mở Daily Application"}
+              <ClipboardList className="h-3.5 w-3.5" aria-hidden /> {session.role === "DEPT_MANAGER" || !canRegistrations ? "Mở Planning" : "Mở Daily Application"}
             </Link>
           </div>
         </div>
@@ -127,7 +136,7 @@ export default async function DashboardPage() {
           title="Hôm nay cần chú ý"
           action={
             <Link
-              href={session.role === "DEPT_MANAGER" ? "/admin/planning" : "/hr/registrations"}
+              href={session.role === "DEPT_MANAGER" || !canRegistrations ? "/admin/planning" : "/hr/registrations"}
               className="shrink-0 rounded-full border border-warning/30 bg-surface-raised px-3 py-1.5 text-[12px] font-bold text-warning transition-colors hover:bg-warning-tint"
             >
               Xử lý ngay →

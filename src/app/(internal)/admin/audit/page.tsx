@@ -2,7 +2,7 @@ import { redirect } from "next/navigation";
 import { desc } from "drizzle-orm";
 import { db } from "@/db";
 import { auditLogs } from "@/db/schema";
-import { getSession } from "@/lib/auth";
+import { getSession, hasPermission } from "@/lib/auth";
 import { Card, CardContent, CardHeader } from "@/components/ui";
 
 export const dynamic = "force-dynamic";
@@ -10,7 +10,8 @@ export const dynamic = "force-dynamic";
 export default async function AuditPage() {
   const session = await getSession();
   if (!session) redirect("/login");
-  if (session.role !== "ADMIN") redirect("/hr/registrations");
+  // DYNAMIC RBAC V2 — mở cho mọi role có quyền audit.view (ADMIN + HR_DIRECTOR).
+  if (!(await hasPermission(session.role, "audit.view"))) redirect("/admin/dashboard");
 
   const rows = await db
     .select()
