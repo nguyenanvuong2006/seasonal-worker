@@ -175,94 +175,9 @@ export default async function DashboardPage() {
                   <p className="text-[13.5px] font-bold text-fg">{q.label}</p>
                   <p className="truncate text-[11.5px] text-fg-muted">{q.desc}</p>
                 </div>
-              </div>
-            ) : (
-              <div className="mt-5 flex items-center gap-3 rounded-[14px] border border-dashed border-border-strong bg-surface-hover/60 p-5 text-[13px] text-fg-secondary">
-                <Leaf className="h-5 w-5 shrink-0 text-primary" aria-hidden />
-                Chưa có kế hoạch nhu cầu nào đang áp dụng. Vào{" "}
-                <Link href="/admin/planning" className="font-bold text-primary underline-offset-2 hover:underline">
-                  Planning
-                </Link>{" "}
-                để tạo kế hoạch đầu tiên.
-              </div>
-            )}
-          </CardContent>
-        </Card>
-
-        {/* Movement alerts */}
-        <Card>
-          <CardContent className="p-5">
-            <SectionLabel>Biến động nhân lực</SectionLabel>
-            <h2 className="mt-1.5 text-[15px] font-bold text-fg">Yêu cầu chờ HR</h2>
-            {overview.movements.recent.length === 0 ? (
-              <div className="mt-4 rounded-[14px] border border-dashed border-border-strong bg-surface-hover/60 p-4 text-[12.5px] leading-relaxed text-fg-muted">
-                Không có yêu cầu nghỉ việc / thuyên chuyển nào đang chờ xử lý.
-              </div>
-            ) : (
-              <ul className="mt-3 divide-y divide-border">
-                {overview.movements.recent.map((m) => (
-                  <li key={m.id} className="flex items-center gap-3 py-2.5">
-                    <div
-                      className={
-                        m.movementType === "resignation"
-                          ? "flex h-8 w-8 shrink-0 items-center justify-center rounded-[9px] bg-warning-tint text-warning"
-                          : "flex h-8 w-8 shrink-0 items-center justify-center rounded-[9px] bg-info-tint text-info"
-                      }
-                    >
-                      <ArrowLeftRight className="h-4 w-4" aria-hidden />
-                    </div>
-                    <div className="min-w-0 flex-1">
-                      <p className="truncate text-[13px] font-semibold text-fg">{m.workerName ?? "—"}</p>
-                      <p className="text-[11.5px] text-fg-muted">
-                        {m.movementType === "resignation" ? "Nghỉ việc" : "Thuyên chuyển"} · {m.effectiveDate ? new Date(m.effectiveDate).toLocaleDateString("vi-VN") : "—"}
-                      </p>
-                    </div>
-                    <Badge tone="amber" dot>Chờ HR</Badge>
-                  </li>
-                ))}
-              </ul>
-            )}
-            <Link href="/admin/workforce-movements" className="mt-3 inline-flex items-center gap-1 text-[12px] font-bold text-primary hover:underline">
-              Xem tất cả biến động →
-            </Link>
-          </CardContent>
-        </Card>
-      </div>
-
-      {/* ============ ACTIVITY / WORKFLOW — today's pipeline ============ */}
-      <div>
-        <SectionLabel tone="green" className="mb-2">Hoạt động hôm nay</SectionLabel>
-        <MetricStrip
-          items={[
-            <MetricStripItem key="total" icon={<FileText className="h-4 w-4" aria-hidden />} value={t.total} label="Tổng DW đăng ký" tone="primary" />,
-            <MetricStripItem key="pending" icon={<Clock className="h-4 w-4" aria-hidden />} value={t.pending} label="Chờ duyệt" tone="warning" />,
-            <MetricStripItem key="approved" icon={<CheckCircle2 className="h-4 w-4" aria-hidden />} value={t.approved} label="Đã xếp việc" tone="success" />,
-            <MetricStripItem key="new" icon={<UserPlus2 className="h-4 w-4" aria-hidden />} value={t.newToDw} label="Người mới → DW Data" tone="accent" />,
-            <MetricStripItem key="mismatch" icon={<AlertTriangle className="h-4 w-4" aria-hidden />} value={t.mismatch} label="Khai sai CŨ/MỚI" tone="danger" />,
-            <MetricStripItem key="dw" icon={<Database className="h-4 w-4" aria-hidden />} value={overview.dwTotal.toLocaleString("vi-VN")} label="Tổng hồ sơ DW Data" tone="info" />,
-          ]}
-        />
-      </div>
-
-      {/* ============ QUICK ACTIONS ============ */}
-      <div>
-        <SectionLabel tone="green" className="mb-2">Truy cập nhanh</SectionLabel>
-        <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 xl:grid-cols-4">
-          {quickLinks.map((q) => (
-            <Link
-              key={q.href}
-              href={q.href}
-              className="group flex items-center gap-3 rounded-[16px] border border-border bg-surface p-4 shadow-[0_1px_2px_rgba(23,32,18,0.04),0_8px_24px_rgba(23,32,18,0.05)] transition-[border-color,box-shadow,transform] hover:-translate-y-[1px] hover:border-primary/30 hover:shadow-md focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/30"
-            >
-              <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-[11px] bg-primary-tint text-primary ring-1 ring-black/[0.03] transition-colors group-hover:bg-accent-tint group-hover:text-accent">
-                <q.icon className="h-5 w-5" aria-hidden />
-              </div>
-              <div className="min-w-0">
-                <p className="text-[13.5px] font-bold text-fg">{q.label}</p>
-                <p className="truncate text-[11.5px] text-fg-muted">{q.desc}</p>
-              </div>
-            </Link>
-          ))}
+              </Link>
+            ))}
+          </div>
         </div>
       ) : null}
 
