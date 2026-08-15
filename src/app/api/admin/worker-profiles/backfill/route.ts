@@ -2,7 +2,7 @@ import { NextResponse } from "next/server";
 import { isNull } from "drizzle-orm";
 import { db, pool } from "@/db";
 import { dailyApplications, dwData } from "@/db/schema";
-import { requirePermission, writeAudit } from "@/lib/auth";
+import { getUserScope, requirePermission, writeAudit } from "@/lib/auth";
 import { normalizePersonName } from "@/lib/person-name";
 import { isValidCccd, normalizeCccd } from "@/lib/validators";
 
@@ -19,6 +19,9 @@ export const maxDuration = 60;
 export async function POST() {
   const guard = await requirePermission(["ADMIN"], "worker_profile.edit");
   if (!guard.ok) return NextResponse.json({ error: guard.error }, { status: guard.status });
+  if ((await getUserScope(guard.session)) !== null) {
+    return NextResponse.json({ error: "Backfill toàn công ty chỉ khả dụng cho tài khoản không bị giới hạn Data Scope." }, { status: 403 });
+  }
 
   const client = await pool.connect();
   try {
@@ -79,6 +82,9 @@ export async function POST() {
 export async function GET() {
   const guard = await requirePermission(["ADMIN"], "worker_profile.edit");
   if (!guard.ok) return NextResponse.json({ error: guard.error }, { status: guard.status });
+  if ((await getUserScope(guard.session)) !== null) {
+    return NextResponse.json({ error: "Backfill toàn công ty chỉ khả dụng cho tài khoản không bị giới hạn Data Scope." }, { status: 403 });
+  }
   const client = await pool.connect();
   try {
     const profiles = await client.query(`SELECT count(*)::int c FROM worker_profiles WHERE deleted_at IS NULL`);

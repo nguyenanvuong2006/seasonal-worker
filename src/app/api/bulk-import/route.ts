@@ -2,7 +2,8 @@ import { NextResponse } from "next/server";
 import { and, eq, inArray, isNull, sql } from "drizzle-orm";
 import { db } from "@/db";
 import { dailyApplications, dwData, employmentSessions, workerProfiles } from "@/db/schema";
-import { requireRoleAndPermission, writeAudit } from "@/lib/auth";
+import { getUserScope, requireRoleAndPermission, writeAudit } from "@/lib/auth";
+import { scopeAllowsDepartment } from "@/lib/data-scope";
 import { todayStr } from "@/lib/helpers";
 import { normalizePersonName } from "@/lib/person-name";
 import { runRules } from "@/lib/rule-engine";
@@ -46,11 +47,18 @@ export async function POST(req: Request) {
     const finalStatus = status === "REJECTED" || status === "WAITLIST" ? status : "APPROVED";
     const today = todayStr();
     const deptId = departmentId && departmentId !== "ALL" ? departmentId : null;
+    const scope = await getUserScope(guard.session);
+    if (deptId && !scopeAllowsDepartment(scope, deptId)) {
+      return NextResponse.json({ error: "Bộ phận đích nằm ngoài Data Scope được cấp." }, { status: 403 });
+    }
 
     const result = await db.transaction(async (tx) => {
       // BƯỚC 0/4 — Duyệt hồ sơ (#1 yêu cầu nghiệp vụ): phân loại RÕ RÀNG từng ID thay vì âm thầm
       // loại bỏ những dòng không đủ điều kiện — để khi có 0 thay đổi, người dùng biết CHÍNH XÁC vì sao.
-      const allTargets = await tx.select().from(dailyApplications).where(inArray(dailyApplications.id, ids));
+      const selectedTargets = await tx.select().from(dailyApplications).where(inArray(dailyApplications.id, ids));
+      // Outside-scope IDs are deliberately treated as not found so this endpoint cannot be used
+      // as an existence/PII oracle. Scoped users may only process already-owned applications.
+      const allTargets = scope === null ? selectedTargets : selectedTargets.filter((target) => scopeAllowsDepartment(scope, target.deptId));
       const foundIds = new Set(allTargets.map((t) => t.id));
 
       const results: RowResult[] = [];

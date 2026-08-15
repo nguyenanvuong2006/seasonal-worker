@@ -1,5 +1,9 @@
 import { NextResponse } from "next/server";
-import { requirePermission, writeAudit } from "@/lib/auth";
+import { eq } from "drizzle-orm";
+import { db } from "@/db";
+import { planningPeriods } from "@/db/schema";
+import { getUserScope, requirePermission, writeAudit } from "@/lib/auth";
+import { scopeAllowsDepartment } from "@/lib/data-scope";
 import { activatePeriod, reviseActivePeriod } from "@/lib/planning";
 
 export const runtime = "nodejs";
@@ -23,6 +27,12 @@ export async function PATCH(req: Request, ctx: { params: Promise<{ id: string }>
   if (!permissionKey) return NextResponse.json({ error: "Thiếu action hợp lệ." }, { status: 400 });
   const guard = await requirePermission(["ADMIN", "HR_RECRUITER"], permissionKey);
   if (!guard.ok) return NextResponse.json({ error: guard.error }, { status: guard.status });
+  const [period] = await db.select({ departmentId: planningPeriods.departmentId }).from(planningPeriods).where(eq(planningPeriods.id, id));
+  if (!period) return NextResponse.json({ error: "Không tìm thấy kế hoạch." }, { status: 404 });
+  const scope = await getUserScope(guard.session);
+  if (!scopeAllowsDepartment(scope, period.departmentId)) {
+    return NextResponse.json({ error: "Không tìm thấy kế hoạch trong Data Scope được cấp." }, { status: 404 });
+  }
 
   try {
     if (body.action === "activate") {

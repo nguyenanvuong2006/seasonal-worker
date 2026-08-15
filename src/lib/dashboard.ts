@@ -1,11 +1,12 @@
 import "server-only";
-import { and, desc, eq, inArray, isNull, sql } from "drizzle-orm";
+import { and, desc, eq, inArray, isNull, or, sql } from "drizzle-orm";
 import { db, pool } from "@/db";
 import { dailyApplications, departments, planningPeriods, workforceMovements, workerProfiles } from "@/db/schema";
 import { exportColumns, getFieldDefinitions } from "@/lib/metadata";
 import { batchComputePlanningMetrics } from "@/lib/planning";
 import { getUserScope, type Session } from "@/lib/auth";
 import { normalizePersonName } from "@/lib/person-name";
+import { movementScopeVisibility } from "@/lib/data-scope";
 
 /**
  * DASHBOARD FOUNDATION (nền tảng, #9) — nay đọc theo Role + Data Scope (Phase 2, Step 6):
@@ -22,10 +23,11 @@ export const KPI_METRICS = [
   { key: "dw_data_total", label: "Tổng hồ sơ trong DW Data" },
 ] as const;
 
-async function computeMetric(key: string, deptScope: string[] | null): Promise<number> {
-  // dw_data_total không có deptId (kho lao động chung, không thuộc riêng 1 bộ phận) —
-  // luôn tính toàn công ty kể cả khi có Data Scope (đúng bản chất dữ liệu).
+async function computeMetric(key: string, deptScope: string[] | null): Promise<number | null> {
+  // DW Data has no department ownership. Returning the company-wide count to a scoped user
+  // would leak an out-of-scope aggregate; null means unavailable in this scope, not numeric zero.
   if (key === "dw_data_total") {
+    if (deptScope !== null) return null;
     const { rows } = await pool.query(`SELECT count(*)::int c FROM dw_data WHERE deleted_at IS NULL`);
     return rows[0]?.c ?? 0;
   }
@@ -61,8 +63,8 @@ export async function getRecentApplicationsTable(limit = 10, deptScope: string[]
   }
 
   const rows = deptScope
-    ? await db.select().from(dailyApplications).where(inArray(dailyApplications.deptId, deptScope)).orderBy(desc(dailyApplications.createdAt)).limit(limit)
-    : await db.select().from(dailyApplications).orderBy(desc(dailyApplications.createdAt)).limit(limit);
+    ? await db.select().from(dailyApplications).where(and(isNull(dailyApplications.deletedAt), inArray(dailyApplications.deptId, deptScope))).orderBy(desc(dailyApplications.createdAt)).limit(limit)
+    : await db.select().from(dailyApplications).where(isNull(dailyApplications.deletedAt)).orderBy(desc(dailyApplications.createdAt)).limit(limit);
 
   const RESOLVERS: Record<string, (r: (typeof rows)[number]) => string> = {
     da_timestamp: (r) => r.regDate,
@@ -90,6 +92,7 @@ export async function getRecentApplicationsTable(limit = 10, deptScope: string[]
 export async function getScopedDepartmentTable(
   limit = 10,
   deptScope: string[] | null = null,
+  canViewPhone = false,
 ): Promise<{ headers: string[]; rows: string[][] }> {
   const headers = ["Họ và tên", "SĐT", "Giới tính", "Bộ phận", "Nhóm"];
 
@@ -110,7 +113,7 @@ export async function getScopedDepartmentTable(
       .limit(limit);
     return {
       headers,
-      rows: rows.map((r) => [r.fullName, r.phone, r.gender ?? "", r.deptName ?? "", r.groupName ?? ""]),
+      rows: rows.map((r) => [r.fullName, canViewPhone ? r.phone : "•••• (ẩn theo quyền)", r.gender ?? "", r.deptName ?? "", r.groupName ?? ""]),
     };
   }
 
@@ -132,7 +135,7 @@ export async function getScopedDepartmentTable(
 
   return {
     headers,
-    rows: rows.map((r) => [r.fullName, r.phone, r.gender ?? "", r.deptName ?? "", r.groupName ?? ""]),
+    rows: rows.map((r) => [r.fullName, canViewPhone ? r.phone : "•••• (ẩn theo quyền)", r.gender ?? "", r.deptName ?? "", r.groupName ?? ""]),
   };
 }
 
@@ -156,7 +159,7 @@ export type DashboardOverview = {
     newToDw: number;
     mismatch: number;
   };
-  dwTotal: number;
+  dwTotal: number | null;
   planning: {
     demandMale: number;
     demandFemale: number;
@@ -197,13 +200,16 @@ export async function getDashboardOverview(session: Session): Promise<DashboardO
     scope ? [scope] : [],
   );
 
-  // 2) DW Data total (company-wide by nature — same behaviour as the widget API)
-  const dwResult = await pool.query(`SELECT count(*)::int c FROM dw_data WHERE deleted_at IS NULL`);
+  // 2) DW Data is company-wide and has no department key. Hide it for scoped sessions rather
+  // than leaking a company total or misrepresenting unavailable as zero.
+  const dwTotal = scope === null
+    ? (await pool.query(`SELECT count(*)::int c FROM dw_data WHERE deleted_at IS NULL`)).rows[0]?.c ?? 0
+    : null;
 
   // 3) Planning: active periods within scope
   const periodRows = scope
-    ? await db.select({ id: planningPeriods.id }).from(planningPeriods).where(and(eq(planningPeriods.status, "ACTIVE"), inArray(planningPeriods.departmentId, scope)))
-    : await db.select({ id: planningPeriods.id }).from(planningPeriods).where(eq(planningPeriods.status, "ACTIVE"));
+    ? await db.select({ id: planningPeriods.id }).from(planningPeriods).where(and(eq(planningPeriods.status, "ACTIVE"), isNull(planningPeriods.supersededBy), inArray(planningPeriods.departmentId, scope)))
+    : await db.select({ id: planningPeriods.id }).from(planningPeriods).where(and(eq(planningPeriods.status, "ACTIVE"), isNull(planningPeriods.supersededBy)));
 
   let planning: DashboardOverview["planning"] = null;
   if (periodRows.length > 0) {
@@ -228,14 +234,27 @@ export async function getDashboardOverview(session: Session): Promise<DashboardO
     };
   }
 
-  // 4) Movement alerts (pending HR approval)
+  // 4) Movement alerts. Scope intersects either side for transfer visibility; destination-only
+  // previews are redacted. Counts are computed before LIMIT (the old code counted only 5 rows).
   const movWhere = scope
-    ? and(eq(workforceMovements.status, "PENDING_HR"), inArray(workforceMovements.fromDeptId, scope))
+    ? and(
+        eq(workforceMovements.status, "PENDING_HR"),
+        or(inArray(workforceMovements.fromDeptId, scope), inArray(workforceMovements.toDeptId, scope)),
+      )
     : eq(workforceMovements.status, "PENDING_HR");
+  const [movementCounts] = await db
+    .select({
+      resignations: sql<number>`count(*) filter (where ${workforceMovements.movementType} = 'resignation')::int`,
+      transfers: sql<number>`count(*) filter (where ${workforceMovements.movementType} = 'transfer')::int`,
+    })
+    .from(workforceMovements)
+    .where(movWhere);
   const movs = await db
     .select({
       id: workforceMovements.id,
       movementType: workforceMovements.movementType,
+      fromDeptId: workforceMovements.fromDeptId,
+      toDeptId: workforceMovements.toDeptId,
       workerName: workerProfiles.fullName,
       effectiveDate: workforceMovements.effectiveDate,
       status: workforceMovements.status,
@@ -256,12 +275,21 @@ export async function getDashboardOverview(session: Session): Promise<DashboardO
       newToDw: pipelineResult.rows[0]?.new_to_dw ?? 0,
       mismatch: pipelineResult.rows[0]?.mismatch ?? 0,
     },
-    dwTotal: dwResult.rows[0]?.c ?? 0,
+    dwTotal,
     planning,
     movements: {
-      pendingResignations: movs.filter((m) => m.movementType === "resignation").length,
-      pendingTransfers: movs.filter((m) => m.movementType === "transfer").length,
-      recent: movs.map((m) => ({ ...m, workerName: normalizePersonName(m.workerName ?? "") || null })),
+      pendingResignations: movementCounts?.resignations ?? 0,
+      pendingTransfers: movementCounts?.transfers ?? 0,
+      recent: movs.map((movement) => {
+        const visibility = movementScopeVisibility(scope, movement.movementType, movement.fromDeptId, movement.toDeptId);
+        return {
+          id: movement.id,
+          movementType: movement.movementType,
+          effectiveDate: movement.effectiveDate,
+          status: movement.status,
+          workerName: visibility === "FULL" ? normalizePersonName(movement.workerName ?? "") || null : null,
+        };
+      }),
     },
   };
 }

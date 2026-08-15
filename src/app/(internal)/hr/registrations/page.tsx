@@ -41,7 +41,7 @@ export default async function HrRegistrationsPage() {
           )
           .orderBy(asc(departments.deptName), asc(departments.groupName));
 
-  const [dw] = await db.select({ c: sql<number>`count(*)::int` }).from(dwData);
+  const dw = scope === null ? (await db.select({ c: sql<number>`count(*)::int` }).from(dwData))[0] : null;
 
   // RECRUITER PIPELINE (cá nhân hoá theo vai trò) — số liệu hôm nay để HR nắm nhanh khối lượng việc.
   // Với người có Data Scope, chỉ đếm trong các bộ phận được phân quyền.
@@ -70,7 +70,7 @@ export default async function HrRegistrationsPage() {
         title="Daily Application — Tiếp nhận & Xếp việc Tập nghề"
         description={
           scoped
-            ? "Bạn đang xem ở chế độ Quản lý bộ phận: bộ lọc và danh sách chỉ hiển thị trong phạm vi bộ phận được phân quyền (Data Scope) của bạn."
+            ? "Bộ lọc và danh sách chỉ hiển thị trong Data Scope được cấp cho tài khoản của bạn."
             : "Mặc định chỉ hiện DW hôm nay. Tick ô “Xem khoảng ngày” để tra cứu & xuất kết quả các ngày trước. Cột DW Data tự động đối chiếu 3 tầng (CCCD → Tên+Năm sinh → Tên+SĐT)."
         }
         actions={
@@ -82,7 +82,7 @@ export default async function HrRegistrationsPage() {
               <>
                 <Badge tone="gold" dot>Inline edit như Google Sheet</Badge>
                 <Badge tone="green" dot>
-                  Đối chiếu {dw.c.toLocaleString("vi-VN")} DW Data
+                  Đối chiếu {(dw?.c ?? 0).toLocaleString("vi-VN")} DW Data
                 </Badge>
               </>
             )}
@@ -96,7 +96,7 @@ export default async function HrRegistrationsPage() {
           <MetricStripItem key="pending" icon={<Clock className="h-4 w-4" aria-hidden />} value={pipeline?.pending ?? 0} label="Chờ duyệt" tone="warning" />,
           <MetricStripItem key="approved" icon={<CheckCircle2 className="h-4 w-4" aria-hidden />} value={pipeline?.approved ?? 0} label="Đã nhận việc" tone="success" />,
           <MetricStripItem key="new" icon={<UserPlus2 className="h-4 w-4" aria-hidden />} value={pipeline?.newToDw ?? 0} label="Người mới (chưa có DW)" tone="accent" />,
-          <MetricStripItem key="dw" icon={<Database className="h-4 w-4" aria-hidden />} value={dw.c.toLocaleString("vi-VN")} label="Hồ sơ DW Data" tone="info" />,
+          <MetricStripItem key="dw" icon={<Database className="h-4 w-4" aria-hidden />} value={dw ? dw.c.toLocaleString("vi-VN") : "—"} label={dw ? "Hồ sơ DW Data" : "DW Data ngoài scope"} tone="info" />,
         ]}
       />
 
