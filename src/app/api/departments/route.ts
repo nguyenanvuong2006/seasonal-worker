@@ -4,6 +4,7 @@ import { db } from "@/db";
 import { departments } from "@/db/schema";
 import { requireRoleAndPermission, writeAudit } from "@/lib/auth";
 import { todayStr } from "@/lib/helpers";
+import { normalizePersonName } from "@/lib/person-name";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -38,7 +39,10 @@ export async function GET() {
     .where(isNull(departments.deletedAt))
     .orderBy(asc(departments.deptName), asc(departments.groupName));
 
-  return NextResponse.json({ rows });
+  // Chuẩn hoá tên người phụ trách bộ phận trước khi trả về UI.
+  return NextResponse.json({
+    rows: rows.map((r) => ({ ...r, supervisor: normalizePersonName(r.supervisor) })),
+  });
 }
 
 export async function POST(req: Request) {
@@ -62,7 +66,7 @@ export async function POST(req: Request) {
         section: body.section || "",
         groupName: String(body.groupName || "").trim(),
         vnName: body.vnName || null,
-        supervisor: body.supervisor || null,
+        supervisor: normalizePersonName(body.supervisor) || null,
         supervisorPhone: body.supervisorPhone || null,
         sheetLink: body.sheetLink || null,
         dailyQuota: Number(body.dailyQuota) || 0,
@@ -94,6 +98,8 @@ export async function PATCH(req: Request) {
   for (const k of ["location", "division", "deptName", "section", "groupName", "vnName", "supervisor", "supervisorPhone", "sheetLink"]) {
     if (k in body) patch[k] = body[k] ?? null;
   }
+  // Chuẩn hoá tên người phụ trách bộ phận trước khi lưu.
+  if (typeof patch.supervisor === "string") patch.supervisor = normalizePersonName(patch.supervisor) || null;
   if ("dailyQuota" in body) patch.dailyQuota = Number(body.dailyQuota) || 0;
   if ("isActive" in body) patch.isActive = Boolean(body.isActive);
 

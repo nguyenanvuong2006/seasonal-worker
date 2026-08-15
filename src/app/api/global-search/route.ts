@@ -10,6 +10,7 @@ import {
 } from "@/db/schema";
 import { getSession, getUserScope, hasPermission } from "@/lib/auth";
 import { ROLE_LABEL } from "@/lib/helpers";
+import { normalizePersonName } from "@/lib/person-name";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -70,7 +71,7 @@ export async function GET(req: Request) {
         label: "Hồ sơ Tập nghề",
         items: rows.map((r) => ({
           id: r.id,
-          title: r.fullName,
+          title: normalizePersonName(r.fullName),
           subtitle: `CCCD: ${mask(r.cccd, canViewCccd)}${r.phone ? " • SĐT: " + mask(r.phone, canViewPhone) : ""}`,
           href: `/admin/worker-profiles?cccd=${encodeURIComponent(r.cccd)}`,
         })),
@@ -109,7 +110,7 @@ export async function GET(req: Request) {
         label: "Daily Application",
         items: rows.map((r) => ({
           id: r.id,
-          title: r.fullName,
+          title: normalizePersonName(r.fullName),
           subtitle: `CCCD: ${mask(r.cccd, canViewCccd)} • ${r.deptName ?? "Chưa xếp bộ phận"}`,
           status: r.status,
           href: `/hr/registrations?q=${encodeURIComponent(r.cccd)}&from=${r.regDate}&to=${r.regDate}&rangeMode=1`,
@@ -149,7 +150,7 @@ export async function GET(req: Request) {
         items: rows.map((r) => ({
           id: r.id,
           title: r.deptName,
-          subtitle: [r.groupName, r.vnName, r.supervisor ? `Phụ trách: ${r.supervisor}` : null].filter(Boolean).join(" • ") || "—",
+          subtitle: [r.groupName, r.vnName, r.supervisor ? `Phụ trách: ${normalizePersonName(r.supervisor)}` : null].filter(Boolean).join(" • ") || "—",
           href: session.role === "DEPT_MANAGER" ? `/department?dept=${r.id}` : `/admin/departments?q=${encodeURIComponent(r.deptName)}`,
         })),
       });
@@ -231,7 +232,7 @@ export async function GET(req: Request) {
         label: "Nghỉ việc / Thuyên chuyển",
         items: rows.map((r) => ({
           id: r.id,
-          title: r.workerName ?? "(Không rõ lao động)",
+          title: normalizePersonName(r.workerName ?? "") || "(Không rõ lao động)",
           subtitle: `${r.movementType === "resignation" ? "Nghỉ việc" : "Thuyên chuyển"} • CCCD: ${mask(r.workerCccd, canViewCccd)} • ${r.effectiveDate}`,
           status: r.status,
           href: `/admin/workforce-movements?highlight=${r.id}`,

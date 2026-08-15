@@ -119,6 +119,9 @@ export const dailyApplications = pgTable(
     dwMatch: varchar("dw_match", { length: 20 }).notNull().default("NEW"), // MATCHED | NEW | MISMATCH
     dwId: uuid("dw_id").references(() => dwData.id, { onDelete: "set null" }),
     dwCode: varchar("dw_code", { length: 40 }),
+    // IT CODE / Mã vân tay (#18) — Recruiter nhập tại cột Daily Application; đồng bộ với
+    // dw_data.it_code và worker_profiles.fingerprint_code (xem Requirement 2).
+    itCode: varchar("it_code", { length: 40 }),
 
     // Nguyện vọng
     workDuration: varchar("work_duration", { length: 40 }),
@@ -796,6 +799,7 @@ export const stagingDailyApplication = pgTable(
     note: text("note"),
     vaccine: text("vaccine"),
     codeCheck: text("code_check"),
+    itCode: text("it_code"),
     regDateRaw: text("reg_date_raw"), // giá trị GỐC từ file — giữ nguyên để hiện trong báo cáo lỗi
     regDateParsed: text("reg_date_parsed"), // ISO 8601 đã chuẩn hoá bằng date-parser.ts, hoặc NULL nếu không parse được
     customAnswers: jsonb("custom_answers").$type<Record<string, string>>().default({}),

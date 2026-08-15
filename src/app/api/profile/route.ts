@@ -3,6 +3,7 @@ import { eq } from "drizzle-orm";
 import { db } from "@/db";
 import { departments, users } from "@/db/schema";
 import { getSession, writeAudit } from "@/lib/auth";
+import { normalizePersonName } from "@/lib/person-name";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -31,7 +32,7 @@ export async function GET() {
     .limit(1);
 
   if (!row) return NextResponse.json({ error: "Không tìm thấy tài khoản." }, { status: 404 });
-  return NextResponse.json({ profile: row });
+  return NextResponse.json({ profile: { ...row, fullName: normalizePersonName(row.fullName) } });
 }
 
 /**
@@ -44,7 +45,7 @@ export async function PATCH(req: Request) {
   if (!session) return NextResponse.json({ error: "Chưa đăng nhập." }, { status: 401 });
 
   const body = (await req.json()) as { fullName?: string };
-  const fullName = String(body.fullName ?? "").trim();
+  const fullName = normalizePersonName(body.fullName);
   if (!fullName) return NextResponse.json({ error: "Họ và tên không được để trống." }, { status: 400 });
   if (fullName.length > MAX_FULL_NAME_LENGTH) {
     return NextResponse.json({ error: `Họ và tên tối đa ${MAX_FULL_NAME_LENGTH} ký tự.` }, { status: 400 });

@@ -3,6 +3,7 @@ import { and, desc, eq, isNotNull } from "drizzle-orm";
 import { db } from "@/db";
 import { dailyApplications, departments, dwData } from "@/db/schema";
 import { requireRoleAndPermission, writeAudit } from "@/lib/auth";
+import { normalizePersonName } from "@/lib/person-name";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -48,7 +49,12 @@ export async function GET() {
       .orderBy(desc(dailyApplications.deletedAt)),
   ]);
 
-  return NextResponse.json({ departments: deptRows, dwData: dwRows, dailyApplications: appRows });
+  // Chuẩn hoá họ tên trước khi trả về UI (label là họ tên lao động).
+  return NextResponse.json({
+    departments: deptRows,
+    dwData: dwRows.map((r) => ({ ...r, label: normalizePersonName(r.label) })),
+    dailyApplications: appRows.map((r) => ({ ...r, label: normalizePersonName(r.label) })),
+  });
 }
 
 const TABLES = { departments, dw_data: dwData, daily_applications: dailyApplications } as const;

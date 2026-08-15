@@ -1,9 +1,10 @@
 import { NextResponse } from "next/server";
-import { eq, inArray, sql } from "drizzle-orm";
+import { and, eq, inArray, isNull, sql } from "drizzle-orm";
 import { db } from "@/db";
-import { dailyApplications, dwData, employmentSessions } from "@/db/schema";
+import { dailyApplications, dwData, employmentSessions, workerProfiles } from "@/db/schema";
 import { requireRoleAndPermission, writeAudit } from "@/lib/auth";
 import { todayStr } from "@/lib/helpers";
+import { normalizePersonName } from "@/lib/person-name";
 import { runRules } from "@/lib/rule-engine";
 import { queueNotification } from "@/lib/notifications";
 import { autoAllocateInternship } from "@/lib/planning";
@@ -67,7 +68,7 @@ export async function POST(req: Request) {
         results.push({
           id: target.id,
           cccd: target.cccd,
-          fullName: target.fullName,
+          fullName: normalizePersonName(target.fullName),
           ok: false,
           reason: "CCCD phải gồm đúng 12 chữ số trước khi xử lý hồ sơ",
         });
@@ -75,7 +76,7 @@ export async function POST(req: Request) {
 
       const alreadyAtStatus = allTargets.filter((target) => target.status === finalStatus && !invalidIdentityIds.has(target.id));
       for (const t of alreadyAtStatus) {
-        results.push({ id: t.id, cccd: t.cccd, fullName: t.fullName, ok: false, reason: "Hồ sơ đã ở đúng trạng thái này từ trước — không có gì để duyệt lại (bỏ qua)" });
+        results.push({ id: t.id, cccd: t.cccd, fullName: normalizePersonName(t.fullName), ok: false, reason: "Hồ sơ đã ở đúng trạng thái này từ trước — không có gì để duyệt lại (bỏ qua)" });
       }
 
       const targets = allTargets.filter((target) => target.status !== finalStatus && !invalidIdentityIds.has(target.id));
@@ -94,7 +95,9 @@ export async function POST(req: Request) {
             .insert(dwData)
             .values(
               freshOnes.map((t) => ({
-                fullName: t.fullName,
+                fullName: normalizePersonName(t.fullName),
+                // IT CODE / Mã vân tay (#18) — chuyển IT CODE đã nhập ở Daily Application sang DW Data.
+                itCode: t.itCode ?? null,
                 gender: t.gender,
                 bod: t.dob,
                 cccd: t.cccd,
@@ -110,6 +113,7 @@ export async function POST(req: Request) {
               targetWhere: sql`deleted_at is null`,
               set: {
                 fullName: sql`excluded.full_name`,
+                itCode: sql`coalesce(excluded.it_code, ${dwData.itCode})`,
                 phone: sql`coalesce(excluded.phone, ${dwData.phone})`,
                 residentialAddress: sql`coalesce(excluded.residential_address, ${dwData.residentialAddress})`,
               },
@@ -117,7 +121,8 @@ export async function POST(req: Request) {
             .returning({ id: dwData.id, cccd: dwData.cccd });
           newImported = inserted.length;
 
-          // Gắn liên kết DW cho các đơn vừa import
+          // Gắn liên kết DW cho các đơn vừa import + cập nhật worker_profiles.dw_id
+          // để các lần sửa IT CODE sau này đồng bộ đúng sang dw_data.it_code.
           for (const ins of inserted) {
             if (!ins.cccd) continue;
             dwInsertedCccd.add(ins.cccd);
@@ -125,6 +130,10 @@ export async function POST(req: Request) {
               .update(dailyApplications)
               .set({ dwId: ins.id, dwMatch: "MATCHED" })
               .where(eq(dailyApplications.cccd, ins.cccd));
+            await tx
+              .update(workerProfiles)
+              .set({ dwId: ins.id })
+              .where(and(eq(workerProfiles.cccd, ins.cccd), isNull(workerProfiles.deletedAt)));
           }
         }
       }
@@ -170,7 +179,7 @@ export async function POST(req: Request) {
             : finalStatus === "REJECTED"
               ? "Đã từ chối"
               : "Đã chuyển vào danh sách dự phòng (Waitlist)";
-        results.push({ id: t.id, cccd: t.cccd, fullName: t.fullName, ok: true, reason });
+        results.push({ id: t.id, cccd: t.cccd, fullName: normalizePersonName(t.fullName), ok: true, reason });
       }
 
       return { updated: updated.length, newImported, results, processedIds: targets.map((t) => t.id) };
@@ -206,7 +215,7 @@ export async function POST(req: Request) {
           recipientType: "WORKER",
           recipientRef: row.cccd,
           templateKey: "worker_approved",
-          payload: { fullName: row.fullName, deptId },
+          payload: { fullName: normalizePersonName(row.fullName), deptId },
         });
       }
     }

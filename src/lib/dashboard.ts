@@ -5,6 +5,7 @@ import { dailyApplications, planningPeriods, workforceMovements, workerProfiles 
 import { exportColumns, getFieldDefinitions } from "@/lib/metadata";
 import { batchComputePlanningMetrics } from "@/lib/planning";
 import { getUserScope, type Session } from "@/lib/auth";
+import { normalizePersonName } from "@/lib/person-name";
 
 /**
  * DASHBOARD FOUNDATION (nền tảng, #9) — nay đọc theo Role + Data Scope (Phase 2, Step 6):
@@ -66,11 +67,12 @@ export async function getRecentApplicationsTable(limit = 10, deptScope: string[]
   const RESOLVERS: Record<string, (r: (typeof rows)[number]) => string> = {
     da_timestamp: (r) => r.regDate,
     da_cccd: (r) => r.cccd,
-    da_full_name: (r) => r.fullName,
+    da_full_name: (r) => normalizePersonName(r.fullName),
     da_gender: (r) => r.gender ?? "",
     da_phone: (r) => r.phone,
     da_status: (r) => r.status,
     da_dw_match: (r) => r.dwMatch,
+    da_it_code: (r) => r.itCode ?? "",
   };
 
   return {
@@ -204,7 +206,7 @@ export async function getDashboardOverview(session: Session): Promise<DashboardO
     movements: {
       pendingResignations: movs.filter((m) => m.movementType === "resignation").length,
       pendingTransfers: movs.filter((m) => m.movementType === "transfer").length,
-      recent: movs,
+      recent: movs.map((m) => ({ ...m, workerName: normalizePersonName(m.workerName ?? "") || null })),
     },
   };
 }

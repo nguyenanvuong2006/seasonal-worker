@@ -3,6 +3,7 @@ import { and, desc, eq, sql } from "drizzle-orm";
 import { db } from "@/db";
 import { dailyApplications, departments, dwData } from "@/db/schema";
 import { isValidCccd, isValidPhone } from "@/lib/helpers";
+import { normalizePersonName } from "@/lib/person-name";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -73,7 +74,7 @@ export async function POST(req: Request) {
 
   return NextResponse.json({
     worker: {
-      fullName: dwMatch?.fullName ?? history[0]?.fullName ?? "",
+      fullName: normalizePersonName(dwMatch?.fullName ?? history[0]?.fullName ?? ""),
       isVerified: Boolean(dwMatch),
     },
     history: history.map((h) => ({

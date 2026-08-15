@@ -4,6 +4,7 @@ import { db } from "@/db";
 import { dailyApplications, departments } from "@/db/schema";
 import { matchDwWorker } from "@/lib/matching";
 import { todayStr } from "@/lib/helpers";
+import { normalizePersonName } from "@/lib/person-name";
 import { CCCD_ERROR_MESSAGE, isValidCccd } from "@/lib/validators";
 
 export const runtime = "nodejs";
@@ -45,7 +46,7 @@ export async function POST(req: Request) {
       return NextResponse.json({
         status: "ALREADY_REGISTERED_TODAY",
         reg: {
-          full_name: app.fullName,
+          full_name: normalizePersonName(app.fullName),
           status: app.status,
           dept_name: app.deptName
             ? `${app.deptName}${app.groupName ? " — " + app.groupName : ""}`
@@ -71,7 +72,7 @@ export async function POST(req: Request) {
         status: "RETURNING_VERIFIED",
         confidence: match.confidence,
         worker: {
-          full_name: match.worker!.fullName,
+          full_name: normalizePersonName(match.worker!.fullName),
           address_current: match.worker!.residentialAddress || match.worker!.permanentAddress || null,
         },
       });

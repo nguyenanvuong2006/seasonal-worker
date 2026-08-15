@@ -3,6 +3,7 @@ import { asc, eq, sql } from "drizzle-orm";
 import { db } from "@/db";
 import { departments, users } from "@/db/schema";
 import { hashPassword, requirePermission, writeAudit } from "@/lib/auth";
+import { normalizePersonName } from "@/lib/person-name";
 import { isKnownRoleKey, listRoles } from "@/lib/rbac";
 import {
   buildPatch,
@@ -58,7 +59,7 @@ export async function GET() {
   // (lớp bảo vệ CHÍNH vẫn nằm ở backend) + danh mục vai trò cho dropdown (Dynamic RBAC V2).
   const roleCatalog = await listRoles();
   return NextResponse.json({
-    rows,
+    rows: rows.map((r) => ({ ...r, fullName: normalizePersonName(r.fullName) })),
     currentUserId: guard.session.id,
     roles: roleCatalog.map((r) => ({ key: r.key, name: r.name, isActive: r.isActive, memberCount: r.memberCount })),
   });
@@ -90,7 +91,7 @@ export async function POST(req: Request) {
       .values({
         username,
         passwordHash: hashPassword(password),
-        fullName: String(body.fullName || username),
+        fullName: normalizePersonName(String(body.fullName || username)),
         role: body.role,
         deptId: body.role === "DEPT_MANAGER" ? body.deptId || null : null,
       })
@@ -122,7 +123,7 @@ export async function PATCH(req: Request) {
   if (!target) return NextResponse.json({ error: "Không tìm thấy người dùng." }, { status: 404 });
 
   const change: ChangeIntent = {};
-  if ("fullName" in body) change.fullName = String(body.fullName ?? "");
+  if ("fullName" in body) change.fullName = normalizePersonName(String(body.fullName ?? ""));
   if ("role" in body) change.role = String(body.role ?? "");
   if ("deptId" in body) change.deptId = body.deptId ? String(body.deptId) : null;
   if ("isActive" in body) change.isActive = Boolean(body.isActive);

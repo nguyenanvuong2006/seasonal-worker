@@ -5,6 +5,7 @@ import { useRouter } from "next/navigation";
 import { KeyRound, UserCircle } from "lucide-react";
 import { Badge, Button, Card, CardContent, CardHeader, FormField, Input, toast } from "@/components/ui";
 import { ROLE_LABEL } from "@/lib/helpers";
+import { normalizePersonName } from "@/lib/person-name";
 
 type Profile = {
   id: string;
@@ -34,7 +35,7 @@ export function ProfileView({ profile }: { profile: Profile }) {
       const res = await fetch("/api/profile", {
         method: "PATCH",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ fullName }),
+        body: JSON.stringify({ fullName: normalizePersonName(fullName) }),
       });
       const data = await res.json();
       if (!res.ok) {

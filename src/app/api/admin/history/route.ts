@@ -3,6 +3,7 @@ import { and, desc, eq, sql } from "drizzle-orm";
 import { db } from "@/db";
 import { auditLogs, dailyApplications, departments, dwData } from "@/db/schema";
 import { requirePermission, writeAudit } from "@/lib/auth";
+import { normalizePersonName } from "@/lib/person-name";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -59,6 +60,8 @@ export async function POST(req: Request) {
 
   const table = TABLES[targetType];
   const patchToApply: Record<string, unknown> = { ...before };
+  // Mọi điểm ghi mới fullName đều lưu giá trị đã chuẩn hoá (kể cả khôi phục phiên bản cũ).
+  if (typeof patchToApply.fullName === "string") patchToApply.fullName = normalizePersonName(patchToApply.fullName);
   if (targetType === "daily_applications") patchToApply.updatedAt = new Date();
 
   const [restored] = await db

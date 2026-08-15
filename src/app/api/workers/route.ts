@@ -4,6 +4,7 @@ import { db } from "@/db";
 import { dailyApplications, dwData } from "@/db/schema";
 import { requirePermission, writeAudit } from "@/lib/auth";
 import { getFieldDefinitions } from "@/lib/metadata";
+import { normalizePersonName } from "@/lib/person-name";
 import { CCCD_ERROR_MESSAGE, isValidCccd } from "@/lib/validators";
 
 export const runtime = "nodejs";
@@ -57,7 +58,13 @@ export async function GET(req: Request) {
     .limit(limit)
     .offset((page - 1) * limit);
 
-  return NextResponse.json({ rows, total, page, limit });
+  // Chuẩn hoá họ tên trước khi trả về UI (dữ liệu legacy có thể chưa chuẩn).
+  return NextResponse.json({
+    rows: rows.map((r) => ({ ...r, fullName: normalizePersonName(r.fullName) })),
+    total,
+    page,
+    limit,
+  });
 }
 
 export async function PATCH(req: Request) {
@@ -89,6 +96,8 @@ export async function PATCH(req: Request) {
     patch.cccd = c;
   }
   if ("isActive" in body) patch.isActive = Boolean(body.isActive);
+  // Chuẩn hoá họ tên trước khi lưu (mọi điểm ghi mới đều lưu giá trị chuẩn hoá).
+  if (typeof patch.fullName === "string") patch.fullName = normalizePersonName(patch.fullName);
 
   const [updated] = await db.update(dwData).set(patch).where(eq(dwData.id, body.id)).returning();
   if (!updated) return NextResponse.json({ error: "Không tìm thấy." }, { status: 404 });
