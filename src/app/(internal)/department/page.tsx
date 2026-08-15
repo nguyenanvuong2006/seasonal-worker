@@ -37,6 +37,7 @@ type AppRow = {
   fullName: string;
   gender: string | null;
   phone: string;
+  dwCode: string | null;
   deptId: string | null;
   deptName: string | null;
   groupName: string | null;
@@ -370,6 +371,7 @@ export default function MyDepartmentPage() {
 
     const headers = [
       "STT",
+      "Code",
       "Ngày",
       "Họ và tên",
       "SĐT",
@@ -386,6 +388,7 @@ export default function MyDepartmentPage() {
       ...targetRows.map((r, i) =>
         [
           i + 1,
+          `"${(r.dwCode || "").replace(/"/g, '""')}"`,
           r.regDate,
           `"${(r.fullName || "").replace(/"/g, '""')}"`,
           `"${r.phone || ""}"`,
@@ -589,6 +592,7 @@ export default function MyDepartmentPage() {
                       />
                     </th>
                     <th className="w-12 px-3 py-2.5 text-center text-[10.5px] uppercase">#</th>
+                    <th className="px-3 py-2.5 text-left text-[10.5px] uppercase">Code</th>
                     <th className="px-3 py-2.5 text-left text-[10.5px] uppercase">Họ và tên</th>
                     <th className="px-3 py-2.5 text-center text-[10.5px] uppercase">Giới tính</th>
                     <th className="px-3 py-2.5 text-left text-[10.5px] uppercase">Department</th>
@@ -620,6 +624,9 @@ export default function MyDepartmentPage() {
                           />
                         </td>
                         <td className="px-3 py-2.5 text-center text-xs text-fg-muted">{i + 1}</td>
+                        <td className="px-3 py-2.5 font-mono text-xs font-semibold text-fg-secondary">
+                          {r.dwCode || "—"}
+                        </td>
                         <td className="px-3 py-2.5 font-bold text-fg">{r.fullName}</td>
                         <td className="px-3 py-2.5 text-center">
                           <Badge tone={r.gender === "Nữ" ? "purple" : "blue"}>

@@ -4,7 +4,7 @@ import Link from "next/link";
 import { getSession, hasPermission } from "@/lib/auth";
 import { getDashboardOverview } from "@/lib/dashboard";
 import { getPublicBranding } from "@/lib/branding";
-import { AlertPanel, SectionLabel, SkeletonKpiRow } from "@/components/ui";
+import { AlertPanel, Badge, Card, CardContent, MetricStrip, MetricStripItem, SectionLabel, SkeletonKpiRow } from "@/components/ui";
 import DashboardWidgets from "@/components/dashboard-widgets";
 import AnalyticsDashboard from "@/components/analytics/analytics-dashboard";
 import {
@@ -13,9 +13,12 @@ import {
   CalendarRange,
   CheckCircle2,
   ClipboardList,
+  Clock,
   Database,
+  FileText,
   Sprout,
   Sun,
+  UserPlus2,
 } from "lucide-react";
 
 export const dynamic = "force-dynamic";
@@ -180,6 +183,60 @@ export default async function DashboardPage() {
           </div>
         </div>
       ) : null}
+
+      {/* Movement alerts */}
+      <Card>
+        <CardContent className="p-5">
+          <SectionLabel>Biến động nhân lực</SectionLabel>
+          <h2 className="mt-1.5 text-[15px] font-bold text-fg">Yêu cầu chờ HR</h2>
+          {overview.movements.recent.length === 0 ? (
+            <div className="mt-4 rounded-[14px] border border-dashed border-border-strong bg-surface-hover/60 p-4 text-[12.5px] leading-relaxed text-fg-muted">
+              Không có yêu cầu nghỉ việc / thuyên chuyển nào đang chờ xử lý.
+            </div>
+          ) : (
+            <ul className="mt-3 divide-y divide-border">
+              {overview.movements.recent.map((m) => (
+                <li key={m.id} className="flex items-center gap-3 py-2.5">
+                  <div
+                    className={
+                      m.movementType === "resignation"
+                        ? "flex h-8 w-8 shrink-0 items-center justify-center rounded-[9px] bg-warning-tint text-warning"
+                        : "flex h-8 w-8 shrink-0 items-center justify-center rounded-[9px] bg-info-tint text-info"
+                    }
+                  >
+                    <ArrowLeftRight className="h-4 w-4" aria-hidden />
+                  </div>
+                  <div className="min-w-0 flex-1">
+                    <p className="truncate text-[13px] font-semibold text-fg">{m.workerName ?? "—"}</p>
+                    <p className="text-[11.5px] text-fg-muted">
+                      {m.movementType === "resignation" ? "Nghỉ việc" : "Thuyên chuyển"} · {m.effectiveDate ? new Date(m.effectiveDate).toLocaleDateString("vi-VN") : "—"}
+                    </p>
+                  </div>
+                  <Badge tone="amber" dot>Chờ HR</Badge>
+                </li>
+              ))}
+            </ul>
+          )}
+          <Link href="/admin/workforce-movements" className="mt-3 inline-flex items-center gap-1 text-[12px] font-bold text-primary hover:underline">
+            Xem tất cả biến động →
+          </Link>
+        </CardContent>
+      </Card>
+
+      {/* ============ ACTIVITY / WORKFLOW — today's pipeline ============ */}
+      <div>
+        <SectionLabel tone="green" className="mb-2">Hoạt động hôm nay</SectionLabel>
+        <MetricStrip
+          items={[
+            <MetricStripItem key="total" icon={<FileText className="h-4 w-4" aria-hidden />} value={t.total} label="Tổng DW đăng ký" tone="primary" />,
+            <MetricStripItem key="pending" icon={<Clock className="h-4 w-4" aria-hidden />} value={t.pending} label="Chờ duyệt" tone="warning" />,
+            <MetricStripItem key="approved" icon={<CheckCircle2 className="h-4 w-4" aria-hidden />} value={t.approved} label="Đã xếp việc" tone="success" />,
+            <MetricStripItem key="new" icon={<UserPlus2 className="h-4 w-4" aria-hidden />} value={t.newToDw} label="Người mới → DW Data" tone="accent" />,
+            <MetricStripItem key="mismatch" icon={<AlertTriangle className="h-4 w-4" aria-hidden />} value={t.mismatch} label="Khai sai CŨ/MỚI" tone="danger" />,
+            <MetricStripItem key="dw" icon={<Database className="h-4 w-4" aria-hidden />} value={overview.dwTotal.toLocaleString("vi-VN")} label="Tổng hồ sơ DW Data" tone="info" />,
+          ]}
+        />
+      </div>
 
       {/* ============ ADDITIONAL WIDGETS (dashboard_widgets — giữ nguyên chức năng) ============ */}
       <div>

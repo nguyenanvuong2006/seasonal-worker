@@ -202,6 +202,9 @@ export async function GET(req: Request) {
     if (scope.length === 0) return NextResponse.json({ rows: [] });
     filters.push(inArray(dailyApplications.deptId, scope));
     filters.push(inArray(dailyApplications.status, ["APPROVED", "INACTIVE"]));
+    // Bộ lọc bộ phận vẫn phải hoạt động với người dùng CÓ Data Scope: chọn bộ phận
+    // được phân quyền nào thì chỉ hiện bộ phận đó (giao với scope, không bỏ qua).
+    if (deptParam && deptParam !== "ALL") filters.push(eq(dailyApplications.deptId, deptParam));
   } else if (deptParam && deptParam !== "ALL") {
     filters.push(eq(dailyApplications.deptId, deptParam));
   }
