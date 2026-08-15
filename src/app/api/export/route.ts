@@ -6,6 +6,7 @@ import { dailyApplications, departments, formQuestions, workflowStages } from "@
 import { getSession, getUserScope, hasPermission, writeAudit } from "@/lib/auth";
 import { formatDate, STATUS_META, todayStr } from "@/lib/helpers";
 import { exportColumns, getFieldDefinitions } from "@/lib/metadata";
+import { normalizePersonName } from "@/lib/person-name";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -25,6 +26,7 @@ const CENTERED_KEYS = new Set([
   "da_declared_type",
   "da_dw_match",
   "da_dw_code",
+  "da_it_code",
   "da_status",
 ]);
 
@@ -85,6 +87,7 @@ export async function GET(req: Request) {
       declaredType: dailyApplications.declaredType,
       dwMatch: dailyApplications.dwMatch,
       dwCode: dailyApplications.dwCode,
+      itCode: dailyApplications.itCode,
       workDuration: dailyApplications.workDuration,
       referralChannel: dailyApplications.referralChannel,
       deptName: departments.deptName,
@@ -142,7 +145,8 @@ export async function GET(req: Request) {
   const resolvers: Record<string, (r: Row) => string> = {
     da_timestamp: (r) => formatDate(r.regDate),
     da_cccd: (r) => mask(r.cccd, canViewCccd),
-    da_full_name: (r) => r.fullName,
+    da_full_name: (r) => normalizePersonName(r.fullName),
+    da_it_code: (r) => r.itCode ?? "",
     da_gender: (r) => r.gender ?? "",
     da_dob: (r) => r.dob ?? "",
     da_age: (r) => (r.age ?? "") + "",

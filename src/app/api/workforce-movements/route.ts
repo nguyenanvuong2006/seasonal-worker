@@ -5,6 +5,7 @@ import { employmentSessions, workerProfiles, workforceMovements } from "@/db/sch
 import { getUserScope, requirePermission, writeAudit } from "@/lib/auth";
 import { queueNotification } from "@/lib/notifications";
 import { todayStr } from "@/lib/helpers";
+import { normalizePersonName } from "@/lib/person-name";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -52,7 +53,10 @@ export async function GET(req: Request) {
     .orderBy(desc(workforceMovements.createdAt))
     .limit(500);
 
-  return NextResponse.json({ rows });
+  // Chuẩn hoá họ tên lao động trước khi trả về UI.
+  return NextResponse.json({
+    rows: rows.map((r) => ({ ...r, workerName: normalizePersonName(r.workerName ?? "") || null })),
+  });
 }
 
 /** Tạo yêu cầu mới (Manager/Nhân viên hành chính) — RESIGNATION hoặc TRANSFER. */

@@ -1,10 +1,11 @@
 import { NextResponse } from "next/server";
 import { and, eq, isNull, ne } from "drizzle-orm";
 import { db } from "@/db";
-import { dailyApplications, employmentSessions, workerProfiles } from "@/db/schema";
+import { dailyApplications, dwData, employmentSessions, workerProfiles } from "@/db/schema";
 import { requireRoleAndPermission, writeAudit } from "@/lib/auth";
 import { getWorkflowStages } from "@/lib/workflow";
 import { autoAllocateInternship } from "@/lib/planning";
+import { normalizePersonName } from "@/lib/person-name";
 import { CCCD_ERROR_MESSAGE, isValidCccd, normalizeCccd } from "@/lib/validators";
 
 export const runtime = "nodejs";
@@ -28,6 +29,7 @@ const EDITABLE = [
   "workDuration",
   "referralChannel",
   "declaredType",
+  "itCode",
 ] as const;
 
 // P1-4 (Production Hardening Audit) — field định danh cần đồng bộ sang worker_profiles (nguồn
@@ -57,6 +59,9 @@ export async function PATCH(req: Request, ctx: { params: Promise<{ id: string }>
         patch[key] = v === "" || v === "ALL" ? null : v;
       }
     }
+    // Chuẩn hoá họ tên & IT CODE trước khi lưu (mọi điểm ghi mới đều lưu giá trị chuẩn hoá).
+    if (typeof patch.fullName === "string") patch.fullName = normalizePersonName(patch.fullName);
+    if (typeof patch.itCode === "string") patch.itCode = patch.itCode.trim() || null;
     if (Object.keys(patch).length === 1) {
       return NextResponse.json({ error: "Không có dữ liệu cập nhật." }, { status: 400 });
     }
@@ -136,6 +141,33 @@ export async function PATCH(req: Request, ctx: { params: Promise<{ id: string }>
         if (Object.keys(profilePatch).length > 0) {
           profilePatch.updatedAt = new Date();
           await tx.update(workerProfiles).set(profilePatch).where(eq(workerProfiles.id, linkedSession.workerId));
+        }
+      }
+
+      // IT CODE / Mã vân tay (#18) — sửa IT CODE tại Daily Application đồng bộ 3 nơi:
+      //   daily_applications.it_code (đã cập nhật ở trên),
+      //   worker_profiles.fingerprint_code (theo workerId liên kết, fallback theo CCCD),
+      //   dw_data.it_code (chỉ khi lao động ĐÃ có hồ sơ DW — theo dwId hoặc khớp CCCD).
+      if ("itCode" in patch) {
+        const itCode = (patch.itCode as string | null) ?? null;
+        if (linkedSession) {
+          await tx
+            .update(workerProfiles)
+            .set({ fingerprintCode: itCode, fingerprintStatus: itCode ? "DA_CAP" : "CHUA_CAP", updatedAt: new Date() })
+            .where(eq(workerProfiles.id, linkedSession.workerId));
+        } else {
+          await tx
+            .update(workerProfiles)
+            .set({ fingerprintCode: itCode, fingerprintStatus: itCode ? "DA_CAP" : "CHUA_CAP", updatedAt: new Date() })
+            .where(and(eq(workerProfiles.cccd, existing.cccd), isNull(workerProfiles.deletedAt)));
+        }
+        if (existing.dwId) {
+          await tx.update(dwData).set({ itCode }).where(eq(dwData.id, existing.dwId));
+        } else {
+          await tx
+            .update(dwData)
+            .set({ itCode })
+            .where(and(eq(dwData.cccd, existing.cccd), isNull(dwData.deletedAt)));
         }
       }
 

@@ -4,6 +4,7 @@ import { db } from "@/db";
 import { dailyApplications, departments, planningPeriods, planningTargets, workerProfiles, workforceMovements } from "@/db/schema";
 import { getUserScope, hasPermission, requirePermission } from "@/lib/auth";
 import { todayStr } from "@/lib/helpers";
+import { normalizePersonName } from "@/lib/person-name";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -51,7 +52,7 @@ export async function GET(req: Request) {
     const where = and(...filters);
 
     const rows = await db.select().from(dailyApplications).where(where).orderBy(desc(dailyApplications.submittedAt)).limit(SECTION_LIMIT);
-    newApplicants = rows.map((r) => ({ id: r.id, fullName: r.fullName, cccd: r.cccd, submittedAt: r.submittedAt.toISOString() }));
+    newApplicants = rows.map((r) => ({ id: r.id, fullName: normalizePersonName(r.fullName), cccd: r.cccd, submittedAt: r.submittedAt.toISOString() }));
     const [cnt] = await db.select({ c: sql<number>`count(*)::int` }).from(dailyApplications).where(where);
     newApplicantsTotal = cnt?.c ?? newApplicants.length;
   } else {
@@ -82,7 +83,7 @@ export async function GET(req: Request) {
       .where(where)
       .orderBy(desc(workforceMovements.createdAt))
       .limit(SECTION_LIMIT)
-      .then((rows) => rows.map((r) => ({ ...r, createdAt: r.createdAt.toISOString() })));
+      .then((rows) => rows.map((r) => ({ ...r, workerName: normalizePersonName(r.workerName ?? "") || null, createdAt: r.createdAt.toISOString() })));
     const [cnt] = await db.select({ c: sql<number>`count(*)::int` }).from(workforceMovements).leftJoin(workerProfiles, eq(workforceMovements.workerId, workerProfiles.id)).where(where);
     resignationsTotal = cnt?.c ?? resignations.length;
   } else {
@@ -113,7 +114,7 @@ export async function GET(req: Request) {
       .where(where)
       .orderBy(desc(workforceMovements.createdAt))
       .limit(SECTION_LIMIT)
-      .then((rows) => rows.map((r) => ({ ...r, createdAt: r.createdAt.toISOString() })));
+      .then((rows) => rows.map((r) => ({ ...r, workerName: normalizePersonName(r.workerName ?? "") || null, createdAt: r.createdAt.toISOString() })));
     const [cnt] = await db.select({ c: sql<number>`count(*)::int` }).from(workforceMovements).leftJoin(workerProfiles, eq(workforceMovements.workerId, workerProfiles.id)).where(where);
     transfersTotal = cnt?.c ?? transfers.length;
   } else {

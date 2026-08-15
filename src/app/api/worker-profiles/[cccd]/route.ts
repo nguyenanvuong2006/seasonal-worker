@@ -3,6 +3,7 @@ import { and, desc, eq, isNull } from "drizzle-orm";
 import { db } from "@/db";
 import { departments, employmentSessions, workerProfiles } from "@/db/schema";
 import { requirePermission, writeAudit } from "@/lib/auth";
+import { normalizePersonName } from "@/lib/person-name";
 import { CCCD_ERROR_MESSAGE, isValidCccd, normalizeCccd } from "@/lib/validators";
 
 export const runtime = "nodejs";
@@ -39,7 +40,8 @@ export async function GET(_req: Request, ctx: { params: Promise<{ cccd: string }
     .where(eq(employmentSessions.workerId, profile.id))
     .orderBy(desc(employmentSessions.regDate));
 
-  return NextResponse.json({ profile, sessions });
+  // Chuẩn hoá họ tên trước khi trả về UI (dữ liệu legacy có thể chưa chuẩn).
+  return NextResponse.json({ profile: { ...profile, fullName: normalizePersonName(profile.fullName) }, sessions });
 }
 
 /** Cập nhật thông tin Biometric (#16) cho 1 hồ sơ điện tử. */

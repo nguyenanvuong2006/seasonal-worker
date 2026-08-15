@@ -3,6 +3,7 @@ import { and, asc, eq, sql } from "drizzle-orm";
 import { db, pool } from "@/db";
 import { formQuestions, importBatches, importStagingRows } from "@/db/schema";
 import { buildHeaderIndex, getFieldDefinitions, makeFieldPicker, normalizeHeader, type Group } from "@/lib/metadata";
+import { normalizePersonName } from "@/lib/person-name";
 import { CCCD_ERROR_MESSAGE, isValidCccd } from "@/lib/validators";
 
 /**
@@ -134,7 +135,7 @@ export async function mergeNextChunk(batchId: string, importType: Group, mapping
               deptName,
               groupName,
               clean(pick("dept_vn_name", ["Tên Tiếng Việt"])),
-              clean(pick("dept_supervisor", ["Phụ Trách Lao Động"])),
+              normalizePersonName(pick("dept_supervisor", ["Phụ Trách Lao Động"])) || null,
               clean(pick("dept_supervisor_phone", ["SĐT"])),
               clean(pick("dept_note", ["Note here!"])),
             ],
@@ -152,6 +153,7 @@ export async function mergeNextChunk(batchId: string, importType: Group, mapping
             errorC++;
             continue;
           }
+          const normalizedFullName = normalizePersonName(fullName);
           const cccd = clean(pick("dw_cccd", ["ID No", "CCCD"]));
           if (!isValidCccd(cccd)) {
             await markRow(client, row.id, "ERROR", CCCD_ERROR_MESSAGE);
@@ -170,7 +172,7 @@ export async function mergeNextChunk(batchId: string, importType: Group, mapping
                 clean(pick("dw_it_code", ["IT CODE"])),
                 clean(pick("dw_old_code", ["OldDW_VLOOKUP"])),
                 clean(pick("dw_id_vlookup", ["ID_VLOOKUP"])),
-                fullName,
+                normalizedFullName,
                 clean(pick("dw_gender", ["GENDER"])),
                 clean(pick("dw_bod", ["BOD"])),
                 clean(pick("dw_profile", ["PROFILE"])),
@@ -213,6 +215,7 @@ export async function mergeNextChunk(batchId: string, importType: Group, mapping
             errorC++;
             continue;
           }
+          const normalizedFullName = normalizePersonName(fullName);
           if (!isValidCccd(cccd)) {
             await markRow(client, row.id, "ERROR", CCCD_ERROR_MESSAGE);
             errorC++;
@@ -255,17 +258,17 @@ export async function mergeNextChunk(batchId: string, importType: Group, mapping
           try {
             const res = await client.query(
               `INSERT INTO daily_applications (submitted_at, reg_date, cccd, full_name, gender, dob, birth_year, age,
-                 phone, ethnicity, permanent_address, residential_address, declared_type, dw_match, dw_id, dw_code,
+                 phone, ethnicity, permanent_address, residential_address, declared_type, dw_match, dw_id, dw_code, it_code,
                  work_duration, referral_channel, dept_id, status, starting_date, appointment_list, note_worker,
                  vaccine, code_check, custom_answers, is_imported)
-               VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,$24,$25,$26,true)
+               VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,$24,$25,$26,$27,true)
                ON CONFLICT (cccd, reg_date) WHERE deleted_at IS NULL DO NOTHING
                RETURNING id`,
               [
                 `${regDate}T00:00:00+07:00`,
                 regDate,
                 cccd,
-                fullName,
+                normalizedFullName,
                 clean(pick("da_gender", ["Giới tính"])),
                 dobRaw,
                 birthYear ? parseInt(birthYear) : null,
@@ -278,6 +281,7 @@ export async function mergeNextChunk(batchId: string, importType: Group, mapping
                 dwMatch,
                 match[0]?.id ?? null,
                 match[0]?.code ?? null,
+                clean(pick("da_it_code", ["IT CODE"])),
                 clean(pick("da_work_duration", ["Thời gian đăng ký làm"])),
                 clean(pick("da_referral", ["Kênh giới thiệu"])),
                 deptId,

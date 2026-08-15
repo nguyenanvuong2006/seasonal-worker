@@ -226,6 +226,7 @@ export const DEFAULT_FIELD_DEFINITIONS: SeedDef[] = [
   { fieldKey: "da_declared_type", groupName: "daily_application", displayName: "Cũ / Mới (tự khai)", databaseField: "declared_type", importColumnName: "Thông tin lao động", aliases: ["Cũ/Mới", "Loại lao động"], sortOrder: 11 },
   { fieldKey: "da_dw_match", groupName: "daily_application", displayName: "Cũ / Mới (đối chiếu DW)", databaseField: "dw_match", importColumnName: "DW Match", exportable: true, importable: false, filterable: true, sortOrder: 12 },
   { fieldKey: "da_dw_code", groupName: "daily_application", displayName: "Mã DW", databaseField: "dw_code", importColumnName: "Mã DW", importable: false, sortOrder: 13 },
+  { fieldKey: "da_it_code", groupName: "daily_application", displayName: "IT CODE", databaseField: "it_code", importColumnName: "IT CODE", aliases: ["IT Code", "Mã vân tay", "ITCODE"], sortOrder: 14 },
   { fieldKey: "da_work_duration", groupName: "daily_application", displayName: "Thời gian đăng ký làm", databaseField: "work_duration", importColumnName: "Thời gian đăng ký làm", aliases: ["Thời gian làm việc"], sortOrder: 14, exportable: false },
   { fieldKey: "da_referral", groupName: "daily_application", displayName: "Kênh giới thiệu", databaseField: "referral_channel", importColumnName: "Kênh giới thiệu", aliases: ["Referral"], sortOrder: 15, exportable: false },
   { fieldKey: "da_dept", groupName: "daily_application", displayName: "Bộ phận", databaseField: "dept_id", importColumnName: "Bộ phận", aliases: ["Dept."], searchable: true, filterable: true, sortOrder: 16 },

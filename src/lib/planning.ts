@@ -11,6 +11,7 @@ import {
   workforceMovements,
 } from "@/db/schema";
 import { isFemale, isMale } from "@/lib/helpers";
+import { normalizePersonName } from "@/lib/person-name";
 
 type Executor = typeof db | Parameters<Parameters<typeof db.transaction>[0]>[0];
 
@@ -377,7 +378,7 @@ export async function getUnplannedSessions(departmentId?: string) {
   if (departmentId) filters.push(eq(employmentSessions.deptId, departmentId));
   if (allocatedIds.length > 0) filters.push(notInArray(employmentSessions.id, allocatedIds));
 
-  return db
+  const rows = await db
     .select({
       id: employmentSessions.id,
       workerId: employmentSessions.workerId,
@@ -392,6 +393,9 @@ export async function getUnplannedSessions(departmentId?: string) {
     .leftJoin(workerProfiles, eq(employmentSessions.workerId, workerProfiles.id))
     .leftJoin(departments, eq(employmentSessions.deptId, departments.id))
     .where(and(...filters));
+
+  // Chuẩn hoá họ tên lao động trước khi trả về UI.
+  return rows.map((r) => ({ ...r, workerName: normalizePersonName(r.workerName ?? "") || null }));
 }
 
 /**

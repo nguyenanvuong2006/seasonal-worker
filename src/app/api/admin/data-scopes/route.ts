@@ -3,6 +3,7 @@ import { and, eq, inArray, isNull, ne } from "drizzle-orm";
 import { db } from "@/db";
 import { departments, userDepartmentScopes, users } from "@/db/schema";
 import { requirePermission, writeAudit } from "@/lib/auth";
+import { normalizePersonName } from "@/lib/person-name";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -40,7 +41,11 @@ export async function GET() {
     db.select().from(userDepartmentScopes),
   ]);
 
-  return NextResponse.json({ users: scopeUsers, departments: allDepts, scopes });
+  return NextResponse.json({
+    users: scopeUsers.map((u) => ({ ...u, fullName: normalizePersonName(u.fullName) })),
+    departments: allDepts,
+    scopes,
+  });
 }
 
 /** Cập nhật hàng loạt danh sách bộ phận cho 1 user (Transactional replacement). */

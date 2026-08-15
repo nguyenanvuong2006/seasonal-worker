@@ -1,10 +1,11 @@
 import { NextResponse } from "next/server";
 import { and, asc, desc, eq, gte, inArray, isNull, lte, sql } from "drizzle-orm";
 import { db } from "@/db";
-import { dailyApplications, departments, employmentSessions, formQuestions, workerProfiles } from "@/db/schema";
+import { dailyApplications, departments, dwData, employmentSessions, formQuestions, workerProfiles } from "@/db/schema";
 import { getSession, getUserScope } from "@/lib/auth";
 import { matchDwWorker } from "@/lib/matching";
 import { todayStr } from "@/lib/helpers";
+import { normalizePersonName } from "@/lib/person-name";
 import { runRules } from "@/lib/rule-engine";
 import { isQuestionForAudience } from "@/lib/form-targeting";
 import { CCCD_ERROR_MESSAGE, isValidCccd } from "@/lib/validators";
@@ -18,7 +19,7 @@ export async function POST(req: Request) {
     const body = await req.json();
     const cccd = String(body.cccd ?? "").trim();
     const phone = String(body.phone ?? "").replace(/\D/g, "");
-    const fullName = String(body.full_name ?? "").trim();
+    const fullName = normalizePersonName(body.full_name);
     const rawAnswers = body.custom_answers && typeof body.custom_answers === "object" && !Array.isArray(body.custom_answers)
       ? body.custom_answers as Record<string, unknown>
       : {};
@@ -107,7 +108,7 @@ export async function POST(req: Request) {
       .values({
         regDate: today,
         cccd,
-        fullName: match.worker?.fullName ?? fullName,
+        fullName: normalizePersonName(match.worker?.fullName ?? fullName),
         gender: body.gender || match.worker?.gender || null,
         dob: dobStr ?? match.worker?.bod ?? null,
         birthYear,
@@ -134,7 +135,7 @@ export async function POST(req: Request) {
       .insert(workerProfiles)
       .values({
         cccd,
-        fullName: match.worker?.fullName ?? fullName,
+        fullName: normalizePersonName(match.worker?.fullName ?? fullName),
         gender: body.gender || match.worker?.gender || null,
         dob: dobStr ?? match.worker?.bod ?? null,
         phone,
@@ -146,7 +147,7 @@ export async function POST(req: Request) {
         target: workerProfiles.cccd,
         targetWhere: sql`deleted_at is null`,
         set: {
-          fullName: match.worker?.fullName ?? fullName,
+          fullName: normalizePersonName(match.worker?.fullName ?? fullName),
           phone,
           residentialAddress,
           updatedAt: new Date(),
@@ -219,6 +220,8 @@ export async function GET(req: Request) {
       declaredType: dailyApplications.declaredType,
       dwMatch: dailyApplications.dwMatch,
       dwCode: dailyApplications.dwCode,
+      itCode: dailyApplications.itCode,
+      dwItCode: dwData.itCode,
       workDuration: dailyApplications.workDuration,
       referralChannel: dailyApplications.referralChannel,
       deptId: dailyApplications.deptId,
@@ -242,9 +245,19 @@ export async function GET(req: Request) {
     .from(dailyApplications)
     .leftJoin(departments, eq(dailyApplications.deptId, departments.id))
     .leftJoin(workerProfiles, and(eq(dailyApplications.cccd, workerProfiles.cccd), isNull(workerProfiles.deletedAt)))
+    .leftJoin(dwData, eq(dailyApplications.dwId, dwData.id))
     .where(and(...filters))
     .orderBy(desc(dailyApplications.regDate), asc(dailyApplications.fullName))
     .limit(3000);
 
-  return NextResponse.json({ rows, range: { from, to } });
+  // Chuẩn hoá họ tên trước khi trả về UI (dữ liệu legacy trong DB có thể chưa chuẩn).
+  // IT CODE ưu tiên giá trị lưu trên daily_applications; nếu trống thì lấy hiện hành từ DW Data.
+  const normalizedRows = rows.map(({ dwItCode, ...r }) => ({
+    ...r,
+    fullName: normalizePersonName(r.fullName),
+    supervisor: normalizePersonName(r.supervisor),
+    itCode: r.itCode ?? dwItCode ?? null,
+  }));
+
+  return NextResponse.json({ rows: normalizedRows, range: { from, to } });
 }

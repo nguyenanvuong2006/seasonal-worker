@@ -6,6 +6,7 @@ import { and, eq } from "drizzle-orm";
 import { db } from "@/db";
 import { auditLogs, rolePermissions, userDepartmentScopes, users, type RolePermission } from "@/db/schema";
 import { ENFORCED_PERMISSION_KEYS, PERMISSION_CATALOG, SYSTEM_ROLE_KEYS } from "@/lib/rbac-catalog";
+import { normalizePersonName } from "@/lib/person-name";
 
 /**
  * DYNAMIC RBAC V2 — Role không còn là enum 3 giá trị hardcode. users.role (varchar) giữ nguyên
@@ -120,7 +121,7 @@ export async function getSession(): Promise<Session | null> {
     return {
       id: user.id,
       username: user.username,
-      fullName: user.fullName,
+      fullName: normalizePersonName(user.fullName),
       role: user.role as Role,
       deptId: user.deptId,
     };

@@ -3,6 +3,7 @@ import { isNull } from "drizzle-orm";
 import { db, pool } from "@/db";
 import { dailyApplications, dwData } from "@/db/schema";
 import { requirePermission, writeAudit } from "@/lib/auth";
+import { normalizePersonName } from "@/lib/person-name";
 import { isValidCccd, normalizeCccd } from "@/lib/validators";
 
 export const runtime = "nodejs";
@@ -32,7 +33,7 @@ export async function POST() {
          VALUES ($1,$2,$3,$4,$5,$6,$7,$8)
          ON CONFLICT (cccd) WHERE deleted_at IS NULL DO UPDATE SET dw_id = EXCLUDED.dw_id
          RETURNING id`,
-        [cccd, w.fullName, w.gender, w.bod, w.phone, w.permanentAddress, w.residentialAddress, w.id],
+        [cccd, normalizePersonName(w.fullName), w.gender, w.bod, w.phone, w.permanentAddress, w.residentialAddress, w.id],
       );
       if (res.rowCount) profilesFromDw++;
     }
@@ -49,7 +50,7 @@ export async function POST() {
          VALUES ($1,$2,$3,$4,$5,$6,$7,$8)
          ON CONFLICT (cccd) WHERE deleted_at IS NULL DO UPDATE SET updated_at = now()
          RETURNING id`,
-        [cccd, a.fullName, a.gender, a.dob, a.phone, a.permanentAddress, a.residentialAddress, a.dwId],
+        [cccd, normalizePersonName(a.fullName), a.gender, a.dob, a.phone, a.permanentAddress, a.residentialAddress, a.dwId],
       );
       const profileId = pRes.rows[0]?.id;
       if (!profileId) continue;

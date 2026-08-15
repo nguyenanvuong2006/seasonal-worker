@@ -5,6 +5,7 @@ import { db, pool } from "@/db";
 import { formQuestions, importJobErrors, importJobs, stagingDailyApplication, stagingDepartment, stagingDwData } from "@/db/schema";
 import { getFieldDefinitions, makeFieldPicker, normalizeHeader, normalizeHeaderFuzzy, type Group } from "@/lib/metadata";
 import { parseFlexibleDate, parseFlexibleDateTime } from "@/lib/date-parser";
+import { normalizePersonName } from "@/lib/person-name";
 import { CCCD_PATTERN, NUMBER_PATTERN, VN_PHONE_PATTERN } from "@/lib/validators";
 
 /**
@@ -94,7 +95,7 @@ export async function stageRows(jobId: string, jobType: JobType, rows: Record<st
           chunk.map((r) => pickers.dept_name(r)),
           chunk.map((r) => pickers.dept_group(r) ?? ""),
           chunk.map((r) => pickers.dept_vn_name(r)),
-          chunk.map((r) => pickers.dept_supervisor(r)),
+          chunk.map((r) => normalizeNameValue(pickers.dept_supervisor(r))),
           chunk.map((r) => pickers.dept_supervisor_phone(r)),
           chunk.map((r) => pickers.dept_note(r)),
         ],
@@ -118,7 +119,7 @@ export async function stageRows(jobId: string, jobType: JobType, rows: Record<st
           chunk.map((r) => pickers.dw_it_code(r)),
           chunk.map((r) => pickers.dw_old_code(r)),
           chunk.map((r) => pickers.dw_id_vlookup(r)),
-          chunk.map((r) => pickers.dw_full_name(r)),
+          chunk.map((r) => normalizeNameValue(pickers.dw_full_name(r))),
           chunk.map((r) => pickers.dw_gender(r)),
           chunk.map((r) => pickers.dw_bod(r)),
           chunk.map((r) => pickers.dw_profile(r)),
@@ -156,18 +157,18 @@ export async function stageRows(jobId: string, jobType: JobType, rows: Record<st
       await pool.query(
         `INSERT INTO staging_daily_application (job_id, row_number, cccd, full_name, gender, dob, age, phone, ethnicity,
            permanent_address, residential_address, declared_type_raw, dept_name, group_name, work_duration, referral_channel,
-           starting_date_raw, starting_date_parsed, appointment_list, note, vaccine, code_check, reg_date_raw, reg_date_parsed, custom_answers)
+           starting_date_raw, starting_date_parsed, appointment_list, note, vaccine, code_check, it_code, reg_date_raw, reg_date_parsed, custom_answers)
          SELECT $1::uuid, x.rn, x.cccd, x.fn, x.gd, x.dob, x.age, x.ph, x.eth, x.pa, x.ra, x.dt, x.dn, x.gn, x.wd, x.rc,
-                x.sd, x.sdp, x.al, x.nt, x.vc, x.cc, x.rd, x.rdp, x.ca::jsonb
+                x.sd, x.sdp, x.al, x.nt, x.vc, x.cc, x.itc, x.rd, x.rdp, x.ca::jsonb
          FROM unnest($2::int[], $3::text[], $4::text[], $5::text[], $6::text[], $7::text[], $8::text[], $9::text[],
                       $10::text[], $11::text[], $12::text[], $13::text[], $14::text[], $15::text[], $16::text[],
-                      $17::text[], $18::text[], $19::text[], $20::text[], $21::text[], $22::text[], $23::text[], $24::text[], $25::text[])
-           AS x(rn, cccd, fn, gd, dob, age, ph, eth, pa, ra, dt, dn, gn, wd, rc, sd, sdp, al, nt, vc, cc, rd, rdp, ca)`,
+                      $17::text[], $18::text[], $19::text[], $20::text[], $21::text[], $22::text[], $23::text[], $24::text[], $25::text[], $26::text[])
+           AS x(rn, cccd, fn, gd, dob, age, ph, eth, pa, ra, dt, dn, gn, wd, rc, sd, sdp, al, nt, vc, cc, itc, rd, rdp, ca)`,
         [
           jobId,
           rn,
           chunk.map((r) => identityValue(pickers.da_cccd(r))),
-          chunk.map((r) => pickers.da_full_name(r)),
+          chunk.map((r) => normalizeNameValue(pickers.da_full_name(r))),
           chunk.map((r) => pickers.da_gender(r)),
           chunk.map((r) => pickers.da_dob(r)),
           chunk.map((r) => pickers.da_age(r)),
@@ -190,6 +191,7 @@ export async function stageRows(jobId: string, jobType: JobType, rows: Record<st
           chunk.map((r) => pickers.da_note(r)),
           chunk.map((r) => pickers.da_vaccine(r)),
           chunk.map((r) => pickers.da_code_check(r)),
+          chunk.map((r) => pickers.da_it_code(r)),
           chunk.map((r) => pickers.da_timestamp(r) ?? null),
           chunk.map((r) => parseFlexibleDateTime(pickers.da_timestamp(r))?.iso ?? null),
           customAnswers,
@@ -201,6 +203,12 @@ export async function stageRows(jobId: string, jobType: JobType, rows: Record<st
 
 function identityValue(v: string | undefined): string | null {
   const value = (v ?? "").trim();
+  return value || null;
+}
+
+/** Chuẩn hoá họ tên (và tên người phụ trách) ngay ở tầng staging — trả null khi rỗng như các cột text khác. */
+function normalizeNameValue(v: string | undefined): string | null {
+  const value = normalizePersonName(v);
   return value || null;
 }
 
@@ -216,13 +224,13 @@ function buildColumnPickers(defs: Awaited<ReturnType<typeof getFieldDefinitions>
       ? ["dept_stt", "dept_name", "dept_group", "dept_vn_name", "dept_supervisor", "dept_supervisor_phone", "dept_note"]
       : jobType === "dw_data"
         ? ["dw_code", "dw_it_code", "dw_old_code", "dw_id_vlookup", "dw_full_name", "dw_gender", "dw_bod", "dw_profile", "dw_dktn", "dw_cccd", "dw_date_of_issue", "dw_place_of_issue", "dw_permanent_address", "dw_residential_address", "dw_phone"]
-        : ["da_timestamp", "da_cccd", "da_full_name", "da_gender", "da_dob", "da_age", "da_phone", "da_ethnicity", "da_address", "da_permanent_address", "da_declared_type", "da_dept", "da_group", "da_work_duration", "da_referral", "da_starting_date", "da_appointment_list", "da_note", "da_vaccine", "da_code_check"];
+        : ["da_timestamp", "da_cccd", "da_full_name", "da_gender", "da_dob", "da_age", "da_phone", "da_ethnicity", "da_address", "da_permanent_address", "da_declared_type", "da_dept", "da_group", "da_work_duration", "da_referral", "da_starting_date", "da_appointment_list", "da_note", "da_vaccine", "da_code_check", "da_it_code"];
   const out: Record<string, (row: Record<string, string>) => string | undefined> = {};
   for (const k of keys) out[k] = (row) => makeFieldPicker(row, defs)(k);
   return out as Record<
     | "dept_stt" | "dept_name" | "dept_group" | "dept_vn_name" | "dept_supervisor" | "dept_supervisor_phone" | "dept_note"
     | "dw_code" | "dw_it_code" | "dw_old_code" | "dw_id_vlookup" | "dw_full_name" | "dw_gender" | "dw_bod" | "dw_profile" | "dw_dktn" | "dw_cccd" | "dw_date_of_issue" | "dw_place_of_issue" | "dw_permanent_address" | "dw_residential_address" | "dw_phone"
-    | "da_timestamp" | "da_cccd" | "da_full_name" | "da_gender" | "da_dob" | "da_age" | "da_phone" | "da_ethnicity" | "da_address" | "da_permanent_address" | "da_declared_type" | "da_dept" | "da_group" | "da_work_duration" | "da_referral" | "da_starting_date" | "da_appointment_list" | "da_note" | "da_vaccine" | "da_code_check",
+    | "da_timestamp" | "da_cccd" | "da_full_name" | "da_gender" | "da_dob" | "da_age" | "da_phone" | "da_ethnicity" | "da_address" | "da_permanent_address" | "da_declared_type" | "da_dept" | "da_group" | "da_work_duration" | "da_referral" | "da_starting_date" | "da_appointment_list" | "da_note" | "da_vaccine" | "da_code_check" | "da_it_code",
     (row: Record<string, string>) => string | undefined
   >;
 }
@@ -386,7 +394,7 @@ async function runMergingChunk(jobId: string, jobType: JobType, fromRow: number,
   // daily_application
   const res = await pool.query(
     `INSERT INTO daily_applications (submitted_at, reg_date, cccd, full_name, gender, dob, birth_year, age, phone,
-       ethnicity, permanent_address, residential_address, declared_type, dw_match, dw_id, dw_code, work_duration,
+       ethnicity, permanent_address, residential_address, declared_type, dw_match, dw_id, dw_code, it_code, work_duration,
        referral_channel, dept_id, status, starting_date, appointment_list, note_worker, vaccine, code_check,
        custom_answers, is_imported)
      SELECT
@@ -395,7 +403,7 @@ async function runMergingChunk(jobId: string, jobType: JobType, fromRow: number,
        CASE WHEN age ~ '^[0-9]+(\\.[0-9]+)?$' THEN round(age::numeric)::int ELSE NULL END,
        phone, ethnicity, permanent_address, residential_address,
        CASE WHEN declared_type_raw LIKE 'Cũ%' THEN 'OLD' ELSE 'NEW' END,
-       resolved_dw_match, resolved_dw_id, resolved_dw_code, work_duration, referral_channel, resolved_dept_id,
+       resolved_dw_match, resolved_dw_id, resolved_dw_code, it_code, work_duration, referral_channel, resolved_dept_id,
        CASE WHEN resolved_dept_id IS NOT NULL THEN 'APPROVED' ELSE 'PENDING' END,
        starting_date_parsed::date, appointment_list, note, vaccine, code_check, coalesce(custom_answers,'{}'::jsonb), true
      FROM staging_daily_application

@@ -21,6 +21,7 @@
 import { useEffect, useRef, useState } from "react";
 import { Button, Modal, toast } from "@/components/ui";
 import { Camera, ImageUp, ScanLine } from "lucide-react";
+import { normalizePersonName } from "@/lib/person-name";
 import { isValidCccd } from "@/lib/validators";
 
 // ============================== Types ==============================
@@ -52,7 +53,7 @@ function parseCccdQr(text: string): CccdQrData | null {
   if (!isValidCccd(cccd)) return null;
   return {
     cccd,
-    fullName: (fullName || "").trim(),
+    fullName: normalizePersonName(fullName),
     dob: toIsoDate(dobRaw || ""),
     gender: (gender || "").trim(),
     address: (address || "").trim(),

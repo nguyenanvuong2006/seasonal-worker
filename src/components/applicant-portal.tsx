@@ -19,6 +19,7 @@ import {
 import { CccdQrScanner, type CccdQrData } from "@/components/cccd-qr-scanner";
 import type { FormQuestion } from "@/db/schema";
 import { isQuestionForAudience } from "@/lib/form-targeting";
+import { normalizePersonName } from "@/lib/person-name";
 import { CCCD_ERROR_MESSAGE, isValidCccd } from "@/lib/validators";
 import Link from "next/link";
 
@@ -245,7 +246,7 @@ export default function ApplicantPortal({ questions }: { questions: FormQuestion
     setCccd(data.cccd);
     setCccdError(null);
     if (stage === "new") {
-      if (data.fullName) setFullName(data.fullName);
+      if (data.fullName) setFullName(normalizePersonName(data.fullName));
       if (data.dob) setDob(data.dob);
       if (data.address) setAddress(data.address);
       const genderQ = questions.find((q) => q.fieldKey === "gioi_tinh");
@@ -345,7 +346,7 @@ export default function ApplicantPortal({ questions }: { questions: FormQuestion
         body: JSON.stringify({
           cccd,
           phone,
-          full_name: fullName,
+          full_name: normalizePersonName(fullName),
           dob,
           address_current: address,
           custom_answers: customAnswers,

@@ -13,6 +13,7 @@ import {
 } from "@tanstack/react-table";
 import { Badge, Button, Card, Input, MetricStrip, MetricStripItem, Modal, toast, cn } from "@/components/ui";
 import { formatDate, STATUS_META, todayStr } from "@/lib/helpers";
+import { normalizePersonName } from "@/lib/person-name";
 import { CCCD_ERROR_MESSAGE, isValidCccd, normalizeCccd } from "@/lib/validators";
 import {
   AlertTriangle,
@@ -45,6 +46,7 @@ export type AppRow = {
   declaredType: string;
   dwMatch: string;
   dwCode: string | null;
+  itCode: string | null;
   workDuration: string | null;
   referralChannel: string | null;
   deptId: string | null;
@@ -198,13 +200,20 @@ function HistoryPanel({ row, canRestore, onClose, onRestored }: { row: AppRow; c
                 {changedKeys.length > 0 && (
                   <table className="mt-2 w-full text-[12px]">
                     <tbody>
-                      {changedKeys.map((k) => (
-                        <tr key={k} className="border-t border-border">
-                          <td className="py-1 pr-2 font-mono text-fg-muted">{k}</td>
-                          <td className="py-1 pr-2 text-danger line-through">{String(before[k] ?? "—")}</td>
-                          <td className="py-1 text-success">{String(after[k] ?? "—")}</td>
-                        </tr>
-                      ))}
+                      {changedKeys.map((k) => {
+                        const rawBefore = String(before[k] ?? "—");
+                        const rawAfter = String(after[k] ?? "—");
+                        // Chuẩn hoá khi hiển thị trường fullName (dữ liệu legacy có thể chưa chuẩn).
+                        const displayBefore = k === "fullName" ? normalizePersonName(rawBefore) : rawBefore;
+                        const displayAfter = k === "fullName" ? normalizePersonName(rawAfter) : rawAfter;
+                        return (
+                          <tr key={k} className="border-t border-border">
+                            <td className="py-1 pr-2 font-mono text-fg-muted">{k}</td>
+                            <td className="py-1 pr-2 text-danger line-through">{displayBefore}</td>
+                            <td className="py-1 text-success">{displayAfter}</td>
+                          </tr>
+                        );
+                      })}
                     </tbody>
                   </table>
                 )}
@@ -255,6 +264,8 @@ export default function RegistrationsGrid({
   const [newModalOpen, setNewModalOpen] = React.useState(false);
   const [newSel, setNewSel] = React.useState<Record<string, boolean>>({});
   const [newDept, setNewDept] = React.useState("");
+  // Xác nhận đồng bộ IT CODE sang DW Data trước khi ghi (chỉ áp dụng cho lao động ĐÃ có DW Data).
+  const [itCodeConfirm, setItCodeConfirm] = React.useState<{ id: string; value: string; workerName: string } | null>(null);
 
   const load = React.useCallback(async () => {
     setLoading(true);
@@ -321,7 +332,7 @@ export default function RegistrationsGrid({
         const body: Record<string, unknown> = {};
         (
           ["cccd", "fullName", "gender", "dob", "phone", "ethnicity", "residentialAddress",
-           "deptId", "status", "noteWorker", "appointmentList", "workDuration"] as const
+           "deptId", "status", "noteWorker", "appointmentList", "workDuration", "itCode"] as const
         ).forEach((k) => {
           if (k in patch) body[k] = patch[k];
         });
@@ -409,7 +420,7 @@ export default function RegistrationsGrid({
             {canEdit ? (
               <EditableCell
                 value={i.getValue()}
-                onCommit={(v) => patchRow(i.row.original.id, { fullName: v })}
+                onCommit={(v) => patchRow(i.row.original.id, { fullName: normalizePersonName(v) })}
                 className="font-semibold text-fg"
               />
             ) : (
@@ -441,6 +452,29 @@ export default function RegistrationsGrid({
                 </span>
               )}
             </span>
+          );
+        },
+      }),
+      ch.accessor("itCode", {
+        header: "IT CODE",
+        cell: (i) => {
+          const val = i.getValue() ?? "";
+          if (!canEdit) return <span className="px-2 font-mono text-[12px]">{val || "—"}</span>;
+          return (
+            <EditableCell
+              value={val}
+              placeholder="Nhập IT CODE"
+              className="font-mono text-[12px]"
+              onCommit={(v) => {
+                const itCode = v.trim();
+                if (i.row.original.dwMatch === "MATCHED") {
+                  // Lao động CŨ đã có DW Data -> cảnh báo đồng bộ trước khi ghi.
+                  setItCodeConfirm({ id: i.row.original.id, value: itCode, workerName: i.row.original.fullName });
+                } else {
+                  void patchRow(i.row.original.id, { itCode: itCode || null });
+                }
+              }}
+            />
           );
         },
       }),
@@ -981,6 +1015,7 @@ export default function RegistrationsGrid({
               {[
                 ["CCCD", detail.cccd],
                 ["Mã DW", detail.dwCode ?? "Chưa có"],
+                ["IT CODE", detail.itCode ?? "—"],
                 ["SĐT", detail.phone],
                 ["Giới tính", detail.gender ?? "—"],
                 ["Ngày sinh", detail.dob ?? "—"],
@@ -1032,6 +1067,35 @@ export default function RegistrationsGrid({
           </div>
         )}
       </Modal>
+
+      {itCodeConfirm && (
+        <Modal open onClose={() => setItCodeConfirm(null)} title="Cập nhật IT CODE đồng bộ DW Data" width="max-w-md">
+          <div className="space-y-4">
+            <div className="rounded-[12px] border border-warning/30 bg-warning-tint p-3 text-[13px] leading-6 text-fg-secondary">
+              Lao động <b className="text-fg">{itCodeConfirm.workerName}</b> đã có hồ sơ trong DW Data.
+              Giá trị <b className="text-fg">IT CODE</b> sẽ được cập nhật <b className="text-fg">đồng thời</b> vào:
+              <ul className="mt-2 list-disc space-y-1 pl-5">
+                <li>Daily Application (<span className="font-mono text-[11px]">daily_applications.it_code</span>)</li>
+                <li>Hồ sơ Tập nghề — mã vân tay (<span className="font-mono text-[11px]">worker_profiles.fingerprint_code</span>)</li>
+                <li>DW Data (<span className="font-mono text-[11px]">dw_data.it_code</span>)</li>
+              </ul>
+            </div>
+            <div className="flex justify-end gap-2">
+              <Button variant="ghost" onClick={() => setItCodeConfirm(null)}>Hủy</Button>
+              <Button
+                variant="primary"
+                onClick={() => {
+                  const { id, value } = itCodeConfirm;
+                  setItCodeConfirm(null);
+                  void patchRow(id, { itCode: value || null });
+                }}
+              >
+                Xác nhận & cập nhật
+              </Button>
+            </div>
+          </div>
+        </Modal>
+      )}
 
       {historyRow && (
         <HistoryPanel
