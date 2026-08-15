@@ -3,7 +3,7 @@ import { asc, eq } from "drizzle-orm";
 import { db } from "@/db";
 import { dashboardWidgets } from "@/db/schema";
 import { getUserScope, requirePermission, writeAudit } from "@/lib/auth";
-import { getKpiValue, getRecentApplicationsTable } from "@/lib/dashboard";
+import { getKpiValue, getRecentApplicationsTable, getScopedDepartmentTable } from "@/lib/dashboard";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -28,7 +28,9 @@ export async function GET() {
         const metric = String((w.config as { metric?: string })?.metric ?? "");
         return { ...w, value: await getKpiValue(metric, scope) };
       }
-      const table = await getRecentApplicationsTable(10, scope);
+      // Có Data Scope (Quản lý bộ phận) → bảng tối giản chỉ Họ và tên | SĐT | Giới tính |
+      // Bộ phận | Nhóm, và chỉ gồm người thuộc bộ phận được phân quyền.
+      const table = scope !== null ? await getScopedDepartmentTable(10, scope) : await getRecentApplicationsTable(10, scope);
       return { ...w, table };
     }),
   );
