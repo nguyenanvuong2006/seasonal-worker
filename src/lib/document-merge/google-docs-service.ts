@@ -1,273 +1,247 @@
 /**
- * Document Merge Engine — Google Docs Service
- * 
- * Interface cho Google Docs/Drive API integration.
- * Hiện tại là mock implementation - cần Google Cloud credentials để hoạt động thật.
+ * Document Merge Engine — Google Docs / Drive service.
+ *
+ * Production path:
+ * - read template text through Drive export (preview / placeholder scan only)
+ * - COPY the real Google Docs template before merge
+ * - replace <<placeholders>> with Docs batchUpdate so template formatting is preserved
+ * - create batch-print documents with real Docs insertPageBreak requests
+ *
+ * Mock mode is intentionally restricted to tests or DOCUMENT_MERGE_USE_MOCK=true.
  */
 
-import { extractUniquePlaceholders, replaceMultiplePlaceholders } from './placeholder-extractor.ts';
+import { replaceMultiplePlaceholders } from "./placeholder-extractor.ts";
 
-/** Google Docs service interface */
+export const PAGE_BREAK_TEXT = "\n\n--- DOCUMENT_MERGE_PAGE_BREAK ---\n\n";
+
 export interface GoogleDocsService {
-  /** Lấy nội dung document */
   getDocumentContent(docId: string): Promise<string>;
-  
-  /** Copy document */
-  copyDocument(docId: string, folderId?: string): Promise<string>;
-  
-  /** Cập nhật document content */
+  copyDocument(docId: string, folderId?: string, title?: string): Promise<string>;
   updateDocumentContent(docId: string, content: string): Promise<void>;
-  
-  /** Tạo document mới */
+  replacePlaceholders(docId: string, replacements: PlaceholderReplacement[]): Promise<void>;
   createDocument(title: string, content: string, folderId?: string): Promise<string>;
-  
-  /** Kiểm tra document có tồn tại không */
   documentExists(docId: string): Promise<boolean>;
-  
-  /** Lấy permissions của document */
   getDocumentPermissions(docId: string): Promise<string[]>;
 }
 
-/** Mock Google Docs Service - sử dụng khi chưa có credentials */
-export class MockGoogleDocsService implements GoogleDocsService {
-  private documents: Map<string, { title: string; content: string }> = new Map();
-  
-  async getDocumentContent(docId: string): Promise<string> {
-    const doc = this.documents.get(docId);
-    if (!doc) {
-      // Mock template content với placeholders
-      return `
-HỌ TÊN: <<Ho_ten>>
-NGÀY SINH: <<Ngay_sinh>>
-SỐ CCCD: <<So_CCCD>>
-ĐỊA CHỈ: <<Dia_chi>>
-NGÀY ĐĂNG KÝ: <<Ngay_dang_ky>>
-BỘ PHẬN: <<Bo_phan>>
-<<Gioi_tinh_Nam>> Nam
-<<Gioi_tinh_Nu>> Nữ
-`;
-    }
-    return doc.content;
-  }
-  
-  async copyDocument(docId: string, _folderId?: string): Promise<string> {
-    const sourceDoc = await this.getDocumentContent(docId);
-    const newId = `mock_copy_${Date.now()}_${Math.random().toString(36).slice(2, 9)}`;
-    this.documents.set(newId, {
-      title: `Copy of ${docId}`,
-      content: sourceDoc,
-    });
-    return newId;
-  }
-  
-  async updateDocumentContent(_docId: string, _content: string): Promise<void> {
-    // Mock implementation - không làm gì
-  }
-  
-  async createDocument(title: string, content: string, _folderId?: string): Promise<string> {
-    const docId = `mock_new_${Date.now()}_${Math.random().toString(36).slice(2, 9)}`;
-    this.documents.set(docId, { title, content });
-    return docId;
-  }
-  
-  async documentExists(docId: string): Promise<boolean> {
-    // Mock - coi như template IDs bắt đầu bằng số là tồn tại
-    return /^\d/.test(docId);
-  }
-  
-  async getDocumentPermissions(_docId: string): Promise<string[]> {
-    return ['anyone'];
-  }
-}
-
-/** Real Google Docs Service - cần Google Cloud credentials */
-export class RealGoogleDocsService implements GoogleDocsService {
-  private accessToken: string;
-  private baseUrl = 'https://docs.googleapis.com/v1';
-  private driveUrl = 'https://www.googleapis.com/drive/v3';
-  
-  constructor(accessToken: string) {
-    this.accessToken = accessToken;
-  }
-  
-  private async fetch<T>(url: string, options?: RequestInit): Promise<T> {
-    const response = await fetch(url, {
-      ...options,
-      headers: {
-        'Authorization': `Bearer ${this.accessToken}`,
-        'Content-Type': 'application/json',
-        ...options?.headers,
-      },
-    });
-    
-    if (!response.ok) {
-      const error = await response.text();
-      throw new Error(`Google API error: ${response.status} - ${error}`);
-    }
-    
-    return response.json();
-  }
-  
-  async getDocumentContent(docId: string): Promise<string> {
-    // Export as plain text
-    const response = await fetch(
-      `${this.baseUrl}/documents/${docId}:batchUpdate`,
-      {
-        method: 'POST',
-        headers: {
-          'Authorization': `Bearer ${this.accessToken}`,
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({
-          requests: [{
-            exportOptions: {
-              exportFormat: 'TEXT',
-            },
-          }],
-        }),
-      }
-    );
-    
-    if (!response.ok) {
-      throw new Error(`Failed to get document content: ${response.status}`);
-    }
-    
-    // Return raw text content
-    return response.text();
-  }
-  
-  async copyDocument(docId: string, folderId?: string): Promise<string> {
-    const body: Record<string, unknown> = {
-      name: `Merge_${Date.now()}`,
-    };
-    
-    if (folderId) {
-      body.parents = [folderId];
-    }
-    
-    const result = await this.fetch<{ id: string }>(
-      `${this.driveUrl}/files/${docId}/copy`,
-      {
-        method: 'POST',
-        body: JSON.stringify(body),
-      }
-    );
-    
-    return result.id;
-  }
-  
-  async updateDocumentContent(docId: string, content: string): Promise<void> {
-    // Use batchUpdate to replace content
-    await this.fetch(`${this.baseUrl}/documents/${docId}:batchUpdate`, {
-      method: 'POST',
-      body: JSON.stringify({
-        requests: [
-          {
-            replaceAllText: {
-              replaceText: content,
-              containsText: {
-                matchCase: true,
-              },
-            },
-          },
-        ],
-      }),
-    });
-  }
-  
-  async createDocument(title: string, content: string, folderId?: string): Promise<string> {
-    // Tạo document mới
-    const fileMetadata: Record<string, unknown> = {
-      name: title,
-      mimeType: 'application/vnd.google-apps.document',
-    };
-    
-    if (folderId) {
-      fileMetadata.parents = [folderId];
-    }
-    
-    const formData = new FormData();
-    formData.append('metadata', JSON.stringify(fileMetadata));
-    formData.append('content', content);
-    formData.append('mimeType', 'application/vnd.google-apps.document');
-    
-    const result = await this.fetch<{ id: string }>(
-      'https://www.googleapis.com/upload/drive/v3/files',
-      {
-        method: 'POST',
-        headers: {
-          'Authorization': `Bearer ${this.accessToken}`,
-        },
-        body: formData,
-      }
-    );
-    
-    return result.id;
-  }
-  
-  async documentExists(docId: string): Promise<boolean> {
-    try {
-      await this.fetch(`${this.driveUrl}/files/${docId}`, {
-        method: 'GET',
-      });
-      return true;
-    } catch {
-      return false;
-    }
-  }
-  
-  async getDocumentPermissions(docId: string): Promise<string[]> {
-    const result = await this.fetch<{ permissions: { type: string }[] }>(
-      `${this.driveUrl}/files/${docId}/permissions`,
-      { method: 'GET' }
-    );
-    
-    return result.permissions.map(p => p.type);
-  }
-}
-
-/** Factory function để create service */
-export function createGoogleDocsService(accessToken?: string): GoogleDocsService {
-  if (accessToken) {
-    return new RealGoogleDocsService(accessToken);
-  }
-  return new MockGoogleDocsService();
-}
-
-/** Placeholder replacer cho Google Docs content */
 export interface PlaceholderReplacement {
   placeholder: string;
   value: string;
 }
 
-/**
- * Replace placeholders in Google Docs content
- * Xử lý đặc biệt cho tables và formatting
- */
+type MockDoc = { title: string; content: string };
+
+export class MockGoogleDocsService implements GoogleDocsService {
+  private documents = new Map<string, MockDoc>();
+
+  async getDocumentContent(docId: string): Promise<string> {
+    const doc = this.documents.get(docId);
+    if (doc) return doc.content;
+    return [
+      "HỌ TÊN: <<Ho_ten>>",
+      "NGÀY SINH: <<Ngay_sinh>>",
+      "SỐ CCCD: <<So_CCCD>>",
+      "ĐỊA CHỈ: <<Dia_chi>>",
+      "NGÀY ĐĂNG KÝ: <<Ngay_dang_ky>>",
+      "BỘ PHẬN: <<Bo_phan>>",
+    ].join("\n");
+  }
+
+  async copyDocument(docId: string, _folderId?: string, title?: string): Promise<string> {
+    const sourceDoc = await this.getDocumentContent(docId);
+    const newId = `mock_copy_${Date.now()}_${Math.random().toString(36).slice(2, 9)}`;
+    this.documents.set(newId, { title: title || `Copy of ${docId}`, content: sourceDoc });
+    return newId;
+  }
+
+  async updateDocumentContent(docId: string, content: string): Promise<void> {
+    const existing = this.documents.get(docId);
+    this.documents.set(docId, { title: existing?.title || docId, content });
+  }
+
+  async replacePlaceholders(docId: string, replacements: PlaceholderReplacement[]): Promise<void> {
+    const content = await this.getDocumentContent(docId);
+    const values: Record<string, string> = {};
+    for (const item of replacements) values[item.placeholder] = item.value;
+    await this.updateDocumentContent(docId, replaceMultiplePlaceholders(content, values));
+  }
+
+  async createDocument(title: string, content: string, _folderId?: string): Promise<string> {
+    const id = `mock_new_${Date.now()}_${Math.random().toString(36).slice(2, 9)}`;
+    this.documents.set(id, { title, content });
+    return id;
+  }
+
+  async documentExists(docId: string): Promise<boolean> {
+    return this.documents.has(docId) || /^\d/.test(docId) || docId.startsWith("mock_");
+  }
+
+  async getDocumentPermissions(_docId: string): Promise<string[]> {
+    return ["anyone"];
+  }
+}
+
+export class RealGoogleDocsService implements GoogleDocsService {
+  private readonly accessToken: string;
+  private readonly docsUrl = "https://docs.googleapis.com/v1";
+  private readonly driveUrl = "https://www.googleapis.com/drive/v3";
+
+  constructor(accessToken: string) {
+    this.accessToken = accessToken;
+  }
+
+  private async requestJson<T>(url: string, options: RequestInit = {}): Promise<T> {
+    const response = await fetch(url, {
+      ...options,
+      headers: {
+        Authorization: `Bearer ${this.accessToken}`,
+        ...(options.body ? { "Content-Type": "application/json" } : {}),
+        ...options.headers,
+      },
+    });
+    if (!response.ok) {
+      const detail = await response.text();
+      throw new Error(`Google API ${response.status}: ${detail.slice(0, 800)}`);
+    }
+    return response.json() as Promise<T>;
+  }
+
+  private async docsBatchUpdate(docId: string, requests: Record<string, unknown>[]): Promise<void> {
+    if (requests.length === 0) return;
+    await this.requestJson(`${this.docsUrl}/documents/${encodeURIComponent(docId)}:batchUpdate`, {
+      method: "POST",
+      body: JSON.stringify({ requests }),
+    });
+  }
+
+  async getDocumentContent(docId: string): Promise<string> {
+    // Google Docs API does not have an "export text" batchUpdate operation.
+    // Drive export is the supported way to obtain plain text for scan/preview.
+    const url = `${this.driveUrl}/files/${encodeURIComponent(docId)}/export?mimeType=${encodeURIComponent("text/plain")}`;
+    const response = await fetch(url, {
+      headers: { Authorization: `Bearer ${this.accessToken}` },
+    });
+    if (!response.ok) {
+      const detail = await response.text();
+      throw new Error(`Không đọc được Google Docs (${response.status}): ${detail.slice(0, 500)}`);
+    }
+    return response.text();
+  }
+
+  async copyDocument(docId: string, folderId?: string, title?: string): Promise<string> {
+    const body: Record<string, unknown> = { name: title || `Merge_${Date.now()}` };
+    if (folderId) body.parents = [folderId];
+    const result = await this.requestJson<{ id: string }>(
+      `${this.driveUrl}/files/${encodeURIComponent(docId)}/copy?fields=id`,
+      { method: "POST", body: JSON.stringify(body) },
+    );
+    return result.id;
+  }
+
+  async replacePlaceholders(docId: string, replacements: PlaceholderReplacement[]): Promise<void> {
+    const requests = replacements
+      .filter((item) => item.placeholder.trim().length > 0)
+      .map((item) => ({
+        replaceAllText: {
+          containsText: {
+            text: `<<${item.placeholder.replace(/^<<|>>$/g, "")}>>`,
+            matchCase: true,
+          },
+          replaceText: item.value ?? "",
+        },
+      }));
+    await this.docsBatchUpdate(docId, requests);
+  }
+
+  async updateDocumentContent(docId: string, content: string): Promise<void> {
+    const document = await this.requestJson<{
+      body?: { content?: Array<{ endIndex?: number }> };
+    }>(`${this.docsUrl}/documents/${encodeURIComponent(docId)}`);
+    const blocks = document.body?.content ?? [];
+    const endIndex = blocks.reduce((max, block) => Math.max(max, block.endIndex ?? 1), 1);
+
+    const requests: Record<string, unknown>[] = [];
+    if (endIndex > 2) {
+      requests.push({
+        deleteContentRange: { range: { startIndex: 1, endIndex: endIndex - 1 } },
+      });
+    }
+
+    const parts = content.split(PAGE_BREAK_TEXT);
+    let index = 1;
+    for (let i = 0; i < parts.length; i++) {
+      const text = parts[i];
+      if (text) {
+        requests.push({ insertText: { location: { index }, text } });
+        index += text.length;
+      }
+      if (i < parts.length - 1) {
+        requests.push({ insertPageBreak: { location: { index } } });
+        index += 1;
+      }
+    }
+    await this.docsBatchUpdate(docId, requests);
+  }
+
+  async createDocument(title: string, content: string, folderId?: string): Promise<string> {
+    const created = await this.requestJson<{ documentId: string }>(`${this.docsUrl}/documents`, {
+      method: "POST",
+      body: JSON.stringify({ title }),
+    });
+    const docId = created.documentId;
+
+    if (folderId) {
+      const meta = await this.requestJson<{ parents?: string[] }>(
+        `${this.driveUrl}/files/${encodeURIComponent(docId)}?fields=parents`,
+      );
+      const removeParents = (meta.parents ?? []).join(",");
+      const params = new URLSearchParams({ addParents: folderId, fields: "id,parents" });
+      if (removeParents) params.set("removeParents", removeParents);
+      await this.requestJson(`${this.driveUrl}/files/${encodeURIComponent(docId)}?${params.toString()}`, {
+        method: "PATCH",
+        body: JSON.stringify({}),
+      });
+    }
+
+    await this.updateDocumentContent(docId, content);
+    return docId;
+  }
+
+  async documentExists(docId: string): Promise<boolean> {
+    try {
+      await this.requestJson(`${this.driveUrl}/files/${encodeURIComponent(docId)}?fields=id,trashed`);
+      return true;
+    } catch {
+      return false;
+    }
+  }
+
+  async getDocumentPermissions(docId: string): Promise<string[]> {
+    const result = await this.requestJson<{ permissions?: Array<{ type: string }> }>(
+      `${this.driveUrl}/files/${encodeURIComponent(docId)}/permissions?fields=permissions(type)`,
+    );
+    return (result.permissions ?? []).map((item) => item.type);
+  }
+}
+
+export function createGoogleDocsService(accessToken?: string): GoogleDocsService {
+  const allowMock = process.env.NODE_ENV === "test" || process.env.DOCUMENT_MERGE_USE_MOCK === "true";
+  if (accessToken) return new RealGoogleDocsService(accessToken);
+  if (allowMock) return new MockGoogleDocsService();
+  throw new Error(
+    "Document Merge chưa được cấu hình Google OAuth. Hãy cấu hình GOOGLE_ACCESS_TOKEN hoặc cơ chế cấp access token trước khi merge production.",
+  );
+}
+
 export function replacePlaceholdersInContent(
   content: string,
-  replacements: PlaceholderReplacement[]
+  replacements: PlaceholderReplacement[],
 ): string {
   const replacementMap: Record<string, string> = {};
-  
-  for (const r of replacements) {
-    replacementMap[r.placeholder] = r.value;
-  }
-  
+  for (const item of replacements) replacementMap[item.placeholder] = item.value;
   return replaceMultiplePlaceholders(content, replacementMap);
 }
 
-/**
- * Create page break text
- */
-export const PAGE_BREAK_TEXT = '\n\n---\n\n--- PAGE BREAK ---\n\n---\n\n';
-
-/**
- * Merge multiple records into one document
- */
-export function mergeRecordsToDocument(
-  baseContent: string,
-  recordContents: string[]
-): string {
+export function mergeRecordsToDocument(_baseContent: string, recordContents: string[]): string {
   return recordContents.join(PAGE_BREAK_TEXT);
 }
