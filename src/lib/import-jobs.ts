@@ -19,7 +19,7 @@ import { CCCD_PATTERN, NUMBER_PATTERN, VN_PHONE_PATTERN } from "@/lib/validators
  */
 
 export const STAGE_CHUNK = 8000; // số dòng merge / 1 câu lệnh SQL — đủ nhỏ để không chạm giới hạn, đủ lớn để nhanh
-const STALE_MS = 90_000; // job không có heartbeat > 90s coi là "treo", watchdog được phép resume
+export const STALE_MS = 90_000; // job không có heartbeat > 90s coi là "treo", watchdog được phép resume
 
 type JobType = "department" | "dw_data" | "daily_application";
 
@@ -491,6 +491,27 @@ export async function runNextStep(jobId: string): Promise<{ done: boolean; stage
 
       const processedNow = Math.min(toRow, job.totalRows);
       const isLastChunk = toRow >= job.totalRows;
+
+      if (isLastChunk) {
+        // CHỐT DONE NGAY TRONG CÙNG INVOCATION (fix job "treo" ở 100%): trước đây lô merge
+        // cuối chỉ chuyển stage sang BUILDING_STATS rồi trả done=false, phụ thuộc THÊM 1 lượt
+        // "chain" nữa mới đánh dấu DONE — nếu lượt chain đó thất bại (after() fetch lỗi, cold
+        // start, instance bị thu hồi...), job đứng mãi ở RUNNING 13.519/13.519 dù dữ liệu đã
+        // vào đủ. Giờ chạy luôn BUILDING_STATS + DONE tại đây: hết cửa sổ lỗi đó hoàn toàn.
+        await touch(jobId, {
+          processedRows: processedNow,
+          insertedRows: job.insertedRows + inserted,
+          updatedRows: job.updatedRows + updated,
+          duplicateRows: job.duplicateRows + duplicate,
+          progress: 97,
+          metadata: { ...(job.metadata as object), mergeCursor: toRow, lastChunkMs: chunkMs },
+          currentStage: "BUILDING_STATS",
+        });
+        await runBuildingStats(jobId, jobType);
+        await touch(jobId, { currentStage: "DONE", progress: 100, status: "DONE", finishedAt: new Date() });
+        return { done: true, stage: "DONE", job };
+      }
+
       await touch(jobId, {
         processedRows: processedNow,
         insertedRows: job.insertedRows + inserted,
@@ -498,9 +519,9 @@ export async function runNextStep(jobId: string): Promise<{ done: boolean; stage
         duplicateRows: job.duplicateRows + duplicate,
         progress: Math.min(95, 40 + Math.round((processedNow / Math.max(1, job.totalRows)) * 55)),
         metadata: { ...(job.metadata as object), mergeCursor: toRow, lastChunkMs: chunkMs },
-        currentStage: isLastChunk ? "BUILDING_STATS" : "MERGING",
+        currentStage: "MERGING",
       });
-      return { done: false, stage: isLastChunk ? "BUILDING_STATS" : "MERGING", job };
+      return { done: false, stage: "MERGING", job };
     }
 
     if (job.currentStage === "BUILDING_STATS") {

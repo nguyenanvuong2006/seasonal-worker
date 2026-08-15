@@ -22,6 +22,12 @@ export async function POST(req: Request, ctx: { params: Promise<{ id: string }> 
   const [job] = await db.select().from(importJobs).where(eq(importJobs.id, id));
   if (!job) return NextResponse.json({ error: "Không tìm thấy Job." }, { status: 404 });
   if (job.status === "DONE") return NextResponse.json({ error: "Job đã hoàn tất." }, { status: 400 });
+  // CANCELLED là TERMINAL STATE (chuẩn hoá semantics cho Staging Retention & Cleanup):
+  // không được Retry/Resume — staging của job đã huỷ sẽ bị dọn theo lịch (>24h), Retry sau
+  // thời điểm đó sẽ chạy trên staging thiếu dữ liệu. Muốn nhập lại: tạo Job mới từ đầu.
+  if (job.status === "CANCELLED") {
+    return NextResponse.json({ error: "Job đã huỷ — không thể tiếp tục. Hãy tạo Job import mới." }, { status: 400 });
+  }
 
   await db.update(importJobs).set({ status: "QUEUED", lastError: null, updatedAt: new Date() }).where(eq(importJobs.id, id));
 
