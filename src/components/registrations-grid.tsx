@@ -688,7 +688,7 @@ export default function RegistrationsGrid({
     <div className="space-y-4">
       <MetricStrip
         items={[
-          <MetricStripItem key="total" icon={<FileText className="h-4 w-4" />} value={stats.total} label="Tổng đơn" context={rangeMode ? "Khoảng ngày" : "Hôm nay"} tone="primary" />,
+          <MetricStripItem key="total" icon={<FileText className="h-4 w-4" />} value={stats.total} label="Tổng DW" context={rangeMode ? "Khoảng ngày" : "Hôm nay"} tone="primary" />,
           <MetricStripItem key="approved" icon={<CheckCircle2 className="h-4 w-4" />} value={stats.approved} label="Đã xếp việc" context="Đã duyệt" tone="success" />,
           <MetricStripItem key="pending" icon={<Clock className="h-4 w-4" />} value={stats.pending} label="Chờ xếp" context="Cần xử lý" tone="warning" />,
           <MetricStripItem key="fresh" icon={<UserPlus2 className="h-4 w-4" />} value={stats.fresh} label="Chưa có DW" context="Người mới" tone="accent" />,
@@ -839,7 +839,7 @@ export default function RegistrationsGrid({
           <p className="text-[13px] font-semibold text-fg">
             Daily Application — sửa trực tiếp như Google Sheet
           </p>
-          <Badge tone="gray">{rows.length} đơn</Badge>
+          <Badge tone="gray">{rows.length} DW</Badge>
         </div>
         <div className="v2-scroll max-h-[62vh] overflow-auto">
           <table className="grid-sheet w-full border-collapse">
@@ -870,7 +870,7 @@ export default function RegistrationsGrid({
               {!loading && table.getRowModel().rows.length === 0 && (
                 <tr>
                   <td colSpan={columns.length} className="p-12 text-center text-sm text-fg-muted">
-                    Chưa có đơn nào {rangeMode ? "trong khoảng ngày này" : `ngày ${formatDate(from)}`}.
+                    Chưa có DW nào {rangeMode ? "trong khoảng ngày này" : `ngày ${formatDate(from)}`}.
                   </td>
                 </tr>
               )}

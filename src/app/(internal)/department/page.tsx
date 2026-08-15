@@ -1,7 +1,6 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useState } from "react";
-import Link from "next/link";
 import {
   Badge,
   Button,
@@ -13,31 +12,23 @@ import {
   Input,
   KpiCard,
   Modal,
-  PageHeader,
+  StatusBadge,
   cn,
   toast,
 } from "@/components/ui";
 import {
-  Building2,
+  ArrowLeftRight,
   Calendar,
-  Check,
-  CheckSquare,
-  ChevronDown,
   Download,
   FileSpreadsheet,
-  Filter,
-  IdCard,
   Loader2,
   Percent,
   Search,
-  Square,
   Target,
   UserMinus,
-  UserPlus2,
   Users,
-  X,
 } from "lucide-react";
-import { formatDate, maskCccd, todayStr } from "@/lib/helpers";
+import { formatDate, todayStr } from "@/lib/helpers";
 
 type AppRow = {
   id: string;
@@ -81,12 +72,9 @@ export default function MyDepartmentPage() {
   const [from, setFrom] = useState(() => todayStr());
   const [to, setTo] = useState(() => todayStr());
 
-  // Search & hierarchy filters
+  // Search & hierarchy filters — DEPENDENT chain (dept -> group), scoped
   const [search, setSearch] = useState("");
-  const [filterLocation, setFilterLocation] = useState("ALL");
-  const [filterDivision, setFilterDivision] = useState("ALL");
-  const [filterDept, setFilterDept] = useState("ALL");
-  const [filterSection, setFilterSection] = useState("ALL");
+  const [filterDeptId, setFilterDeptId] = useState("ALL");
   const [filterGroup, setFilterGroup] = useState("ALL");
 
   // Multi-selection state
@@ -95,21 +83,31 @@ export default function MyDepartmentPage() {
   // Bulk Resignation modal
   const [resignationModalOpen, setResignationModalOpen] = useState(false);
   const [resignationTargetRows, setResignationTargetRows] = useState<AppRow[]>([]);
+  const [resignationReasons, setResignationReasons] = useState<Record<string, string>>({});
   const [effectiveDate, setEffectiveDate] = useState(() => todayStr());
-  const [resignationReason, setResignationReason] = useState("");
   const [resignationNote, setResignationNote] = useState("");
   const [submittingResignation, setSubmittingResignation] = useState(false);
 
-  // Load departments and registrations
+  // Bulk Transfer modal
+  const [transferModalOpen, setTransferModalOpen] = useState(false);
+  const [transferTargetRows, setTransferTargetRows] = useState<AppRow[]>([]);
+  const [transferReasons, setTransferReasons] = useState<Record<string, string>>({});
+  const [transferToDeptId, setTransferToDeptId] = useState("");
+  const [transferDate, setTransferDate] = useState(() => todayStr());
+  const [transferNote, setTransferNote] = useState("");
+  const [submittingTransfer, setSubmittingTransfer] = useState(false);
+
+  // Load departments and scoped registrations
   const loadData = useCallback(async () => {
     setLoading(true);
     try {
       const [regRes, deptRes] = await Promise.all([
+        // API tự áp Data Scope thật của tài khoản đang đăng nhập (server-side, không tin client)
         fetch(`/api/registrations?from=${from}&to=${to}`),
-        fetch("/api/departments"),
+        fetch("/api/departments?scope=self"),
       ]);
 
-      if (!regRes.ok) {
+      if (!regRes.ok || !deptRes.ok) {
         toast({ title: "Không thể tải dữ liệu", variant: "destructive" });
         setLoading(false);
         return;
@@ -131,49 +129,40 @@ export default function MyDepartmentPage() {
     void loadData();
   }, [loadData]);
 
-  // Unique values for dropdown filters
-  const uniqueLocations = useMemo(() => {
-    const set = new Set<string>();
-    depts.forEach((d) => d.location && set.add(d.location));
-    rows.forEach((r) => r.location && set.add(r.location));
-    return Array.from(set).sort();
-  }, [depts, rows]);
+  // Bộ phận được phân quyền = chính danh sách /api/departments?scope=self
+  const scopedDeptIds = useMemo(() => new Set(depts.map((d) => d.id)), [depts]);
 
-  const uniqueDivisions = useMemo(() => {
-    const set = new Set<string>();
-    depts.forEach((d) => d.division && set.add(d.division));
-    rows.forEach((r) => r.division && set.add(r.division));
-    return Array.from(set).sort();
-  }, [depts, rows]);
-
+  // Unique department names — CHỈ trong phạm vi phân quyền
   const uniqueDeptNames = useMemo(() => {
     const set = new Set<string>();
     depts.forEach((d) => d.deptName && set.add(d.deptName));
-    rows.forEach((r) => r.deptName && set.add(r.deptName));
     return Array.from(set).sort();
-  }, [depts, rows]);
+  }, [depts]);
 
-  const uniqueSections = useMemo(() => {
+  // Groups DEPENDENT on selected department — chỉ nhóm thuộc bộ phận đang chọn
+  const groupsForSelectedDept = useMemo(() => {
     const set = new Set<string>();
-    depts.forEach((d) => (d.section || d.groupName) && set.add(d.section || d.groupName || ""));
-    rows.forEach((r) => (r.section || r.groupName) && set.add(r.section || r.groupName || ""));
+    if (filterDeptId === "ALL") {
+      depts.forEach((d) => d.groupName && set.add(d.groupName));
+    } else {
+      const dept = depts.find((d) => d.id === filterDeptId);
+      if (dept?.groupName) set.add(dept.groupName);
+    }
     return Array.from(set).sort();
-  }, [depts, rows]);
+  }, [depts, filterDeptId]);
 
-  const uniqueGroups = useMemo(() => {
-    const set = new Set<string>();
-    depts.forEach((d) => d.groupName && set.add(d.groupName));
-    rows.forEach((r) => r.groupName && set.add(r.groupName));
-    return Array.from(set).sort();
-  }, [depts, rows]);
+  // Reset dependent group khi đổi bộ phận
+  const changeDept = (deptId: string) => {
+    setFilterDeptId(deptId);
+    setFilterGroup("ALL");
+  };
 
-  // Filtered rows
+  // Filtered rows — scope + filter bộ phận/nhóm đã chọn
   const filteredRows = useMemo(() => {
     return rows.filter((r) => {
-      if (filterLocation !== "ALL" && (r.location || "") !== filterLocation) return false;
-      if (filterDivision !== "ALL" && (r.division || "") !== filterDivision) return false;
-      if (filterDept !== "ALL" && r.deptName !== filterDept) return false;
-      if (filterSection !== "ALL" && (r.section || r.groupName || "") !== filterSection) return false;
+      // Chỉ giữ người thuộc bộ phận được phân quyền (lưới an toàn phía client)
+      if (r.deptId && !scopedDeptIds.has(r.deptId)) return false;
+      if (filterDeptId !== "ALL" && r.deptId !== filterDeptId) return false;
       if (filterGroup !== "ALL" && (r.groupName || "") !== filterGroup) return false;
 
       if (search.trim()) {
@@ -189,7 +178,7 @@ export default function MyDepartmentPage() {
       }
       return true;
     });
-  }, [rows, filterLocation, filterDivision, filterDept, filterSection, filterGroup, search]);
+  }, [rows, scopedDeptIds, filterDeptId, filterGroup, search]);
 
   // Toggle row selection
   const toggleRow = (id: string) => {
@@ -218,24 +207,28 @@ export default function MyDepartmentPage() {
   const isAllVisibleSelected =
     filteredRows.length > 0 && filteredRows.every((r) => selectedIds.has(r.id));
 
-  // Open single resignation modal
-  const openSingleResignation = (row: AppRow) => {
-    setResignationTargetRows([row]);
+  // Mở modal Báo nghỉ việc (1 người hoặc nhiều người được tick)
+  const openResignation = (rows: AppRow[]) => {
+    if (rows.length === 0) return;
+    setResignationTargetRows(rows);
+    // Lý do mặc định có thể sửa riêng từng người ngay trong bảng thông tin
+    setResignationReasons(
+      Object.fromEntries(rows.map((r) => [r.id, "Nghỉ Tập nghề theo nguyện vọng cá nhân"])),
+    );
     setEffectiveDate(todayStr());
-    setResignationReason("Nghỉ Tập nghề theo nguyện vọng cá nhân");
     setResignationNote("");
     setResignationModalOpen(true);
   };
 
-  // Open bulk resignation modal
-  const openBulkResignation = () => {
-    const targets = filteredRows.filter((r) => selectedIds.has(r.id));
-    if (targets.length === 0) return;
-    setResignationTargetRows(targets);
-    setEffectiveDate(todayStr());
-    setResignationReason("Báo nghỉ Tập nghề hàng loạt");
-    setResignationNote("");
-    setResignationModalOpen(true);
+  // Mở modal Báo thuyên chuyển (1 người hoặc nhiều người được tick)
+  const openTransfer = (rows: AppRow[]) => {
+    if (rows.length === 0) return;
+    setTransferTargetRows(rows);
+    setTransferReasons(Object.fromEntries(rows.map((r) => [r.id, ""])));
+    setTransferToDeptId("");
+    setTransferDate(todayStr());
+    setTransferNote("");
+    setTransferModalOpen(true);
   };
 
   // Submit Resignation (single or bulk)
@@ -269,7 +262,7 @@ export default function MyDepartmentPage() {
             movementType: "resignation",
             workerId,
             effectiveDate,
-            reason: resignationReason || "Nghỉ Tập nghề",
+            reason: resignationReasons[r.id]?.trim() || "Nghỉ Tập nghề",
             note: resignationNote || null,
           }),
         });
@@ -299,6 +292,71 @@ export default function MyDepartmentPage() {
     }
   };
 
+  // Submit Transfer (single or bulk)
+  const submitTransfer = async () => {
+    if (transferTargetRows.length === 0) return;
+    if (!transferToDeptId) {
+      toast({ title: "Vui lòng chọn Bộ phận mới để chuyển đến.", variant: "destructive" });
+      return;
+    }
+    setSubmittingTransfer(true);
+    let successCount = 0;
+    let failCount = 0;
+
+    for (const r of transferTargetRows) {
+      try {
+        let workerId = r.workerId;
+        if (!workerId) {
+          const profileRes = await fetch(`/api/worker-profiles/${r.cccd}`);
+          if (profileRes.ok) {
+            const pData = await profileRes.json();
+            workerId = pData.profile?.id;
+          }
+        }
+
+        if (!workerId) {
+          failCount++;
+          continue;
+        }
+
+        const res = await fetch("/api/workforce-movements", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            movementType: "transfer",
+            workerId,
+            toDeptId: transferToDeptId,
+            effectiveDate: transferDate,
+            reason: transferReasons[r.id]?.trim() || null,
+            note: transferNote || null,
+          }),
+        });
+
+        if (res.ok) successCount++;
+        else failCount++;
+      } catch (e) {
+        failCount++;
+      }
+    }
+
+    setSubmittingTransfer(false);
+    setTransferModalOpen(false);
+
+    if (successCount > 0) {
+      toast({
+        title: `Đã tạo ${successCount} yêu cầu thuyên chuyển thành công (chờ HR duyệt)`,
+      });
+      deselectAll();
+      await loadData();
+    }
+    if (failCount > 0) {
+      toast({
+        title: `Có ${failCount} người không thể tạo yêu cầu thuyên chuyển (chưa có hồ sơ Tập nghề)`,
+        variant: "destructive",
+      });
+    }
+  };
+
   // Export selected or all visible to CSV/Excel
   const exportData = () => {
     const targetRows = selectedIds.size > 0
@@ -312,13 +370,10 @@ export default function MyDepartmentPage() {
 
     const headers = [
       "STT",
-      "Ngày ĐK",
+      "Ngày",
       "Họ và tên",
-      "CCCD",
-      "Giới tính",
       "SĐT",
-      "Location",
-      "Division",
+      "Giới tính",
       "Department",
       "Section",
       "Group",
@@ -333,13 +388,10 @@ export default function MyDepartmentPage() {
           i + 1,
           r.regDate,
           `"${(r.fullName || "").replace(/"/g, '""')}"`,
-          `"${r.cccd}"`,
+          `"${r.phone || ""}"`,
           r.gender || "",
-          r.phone || "",
-          `"${(r.location || "").replace(/"/g, '""')}"`,
-          `"${(r.division || "").replace(/"/g, '""')}"`,
           `"${(r.deptName || "").replace(/"/g, '""')}"`,
-          `"${(r.section || r.groupName || "").replace(/"/g, '""')}"`,
+          `"${(r.section || "").replace(/"/g, '""')}"`,
           `"${(r.groupName || "").replace(/"/g, '""')}"`,
           r.startingDate || "",
           r.status || "",
@@ -358,7 +410,8 @@ export default function MyDepartmentPage() {
   };
 
   // KPIs
-  const newCount = filteredRows.filter((r) => r.dwMatch === "NEW").length;
+  const activeCount = filteredRows.filter((r) => r.status === "APPROVED").length;
+  const inactiveCount = filteredRows.filter((r) => r.status === "INACTIVE").length;
   const totalQuota = depts.reduce((acc, d) => acc + (d.dailyQuota || 0), 0);
 
   return (
@@ -372,7 +425,7 @@ export default function MyDepartmentPage() {
               Bộ phận của tôi — Danh sách người tập nghề
             </h1>
             <p className="text-xs text-fg-secondary">
-              Hiển thị toàn bộ người tập nghề thuộc phạm vi phân quyền Data Scope của bạn.
+              Chỉ hiển thị người tập nghề thuộc bộ phận và nhóm được phân quyền (Data Scope) của bạn.
             </p>
           </div>
 
@@ -409,8 +462,9 @@ export default function MyDepartmentPage() {
       <div className="grid grid-cols-2 gap-3 lg:grid-cols-4">
         <KpiCard
           icon={<Users className="h-4 w-4" />}
-          label="Tiếp nhận Tập nghề"
-          value={filteredRows.length}
+          label="Đang tập nghề"
+          value={activeCount}
+          context={`${filteredRows.length} người trong khoảng ngày`}
           tone="primary"
         />
         <KpiCard
@@ -420,20 +474,20 @@ export default function MyDepartmentPage() {
           tone="warning"
         />
         <KpiCard
-          icon={<UserPlus2 className="h-4 w-4" />}
-          label="Người mới (DW Match)"
-          value={newCount}
+          icon={<Calendar className="h-4 w-4" />}
+          label="Đã nghỉ việc"
+          value={inactiveCount}
           tone="info"
         />
         <KpiCard
           icon={<Percent className="h-4 w-4" />}
           label="Tỷ lệ đáp ứng nhu cầu"
-          value={totalQuota > 0 ? `${Math.round((filteredRows.length / totalQuota) * 100)}%` : "100%"}
+          value={totalQuota > 0 ? `${Math.round((activeCount / totalQuota) * 100)}%` : "100%"}
           tone="success"
         />
       </div>
 
-      {/* Hierarchy Filter Toolbar */}
+      {/* Hierarchy Filter Toolbar — chỉ hiển thị bộ phận/nhóm được phân quyền */}
       <Card className="p-4">
         <div className="flex flex-wrap items-center justify-between gap-3">
           <div className="flex flex-wrap items-center gap-2 flex-1">
@@ -449,61 +503,32 @@ export default function MyDepartmentPage() {
               />
             </div>
 
-            {/* Location filter */}
-            {uniqueLocations.length > 0 && (
-              <select
-                value={filterLocation}
-                onChange={(e) => setFilterLocation(e.target.value)}
-                className="h-8 rounded-[6px] border border-border bg-surface px-2 text-xs font-medium text-fg outline-none focus:border-primary"
-              >
-                <option value="ALL">Location: Tất cả</option>
-                {uniqueLocations.map((l) => (
-                  <option key={l} value={l}>
-                    {l}
-                  </option>
-                ))}
-              </select>
-            )}
-
-            {/* Division filter */}
-            {uniqueDivisions.length > 0 && (
-              <select
-                value={filterDivision}
-                onChange={(e) => setFilterDivision(e.target.value)}
-                className="h-8 rounded-[6px] border border-border bg-surface px-2 text-xs font-medium text-fg outline-none focus:border-primary"
-              >
-                <option value="ALL">Division: Tất cả</option>
-                {uniqueDivisions.map((d) => (
-                  <option key={d} value={d}>
-                    {d}
-                  </option>
-                ))}
-              </select>
-            )}
-
-            {/* Department filter */}
+            {/* Department filter — chỉ bộ phận được phân quyền */}
             <select
-              value={filterDept}
-              onChange={(e) => setFilterDept(e.target.value)}
+              value={filterDeptId}
+              onChange={(e) => changeDept(e.target.value)}
               className="h-8 max-w-[200px] rounded-[6px] border border-border bg-surface px-2 text-xs font-medium text-fg outline-none focus:border-primary"
             >
-              <option value="ALL">Department: Tất cả</option>
-              {uniqueDeptNames.map((d) => (
-                <option key={d} value={d}>
-                  {d}
-                </option>
-              ))}
+              <option value="ALL">Department: Tất cả ({uniqueDeptNames.length})</option>
+              {uniqueDeptNames.map((d) => {
+                const deptRow = depts.find((x) => x.deptName === d);
+                return (
+                  <option key={d} value={deptRow?.id ?? d}>
+                    {d}
+                  </option>
+                );
+              })}
             </select>
 
-            {/* Section / Group filter */}
-            {uniqueGroups.length > 0 && (
+            {/* Group filter — dependent vào bộ phận đã chọn */}
+            {groupsForSelectedDept.length > 0 && (
               <select
                 value={filterGroup}
                 onChange={(e) => setFilterGroup(e.target.value)}
                 className="h-8 rounded-[6px] border border-border bg-surface px-2 text-xs font-medium text-fg outline-none focus:border-primary"
               >
                 <option value="ALL">Group: Tất cả</option>
-                {uniqueGroups.map((g) => (
+                {groupsForSelectedDept.map((g) => (
                   <option key={g} value={g}>
                     {g}
                   </option>
@@ -548,7 +573,7 @@ export default function MyDepartmentPage() {
             <EmptyState
               icon={<Users className="h-5 w-5" aria-hidden />}
               title="Không có người tập nghề nào"
-              description="Không có người tập nghề nào được xếp cho bộ phận trong khoảng thời gian đã chọn."
+              description="Không có người tập nghề nào được xếp cho bộ phận được phân quyền trong khoảng thời gian đã chọn."
             />
           ) : (
             <div className="overflow-x-auto">
@@ -565,14 +590,12 @@ export default function MyDepartmentPage() {
                     </th>
                     <th className="w-12 px-3 py-2.5 text-center text-[10.5px] uppercase">#</th>
                     <th className="px-3 py-2.5 text-left text-[10.5px] uppercase">Họ và tên</th>
-                    <th className="px-3 py-2.5 text-left text-[10.5px] uppercase">CCCD</th>
                     <th className="px-3 py-2.5 text-center text-[10.5px] uppercase">Giới tính</th>
                     <th className="px-3 py-2.5 text-left text-[10.5px] uppercase">Department</th>
                     <th className="px-3 py-2.5 text-left text-[10.5px] uppercase">Section</th>
                     <th className="px-3 py-2.5 text-left text-[10.5px] uppercase">Group</th>
                     <th className="px-3 py-2.5 text-left text-[10.5px] uppercase">Ngày bắt đầu</th>
                     <th className="px-3 py-2.5 text-center text-[10.5px] uppercase">Trạng thái</th>
-                    <th className="px-3 py-2.5 text-right text-[10.5px] uppercase">Thao tác</th>
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-border">
@@ -597,49 +620,20 @@ export default function MyDepartmentPage() {
                           />
                         </td>
                         <td className="px-3 py-2.5 text-center text-xs text-fg-muted">{i + 1}</td>
-                        <td className="px-3 py-2.5 font-bold text-fg">
-                          {r.fullName}
-                          {r.phone ? (
-                            <span className="block text-[11px] font-normal text-fg-muted font-mono">{r.phone}</span>
-                          ) : null}
-                        </td>
-                        <td className="px-3 py-2.5 font-mono text-xs text-fg-secondary">
-                          {maskCccd(r.cccd)}
-                        </td>
+                        <td className="px-3 py-2.5 font-bold text-fg">{r.fullName}</td>
                         <td className="px-3 py-2.5 text-center">
                           <Badge tone={r.gender === "Nữ" ? "purple" : "blue"}>
                             {r.gender ?? "—"}
                           </Badge>
                         </td>
                         <td className="px-3 py-2.5 text-fg font-semibold">{r.deptName || "—"}</td>
-                        <td className="px-3 py-2.5 text-xs text-fg-secondary">{r.section || r.groupName || "—"}</td>
+                        <td className="px-3 py-2.5 text-xs text-fg-secondary">{r.section || "—"}</td>
                         <td className="px-3 py-2.5 text-xs text-fg-secondary">{r.groupName || "—"}</td>
                         <td className="px-3 py-2.5 text-xs text-fg-secondary">
                           {formatDate(r.startingDate || r.regDate)}
                         </td>
                         <td className="px-3 py-2.5 text-center">
-                          <Badge tone="green" dot>
-                            Đã nhận việc
-                          </Badge>
-                        </td>
-                        <td className="px-3 py-2.5 text-right">
-                          <div className="flex justify-end gap-1" onClick={(e) => e.stopPropagation()}>
-                            <button
-                              type="button"
-                              onClick={() => openSingleResignation(r)}
-                              title="Báo nghỉ Tập nghề"
-                              className="rounded-full bg-danger-tint px-2.5 py-1 text-[11px] font-semibold text-danger hover:bg-danger/20 transition-colors"
-                            >
-                              Báo nghỉ
-                            </button>
-                            <Link
-                              href={`/admin/worker-profiles?cccd=${r.cccd}`}
-                              title="Xem hồ sơ Tập nghề"
-                              className="rounded-full bg-surface-hover p-1 text-fg-secondary hover:bg-border transition-colors inline-flex items-center justify-center"
-                            >
-                              <IdCard className="h-3.5 w-3.5" />
-                            </Link>
-                          </div>
+                          <StatusBadge status={r.status} />
                         </td>
                       </tr>
                     );
@@ -653,7 +647,7 @@ export default function MyDepartmentPage() {
 
       {/* Floating Bulk Action Bar */}
       {selectedIds.size > 0 && (
-        <div className="fixed bottom-6 left-1/2 -translate-x-1/2 z-40 flex items-center gap-3 rounded-[12px] bg-[#0B2E19] text-white px-5 py-3 shadow-xl ring-1 ring-white/10 animate-in slide-in-from-bottom-4 duration-200">
+        <div className="fixed bottom-6 left-1/2 -translate-x-1/2 z-40 flex flex-wrap items-center justify-center gap-3 rounded-[12px] bg-[#0B2E19] text-white px-5 py-3 shadow-xl ring-1 ring-white/10 animate-in slide-in-from-bottom-4 duration-200">
           <span className="text-xs font-semibold">
             Đã chọn <b className="text-accent text-sm">{selectedIds.size}</b> người tập nghề
           </span>
@@ -661,10 +655,18 @@ export default function MyDepartmentPage() {
           <Button
             variant="danger"
             size="sm"
-            onClick={openBulkResignation}
+            onClick={() => openResignation(filteredRows.filter((r) => selectedIds.has(r.id)))}
             className="gap-1.5 text-xs font-semibold bg-danger hover:bg-danger-hover text-white"
           >
             <UserMinus className="h-3.5 w-3.5" /> Báo nghỉ việc ({selectedIds.size})
+          </Button>
+          <Button
+            variant="primary"
+            size="sm"
+            onClick={() => openTransfer(filteredRows.filter((r) => selectedIds.has(r.id)))}
+            className="gap-1.5 text-xs font-semibold bg-accent hover:bg-accent-hover text-white"
+          >
+            <ArrowLeftRight className="h-3.5 w-3.5" /> Báo thuyên chuyển ({selectedIds.size})
           </Button>
           <Button
             variant="outline"
@@ -699,30 +701,53 @@ export default function MyDepartmentPage() {
             Yêu cầu báo nghỉ sẽ được gửi tới Phòng Nhân sự (HR Recruiter) để duyệt và cập nhật chỉ số nghỉ việc vào Kế hoạch Tập nghề.
           </p>
 
-          {resignationTargetRows.length > 1 && (
-            <div className="max-h-36 overflow-y-auto rounded-[8px] border border-border bg-surface-hover/50 p-2 text-xs space-y-1">
-              {resignationTargetRows.map((r) => (
-                <div key={r.id} className="flex justify-between items-center text-fg">
-                  <span className="font-semibold">{r.fullName}</span>
-                  <span className="text-fg-muted font-mono">{r.deptName} — {maskCccd(r.cccd)}</span>
-                </div>
-              ))}
-            </div>
-          )}
+          {/* Bảng thông tin gọn của tất cả người được chọn — nhập Lý do nghỉ việc cho từng người */}
+          <div className="max-h-52 overflow-auto rounded-[8px] border border-border">
+            <table className="w-full text-xs">
+              <thead className="sticky top-0 bg-primary text-white">
+                <tr>
+                  <th className="px-2 py-1.5 text-left text-[10px] uppercase">Họ và tên</th>
+                  <th className="px-2 py-1.5 text-left text-[10px] uppercase">Giới tính</th>
+                  <th className="px-2 py-1.5 text-left text-[10px] uppercase">Department</th>
+                  <th className="px-2 py-1.5 text-left text-[10px] uppercase">Section</th>
+                  <th className="px-2 py-1.5 text-left text-[10px] uppercase">Group</th>
+                  <th className="px-2 py-1.5 text-left text-[10px] uppercase">Ngày bắt đầu</th>
+                  <th className="px-2 py-1.5 text-left text-[10px] uppercase">Trạng thái</th>
+                  <th className="min-w-[180px] px-2 py-1.5 text-left text-[10px] uppercase">Lý do nghỉ việc</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-border">
+                {resignationTargetRows.map((r) => (
+                  <tr key={r.id} className="bg-surface">
+                    <td className="px-2 py-1.5 font-semibold text-fg">{r.fullName}</td>
+                    <td className="px-2 py-1.5 text-fg-secondary">{r.gender ?? "—"}</td>
+                    <td className="px-2 py-1.5 text-fg-secondary">{r.deptName || "—"}</td>
+                    <td className="px-2 py-1.5 text-fg-secondary">{r.section || "—"}</td>
+                    <td className="px-2 py-1.5 text-fg-secondary">{r.groupName || "—"}</td>
+                    <td className="px-2 py-1.5 text-fg-secondary">{formatDate(r.startingDate || r.regDate)}</td>
+                    <td className="px-2 py-1.5"><StatusBadge status={r.status} /></td>
+                    <td className="px-2 py-1.5">
+                      <input
+                        type="text"
+                        placeholder="Nhập lý do..."
+                        value={resignationReasons[r.id] ?? ""}
+                        onChange={(e) =>
+                          setResignationReasons((prev) => ({ ...prev, [r.id]: e.target.value }))
+                        }
+                        className="h-7 w-full min-w-[170px] rounded-[6px] border border-border bg-surface px-2 text-xs text-fg outline-none focus:border-primary"
+                      />
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
 
           <FormField label="Ngày có hiệu lực (Effective Date)" required>
             <Input
               type="date"
               value={effectiveDate}
               onChange={(e) => setEffectiveDate(e.target.value)}
-            />
-          </FormField>
-
-          <FormField label="Lý do nghỉ việc" required>
-            <Input
-              placeholder="VD: Nghỉ theo nguyện vọng, hoàn thành kỳ tập nghề..."
-              value={resignationReason}
-              onChange={(e) => setResignationReason(e.target.value)}
             />
           </FormField>
 
@@ -745,6 +770,133 @@ export default function MyDepartmentPage() {
           </Button>
         </div>
       </Modal>
+
+      {/* Modal: Báo thuyên chuyển (Single or Bulk) */}
+      <Modal
+        open={transferModalOpen}
+        onClose={() => setTransferModalOpen(false)}
+        title={
+          transferTargetRows.length > 1
+            ? `Báo Thuyên Chuyển Hàng Loạt (${transferTargetRows.length} Người Tập Nghề)`
+            : `Báo Thuyên Chuyển — ${transferTargetRows[0]?.fullName ?? ""}`
+        }
+      >
+        <div className="space-y-4">
+          <p className="text-xs text-fg-muted">
+            Yêu cầu thuyên chuyển sẽ được gửi tới Phòng Nhân sự (HR Recruiter) để duyệt. Bộ phận mới có thể là bất kỳ bộ phận nào trong hệ thống (không giới hạn theo phân quyền của bạn).
+          </p>
+
+          {/* Bảng thông tin gọn của tất cả người được chọn — nhập Lý do thuyên chuyển cho từng người */}
+          <div className="max-h-52 overflow-auto rounded-[8px] border border-border">
+            <table className="w-full text-xs">
+              <thead className="sticky top-0 bg-primary text-white">
+                <tr>
+                  <th className="px-2 py-1.5 text-left text-[10px] uppercase">Họ và tên</th>
+                  <th className="px-2 py-1.5 text-left text-[10px] uppercase">Giới tính</th>
+                  <th className="px-2 py-1.5 text-left text-[10px] uppercase">Department</th>
+                  <th className="px-2 py-1.5 text-left text-[10px] uppercase">Section</th>
+                  <th className="px-2 py-1.5 text-left text-[10px] uppercase">Group</th>
+                  <th className="px-2 py-1.5 text-left text-[10px] uppercase">Ngày bắt đầu</th>
+                  <th className="px-2 py-1.5 text-left text-[10px] uppercase">Trạng thái</th>
+                  <th className="min-w-[180px] px-2 py-1.5 text-left text-[10px] uppercase">Lý do thuyên chuyển</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-border">
+                {transferTargetRows.map((r) => (
+                  <tr key={r.id} className="bg-surface">
+                    <td className="px-2 py-1.5 font-semibold text-fg">{r.fullName}</td>
+                    <td className="px-2 py-1.5 text-fg-secondary">{r.gender ?? "—"}</td>
+                    <td className="px-2 py-1.5 text-fg-secondary">{r.deptName || "—"}</td>
+                    <td className="px-2 py-1.5 text-fg-secondary">{r.section || "—"}</td>
+                    <td className="px-2 py-1.5 text-fg-secondary">{r.groupName || "—"}</td>
+                    <td className="px-2 py-1.5 text-fg-secondary">{formatDate(r.startingDate || r.regDate)}</td>
+                    <td className="px-2 py-1.5"><StatusBadge status={r.status} /></td>
+                    <td className="px-2 py-1.5">
+                      <input
+                        type="text"
+                        placeholder="Nhập lý do..."
+                        value={transferReasons[r.id] ?? ""}
+                        onChange={(e) =>
+                          setTransferReasons((prev) => ({ ...prev, [r.id]: e.target.value }))
+                        }
+                        className="h-7 w-full min-w-[170px] rounded-[6px] border border-border bg-surface px-2 text-xs text-fg outline-none focus:border-primary"
+                      />
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+
+          <FormField label="Bộ phận mới (Bộ phận nhận thuyên chuyển)" required>
+            <AllTransferDeptOptions value={transferToDeptId} onChange={setTransferToDeptId} />
+            <p className="mt-1 text-[11px] text-fg-muted">
+              Danh sách gồm toàn bộ bộ phận trong hệ thống để bộ phận nhận thuyên chuyển có thể cập nhật thông tin.
+            </p>
+          </FormField>
+
+          <FormField label="Ngày thuyên chuyển" required>
+            <Input
+              type="date"
+              value={transferDate}
+              onChange={(e) => setTransferDate(e.target.value)}
+            />
+          </FormField>
+
+          <FormField label="Ghi chú thêm">
+            <Input
+              placeholder="Ghi chú bàn giao hoặc thông tin khác..."
+              value={transferNote}
+              onChange={(e) => setTransferNote(e.target.value)}
+            />
+          </FormField>
+
+          <Button
+            variant="primary"
+            size="lg"
+            className="w-full"
+            loading={submittingTransfer}
+            onClick={submitTransfer}
+          >
+            Xác nhận gửi yêu cầu thuyên chuyển ({transferTargetRows.length})
+          </Button>
+        </div>
+      </Modal>
     </div>
+  );
+}
+
+/** Toàn bộ bộ phận trong hệ thống (không giới hạn phân quyền) — cho dropdown Bộ phận mới. */
+function AllTransferDeptOptions({ value, onChange }: { value: string; onChange: (v: string) => void }) {
+  const [allDepts, setAllDepts] = useState<Dept[]>([]);
+
+  useEffect(() => {
+    void (async () => {
+      try {
+        const res = await fetch("/api/departments?scope=all");
+        if (res.ok) {
+          const data = await res.json();
+          setAllDepts(data.rows ?? []);
+        }
+      } catch {
+        /* giữ dropdown trống nếu không tải được */
+      }
+    })();
+  }, []);
+
+  return (
+    <select
+      value={value}
+      onChange={(e) => onChange(e.target.value)}
+      className="h-10 w-full rounded-[10px] border border-border-strong bg-surface px-3 text-[14px] font-medium text-fg outline-none focus:border-primary focus:ring-2 focus:ring-primary/15"
+    >
+      <option value="">— Chọn bộ phận mới —</option>
+      {allDepts.map((d) => (
+        <option key={d.id} value={d.id}>
+          {d.deptName}
+          {d.groupName ? ` — ${d.groupName}` : ""}
+        </option>
+      ))}
+    </select>
   );
 }

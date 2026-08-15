@@ -1,16 +1,58 @@
 import { NextResponse } from "next/server";
-import { and, asc, eq, isNull, sql } from "drizzle-orm";
+import { and, asc, eq, inArray, isNull, sql } from "drizzle-orm";
 import { db } from "@/db";
 import { departments } from "@/db/schema";
-import { requireRoleAndPermission, writeAudit } from "@/lib/auth";
+import { getUserScope, getSession, requireRoleAndPermission, writeAudit } from "@/lib/auth";
 import { todayStr } from "@/lib/helpers";
 import { normalizePersonName } from "@/lib/person-name";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
-/** Sheet "Department" — Dept. + Group, tự động vào dropdown Daily Application */
-export async function GET() {
+/**
+ * Sheet "Department" — Dept. + Group.
+ * scope=self: chỉ trả về bộ phận thuộc Data Scope của người đang đăng nhập (cổng
+ * "Bộ phận của tôi" — bộ lọc không hiện bộ phận chưa được phân quyền).
+ * scope=all: bỏ qua Data Scope, trả về toàn bộ bộ phận đang hoạt động (dropdown
+ * "Bộ phận mới" khi Báo thuyên chuyển — không giới hạn theo phân quyền).
+ * (mặc định): giữ nguyên hành vi cũ cho Admin/HR — toàn bộ danh sách.
+ */
+export async function GET(req: Request) {
+  const url = new URL(req.url);
+  const scopeParam = url.searchParams.get("scope");
+
+  if (scopeParam === "self") {
+    const session = await getSession();
+    if (!session) return NextResponse.json({ error: "Chưa đăng nhập." }, { status: 401 });
+    const scope = await getUserScope(session);
+    if (scope === null) {
+      // Không giới hạn (Admin/HR không gán scope) → trả về toàn bộ
+    } else if (scope.length === 0) {
+      return NextResponse.json({ rows: [] });
+    } else {
+      const rows = await db
+        .select({
+          id: departments.id,
+          stt: departments.stt,
+          location: departments.location,
+          division: departments.division,
+          deptName: departments.deptName,
+          section: departments.section,
+          groupName: departments.groupName,
+          vnName: departments.vnName,
+          supervisor: departments.supervisor,
+          supervisorPhone: departments.supervisorPhone,
+          sheetLink: departments.sheetLink,
+          dailyQuota: departments.dailyQuota,
+          isActive: departments.isActive,
+        })
+        .from(departments)
+        .where(and(isNull(departments.deletedAt), inArray(departments.id, scope)))
+        .orderBy(asc(departments.deptName), asc(departments.groupName));
+      return NextResponse.json({ rows, scoped: true });
+    }
+  }
+
   const today = todayStr();
   const rows = await db
     .select({

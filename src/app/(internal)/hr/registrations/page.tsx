@@ -46,7 +46,7 @@ export default async function HrRegistrationsPage() {
       <PageHeader
         eyebrow={<SectionLabel>Recruitment Operations</SectionLabel>}
         title="Daily Application — Tiếp nhận & Xếp việc Tập nghề"
-        description="Mặc định chỉ hiện đơn hôm nay. Tick ô “Xem khoảng ngày” để tra cứu & xuất kết quả các ngày trước. Cột DW Data tự động đối chiếu 3 tầng (CCCD → Tên+Năm sinh → Tên+SĐT)."
+        description="Mặc định chỉ hiện DW hôm nay. Tick ô “Xem khoảng ngày” để tra cứu & xuất kết quả các ngày trước. Cột DW Data tự động đối chiếu 3 tầng (CCCD → Tên+Năm sinh → Tên+SĐT)."
         actions={
           <>
             <Badge tone="gray">Sheet: Daily Application</Badge>
@@ -58,7 +58,7 @@ export default async function HrRegistrationsPage() {
 
       <MetricStrip
         items={[
-          <MetricStripItem key="total" icon={<Zap className="h-4 w-4" aria-hidden />} value={pipeline?.total ?? 0} label="Tổng đơn hôm nay" tone="primary" />,
+          <MetricStripItem key="total" icon={<Zap className="h-4 w-4" aria-hidden />} value={pipeline?.total ?? 0} label="Tổng DW hôm nay" tone="primary" />,
           <MetricStripItem key="pending" icon={<Clock className="h-4 w-4" aria-hidden />} value={pipeline?.pending ?? 0} label="Chờ duyệt" tone="warning" />,
           <MetricStripItem key="approved" icon={<CheckCircle2 className="h-4 w-4" aria-hidden />} value={pipeline?.approved ?? 0} label="Đã nhận việc" tone="success" />,
           <MetricStripItem key="new" icon={<UserPlus2 className="h-4 w-4" aria-hidden />} value={pipeline?.newToDw ?? 0} label="Người mới (chưa có DW)" tone="accent" />,

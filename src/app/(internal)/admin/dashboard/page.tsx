@@ -87,7 +87,7 @@ export default async function DashboardPage() {
   ].filter((q) => q.visible);
 
   const attention: string[] = [];
-  if (t.pending > 0) attention.push(`${t.pending} đơn chờ duyệt hôm nay`);
+  if (t.pending > 0) attention.push(`${t.pending} DW chờ duyệt hôm nay`);
   if (t.newToDw > 0) attention.push(`${t.newToDw} người tập nghề mới cần duyệt vào DW Data`);
   if (t.mismatch > 0) attention.push(`${t.mismatch} hồ sơ tự khai CŨ nhưng chưa có trong DW Data`);
   if (p && p.shortageTotal > 0) attention.push(`Thiếu ${p.shortageTotal} người so với kế hoạch đang áp dụng`);
@@ -275,7 +275,7 @@ export default async function DashboardPage() {
         <SectionLabel tone="green" className="mb-2">Hoạt động hôm nay</SectionLabel>
         <MetricStrip
           items={[
-            <MetricStripItem key="total" icon={<FileText className="h-4 w-4" aria-hidden />} value={t.total} label="Tổng đơn đăng ký" tone="primary" />,
+            <MetricStripItem key="total" icon={<FileText className="h-4 w-4" aria-hidden />} value={t.total} label="Tổng DW đăng ký" tone="primary" />,
             <MetricStripItem key="pending" icon={<Clock className="h-4 w-4" aria-hidden />} value={t.pending} label="Chờ duyệt" tone="warning" />,
             <MetricStripItem key="approved" icon={<CheckCircle2 className="h-4 w-4" aria-hidden />} value={t.approved} label="Đã xếp việc" tone="success" />,
             <MetricStripItem key="new" icon={<UserPlus2 className="h-4 w-4" aria-hidden />} value={t.newToDw} label="Người mới → DW Data" tone="accent" />,
