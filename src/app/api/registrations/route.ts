@@ -2,11 +2,12 @@ import { NextResponse } from "next/server";
 import { and, asc, desc, eq, gte, inArray, isNull, lte, sql } from "drizzle-orm";
 import { db } from "@/db";
 import { dailyApplications, departments, dwData, employmentSessions, formQuestions, workerProfiles } from "@/db/schema";
-import { getSession, getUserScope } from "@/lib/auth";
+import { getUserScope, hasPermission, requirePermission } from "@/lib/auth";
 import { matchDwWorker } from "@/lib/matching";
 import { todayStr } from "@/lib/helpers";
 import { normalizePersonName } from "@/lib/person-name";
 import { runRules } from "@/lib/rule-engine";
+import { persistRegistrationAtomically, type RegistrationTransactionRunner } from "@/lib/registration-persistence";
 import { isQuestionForAudience } from "@/lib/form-targeting";
 import { CCCD_ERROR_MESSAGE, isValidCccd } from "@/lib/validators";
 
@@ -103,63 +104,80 @@ export async function POST(req: Request) {
       if (a.type === "FLAG_NOTE") ruleNote = ruleNote ? `${ruleNote}; ${a.value} (rule: ${a.ruleName})` : `${a.value} (rule: ${a.ruleName})`;
     }
 
-    const [created] = await db
-      .insert(dailyApplications)
-      .values({
-        regDate: today,
-        cccd,
-        fullName: normalizePersonName(match.worker?.fullName ?? fullName),
-        gender: body.gender || match.worker?.gender || null,
-        dob: dobStr ?? match.worker?.bod ?? null,
-        birthYear,
-        age: computedAge,
-        phone,
-        ethnicity: body.ethnicity || null,
-        permanentAddress: body.permanent_address || match.worker?.permanentAddress || null,
-        residentialAddress,
-        declaredType: isReturning ? "OLD" : "NEW",
-        dwMatch: match.status,
-        dwId: match.worker?.id ?? null,
-        dwCode: match.worker?.code ?? null,
-        workDuration: body.work_duration || null,
-        referralChannel: body.referral_channel || null,
-        customAnswers: answers,
-        status: ruleStatus ?? "PENDING",
-        noteWorker: ruleNote,
-      })
-      .returning();
+    type ApplicationInsert = typeof dailyApplications.$inferInsert;
+    type ApplicationRow = typeof dailyApplications.$inferSelect;
+    type ProfileInsert = typeof workerProfiles.$inferInsert;
+    type ProfileRow = typeof workerProfiles.$inferSelect;
 
-    // DIGITAL WORKER FILE (#10) — 1 người chỉ có 1 worker_profiles, mỗi lần đăng ký chỉ
-    // tạo 1 employment_sessions gắn vào profile đó (KHÔNG tạo "người" mới mỗi lần quay lại).
-    const [profile] = await db
-      .insert(workerProfiles)
-      .values({
-        cccd,
-        fullName: normalizePersonName(match.worker?.fullName ?? fullName),
-        gender: body.gender || match.worker?.gender || null,
-        dob: dobStr ?? match.worker?.bod ?? null,
-        phone,
-        permanentAddress: body.permanent_address || match.worker?.permanentAddress || null,
-        residentialAddress,
-        dwId: match.worker?.id ?? null,
-      })
-      .onConflictDoUpdate({
-        target: workerProfiles.cccd,
-        targetWhere: sql`deleted_at is null`,
-        set: {
-          fullName: normalizePersonName(match.worker?.fullName ?? fullName),
-          phone,
-          residentialAddress,
-          updatedAt: new Date(),
-        },
-      })
-      .returning();
-
-    await db.insert(employmentSessions).values({
-      workerId: profile.id,
-      dailyApplicationId: created.id,
+    const normalizedName = normalizePersonName(match.worker?.fullName ?? fullName);
+    const applicationValues: ApplicationInsert = {
       regDate: today,
-      status: created.status,
+      cccd,
+      fullName: normalizedName,
+      gender: body.gender || match.worker?.gender || null,
+      dob: dobStr ?? match.worker?.bod ?? null,
+      birthYear,
+      age: computedAge,
+      phone,
+      ethnicity: body.ethnicity || null,
+      permanentAddress: body.permanent_address || match.worker?.permanentAddress || null,
+      residentialAddress,
+      declaredType: isReturning ? "OLD" : "NEW",
+      dwMatch: match.status,
+      dwId: match.worker?.id ?? null,
+      dwCode: match.worker?.code ?? null,
+      workDuration: body.work_duration || null,
+      referralChannel: body.referral_channel || null,
+      customAnswers: answers,
+      status: ruleStatus ?? "PENDING",
+      noteWorker: ruleNote,
+    };
+    const profileValues: ProfileInsert = {
+      cccd,
+      fullName: normalizedName,
+      gender: body.gender || match.worker?.gender || null,
+      dob: dobStr ?? match.worker?.bod ?? null,
+      phone,
+      permanentAddress: body.permanent_address || match.worker?.permanentAddress || null,
+      residentialAddress,
+      dwId: match.worker?.id ?? null,
+    };
+
+    // Application + stable profile + employment session are one atomic business write.
+    // Validation/matching/rules stay outside because they are read-only; every write is inside
+    // this transaction, so a profile/session failure rolls the application insert back.
+    const runTransaction: RegistrationTransactionRunner<ApplicationInsert, ApplicationRow, ProfileInsert, ProfileRow> =
+      (callback) => db.transaction(async (tx) => callback({
+        createApplication: async (input) => {
+          const [row] = await tx.insert(dailyApplications).values(input).returning();
+          if (!row) throw new Error("Không thể tạo Daily Application.");
+          return row;
+        },
+        upsertProfile: async (input) => {
+          const [row] = await tx
+            .insert(workerProfiles)
+            .values(input)
+            .onConflictDoUpdate({
+              target: workerProfiles.cccd,
+              targetWhere: sql`deleted_at is null`,
+              set: { fullName: normalizedName, phone, residentialAddress, updatedAt: new Date() },
+            })
+            .returning();
+          if (!row) throw new Error("Không thể tạo hoặc cập nhật Worker Profile.");
+          return row;
+        },
+        createEmploymentSession: async ({ application, profile }) => {
+          await tx.insert(employmentSessions).values({
+            workerId: profile.id,
+            dailyApplicationId: application.id,
+            regDate: today,
+            status: application.status,
+          });
+        },
+      }));
+    const { application: created } = await persistRegistrationAtomically(runTransaction, {
+      application: applicationValues,
+      profile: profileValues,
     });
 
     return NextResponse.json({
@@ -169,17 +187,23 @@ export async function POST(req: Request) {
       confidence: match.confidence,
     });
   } catch (error) {
-    return NextResponse.json(
-      { error: "Lỗi hệ thống: " + (error as Error).message },
-      { status: 500 },
-    );
+    const dbError = error as { code?: string; constraint?: string };
+    if (dbError.code === "23505" && dbError.constraint === "daily_app_cccd_date_uq") {
+      return NextResponse.json(
+        { error: "Đã xác nhận đăng ký hôm nay.", code: "ALREADY_REGISTERED_TODAY" },
+        { status: 409 },
+      );
+    }
+    console.error("[registrations/post] atomic registration failed", { code: dbError.code ?? "UNKNOWN", constraint: dbError.constraint ?? null });
+    return NextResponse.json({ error: "Không thể hoàn tất đăng ký. Không có dữ liệu đăng ký dở dang được lưu." }, { status: 500 });
   }
 }
 
 /** Nội bộ — danh sách. Mặc định CHỈ HÔM NAY; hỗ trợ khoảng ngày để tham khảo. */
 export async function GET(req: Request) {
-  const session = await getSession();
-  if (!session) return NextResponse.json({ error: "Chưa đăng nhập." }, { status: 401 });
+  const guard = await requirePermission(["ADMIN", "HR_RECRUITER", "DEPT_MANAGER", "HR_DIRECTOR"], "registrations.view");
+  if (!guard.ok) return NextResponse.json({ error: guard.error }, { status: guard.status });
+  const session = guard.session;
 
   const url = new URL(req.url);
   const from = url.searchParams.get("from") || todayStr();
@@ -192,22 +216,18 @@ export async function GET(req: Request) {
   if (status && status !== "ALL") filters.push(eq(dailyApplications.status, status));
   if (matchParam && matchParam !== "ALL") filters.push(eq(dailyApplications.dwMatch, matchParam));
 
-  // DYNAMIC RBAC V2 — bỏ proxy role === DEPT_MANAGER: scope do getUserScope quyết định
-  // (role-independent; null = không giới hạn, [] = không thấy gì, list = đúng các bộ phận).
-  // Người dùng CÓ Data Scope (Quản lý bộ phận) chỉ thấy người tập nghề ĐANG LÀM VIỆC tại
-  // bộ phận mình quản lý: APPROVED (đã nhận việc) + INACTIVE (đã nghỉ việc, vẫn còn liên kết
-  // bộ phận) — KHÔNG hiện PENDING/REJECTED/WAITLIST như Admin/HR (chưa được xếp bộ phận nào).
+  // Data Scope only decides WHERE the user may read. Business permission decides which
+  // workflow statuses are visible; assigning a scope to HR must not silently downgrade HR.
   const scope = await getUserScope(session);
-  if (scope) {
+  if (scope !== null) {
     if (scope.length === 0) return NextResponse.json({ rows: [] });
+    if (deptParam && deptParam !== "ALL" && !scope.includes(deptParam)) return NextResponse.json({ rows: [] });
     filters.push(inArray(dailyApplications.deptId, scope));
-    filters.push(inArray(dailyApplications.status, ["APPROVED", "INACTIVE"]));
-    // Bộ lọc bộ phận vẫn phải hoạt động với người dùng CÓ Data Scope: chọn bộ phận
-    // được phân quyền nào thì chỉ hiện bộ phận đó (giao với scope, không bỏ qua).
-    if (deptParam && deptParam !== "ALL") filters.push(eq(dailyApplications.deptId, deptParam));
-  } else if (deptParam && deptParam !== "ALL") {
-    filters.push(eq(dailyApplications.deptId, deptParam));
   }
+  if (deptParam && deptParam !== "ALL") filters.push(eq(dailyApplications.deptId, deptParam));
+
+  const canProcessApplications = await hasPermission(session.role, "registrations.approve");
+  if (!canProcessApplications) filters.push(inArray(dailyApplications.status, ["APPROVED", "INACTIVE"]));
 
   const rows = await db
     .select({

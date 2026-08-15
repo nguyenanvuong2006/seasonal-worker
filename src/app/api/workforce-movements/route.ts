@@ -1,8 +1,9 @@
 import { NextResponse } from "next/server";
-import { and, desc, eq, inArray } from "drizzle-orm";
+import { and, desc, eq, inArray, isNull, or } from "drizzle-orm";
 import { db } from "@/db";
-import { employmentSessions, workerProfiles, workforceMovements } from "@/db/schema";
+import { departments, employmentSessions, workerProfiles, workforceMovements } from "@/db/schema";
 import { getUserScope, requirePermission, writeAudit } from "@/lib/auth";
+import { movementScopeVisibility } from "@/lib/data-scope";
 import { queueNotification } from "@/lib/notifications";
 import { todayStr } from "@/lib/helpers";
 import { normalizePersonName } from "@/lib/person-name";
@@ -23,11 +24,17 @@ export async function GET(req: Request) {
   if (statusParam && statusParam !== "ALL") filters.push(eq(workforceMovements.status, statusParam));
   if (typeParam && typeParam !== "ALL") filters.push(eq(workforceMovements.movementType, typeParam));
 
-  // DYNAMIC RBAC V2 — bỏ proxy role === DEPT_MANAGER: scope role-independent.
+  // Worker-level movement policy:
+  // - source/from scope: full record;
+  // - destination-only scope: incoming transfer is visible but PII/business notes are redacted;
+  // - no intersection: invisible. Aggregate Transfer Out/In remains directional by from/to.
   const scope = await getUserScope(guard.session);
-  if (scope) {
+  if (scope !== null) {
     if (scope.length === 0) return NextResponse.json({ rows: [] });
-    filters.push(inArray(workforceMovements.fromDeptId, scope));
+    filters.push(or(
+      inArray(workforceMovements.fromDeptId, scope),
+      inArray(workforceMovements.toDeptId, scope),
+    )!);
   }
 
   const rows = await db
@@ -53,9 +60,24 @@ export async function GET(req: Request) {
     .orderBy(desc(workforceMovements.createdAt))
     .limit(500);
 
-  // Chuẩn hoá họ tên lao động trước khi trả về UI.
   return NextResponse.json({
-    rows: rows.map((r) => ({ ...r, workerName: normalizePersonName(r.workerName ?? "") || null })),
+    rows: rows
+      .map((row) => {
+        const visibility = movementScopeVisibility(scope, row.movementType, row.fromDeptId, row.toDeptId);
+        const full = visibility === "FULL";
+        return {
+          ...row,
+          workerId: full ? row.workerId : null,
+          workerName: full ? normalizePersonName(row.workerName ?? "") || null : null,
+          workerCccd: full ? row.workerCccd : null,
+          reason: full ? row.reason : null,
+          note: full ? row.note : null,
+          requestedBy: full ? row.requestedBy : null,
+          relatedMovementId: full ? row.relatedMovementId : null,
+          scopeVisibility: visibility,
+        };
+      })
+      .filter((row) => row.scopeVisibility !== "NONE"),
   });
 }
 
@@ -79,6 +101,13 @@ export async function POST(req: Request) {
   if (body.movementType === "transfer" && !body.toDeptId) {
     return NextResponse.json({ error: "Thuyên chuyển cần chọn Bộ phận mới." }, { status: 400 });
   }
+  if (body.movementType === "transfer" && body.toDeptId) {
+    const [destination] = await db
+      .select({ id: departments.id })
+      .from(departments)
+      .where(and(eq(departments.id, body.toDeptId), eq(departments.isActive, true), isNull(departments.deletedAt)));
+    if (!destination) return NextResponse.json({ error: "Bộ phận đích không tồn tại hoặc đã ngừng hoạt động." }, { status: 400 });
+  }
 
   // P0-4 (Production Hardening Audit) — TRƯỚC ĐÂY `fromDeptId` lấy thẳng từ request body (client
   // có thể gửi bất kỳ giá trị nào) — authorization bypass: 1 DEPT_MANAGER có thể tự khai
@@ -87,12 +116,16 @@ export async function POST(req: Request) {
   // nghiệp vụ chuẩn — cùng cách applyMovementAction() xác định bộ phận thật ở lib/workforce-movements.ts),
   // KHÔNG tin giá trị `fromDeptId` do client gửi lên.
   const [latestSession] = await db
-    .select({ deptId: employmentSessions.deptId })
+    .select({ deptId: employmentSessions.deptId, status: employmentSessions.status, endDate: employmentSessions.endDate })
     .from(employmentSessions)
+    .innerJoin(workerProfiles, and(eq(employmentSessions.workerId, workerProfiles.id), isNull(workerProfiles.deletedAt)))
     .where(eq(employmentSessions.workerId, body.workerId))
-    .orderBy(desc(employmentSessions.regDate))
+    .orderBy(desc(employmentSessions.regDate), desc(employmentSessions.createdAt))
     .limit(1);
-  const actualFromDeptId = latestSession?.deptId ?? null;
+  if (!latestSession || latestSession.status !== "APPROVED" || (latestSession.endDate && latestSession.endDate <= todayStr())) {
+    return NextResponse.json({ error: "Lao động không có Employment Session active để tạo yêu cầu." }, { status: 400 });
+  }
+  const actualFromDeptId = latestSession.deptId;
 
   // DYNAMIC RBAC V2 — bỏ proxy role === DEPT_MANAGER: user có Data Scope (scope != null) chỉ
   // được tạo yêu cầu cho lao động thuộc bộ phận mình quản lý.

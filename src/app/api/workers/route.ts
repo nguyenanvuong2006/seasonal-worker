@@ -2,7 +2,7 @@ import { NextResponse } from "next/server";
 import { and, asc, desc, eq, ilike, isNull, or, sql } from "drizzle-orm";
 import { db } from "@/db";
 import { dailyApplications, dwData } from "@/db/schema";
-import { requirePermission, writeAudit } from "@/lib/auth";
+import { getUserScope, requirePermission, writeAudit, type Session } from "@/lib/auth";
 import { getFieldDefinitions } from "@/lib/metadata";
 import { normalizePersonName } from "@/lib/person-name";
 import { CCCD_ERROR_MESSAGE, isValidCccd } from "@/lib/validators";
@@ -12,6 +12,12 @@ export const dynamic = "force-dynamic";
 
 // Ánh xạ database_field (khai báo ở /admin/field-definitions) -> cột Drizzle thật của bảng dw_data.
 // Chỉ những field text nào có mặt ở đây mới có thể được bật "Tìm kiếm" cho màn hình DW Data.
+async function scopedDwDataDenied(session: Session): Promise<boolean> {
+  // DW Data has no department key. Until canonical ownership exists, a restricted scope must
+  // fail closed rather than exposing company-wide identities.
+  return (await getUserScope(session)) !== null;
+}
+
 const DW_SEARCHABLE_COLUMNS = {
   full_name: dwData.fullName,
   cccd: dwData.cccd,
@@ -27,6 +33,7 @@ const DW_SEARCHABLE_COLUMNS = {
 export async function GET(req: Request) {
   const guard = await requirePermission(["ADMIN", "HR_RECRUITER", "HR_DIRECTOR"], "dw.view");
   if (!guard.ok) return NextResponse.json({ error: guard.error }, { status: guard.status });
+  if (await scopedDwDataDenied(guard.session)) return NextResponse.json({ error: "DW Data không có department key nên không khả dụng với tài khoản bị giới hạn Data Scope." }, { status: 403 });
 
   const url = new URL(req.url);
   const q = (url.searchParams.get("q") || "").trim();
@@ -70,6 +77,7 @@ export async function GET(req: Request) {
 export async function PATCH(req: Request) {
   const guard = await requirePermission(["ADMIN", "HR_RECRUITER"], "dw.edit");
   if (!guard.ok) return NextResponse.json({ error: guard.error }, { status: guard.status });
+  if (await scopedDwDataDenied(guard.session)) return NextResponse.json({ error: "DW Data không khả dụng với tài khoản bị giới hạn Data Scope." }, { status: 403 });
 
   const body = await req.json();
   if (!body.id) return NextResponse.json({ error: "Thiếu ID." }, { status: 400 });
@@ -122,6 +130,7 @@ export async function PATCH(req: Request) {
 export async function DELETE(req: Request) {
   const guard = await requirePermission(["ADMIN"], "dw.edit");
   if (!guard.ok) return NextResponse.json({ error: guard.error }, { status: guard.status });
+  if (await scopedDwDataDenied(guard.session)) return NextResponse.json({ error: "DW Data không khả dụng với tài khoản bị giới hạn Data Scope." }, { status: 403 });
   const id = new URL(req.url).searchParams.get("id");
   if (!id) return NextResponse.json({ error: "Thiếu ID." }, { status: 400 });
   await db

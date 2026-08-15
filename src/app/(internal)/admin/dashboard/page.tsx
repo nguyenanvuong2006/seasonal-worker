@@ -7,6 +7,7 @@ import { getPublicBranding } from "@/lib/branding";
 import { AlertPanel, Badge, Card, CardContent, MetricStrip, MetricStripItem, SectionLabel, SkeletonKpiRow } from "@/components/ui";
 import DashboardWidgets from "@/components/dashboard-widgets";
 import AnalyticsDashboard from "@/components/analytics/analytics-dashboard";
+import WorkforceOutlook from "@/components/workforce-intelligence/workforce-outlook";
 import {
   AlertTriangle,
   ArrowLeftRight,
@@ -155,7 +156,10 @@ export default async function DashboardPage() {
         </AlertPanel>
       )}
 
-      {/* ============ ANALYTICS (phần chính) ============ */}
+      {/* ============ WORKFORCE INTELLIGENCE (future-looking foundation) ============ */}
+      <WorkforceOutlook />
+
+      {/* ============ OPERATIONAL / HISTORICAL ANALYTICS ============ */}
       <Suspense fallback={<SkeletonKpiRow count={8} />}>
         <AnalyticsDashboard canExport={canExport} />
       </Suspense>
@@ -233,7 +237,7 @@ export default async function DashboardPage() {
             <MetricStripItem key="approved" icon={<CheckCircle2 className="h-4 w-4" aria-hidden />} value={t.approved} label="Đã xếp việc" tone="success" />,
             <MetricStripItem key="new" icon={<UserPlus2 className="h-4 w-4" aria-hidden />} value={t.newToDw} label="Người mới → DW Data" tone="accent" />,
             <MetricStripItem key="mismatch" icon={<AlertTriangle className="h-4 w-4" aria-hidden />} value={t.mismatch} label="Khai sai CŨ/MỚI" tone="danger" />,
-            <MetricStripItem key="dw" icon={<Database className="h-4 w-4" aria-hidden />} value={overview.dwTotal.toLocaleString("vi-VN")} label="Tổng hồ sơ DW Data" tone="info" />,
+            <MetricStripItem key="dw" icon={<Database className="h-4 w-4" aria-hidden />} value={overview.dwTotal === null ? "—" : overview.dwTotal.toLocaleString("vi-VN")} label={overview.dwTotal === null ? "DW Data ngoài scope" : "Tổng hồ sơ DW Data"} tone="info" />,
           ]}
         />
       </div>

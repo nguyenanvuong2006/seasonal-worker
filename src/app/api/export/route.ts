@@ -1,6 +1,6 @@
 import { NextResponse } from "next/server";
 import ExcelJS from "exceljs";
-import { and, asc, eq, gte, inArray, lte } from "drizzle-orm";
+import { and, asc, eq, gte, inArray, isNull, lte } from "drizzle-orm";
 import { db } from "@/db";
 import { dailyApplications, departments, formQuestions, workflowStages } from "@/db/schema";
 import { getSession, getUserScope, hasPermission, writeAudit } from "@/lib/auth";
@@ -49,7 +49,7 @@ export async function GET(req: Request) {
   const to = url.searchParams.get("to") || from;
   const deptParam = url.searchParams.get("deptId");
 
-  const filters = [gte(dailyApplications.regDate, from), lte(dailyApplications.regDate, to)];
+  const filters = [gte(dailyApplications.regDate, from), lte(dailyApplications.regDate, to), isNull(dailyApplications.deletedAt)];
   let deptLabel = "Tất cả bộ phận";
   let managerScope: string[] | null = null;
 
@@ -61,12 +61,11 @@ export async function GET(req: Request) {
     if (managerScope.length === 0) {
       return NextResponse.json({ error: "Chưa gán bộ phận." }, { status: 400 });
     }
-    if (deptParam && deptParam !== "ALL" && managerScope.includes(deptParam)) {
-      filters.push(eq(dailyApplications.deptId, deptParam));
-    } else {
-      filters.push(inArray(dailyApplications.deptId, managerScope));
+    if (deptParam && deptParam !== "ALL" && !managerScope.includes(deptParam)) {
+      return NextResponse.json({ error: "Bộ phận yêu cầu nằm ngoài Data Scope được cấp." }, { status: 403 });
     }
-    filters.push(eq(dailyApplications.status, "APPROVED"));
+    if (deptParam && deptParam !== "ALL") filters.push(eq(dailyApplications.deptId, deptParam));
+    else filters.push(inArray(dailyApplications.deptId, managerScope));
   } else if (deptParam && deptParam !== "ALL") {
     filters.push(eq(dailyApplications.deptId, deptParam));
   }

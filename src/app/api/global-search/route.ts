@@ -1,9 +1,10 @@
 import { NextResponse } from "next/server";
-import { and, desc, eq, ilike, inArray, isNull, or } from "drizzle-orm";
+import { and, desc, eq, ilike, inArray, isNull, or, sql } from "drizzle-orm";
 import { db } from "@/db";
 import {
   dailyApplications,
   departments,
+  employmentSessions,
   planningPeriods,
   workerProfiles,
   workforceMovements,
@@ -50,19 +51,23 @@ export async function GET(req: Request) {
   // DYNAMIC RBAC V2 — bỏ proxy role === DEPT_MANAGER: scope role-independent.
   const scope = await getUserScope(session); // null = không giới hạn
 
-  /* ---------------- Người lao động (worker_profiles) — worker_profile.view (Dynamic RBAC V2:
-     tách từ workers.view cũ), giống hệt GET /api/worker-profiles/[cccd]. Không Data Scope
-     (worker_profiles không gắn department cố định — đúng kiến trúc hiện có). ---------------- */
+  /* ---------------- Worker Profiles: scoped through Employment Sessions. A scoped user cannot
+     search a global identity merely because worker_profiles itself has no department column. ----- */
   if (await hasPermission(session.role, "worker_profile.view")) {
-    const rows = await db
+    const workerFilters = [
+      isNull(workerProfiles.deletedAt),
+      or(ilike(workerProfiles.fullName, pattern), ilike(workerProfiles.cccd, pattern), ilike(workerProfiles.phone, pattern)),
+    ];
+    if (scope !== null && scope.length > 0) {
+      workerFilters.push(sql`exists (
+        select 1 from ${employmentSessions} es
+        where es.worker_id = ${workerProfiles.id} and es.dept_id = any(${scope}::uuid[])
+      )`);
+    }
+    const rows = scope !== null && scope.length === 0 ? [] : await db
       .select({ id: workerProfiles.id, cccd: workerProfiles.cccd, fullName: workerProfiles.fullName, phone: workerProfiles.phone })
       .from(workerProfiles)
-      .where(
-        and(
-          isNull(workerProfiles.deletedAt),
-          or(ilike(workerProfiles.fullName, pattern), ilike(workerProfiles.cccd, pattern), ilike(workerProfiles.phone, pattern)),
-        ),
-      )
+      .where(and(...workerFilters))
       .limit(GROUP_LIMIT);
 
     if (rows.length > 0) {
@@ -83,7 +88,12 @@ export async function GET(req: Request) {
      chính trang /hr/registrations redirect sang /department nên không đưa vào kết quả tìm kiếm
      để tránh dẫn tới đường cụt). ---------------- */
   if (await hasPermission(session.role, "registrations.view")) {
-    const rows = await db
+    const applicationFilters = [
+      isNull(dailyApplications.deletedAt),
+      or(ilike(dailyApplications.fullName, pattern), ilike(dailyApplications.cccd, pattern), ilike(dailyApplications.phone, pattern)),
+    ];
+    if (scope !== null && scope.length > 0) applicationFilters.push(inArray(dailyApplications.deptId, scope));
+    const rows = scope !== null && scope.length === 0 ? [] : await db
       .select({
         id: dailyApplications.id,
         cccd: dailyApplications.cccd,
@@ -95,12 +105,7 @@ export async function GET(req: Request) {
       })
       .from(dailyApplications)
       .leftJoin(departments, eq(dailyApplications.deptId, departments.id))
-      .where(
-        and(
-          isNull(dailyApplications.deletedAt),
-          or(ilike(dailyApplications.fullName, pattern), ilike(dailyApplications.cccd, pattern), ilike(dailyApplications.phone, pattern)),
-        ),
-      )
+      .where(and(...applicationFilters))
       .orderBy(desc(dailyApplications.regDate))
       .limit(GROUP_LIMIT);
 

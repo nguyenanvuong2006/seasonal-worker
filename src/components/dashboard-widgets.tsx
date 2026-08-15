@@ -29,7 +29,7 @@ type Widget = {
   title: string;
   widgetType: "KPI" | "TABLE";
   config: { metric?: string };
-  value?: number;
+  value?: number | null;
   table?: { headers: string[]; rows: string[][] };
 };
 
@@ -154,7 +154,7 @@ export default function DashboardWidgets() {
                     <NumberTile
                       icon={meta.icon}
                       label={w.title}
-                      value={(w.value ?? 0).toLocaleString("vi-VN")}
+                      value={w.value === null || w.value === undefined ? "—" : w.value.toLocaleString("vi-VN")}
                       context={metricLabel ? `Chỉ số: ${metricLabel}` : undefined}
                       tone={meta.tone}
                     />

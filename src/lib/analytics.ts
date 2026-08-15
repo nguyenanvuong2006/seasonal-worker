@@ -203,12 +203,19 @@ async function queryDeptPerformance(
     deptIds !== null && deptIds.length === 0
       ? Promise.resolve({ rows: [] as NumRow[] })
       : pool.query(
-          `SELECT es.dept_id, count(*)::int AS c
-           FROM employment_sessions es
-           WHERE es.status = '${APPROVED_STAGE_KEY}' AND es.end_date IS NULL
-             ${deptIds !== null ? "AND es.dept_id = ANY($1::uuid[])" : ""}
+          `WITH ranked AS (
+             SELECT es.*, row_number() OVER (PARTITION BY es.worker_id ORDER BY es.reg_date DESC, es.created_at DESC, es.id DESC) AS rn
+             FROM employment_sessions es
+             JOIN worker_profiles wp ON wp.id = es.worker_id AND wp.deleted_at IS NULL
+           )
+           SELECT es.dept_id, count(*)::int AS c
+           FROM ranked es
+           WHERE es.rn = 1 AND es.status = '${APPROVED_STAGE_KEY}'
+             AND coalesce(es.starting_date, es.reg_date) <= $1::date
+             AND (es.end_date IS NULL OR es.end_date > $1::date)
+             ${deptIds !== null ? "AND es.dept_id = ANY($2::uuid[])" : ""}
            GROUP BY es.dept_id`,
-          deptIds !== null ? [deptIds] : [],
+          deptIds !== null ? [today, deptIds] : [today],
         ),
   ]);
 
@@ -631,7 +638,8 @@ async function queryDataQuality(f: AnalyticsFilters, deptIds: string[] | null) {
          count(*) FILTER (WHERE a.gender IS NULL OR btrim(a.gender) = '')::int AS missing_gender,
          count(*) FILTER (WHERE a.referral_channel IS NULL OR btrim(a.referral_channel) = '')::int AS missing_referral,
          count(*) FILTER (WHERE a.age IS NOT NULL AND (a.age < 15 OR a.age > 80))::int AS abnormal_age,
-         count(*) FILTER (WHERE a.starting_date IS NOT NULL AND a.starting_date < a.reg_date)::int AS starting_before_reg
+         count(*) FILTER (WHERE a.starting_date IS NOT NULL AND a.starting_date < a.reg_date)::int AS starting_before_reg,
+         count(*) FILTER (WHERE NOT EXISTS (SELECT 1 FROM employment_sessions es WHERE es.daily_application_id = a.id))::int AS application_without_session
        FROM daily_applications a WHERE ${where}`,
       params,
     ),
@@ -653,6 +661,7 @@ async function queryDataQuality(f: AnalyticsFilters, deptIds: string[] | null) {
     { key: "fingerprint_pending", label: "Chưa cấp mã vân tay (CHUA_CAP)", count: n(fpRes.rows[0]?.c), href: "/admin/worker-profiles" },
     { key: "abnormal_age", label: "Tuổi bất thường (<15 hoặc >80)", count: n(r.abnormal_age), href: listHref },
     { key: "starting_before_reg", label: "Ngày bắt đầu trước ngày đăng ký", count: n(r.starting_before_reg), href: listHref },
+    { key: "application_without_session", label: "Application chưa có Employment Session", count: n(r.application_without_session), href: "/admin/worker-profiles" },
   ];
 }
 

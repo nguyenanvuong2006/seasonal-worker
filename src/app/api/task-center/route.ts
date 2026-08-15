@@ -5,6 +5,7 @@ import { dailyApplications, departments, planningPeriods, planningTargets, worke
 import { getUserScope, hasPermission, requirePermission } from "@/lib/auth";
 import { todayStr } from "@/lib/helpers";
 import { normalizePersonName } from "@/lib/person-name";
+import { movementScopeVisibility } from "@/lib/data-scope";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -91,11 +92,21 @@ export async function GET(req: Request) {
   }
 
   // 3) Thuyên chuyển chờ xử lý (PENDING_HR hoặc WAITING_DECISION)
-  let transfers: { id: string; workerName: string | null; workerCccd: string | null; status: string; effectiveDate: string; requestedBy: string; createdAt: string }[] = [];
+  let transfers: { id: string; workerName: string | null; workerCccd: string | null; status: string; effectiveDate: string; requestedBy: string | null; createdAt: string; scopeVisibility: "FULL" | "REDACTED_INCOMING" }[] = [];
   let transfersTotal = 0;
   if (canSeeMovements) {
     const filters = [eq(workforceMovements.movementType, "transfer"), sql`${workforceMovements.status} IN ('PENDING_HR','WAITING_DECISION')`];
-    if (scope) filters.push(inArray(workforceMovements.fromDeptId, scope.length ? scope : ["__none__"]));
+    if (scope !== null) {
+      if (q) {
+        // Do not let a name/CCCD query discover an incoming worker whose source is outside scope.
+        filters.push(inArray(workforceMovements.fromDeptId, scope.length ? scope : ["__none__"]));
+      } else {
+        filters.push(or(
+          inArray(workforceMovements.fromDeptId, scope.length ? scope : ["__none__"]),
+          inArray(workforceMovements.toDeptId, scope.length ? scope : ["__none__"]),
+        )!);
+      }
+    }
     if (q) filters.push(or(ilike(workerProfiles.fullName, `%${q}%`), ilike(workerProfiles.cccd, `%${q}%`))!);
     const where = and(...filters);
 
@@ -104,6 +115,8 @@ export async function GET(req: Request) {
         id: workforceMovements.id,
         workerName: workerProfiles.fullName,
         workerCccd: workerProfiles.cccd,
+        fromDeptId: workforceMovements.fromDeptId,
+        toDeptId: workforceMovements.toDeptId,
         status: workforceMovements.status,
         effectiveDate: workforceMovements.effectiveDate,
         requestedBy: workforceMovements.requestedBy,
@@ -114,7 +127,20 @@ export async function GET(req: Request) {
       .where(where)
       .orderBy(desc(workforceMovements.createdAt))
       .limit(SECTION_LIMIT)
-      .then((rows) => rows.map((r) => ({ ...r, workerName: normalizePersonName(r.workerName ?? "") || null, createdAt: r.createdAt.toISOString() })));
+      .then((rows) => rows.flatMap((r) => {
+        const visibility = movementScopeVisibility(scope, "transfer", r.fromDeptId, r.toDeptId);
+        if (visibility === "NONE") return [];
+        return [{
+          id: r.id,
+          workerName: visibility === "FULL" ? normalizePersonName(r.workerName ?? "") || null : null,
+          workerCccd: visibility === "FULL" ? r.workerCccd : null,
+          status: r.status,
+          effectiveDate: r.effectiveDate,
+          requestedBy: visibility === "FULL" ? r.requestedBy : null,
+          createdAt: r.createdAt.toISOString(),
+          scopeVisibility: visibility,
+        }];
+      }));
     const [cnt] = await db.select({ c: sql<number>`count(*)::int` }).from(workforceMovements).leftJoin(workerProfiles, eq(workforceMovements.workerId, workerProfiles.id)).where(where);
     transfersTotal = cnt?.c ?? transfers.length;
   } else {

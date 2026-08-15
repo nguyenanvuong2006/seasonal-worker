@@ -493,7 +493,11 @@ export const employmentSessions = pgTable(
     note: text("note"),
     createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
   },
-  (t) => [uniqueIndex("employment_session_daily_app_uq").on(t.dailyApplicationId).where(sql`daily_application_id is not null`)],
+  (t) => [
+    uniqueIndex("employment_session_daily_app_uq").on(t.dailyApplicationId).where(sql`daily_application_id is not null`),
+    // Already present in schema.sql; declare here too so Drizzle metadata matches production.
+    index("employment_session_worker_idx").on(t.workerId),
+  ],
 );
 
 /* ============================================================
@@ -544,6 +548,10 @@ export const workforceMovements = pgTable(
     updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
   },
   (t) => [
+    // Existing production indexes from schema.sql; keep Drizzle metadata aligned.
+    index("workforce_movement_worker_idx").on(t.workerId),
+    index("workforce_movement_status_idx").on(t.status),
+    index("workforce_movement_type_status_idx").on(t.movementType, t.status),
     // P1-2 (Production Hardening Audit) — lưới an toàn cấp DB chống SPAWN_RESIGNATION sinh
     // trùng (double-click/retry/race) — 1 movement (`relatedMovementId`) chỉ được sinh ra ĐÚNG
     // 1 resignation liên kết. Kiểm tra idempotent ở tầng transaction (lib/workforce-movements.ts)

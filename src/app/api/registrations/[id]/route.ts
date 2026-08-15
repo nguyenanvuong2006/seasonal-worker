@@ -2,7 +2,8 @@ import { NextResponse } from "next/server";
 import { and, eq, isNull, ne } from "drizzle-orm";
 import { db } from "@/db";
 import { dailyApplications, dwData, employmentSessions, workerProfiles } from "@/db/schema";
-import { requireRoleAndPermission, writeAudit } from "@/lib/auth";
+import { getUserScope, requireRoleAndPermission, writeAudit } from "@/lib/auth";
+import { scopeAllowsDepartment } from "@/lib/data-scope";
 import { getWorkflowStages } from "@/lib/workflow";
 import { autoAllocateInternship } from "@/lib/planning";
 import { normalizePersonName } from "@/lib/person-name";
@@ -51,6 +52,10 @@ export async function PATCH(req: Request, ctx: { params: Promise<{ id: string }>
 
     const [existing] = await db.select().from(dailyApplications).where(eq(dailyApplications.id, id));
     if (!existing) return NextResponse.json({ error: "Không tìm thấy hồ sơ." }, { status: 404 });
+    const scope = await getUserScope(guard.session);
+    if (!scopeAllowsDepartment(scope, existing.deptId)) {
+      return NextResponse.json({ error: "Không tìm thấy hồ sơ trong phạm vi dữ liệu được cấp." }, { status: 404 });
+    }
 
     const patch: Record<string, unknown> = { updatedAt: new Date() };
     for (const key of EDITABLE) {
@@ -64,6 +69,9 @@ export async function PATCH(req: Request, ctx: { params: Promise<{ id: string }>
     if (typeof patch.itCode === "string") patch.itCode = patch.itCode.trim() || null;
     if (Object.keys(patch).length === 1) {
       return NextResponse.json({ error: "Không có dữ liệu cập nhật." }, { status: 400 });
+    }
+    if ("deptId" in patch && !scopeAllowsDepartment(scope, patch.deptId as string | null)) {
+      return NextResponse.json({ error: "Bộ phận đích nằm ngoài Data Scope được cấp." }, { status: 403 });
     }
     if ("cccd" in patch) {
       if (!isValidCccd(patch.cccd)) {
@@ -203,6 +211,12 @@ export async function DELETE(_req: Request, ctx: { params: Promise<{ id: string 
   const guard = await requireRoleAndPermission(["ADMIN", "HR_RECRUITER"], "registrations.edit");
   if (!guard.ok) return NextResponse.json({ error: guard.error }, { status: guard.status });
   const { id } = await ctx.params;
+  const [existing] = await db.select({ deptId: dailyApplications.deptId }).from(dailyApplications).where(eq(dailyApplications.id, id));
+  if (!existing) return NextResponse.json({ error: "Không tìm thấy hồ sơ." }, { status: 404 });
+  const scope = await getUserScope(guard.session);
+  if (!scopeAllowsDepartment(scope, existing.deptId)) {
+    return NextResponse.json({ error: "Không tìm thấy hồ sơ trong phạm vi dữ liệu được cấp." }, { status: 404 });
+  }
   await db
     .update(dailyApplications)
     .set({ deletedAt: new Date(), deletedBy: guard.session.username })

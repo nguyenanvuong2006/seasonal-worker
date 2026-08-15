@@ -23,9 +23,10 @@ export async function GET(req: Request) {
   if (deptParam) filters.push(eq(planningPeriods.departmentId, deptParam));
   if (requestTypeParam && requestTypeParam !== "ALL") filters.push(eq(planningPeriods.requestType, requestTypeParam));
 
-  if (guard.session.role === "DEPT_MANAGER") {
-    const scope = await getUserScope(guard.session);
-    if (!scope || scope.length === 0) return NextResponse.json({ rows: [] });
+  const scope = await getUserScope(guard.session);
+  if (scope !== null) {
+    if (scope.length === 0) return NextResponse.json({ rows: [] });
+    if (deptParam && !scope.includes(deptParam)) return NextResponse.json({ rows: [] });
     filters.push(inArray(planningPeriods.departmentId, scope));
   }
 
@@ -137,16 +138,14 @@ export async function POST(req: Request) {
     return NextResponse.json({ error: "Vui lòng nhập nhu cầu tuyển dụng (Nam hoặc Nữ > 0)." }, { status: 400 });
   }
 
-  // DYNAMIC RBAC V2 (mục I) — DEPT_MANAGER có planning.request nhưng CHỈ tạo DRAFT và CHỈ
-  // cho bộ phận trong Data Scope của mình (không được kích hoạt / không vượt scope).
-  let activateNow = body.activateNow !== false;
-  if (guard.session.role === "DEPT_MANAGER") {
-    const scope = await getUserScope(guard.session);
-    if (!scope || scope.length === 0 || !scope.includes(body.departmentId)) {
-      return NextResponse.json({ error: "Bộ phận này không thuộc phạm vi quản lý của bạn." }, { status: 403 });
-    }
-    activateNow = false; // Manager chỉ tạo DRAFT — HR/Admin kích hoạt.
+  // Scope is role-independent. The DEPT_MANAGER DRAFT-only rule remains a separate business
+  // permission rule and is intentionally unchanged.
+  const scope = await getUserScope(guard.session);
+  if (scope !== null && !scope.includes(body.departmentId)) {
+    return NextResponse.json({ error: "Bộ phận này không thuộc Data Scope được cấp." }, { status: 403 });
   }
+  let activateNow = body.activateNow !== false;
+  if (guard.session.role === "DEPT_MANAGER") activateNow = false;
 
   try {
     const period = await createPeriod({

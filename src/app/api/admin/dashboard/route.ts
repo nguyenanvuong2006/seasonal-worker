@@ -2,7 +2,7 @@ import { NextResponse } from "next/server";
 import { asc, eq } from "drizzle-orm";
 import { db } from "@/db";
 import { dashboardWidgets } from "@/db/schema";
-import { getUserScope, requirePermission, writeAudit } from "@/lib/auth";
+import { getUserScope, hasPermission, requirePermission, writeAudit } from "@/lib/auth";
 import { getKpiValue, getRecentApplicationsTable, getScopedDepartmentTable } from "@/lib/dashboard";
 
 export const runtime = "nodejs";
@@ -15,6 +15,8 @@ export async function GET() {
   if (!guard.ok) return NextResponse.json({ error: guard.error }, { status: guard.status });
 
   const scope = await getUserScope(guard.session);
+  const canViewCccd = await hasPermission(guard.session.role, "privacy.view_cccd");
+  const canViewPhone = await hasPermission(guard.session.role, "privacy.view_phone");
 
   const widgets = await db
     .select()
@@ -30,7 +32,9 @@ export async function GET() {
       }
       // Có Data Scope (Quản lý bộ phận) → bảng tối giản chỉ Họ và tên | SĐT | Giới tính |
       // Bộ phận | Nhóm, và chỉ gồm người thuộc bộ phận được phân quyền.
-      const table = scope !== null ? await getScopedDepartmentTable(10, scope) : await getRecentApplicationsTable(10, scope);
+      const table = scope !== null || !canViewCccd
+        ? await getScopedDepartmentTable(10, scope, canViewPhone)
+        : await getRecentApplicationsTable(10, scope);
       return { ...w, table };
     }),
   );

@@ -104,7 +104,7 @@ export default function WorkforceMovementsPage() {
 
   const load = useCallback(async () => {
     setLoading(true);
-    const [movRes, deptRes] = await Promise.all([fetch("/api/workforce-movements"), fetch("/api/departments")]);
+    const [movRes, deptRes] = await Promise.all([fetch("/api/workforce-movements"), fetch("/api/departments?scope=all")]);
     const movData = await movRes.json();
     const deptData = await deptRes.json();
     setRows(movData.rows ?? []);

@@ -1,5 +1,5 @@
 import "server-only";
-import { and, desc, eq, inArray, isNull, ne, notInArray, sql } from "drizzle-orm";
+import { and, desc, eq, inArray, isNull, lte, ne, notInArray, or, sql } from "drizzle-orm";
 import { db } from "@/db";
 import {
   departments,
@@ -10,7 +10,7 @@ import {
   workerProfiles,
   workforceMovements,
 } from "@/db/schema";
-import { isFemale, isMale } from "@/lib/helpers";
+import { isFemale, isMale, todayStr } from "@/lib/helpers";
 import { normalizePersonName } from "@/lib/person-name";
 
 type Executor = typeof db | Parameters<Parameters<typeof db.transaction>[0]>[0];
@@ -366,7 +366,7 @@ export async function autoAllocateInternship(
 }
 
 /** Danh sách employment_sessions ĐANG LÀM nhưng chưa được phân bổ vào kế hoạch ACTIVE nào. */
-export async function getUnplannedSessions(departmentId?: string) {
+export async function getUnplannedSessions(departmentIds?: string[]) {
   const allocatedToActive = await db
     .select({ sessionId: planningAllocations.employmentSessionId })
     .from(planningAllocations)
@@ -374,8 +374,16 @@ export async function getUnplannedSessions(departmentId?: string) {
     .where(eq(planningPeriods.status, "ACTIVE"));
   const allocatedIds = allocatedToActive.map((r) => r.sessionId);
 
-  const filters = [eq(employmentSessions.status, "APPROVED"), isNull(employmentSessions.endDate)];
-  if (departmentId) filters.push(eq(employmentSessions.deptId, departmentId));
+  const filters = [
+    eq(employmentSessions.status, "APPROVED"),
+    isNull(employmentSessions.endDate),
+    isNull(workerProfiles.deletedAt),
+    or(isNull(employmentSessions.startingDate), lte(employmentSessions.startingDate, todayStr()))!,
+  ];
+  if (departmentIds) {
+    if (departmentIds.length === 0) return [];
+    filters.push(inArray(employmentSessions.deptId, departmentIds));
+  }
   if (allocatedIds.length > 0) filters.push(notInArray(employmentSessions.id, allocatedIds));
 
   const rows = await db
@@ -390,7 +398,7 @@ export async function getUnplannedSessions(departmentId?: string) {
       regDate: employmentSessions.regDate,
     })
     .from(employmentSessions)
-    .leftJoin(workerProfiles, eq(employmentSessions.workerId, workerProfiles.id))
+    .innerJoin(workerProfiles, eq(employmentSessions.workerId, workerProfiles.id))
     .leftJoin(departments, eq(employmentSessions.deptId, departments.id))
     .where(and(...filters));
 
