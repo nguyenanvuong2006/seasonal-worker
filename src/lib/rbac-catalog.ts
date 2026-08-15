@@ -47,6 +47,7 @@ export const PERMISSION_GROUPS: readonly CatalogGroup[] = [
   { key: "cau_hinh_van_hanh", label: "Cấu hình & Vận hành hệ thống" },
   { key: "tong_quan", label: "Dashboard & Tìm kiếm" },
   { key: "quyen_rieng_tu", label: "Quyền riêng tư (PII)" },
+  { key: "document_merge", label: "Document Merge" },
 ];
 
 /** ~42 quyền — danh mục đầy đủ. Key phải trùng với key mà ROUTE thật sự kiểm tra. */
@@ -108,6 +109,12 @@ export const PERMISSION_CATALOG: readonly CatalogPermission[] = [
   { key: "privacy.view_cccd", name: "Xem CCCD (Export / Tìm kiếm)", group: "quyen_rieng_tu" },
   { key: "privacy.view_phone", name: "Xem SĐT (Export / Tìm kiếm)", group: "quyen_rieng_tu" },
   { key: "privacy.view_address", name: "Xem Địa chỉ (Export)", group: "quyen_rieng_tu" },
+  // Document Merge
+  { key: "document_merge.view", name: "Xem Document Merge Center", group: "document_merge" },
+  { key: "document_merge.templates.manage", name: "Quản lý Templates", group: "document_merge" },
+  { key: "document_merge.execute", name: "Thực hiện Merge", group: "document_merge" },
+  { key: "document_merge.history.view", name: "Xem Lịch sử Merge", group: "document_merge" },
+  { key: "document_merge.history.delete", name: "Xoá Lịch sử Merge", group: "document_merge" },
 ];
 
 /** 4 vai trò hệ thống + nền tảng cho vai trò tuỳ chỉnh. */

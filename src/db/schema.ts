@@ -841,3 +841,108 @@ export type WorkforceMovement = typeof workforceMovements.$inferSelect;
 export type PlanningPeriod = typeof planningPeriods.$inferSelect;
 export type PlanningTarget = typeof planningTargets.$inferSelect;
 export type PlanningAllocation = typeof planningAllocations.$inferSelect;
+
+/* ============================================================
+   DOCUMENT MERGE ENGINE
+   Generic Document Merge Center - cho phép Admin tạo Google Docs template,
+   quản lý placeholders, map với dữ liệu hệ thống và merge hồ sơ thành Google Docs.
+   ============================================================ */
+
+export const mergeTemplates = pgTable(
+  "merge_templates",
+  {
+    id: uuid("id").defaultRandom().primaryKey(),
+    name: varchar("name", { length: 255 }).notNull(),
+    description: text("description"),
+    googleDocId: varchar("google_doc_id", { length: 120 }).notNull(),
+    outputFolderId: varchar("output_folder_id", { length: 120 }),
+    outputFileNamePattern: varchar("output_file_name_pattern", { length: 255 }),
+    defaultMergeMode: varchar("default_merge_mode", { length: 24 }).notNull().default("ONE_DOCUMENT"),
+    dataSources: jsonb("data_sources").$type<string[]>().default([]),
+    isActive: boolean("is_active").notNull().default(true),
+    createdBy: varchar("created_by", { length: 64 }).notNull(),
+    updatedBy: varchar("updated_by", { length: 64 }),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+    updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [
+    index("merge_template_active_idx").on(t.isActive),
+    index("merge_template_google_doc_idx").on(t.googleDocId),
+  ],
+);
+
+export const mergeTemplateFields = pgTable(
+  "merge_template_fields",
+  {
+    id: uuid("id").defaultRandom().primaryKey(),
+    templateId: uuid("template_id").notNull(),
+    placeholder: varchar("placeholder", { length: 255 }).notNull(),
+    sourceType: varchar("source_type", { length: 32 }).notNull().default("CORE_FIELD"),
+    sourceEntity: varchar("source_entity", { length: 64 }),
+    sourceField: varchar("source_field", { length: 128 }),
+    sourcePath: varchar("source_path", { length: 255 }),
+    optionValue: varchar("option_value", { length: 255 }),
+    formatType: varchar("format_type", { length: 32 }),
+    fallbackValue: text("fallback_value"),
+    isRequired: boolean("is_required").notNull().default(false),
+    isOrphaned: boolean("is_orphaned").notNull().default(false),
+    isSuggested: boolean("is_suggested").notNull().default(false),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+    updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [
+    uniqueIndex("merge_template_field_uq").on(t.templateId, t.placeholder),
+    index("merge_template_field_template_idx").on(t.templateId),
+  ],
+);
+
+export const mergeJobs = pgTable(
+  "merge_jobs",
+  {
+    id: uuid("id").defaultRandom().primaryKey(),
+    templateId: uuid("template_id"),
+    templateNameSnapshot: varchar("template_name_snapshot", { length: 255 }).notNull().default(""),
+    mergeMode: varchar("merge_mode", { length: 24 }).notNull().default("ONE_DOCUMENT"),
+    status: varchar("status", { length: 24 }).notNull().default("PENDING"),
+    recordCount: integer("record_count").notNull().default(0),
+    outputDocId: varchar("output_doc_id", { length: 120 }),
+    outputUrl: text("output_url"),
+    createdBy: varchar("created_by", { length: 64 }).notNull(),
+    startedAt: timestamp("started_at", { withTimezone: true }),
+    completedAt: timestamp("completed_at", { withTimezone: true }),
+    error: text("error"),
+    metadata: jsonb("metadata").$type<Record<string, unknown>>().default({}),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+    updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [
+    index("merge_job_status_idx").on(t.status),
+    index("merge_job_created_by_idx").on(t.createdBy),
+    index("merge_job_template_idx").on(t.templateId),
+    index("merge_job_created_at_idx").on(t.createdAt),
+  ],
+);
+
+export const mergeJobRecords = pgTable(
+  "merge_job_records",
+  {
+    id: uuid("id").defaultRandom().primaryKey(),
+    mergeJobId: uuid("merge_job_id").notNull(),
+    sourceEntity: varchar("source_entity", { length: 64 }).notNull(),
+    sourceRecordId: uuid("source_record_id").notNull(),
+    sortOrder: integer("sort_order").notNull().default(0),
+    status: varchar("status", { length: 24 }).notNull().default("PENDING"),
+    error: text("error"),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [
+    index("merge_job_record_job_idx").on(t.mergeJobId),
+    index("merge_job_record_source_idx").on(t.sourceEntity, t.sourceRecordId),
+  ],
+);
+
+// Type exports
+export type MergeTemplate = typeof mergeTemplates.$inferSelect;
+export type MergeTemplateField = typeof mergeTemplateFields.$inferSelect;
+export type MergeJob = typeof mergeJobs.$inferSelect;
+export type MergeJobRecord = typeof mergeJobRecords.$inferSelect;
