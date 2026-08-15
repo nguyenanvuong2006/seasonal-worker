@@ -1,26 +1,18 @@
 import { NextResponse } from "next/server";
-import { and, desc, eq, sql } from "drizzle-orm";
+import { and, asc, desc, eq } from "drizzle-orm";
 import { db } from "@/db";
-import { dailyApplications, departments, dwData } from "@/db/schema";
-import { isValidCccd, isValidPhone } from "@/lib/helpers";
+import { dailyApplications, departments, formQuestions } from "@/db/schema";
 import { normalizePersonName } from "@/lib/person-name";
+import { isQuestionForAudience } from "@/lib/form-targeting";
+import { LOOKUP_NOT_FOUND_MESSAGE, verifyLookupIdentity } from "@/lib/lookup-identity";
+import { resolveDocumentKind, resolveDwClassification } from "@/lib/document-merge/template-routing";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
-const NOT_FOUND = NextResponse.json(
-  { error: "Không tìm thấy hồ sơ khớp với CCCD và số điện thoại đã nhập." },
-  { status: 404 },
-);
-
 /**
- * P0-2 (Production Hardening Audit) — Tra cứu công khai, TRƯỚC ĐÂY chỉ cần CCCD là trả về
- * đầy đủ họ tên/SĐT/lịch sử/bộ phận/người phụ trách/SĐT người phụ trách/ghi chú nội bộ —
- * rủi ro PII nghiêm trọng vì CCCD không phải bí mật (dò được/đoán được). Nay bắt buộc CCCD +
- * SĐT cùng khớp 1 hồ sơ thật mới trả dữ liệu, và chỉ trả ĐÚNG những gì trang /lookup hiển thị
- * (không trả SĐT thật, không trả noteWorker nội bộ, không trả người phụ trách/SĐT người phụ
- * trách). Không phân biệt lý do thất bại (CCCD sai vs SĐT sai vs không tồn tại) để tránh dò
- * quét (enumeration) xem 1 CCCD có tồn tại trong hệ thống hay không.
+ * P0-2 — Tra cứu công khai bắt buộc CCCD + SĐT.
+ * Bổ sung link tài liệu đã merge + câu hỏi xác nhận tập nghề (không trả chữ ký ảnh).
  */
 export async function POST(req: Request) {
   let body: { cccd?: string; phone?: string };
@@ -30,29 +22,10 @@ export async function POST(req: Request) {
     return NextResponse.json({ error: "Dữ liệu không hợp lệ." }, { status: 400 });
   }
 
-  const cccd = String(body.cccd ?? "").trim();
-  const phone = String(body.phone ?? "").replace(/\D/g, "");
-
-  if (!isValidCccd(cccd) || !isValidPhone(phone)) {
-    return NextResponse.json({ error: "Vui lòng nhập đúng CCCD và số điện thoại." }, { status: 400 });
+  const identity = await verifyLookupIdentity(body.cccd, body.phone);
+  if (!identity.ok) {
+    return NextResponse.json({ error: identity.error }, { status: identity.status });
   }
-  const phoneTail = phone.slice(-9);
-
-  // Xác minh danh tính: CCCD + phần số thuê bao cuối phải khớp ít nhất 1 nguồn dữ liệu thật (DW Data —
-  // lao động cũ, HOẶC chính SĐT người đó đã khai khi đăng ký) — không chỉ dựa vào CCCD một mình.
-  const [dwMatch] = await db
-    .select({ fullName: dwData.fullName })
-    .from(dwData)
-    .where(and(eq(dwData.cccd, cccd), sql`${dwData.phone} LIKE ${"%" + phoneTail}`))
-    .limit(1);
-
-  const [appPhoneMatch] = await db
-    .select({ id: dailyApplications.id })
-    .from(dailyApplications)
-    .where(and(eq(dailyApplications.cccd, cccd), sql`${dailyApplications.phone} LIKE ${"%" + phoneTail}`))
-    .limit(1);
-
-  if (!dwMatch && !appPhoneMatch) return NOT_FOUND;
 
   const history = await db
     .select({
@@ -60,29 +33,103 @@ export async function POST(req: Request) {
       regDate: dailyApplications.regDate,
       status: dailyApplications.status,
       fullName: dailyApplications.fullName,
+      declaredType: dailyApplications.declaredType,
+      dwMatch: dailyApplications.dwMatch,
       deptName: departments.deptName,
       groupName: departments.groupName,
       startingDate: dailyApplications.startingDate,
+      mergedDocUrl: dailyApplications.mergedDocUrl,
+      mergedDocPdfUrl: dailyApplications.mergedDocPdfUrl,
+      documentSentAt: dailyApplications.documentSentAt,
+      signatureConfirmedAt: dailyApplications.signatureConfirmedAt,
+      confirmedAnswers: dailyApplications.confirmedAnswers,
     })
     .from(dailyApplications)
     .leftJoin(departments, eq(dailyApplications.deptId, departments.id))
-    .where(eq(dailyApplications.cccd, cccd))
+    .where(eq(dailyApplications.cccd, identity.cccd))
     .orderBy(desc(dailyApplications.regDate))
     .limit(20);
 
-  if (!dwMatch && history.length === 0) return NOT_FOUND;
+  if (!identity.dwFullName && history.length === 0) {
+    return NextResponse.json({ error: LOOKUP_NOT_FOUND_MESSAGE }, { status: 404 });
+  }
+
+  const confirmTarget =
+    history.find((row) => row.mergedDocUrl && !row.signatureConfirmedAt) ??
+    history.find((row) => row.mergedDocUrl) ??
+    history.find((row) => row.status === "APPROVED") ??
+    history[0] ??
+    null;
+
+  let confirmationQuestions: {
+    fieldKey: string;
+    questionText: string;
+    fieldType: string;
+    options: string[];
+    isRequired: boolean;
+  }[] = [];
+
+  if (confirmTarget) {
+    const audience = resolveDwClassification({
+      declaredType: confirmTarget.declaredType,
+      dwMatch: confirmTarget.dwMatch,
+    }) === "OLD"
+      ? "RETURNING"
+      : "NEW";
+
+    const questions = await db
+      .select()
+      .from(formQuestions)
+      .where(and(eq(formQuestions.isActive, true), eq(formQuestions.visibleToApplicants, true)))
+      .orderBy(asc(formQuestions.sortOrder));
+
+    confirmationQuestions = questions
+      .filter((question) => isQuestionForAudience(question, audience))
+      .map((question) => ({
+        fieldKey: question.fieldKey,
+        questionText: question.questionText,
+        fieldType: question.fieldType,
+        options: Array.isArray(question.options) ? question.options : [],
+        isRequired: question.isRequired,
+      }));
+  }
 
   return NextResponse.json({
     worker: {
-      fullName: normalizePersonName(dwMatch?.fullName ?? history[0]?.fullName ?? ""),
-      isVerified: Boolean(dwMatch),
+      fullName: normalizePersonName(identity.dwFullName ?? history[0]?.fullName ?? ""),
+      isVerified: Boolean(identity.dwFullName),
     },
-    history: history.map((h) => ({
-      id: h.id,
-      regDate: h.regDate,
-      status: h.status,
-      deptName: h.deptName ? `${h.deptName}${h.groupName ? " — " + h.groupName : ""}` : null,
-      startingDate: h.startingDate,
+    history: history.map((row) => ({
+      id: row.id,
+      regDate: row.regDate,
+      status: row.status,
+      deptName: row.deptName ? `${row.deptName}${row.groupName ? " — " + row.groupName : ""}` : null,
+      startingDate: row.startingDate,
+      dwClassification: resolveDwClassification({
+        declaredType: row.declaredType,
+        dwMatch: row.dwMatch,
+      }),
+      documentKind: resolveDocumentKind({
+        declaredType: row.declaredType,
+        dwMatch: row.dwMatch,
+      }),
+      mergedDocUrl: row.mergedDocUrl,
+      mergedDocPdfUrl: row.mergedDocPdfUrl,
+      documentSentAt: row.documentSentAt,
+      signatureConfirmedAt: row.signatureConfirmedAt,
+      hasSignature: Boolean(row.signatureConfirmedAt),
     })),
+    confirmation: confirmTarget
+      ? {
+          applicationId: confirmTarget.id,
+          documentReady: Boolean(confirmTarget.mergedDocUrl),
+          alreadyConfirmed: Boolean(confirmTarget.signatureConfirmedAt),
+          signatureConfirmedAt: confirmTarget.signatureConfirmedAt,
+          mergedDocUrl: confirmTarget.mergedDocUrl,
+          mergedDocPdfUrl: confirmTarget.mergedDocPdfUrl,
+          confirmedAnswers: confirmTarget.confirmedAnswers ?? {},
+          questions: confirmationQuestions,
+        }
+      : null,
   });
 }

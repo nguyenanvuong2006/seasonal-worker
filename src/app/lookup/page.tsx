@@ -2,16 +2,49 @@
 
 import { useState } from "react";
 import Link from "next/link";
-import { Badge, Button, Card, CardContent, Input, Label, toast } from "@/components/ui";
+import { Badge, Button, Card, CardContent, Input, Label, Textarea, toast } from "@/components/ui";
 import { BrandLogo } from "@/components/brand-logo";
+import { SignaturePad } from "@/components/signature-pad";
 import { formatDate, STATUS_META, todayStr } from "@/lib/helpers";
 import { CCCD_ERROR_MESSAGE, isValidCccd } from "@/lib/validators";
-import { ArrowLeft, CheckCircle2, Clock, Search, ShieldCheck, XCircle } from "lucide-react";
+import { ArrowLeft, CheckCircle2, Clock, ExternalLink, FileText, Search, ShieldCheck, XCircle } from "lucide-react";
 
-type HistoryRow = { id: string; regDate: string; status: string; deptName: string | null; startingDate: string | null };
+type HistoryRow = {
+  id: string;
+  regDate: string;
+  status: string;
+  deptName: string | null;
+  startingDate: string | null;
+  dwClassification?: "OLD" | "NEW";
+  documentKind?: "A" | "B";
+  mergedDocUrl?: string | null;
+  mergedDocPdfUrl?: string | null;
+  documentSentAt?: string | null;
+  signatureConfirmedAt?: string | null;
+  hasSignature?: boolean;
+};
+
+type ConfirmationQuestion = {
+  fieldKey: string;
+  questionText: string;
+  fieldType: string;
+  options: string[];
+  isRequired: boolean;
+};
+
 type LookupResult = {
   worker: { fullName: string; isVerified: boolean };
   history: HistoryRow[];
+  confirmation: {
+    applicationId: string;
+    documentReady: boolean;
+    alreadyConfirmed: boolean;
+    signatureConfirmedAt: string | null;
+    mergedDocUrl: string | null;
+    mergedDocPdfUrl: string | null;
+    confirmedAnswers: Record<string, string>;
+    questions: ConfirmationQuestion[];
+  } | null;
 };
 
 export default function LookupPage() {
@@ -20,6 +53,9 @@ export default function LookupPage() {
   const [loading, setLoading] = useState(false);
   const [data, setData] = useState<LookupResult | null>(null);
   const [notFound, setNotFound] = useState(false);
+  const [answers, setAnswers] = useState<Record<string, string>>({});
+  const [signature, setSignature] = useState("");
+  const [submitting, setSubmitting] = useState(false);
 
   const search = async () => {
     if (!isValidCccd(cccd)) {
@@ -33,6 +69,7 @@ export default function LookupPage() {
     setLoading(true);
     setData(null);
     setNotFound(false);
+    setSignature("");
     try {
       const res = await fetch("/api/lookup", {
         method: "POST",
@@ -46,18 +83,47 @@ export default function LookupPage() {
         return;
       }
       setData(json);
+      setAnswers(json.confirmation?.confirmedAnswers ?? {});
     } finally {
       setLoading(false);
     }
   };
 
+  const submitConfirmation = async () => {
+    if (!data?.confirmation) return;
+    setSubmitting(true);
+    try {
+      const res = await fetch("/api/lookup/confirm", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          cccd,
+          phone,
+          applicationId: data.confirmation.applicationId,
+          signatureDataUrl: signature,
+          confirmedAnswers: answers,
+        }),
+      });
+      const json = await res.json();
+      if (!res.ok) {
+        toast({ title: json.error ?? "Không gửi được xác nhận", variant: "destructive" });
+        return;
+      }
+      toast({ title: "Đã lưu chữ ký và xác nhận hồ sơ Tập nghề." });
+      await search();
+    } finally {
+      setSubmitting(false);
+    }
+  };
+
   const today = todayStr();
   const todayRow = data?.history.find((h) => h.regDate === today);
+  const confirmation = data?.confirmation;
 
   return (
     <main className="min-h-screen bg-bg">
       <div className="border-b border-amber-200/60 bg-gold-50 px-4 py-2 text-center text-[11px] font-bold uppercase tracking-widest text-gold-800">
-        Tra cứu trạng thái • Xuất hiện ngay sau khi HR xác nhận là người mới & xếp việc
+        Tra cứu trạng thái • Xem tài liệu merge • Ký nhận hồ sơ Tập nghề
       </div>
 
       <header className="hasfarm-hero px-4 pb-16 pt-6 text-white">
@@ -68,9 +134,9 @@ export default function LookupPage() {
           </Link>
         </div>
         <div className="mx-auto mt-8 max-w-4xl">
-          <h1 className="text-[28px] font-black leading-[0.95] md:text-[36px]">Tra cứu trạng thái & bộ phận tiếp nhận Tập nghề</h1>
+          <h1 className="text-[28px] font-black leading-[0.95] md:text-[36px]">Tra cứu trạng thái &amp; ký nhận hồ sơ Tập nghề</h1>
           <p className="mt-2 max-w-[50ch] text-sm text-white/75">
-            Nhập CCCD để biết bạn đã được xếp vào bộ phận nào hôm nay — nếu chưa, HR vẫn đang điều phối.
+            Nhập CCCD và số điện thoại đã đăng ký để xem kết quả xếp việc, đọc tài liệu đã merge và ký xác nhận.
           </p>
         </div>
       </header>
@@ -173,18 +239,134 @@ export default function LookupPage() {
               </Card>
             </div>
 
+            {confirmation?.documentReady && (
+              <Card className="rounded-[18px] border-emerald-200">
+                <CardContent className="space-y-4 p-6">
+                  <div className="flex items-start gap-3">
+                    <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-emerald-700 text-white">
+                      <FileText className="h-5 w-5" />
+                    </div>
+                    <div>
+                      <p className="text-sm font-black text-fg">Tài liệu đã merge</p>
+                      <p className="text-xs text-fg-secondary">
+                        Recruiter đã đẩy tài liệu vào hồ sơ tra cứu. Hãy đọc rồi ký xác nhận bên dưới.
+                      </p>
+                    </div>
+                  </div>
+                  <div className="flex flex-wrap gap-2">
+                    {confirmation.mergedDocUrl && (
+                      <a
+                        href={confirmation.mergedDocUrl}
+                        target="_blank"
+                        rel="noreferrer"
+                        className="inline-flex items-center gap-1.5 rounded-lg bg-emerald-700 px-3 py-2 text-xs font-bold text-white"
+                      >
+                        <ExternalLink className="h-3.5 w-3.5" /> Xem Google Docs
+                      </a>
+                    )}
+                    {confirmation.mergedDocPdfUrl && (
+                      <a
+                        href={confirmation.mergedDocPdfUrl}
+                        target="_blank"
+                        rel="noreferrer"
+                        className="inline-flex items-center gap-1.5 rounded-lg border border-emerald-200 bg-white px-3 py-2 text-xs font-bold text-emerald-800"
+                      >
+                        Tải / xem PDF
+                      </a>
+                    )}
+                  </div>
+                </CardContent>
+              </Card>
+            )}
+
+            {confirmation && confirmation.documentReady && (
+              <Card className="rounded-[18px]">
+                <CardContent className="space-y-5 p-6">
+                  <div>
+                    <p className="text-[12px] font-black uppercase tracking-widest text-emerald-800">Xác nhận tập nghề &amp; cam kết</p>
+                    <p className="mt-1 text-sm text-fg-secondary">
+                      Đọc các câu hỏi, ký vào ô chữ ký điện tử rồi gửi xác nhận.
+                    </p>
+                  </div>
+
+                  {confirmation.alreadyConfirmed ? (
+                    <div className="rounded-xl bg-emerald-50 p-4 text-sm font-semibold text-emerald-900">
+                      Đã ký xác nhận lúc {confirmation.signatureConfirmedAt
+                        ? new Date(confirmation.signatureConfirmedAt).toLocaleString("vi-VN")
+                        : "—"}
+                    </div>
+                  ) : (
+                    <>
+                      {confirmation.questions.map((question) => (
+                        <div key={question.fieldKey}>
+                          <Label required={question.isRequired}>{question.questionText}</Label>
+                          {question.fieldType === "SELECT" && question.options.length > 0 ? (
+                            <select
+                              value={answers[question.fieldKey] ?? ""}
+                              onChange={(e) => setAnswers((prev) => ({ ...prev, [question.fieldKey]: e.target.value }))}
+                              className="h-10 w-full rounded-[10px] border border-border-strong bg-surface-raised px-3 text-sm"
+                            >
+                              <option value="">-- Chọn --</option>
+                              {question.options.map((option) => (
+                                <option key={option} value={option}>
+                                  {option}
+                                </option>
+                              ))}
+                            </select>
+                          ) : question.fieldType === "BOOLEAN" ? (
+                            <select
+                              value={answers[question.fieldKey] ?? ""}
+                              onChange={(e) => setAnswers((prev) => ({ ...prev, [question.fieldKey]: e.target.value }))}
+                              className="h-10 w-full rounded-[10px] border border-border-strong bg-surface-raised px-3 text-sm"
+                            >
+                              <option value="">-- Chọn --</option>
+                              <option value="Có">Có</option>
+                              <option value="Không">Không</option>
+                            </select>
+                          ) : (
+                            <Textarea
+                              rows={2}
+                              value={answers[question.fieldKey] ?? ""}
+                              onChange={(e) => setAnswers((prev) => ({ ...prev, [question.fieldKey]: e.target.value }))}
+                            />
+                          )}
+                        </div>
+                      ))}
+
+                      <div>
+                        <Label required>Ô chữ ký điện tử</Label>
+                        <SignaturePad value={signature} onChange={setSignature} />
+                      </div>
+
+                      <Button onClick={submitConfirmation} loading={submitting} size="lg" className="w-full">
+                        Gửi xác nhận &amp; lưu chữ ký
+                      </Button>
+                    </>
+                  )}
+                </CardContent>
+              </Card>
+            )}
+
             <Card className="overflow-hidden rounded-[18px] border border-border p-0 shadow-sm">
               <div className="border-b border-border bg-primary-tint px-5 py-3">
                 <p className="text-[11px] font-black uppercase tracking-widest text-primary">Lịch sử 20 lần gần nhất</p>
               </div>
               <ul className="divide-y divide-border">
                 {data.history.map((h) => (
-                  <li key={h.id} className="flex items-center justify-between px-5 py-3">
+                  <li key={h.id} className="flex flex-wrap items-center justify-between gap-2 px-5 py-3">
                     <div>
                       <p className="text-sm font-bold text-fg">{formatDate(h.regDate)}</p>
                       <p className="text-xs text-fg-secondary">{h.deptName ?? "Chưa xếp bộ phận"}</p>
+                      {h.mergedDocUrl && (
+                        <a href={h.mergedDocUrl} target="_blank" rel="noreferrer" className="text-[11px] font-bold text-emerald-800 underline">
+                          Xem tài liệu {h.documentKind ? ` ${h.documentKind}` : ""}
+                        </a>
+                      )}
                     </div>
-                    <Badge tone={STATUS_META[h.status]?.tone ?? "gray"}>{STATUS_META[h.status]?.label ?? h.status}</Badge>
+                    <div className="flex items-center gap-2">
+                      {h.hasSignature && <Badge tone="green">Đã ký</Badge>}
+                      <Badge tone={STATUS_META[h.status]?.tone ?? "gray"}>{STATUS_META[h.status]?.label ?? h.status}</Badge>
+                    </div>
                   </li>
                 ))}
               </ul>

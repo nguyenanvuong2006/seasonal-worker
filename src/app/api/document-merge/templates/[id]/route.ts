@@ -17,6 +17,7 @@ import { mergeTemplates, mergeTemplateFields } from '@/db/schema';
 import { extractUniquePlaceholders } from '@/lib/document-merge/placeholder-extractor';
 import { createGoogleDocsService } from '@/lib/document-merge/google-docs-service';
 import { autoMapAllPlaceholders } from '@/lib/document-merge/auto-mapping';
+import { extractGoogleDocId } from '@/lib/document-merge/template-routing';
 
 type RouteContext = { params: Promise<{ id: string }> };
 
@@ -65,18 +66,21 @@ export async function PUT(request: Request, context: RouteContext) {
   
   try {
     const body = await request.json();
-    const { name, description, googleDocId, outputFolderId, outputFileNamePattern, defaultMergeMode, dataSources } = body;
+    const { name, description, googleDocId, outputFolderId, outputFileNamePattern, defaultMergeMode, dataSources, documentKind } = body;
+    const extractedDocId = googleDocId ? extractGoogleDocId(String(googleDocId)) : undefined;
+    const kind = documentKind === 'A' || documentKind === 'B' || documentKind === 'GENERIC' ? documentKind : undefined;
     
     const [template] = await db
       .update(mergeTemplates)
       .set({
         name: name ?? undefined,
         description: description ?? undefined,
-        googleDocId: googleDocId ?? undefined,
+        googleDocId: extractedDocId ?? undefined,
         outputFolderId: outputFolderId ?? undefined,
         outputFileNamePattern: outputFileNamePattern ?? undefined,
         defaultMergeMode: defaultMergeMode ?? undefined,
         dataSources: dataSources ?? undefined,
+        documentKind: kind,
         updatedBy: guard.session.username,
         updatedAt: new Date(),
       })

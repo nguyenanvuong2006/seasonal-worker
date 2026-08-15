@@ -7,10 +7,11 @@
  */
 
 import { NextResponse } from 'next/server';
-import { and, eq, desc } from 'drizzle-orm';
+import { eq, desc } from 'drizzle-orm';
 import { requirePermission } from '@/lib/auth';
 import { db } from '@/db';
 import { mergeTemplates, mergeTemplateFields } from '@/db/schema';
+import { extractGoogleDocId } from '@/lib/document-merge/template-routing';
 
 export async function GET() {
   const guard = await requirePermission(['ADMIN', 'HR_RECRUITER', 'HR_DIRECTOR'], 'document_merge.view');
@@ -56,26 +57,31 @@ export async function POST(request: Request) {
   
   try {
     const body = await request.json();
-    const { name, description, googleDocId, outputFolderId, outputFileNamePattern, defaultMergeMode, dataSources } = body;
+    const { name, description, googleDocId, outputFolderId, outputFileNamePattern, defaultMergeMode, dataSources, documentKind } = body;
+
+    const extractedDocId = extractGoogleDocId(String(googleDocId ?? ''));
     
     // Validation
-    if (!name || !googleDocId) {
+    if (!name || !extractedDocId) {
       return NextResponse.json(
         { error: 'Name and Google Doc ID are required' },
         { status: 400 }
       );
     }
+
+    const kind = documentKind === 'A' || documentKind === 'B' ? documentKind : 'GENERIC';
     
     const [template] = await db
       .insert(mergeTemplates)
       .values({
         name,
         description: description || null,
-        googleDocId,
+        googleDocId: extractedDocId,
         outputFolderId: outputFolderId || null,
         outputFileNamePattern: outputFileNamePattern || null,
         defaultMergeMode: defaultMergeMode || 'ONE_DOCUMENT',
         dataSources: dataSources || [],
+        documentKind: kind,
         isActive: true,
         createdBy: guard.session.username,
         updatedBy: guard.session.username,

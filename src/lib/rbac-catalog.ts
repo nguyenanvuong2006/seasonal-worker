@@ -203,6 +203,11 @@ export const BASELINE_ROLE_PERMISSIONS: Readonly<Record<string, readonly string[
     "privacy.view_cccd",
     "privacy.view_phone",
     "privacy.view_address",
+    "document_merge.view",
+    "document_merge.templates.manage",
+    "document_merge.execute",
+    "document_merge.history.view",
+    "document_merge.history.delete",
   ],
   DEPT_MANAGER: [
     "registrations.view",
@@ -229,6 +234,8 @@ export const BASELINE_ROLE_PERMISSIONS: Readonly<Record<string, readonly string[
     "privacy.view_cccd",
     "privacy.view_phone",
     "privacy.view_address",
+    "document_merge.view",
+    "document_merge.history.view",
   ],
 };
 

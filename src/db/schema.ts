@@ -138,6 +138,18 @@ export const dailyApplications = pgTable(
     duplicateNameFlag: boolean("duplicate_name_flag").notNull().default(false),
 
     customAnswers: jsonb("custom_answers").$type<Record<string, string>>().default({}),
+
+    // Document Merge & Ký nhận hồ sơ Tập nghề
+    // Recruiter merge Tài liệu A (DW Cũ / Cam kết) hoặc Tài liệu B (DW Mới / HĐ đào tạo)
+    // rồi đẩy link vào hồ sơ tra cứu; người xin việc xem + ký điện tử tại /lookup.
+    mergedDocUrl: text("merged_doc_url"),
+    mergedDocPdfUrl: text("merged_doc_pdf_url"),
+    mergedTemplateId: uuid("merged_template_id"),
+    documentSentAt: timestamp("document_sent_at", { withTimezone: true }),
+    signatureDataUrl: text("signature_data_url"),
+    signatureConfirmedAt: timestamp("signature_confirmed_at", { withTimezone: true }),
+    confirmedAnswers: jsonb("confirmed_answers").$type<Record<string, string>>().default({}),
+
     isImported: boolean("is_imported").notNull().default(false),
     deletedAt: timestamp("deleted_at", { withTimezone: true }),
     deletedBy: varchar("deleted_by", { length: 64 }),
@@ -859,6 +871,8 @@ export const mergeTemplates = pgTable(
     outputFileNamePattern: varchar("output_file_name_pattern", { length: 255 }),
     defaultMergeMode: varchar("default_merge_mode", { length: 24 }).notNull().default("ONE_DOCUMENT"),
     dataSources: jsonb("data_sources").$type<string[]>().default([]),
+    // A = Cam kết / Tái ký (DW Cũ); B = Hợp đồng đào tạo nghề (DW Mới); GENERIC = dùng chung
+    documentKind: varchar("document_kind", { length: 16 }).notNull().default("GENERIC"),
     isActive: boolean("is_active").notNull().default(true),
     createdBy: varchar("created_by", { length: 64 }).notNull(),
     updatedBy: varchar("updated_by", { length: 64 }),

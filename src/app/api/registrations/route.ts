@@ -1,5 +1,5 @@
 import { NextResponse } from "next/server";
-import { and, asc, desc, eq, gte, inArray, isNull, lte, sql } from "drizzle-orm";
+import { and, asc, desc, eq, gte, inArray, isNotNull, isNull, lte, ne, sql } from "drizzle-orm";
 import { db } from "@/db";
 import { dailyApplications, departments, dwData, employmentSessions, formQuestions, workerProfiles } from "@/db/schema";
 import { getUserScope, hasPermission, requirePermission } from "@/lib/auth";
@@ -211,10 +211,15 @@ export async function GET(req: Request) {
   const status = url.searchParams.get("status");
   const deptParam = url.searchParams.get("deptId");
   const matchParam = url.searchParams.get("dwMatch");
+  const assigned = url.searchParams.get("assigned");
 
   const filters = [gte(dailyApplications.regDate, from), lte(dailyApplications.regDate, to), isNull(dailyApplications.deletedAt)];
   if (status && status !== "ALL") filters.push(eq(dailyApplications.status, status));
   if (matchParam && matchParam !== "ALL") filters.push(eq(dailyApplications.dwMatch, matchParam));
+  if (assigned === "1") {
+    filters.push(isNotNull(dailyApplications.deptId));
+    filters.push(ne(dailyApplications.status, "REJECTED"));
+  }
 
   // Data Scope only decides WHERE the user may read. Business permission decides which
   // workflow statuses are visible; assigning a scope to HR must not silently downgrade HR.
