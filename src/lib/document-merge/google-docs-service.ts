@@ -5,7 +5,7 @@
  * Hiện tại là mock implementation - cần Google Cloud credentials để hoạt động thật.
  */
 
-import { extractUniquePlaceholders, replaceMultiplePlaceholders } from './placeholder-extractor';
+import { extractUniquePlaceholders, replaceMultiplePlaceholders } from './placeholder-extractor.ts';
 
 /** Google Docs service interface */
 export interface GoogleDocsService {

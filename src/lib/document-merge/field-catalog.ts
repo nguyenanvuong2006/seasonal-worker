@@ -6,7 +6,7 @@
  */
 
 import type { FieldDefinition, FormQuestion } from '@/db/schema';
-import { normalizeToFieldKey } from './auto-mapping';
+import { normalizeToFieldKey } from './auto-mapping.ts';
 
 /** Field category */
 export type FieldCategory =
