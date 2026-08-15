@@ -100,3 +100,40 @@ export {
   type GoogleDocsService,
   type PlaceholderReplacement,
 } from './google-docs-service.ts';
+
+// Dual-template routing (Tài liệu A / Tài liệu B)
+export {
+  DOCUMENT_KIND_META,
+  extractGoogleDocId,
+  googleDocEditUrl,
+  googleDocPdfUrl,
+  googleDocPreviewUrl,
+  documentKindLabel,
+  isReturningWorker,
+  resolveDocumentKind,
+  resolveDwClassification,
+  selectTemplateForApplicant,
+  selectTemplateForKind,
+  type DocumentKind,
+  type DwClassification,
+} from './template-routing.ts';
+
+// Preview + fallback placeholders
+export {
+  FALLBACK_PLACEHOLDER_MAP,
+  applyFallbackPlaceholders,
+  buildPreviewContent,
+  countPageBreaks,
+  joinWithPageBreaks,
+} from './preview-merge.ts';
+
+// Electronic signature / confirmation
+export {
+  MAX_SIGNATURE_DATA_URL_LENGTH,
+  isValidSignatureDataUrl,
+  normalizeConfirmedAnswersInput,
+  validateConfirmedAnswers,
+} from './signature.ts';
+
+// Flattened applicant record
+export { buildApplicantMergeRecord } from './applicant-record.ts';

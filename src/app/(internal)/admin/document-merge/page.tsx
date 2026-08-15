@@ -6,9 +6,10 @@
  * Trung tâm quản lý mẫu biểu và thực hiện merge tài liệu tự động từ cơ sở dữ liệu.
  */
 
-import { useState, useEffect, useTransition, Suspense } from 'react';
-import { useSearchParams, useRouter } from 'next/navigation';
-import Link from 'next/link';
+import { useState, useEffect, Suspense } from 'react';
+import { useSearchParams } from 'next/navigation';
+import { MergeWorkspace } from '@/components/document-merge/merge-workspace';
+import { extractGoogleDocId, documentKindLabel } from '@/lib/document-merge/template-routing';
 import {
   FileText,
   Layers,
@@ -45,6 +46,7 @@ interface MergeTemplate {
   outputFolderId: string | null;
   outputFileNamePattern: string | null;
   defaultMergeMode: 'ONE_DOCUMENT' | 'INDIVIDUAL_DOCUMENTS';
+  documentKind?: 'A' | 'B' | 'GENERIC';
   dataSources: string[];
   isActive: boolean;
   createdBy: string;
@@ -85,7 +87,6 @@ const TABS: { id: TabType; label: string; icon: typeof FileText; desc: string }[
 
 function DocumentMergeContent() {
   const searchParams = useSearchParams();
-  const router = useRouter();
 
   const initialTab = (searchParams.get('tab') as TabType) || (searchParams.get('template') ? 'merge' : 'templates');
   const initialTemplateId = searchParams.get('template') || '';
@@ -176,7 +177,7 @@ function DocumentMergeContent() {
           <TemplatesTab onSelectForMerge={handleSelectTemplateForMerge} />
         )}
         {activeTab === 'merge' && (
-          <MergeTab
+          <MergeWorkspace
             selectedTemplateId={selectedTemplateIdForMerge}
             onSelectTemplateId={setSelectedTemplateIdForMerge}
             onSwitchToHistory={() => setActiveTab('history')}
@@ -220,6 +221,7 @@ function TemplatesTab({ onSelectForMerge }: { onSelectForMerge: (templateId: str
     outputFolderId: '',
     outputFileNamePattern: '',
     defaultMergeMode: 'ONE_DOCUMENT' as 'ONE_DOCUMENT' | 'INDIVIDUAL_DOCUMENTS',
+    documentKind: 'GENERIC' as 'A' | 'B' | 'GENERIC',
   });
 
   const loadTemplates = async () => {
@@ -269,6 +271,7 @@ function TemplatesTab({ onSelectForMerge }: { onSelectForMerge: (templateId: str
         outputFolderId: '',
         outputFileNamePattern: '',
         defaultMergeMode: 'ONE_DOCUMENT',
+        documentKind: 'GENERIC',
       });
       loadTemplates();
     } catch (err: any) {
@@ -384,6 +387,10 @@ function TemplatesTab({ onSelectForMerge }: { onSelectForMerge: (templateId: str
                     <span className="text-slate-400">Chế độ mặc định:</span>
                     <span>{template.defaultMergeMode === 'ONE_DOCUMENT' ? '1 File gộp' : 'Từng file riêng'}</span>
                   </div>
+                  <div className="flex items-center justify-between">
+                    <span className="text-slate-400">Phân loại:</span>
+                    <span className="font-semibold text-emerald-800">{documentKindLabel(template.documentKind)}</span>
+                  </div>
                 </div>
               </div>
 
@@ -398,13 +405,35 @@ function TemplatesTab({ onSelectForMerge }: { onSelectForMerge: (templateId: str
                   Mẫu gốc
                 </a>
 
-                <button
-                  onClick={() => onSelectForMerge(template.id)}
-                  className="inline-flex items-center gap-1 rounded-lg bg-emerald-50 px-3 py-1.5 text-xs font-semibold text-emerald-700 transition hover:bg-emerald-700 hover:text-white"
-                >
-                  <Layers className="h-3.5 w-3.5" />
-                  Merge →
-                </button>
+                <div className="flex items-center gap-2">
+                  <button
+                    onClick={async () => {
+                      try {
+                        const res = await fetch(`/api/document-merge/templates/${template.id}/scan`, {
+                          method: 'POST',
+                          headers: { 'Content-Type': 'application/json' },
+                          body: JSON.stringify({ googleDocId: template.googleDocId }),
+                        });
+                        const data = await res.json();
+                        if (!res.ok) throw new Error(data.error || 'Scan thất bại');
+                        alert(`Đã quét ${data.placeholders?.length ?? 0} placeholder.`);
+                        loadTemplates();
+                      } catch (err: any) {
+                        alert(err.message || 'Không quét được placeholder');
+                      }
+                    }}
+                    className="inline-flex items-center gap-1 rounded-lg border border-slate-200 px-2.5 py-1.5 text-xs font-semibold text-slate-600 hover:bg-slate-50"
+                  >
+                    Scan
+                  </button>
+                  <button
+                    onClick={() => onSelectForMerge(template.id)}
+                    className="inline-flex items-center gap-1 rounded-lg bg-emerald-50 px-3 py-1.5 text-xs font-semibold text-emerald-700 transition hover:bg-emerald-700 hover:text-white"
+                  >
+                    <Layers className="h-3.5 w-3.5" />
+                    Merge →
+                  </button>
+                </div>
               </div>
             </div>
           ))}
@@ -450,18 +479,39 @@ function TemplatesTab({ onSelectForMerge }: { onSelectForMerge: (templateId: str
               </div>
 
               <div>
-                <label className="block font-semibold text-slate-700">Google Docs ID *</label>
+                <label className="block font-semibold text-slate-700">Google Docs URL / ID *</label>
                 <input
                   type="text"
                   required
-                  placeholder="VD: 1BxiMVs0XRA5nFMdKvBdBZjgmUUqptlbs74OgvE2upms"
+                  placeholder="Dán URL Google Docs hoặc Doc ID"
                   value={formData.googleDocId}
-                  onChange={(e) => setFormData({ ...formData, googleDocId: e.target.value })}
+                  onChange={(e) => {
+                    const extracted = extractGoogleDocId(e.target.value);
+                    setFormData({ ...formData, googleDocId: extracted || e.target.value });
+                  }}
                   className="mt-1 w-full font-mono rounded-lg border border-slate-200 px-3 py-2 text-xs text-slate-800 outline-none focus:border-emerald-600"
                 />
                 <p className="mt-1 text-[11px] text-slate-400">
-                  Lấy từ đường dẫn URL của file Google Doc: https://docs.google.com/document/d/<b>[DOC_ID]</b>/edit
+                  Dán nguyên URL — hệ thống tự tách Doc ID. Ví dụ: https://docs.google.com/document/d/<b>[DOC_ID]</b>/edit
                 </p>
+              </div>
+
+              <div>
+                <label className="block font-semibold text-slate-700">Phân loại mẫu (Routing A / B)</label>
+                <select
+                  value={formData.documentKind}
+                  onChange={(e) =>
+                    setFormData({
+                      ...formData,
+                      documentKind: e.target.value as 'A' | 'B' | 'GENERIC',
+                    })
+                  }
+                  className="mt-1 w-full rounded-lg border border-slate-200 px-3 py-2 text-xs text-slate-800 outline-none focus:border-emerald-600 bg-white"
+                >
+                  <option value="GENERIC">Mẫu chung (fallback)</option>
+                  <option value="A">Tài liệu A — Cam kết / Tái ký (DW Cũ)</option>
+                  <option value="B">Tài liệu B — Hợp đồng đào tạo nghề (DW Mới)</option>
+                </select>
               </div>
 
               <div>
