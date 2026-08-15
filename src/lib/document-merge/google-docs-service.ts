@@ -1,15 +1,12 @@
 /**
  * Document Merge Engine — Google Docs / Drive service.
  *
- * Production path:
- * - read template text through Drive export (preview / placeholder scan only)
- * - COPY the real Google Docs template before merge
- * - replace <<placeholders>> with Docs batchUpdate so template formatting is preserved
- * - create batch-print documents with real Docs insertPageBreak requests
- *
- * Mock mode is intentionally restricted to tests or DOCUMENT_MERGE_USE_MOCK=true.
+ * Production merge copies the real Google Docs template and performs
+ * replaceAllText on the copy, preserving the original document formatting.
+ * Batch-print output uses real Docs insertPageBreak requests.
  */
 
+import crypto from "node:crypto";
 import { replaceMultiplePlaceholders } from "./placeholder-extractor.ts";
 
 export const PAGE_BREAK_TEXT = "\n\n--- DOCUMENT_MERGE_PAGE_BREAK ---\n\n";
@@ -30,6 +27,91 @@ export interface PlaceholderReplacement {
 }
 
 type MockDoc = { title: string; content: string };
+
+type TokenResponse = {
+  access_token?: string;
+  expires_in?: number;
+  error?: string;
+  error_description?: string;
+};
+
+let cachedToken: { value: string; expiresAt: number } | null = null;
+
+function base64Url(input: string | Buffer): string {
+  return Buffer.from(input).toString("base64url");
+}
+
+async function exchangeServiceAccountToken(email: string, privateKey: string): Promise<TokenResponse> {
+  const now = Math.floor(Date.now() / 1000);
+  const header = base64Url(JSON.stringify({ alg: "RS256", typ: "JWT" }));
+  const payload = base64Url(JSON.stringify({
+    iss: email,
+    scope: "https://www.googleapis.com/auth/documents https://www.googleapis.com/auth/drive",
+    aud: "https://oauth2.googleapis.com/token",
+    iat: now,
+    exp: now + 3600,
+  }));
+  const signingInput = `${header}.${payload}`;
+  const normalizedKey = privateKey.replace(/\\n/g, "\n");
+  const signature = crypto.sign("RSA-SHA256", Buffer.from(signingInput), normalizedKey);
+  const assertion = `${signingInput}.${base64Url(signature)}`;
+
+  const response = await fetch("https://oauth2.googleapis.com/token", {
+    method: "POST",
+    headers: { "Content-Type": "application/x-www-form-urlencoded" },
+    body: new URLSearchParams({
+      grant_type: "urn:ietf:params:oauth:grant-type:jwt-bearer",
+      assertion,
+    }),
+  });
+  return response.json() as Promise<TokenResponse>;
+}
+
+async function exchangeRefreshToken(clientId: string, clientSecret: string, refreshToken: string): Promise<TokenResponse> {
+  const response = await fetch("https://oauth2.googleapis.com/token", {
+    method: "POST",
+    headers: { "Content-Type": "application/x-www-form-urlencoded" },
+    body: new URLSearchParams({
+      client_id: clientId,
+      client_secret: clientSecret,
+      refresh_token: refreshToken,
+      grant_type: "refresh_token",
+    }),
+  });
+  return response.json() as Promise<TokenResponse>;
+}
+
+async function resolveAccessToken(explicitToken?: string): Promise<string> {
+  if (explicitToken) return explicitToken;
+  if (cachedToken && cachedToken.expiresAt > Date.now() + 60_000) return cachedToken.value;
+
+  let result: TokenResponse | null = null;
+  const serviceEmail = process.env.GOOGLE_SERVICE_ACCOUNT_EMAIL;
+  const servicePrivateKey = process.env.GOOGLE_SERVICE_ACCOUNT_PRIVATE_KEY;
+  if (serviceEmail && servicePrivateKey) {
+    result = await exchangeServiceAccountToken(serviceEmail, servicePrivateKey);
+  } else {
+    const clientId = process.env.GOOGLE_CLIENT_ID;
+    const clientSecret = process.env.GOOGLE_CLIENT_SECRET;
+    const refreshToken = process.env.GOOGLE_REFRESH_TOKEN;
+    if (clientId && clientSecret && refreshToken) {
+      result = await exchangeRefreshToken(clientId, clientSecret, refreshToken);
+    }
+  }
+
+  if (!result?.access_token) {
+    const detail = result?.error_description || result?.error || "missing Google OAuth credentials";
+    throw new Error(
+      `Document Merge chưa kết nối Google Docs/Drive (${detail}). Cấu hình service account hoặc OAuth refresh token trong Vercel.`,
+    );
+  }
+
+  cachedToken = {
+    value: result.access_token,
+    expiresAt: Date.now() + Math.max(300, result.expires_in ?? 3600) * 1000,
+  };
+  return cachedToken.value;
+}
 
 export class MockGoogleDocsService implements GoogleDocsService {
   private documents = new Map<string, MockDoc>();
@@ -82,19 +164,24 @@ export class MockGoogleDocsService implements GoogleDocsService {
 }
 
 export class RealGoogleDocsService implements GoogleDocsService {
-  private readonly accessToken: string;
+  private readonly explicitAccessToken?: string;
   private readonly docsUrl = "https://docs.googleapis.com/v1";
   private readonly driveUrl = "https://www.googleapis.com/drive/v3";
 
-  constructor(accessToken: string) {
-    this.accessToken = accessToken;
+  constructor(accessToken?: string) {
+    this.explicitAccessToken = accessToken;
+  }
+
+  private async authHeader(): Promise<Record<string, string>> {
+    const token = await resolveAccessToken(this.explicitAccessToken);
+    return { Authorization: `Bearer ${token}` };
   }
 
   private async requestJson<T>(url: string, options: RequestInit = {}): Promise<T> {
     const response = await fetch(url, {
       ...options,
       headers: {
-        Authorization: `Bearer ${this.accessToken}`,
+        ...(await this.authHeader()),
         ...(options.body ? { "Content-Type": "application/json" } : {}),
         ...options.headers,
       },
@@ -115,12 +202,8 @@ export class RealGoogleDocsService implements GoogleDocsService {
   }
 
   async getDocumentContent(docId: string): Promise<string> {
-    // Google Docs API does not have an "export text" batchUpdate operation.
-    // Drive export is the supported way to obtain plain text for scan/preview.
     const url = `${this.driveUrl}/files/${encodeURIComponent(docId)}/export?mimeType=${encodeURIComponent("text/plain")}`;
-    const response = await fetch(url, {
-      headers: { Authorization: `Bearer ${this.accessToken}` },
-    });
+    const response = await fetch(url, { headers: await this.authHeader() });
     if (!response.ok) {
       const detail = await response.text();
       throw new Error(`Không đọc được Google Docs (${response.status}): ${detail.slice(0, 500)}`);
@@ -154,17 +237,14 @@ export class RealGoogleDocsService implements GoogleDocsService {
   }
 
   async updateDocumentContent(docId: string, content: string): Promise<void> {
-    const document = await this.requestJson<{
-      body?: { content?: Array<{ endIndex?: number }> };
-    }>(`${this.docsUrl}/documents/${encodeURIComponent(docId)}`);
+    const document = await this.requestJson<{ body?: { content?: Array<{ endIndex?: number }> } }>(
+      `${this.docsUrl}/documents/${encodeURIComponent(docId)}`,
+    );
     const blocks = document.body?.content ?? [];
     const endIndex = blocks.reduce((max, block) => Math.max(max, block.endIndex ?? 1), 1);
-
     const requests: Record<string, unknown>[] = [];
     if (endIndex > 2) {
-      requests.push({
-        deleteContentRange: { range: { startIndex: 1, endIndex: endIndex - 1 } },
-      });
+      requests.push({ deleteContentRange: { range: { startIndex: 1, endIndex: endIndex - 1 } } });
     }
 
     const parts = content.split(PAGE_BREAK_TEXT);
@@ -226,11 +306,10 @@ export class RealGoogleDocsService implements GoogleDocsService {
 
 export function createGoogleDocsService(accessToken?: string): GoogleDocsService {
   const allowMock = process.env.NODE_ENV === "test" || process.env.DOCUMENT_MERGE_USE_MOCK === "true";
-  if (accessToken) return new RealGoogleDocsService(accessToken);
-  if (allowMock) return new MockGoogleDocsService();
-  throw new Error(
-    "Document Merge chưa được cấu hình Google OAuth. Hãy cấu hình GOOGLE_ACCESS_TOKEN hoặc cơ chế cấp access token trước khi merge production.",
-  );
+  if (allowMock && !accessToken && !process.env.GOOGLE_SERVICE_ACCOUNT_EMAIL && !process.env.GOOGLE_REFRESH_TOKEN) {
+    return new MockGoogleDocsService();
+  }
+  return new RealGoogleDocsService(accessToken);
 }
 
 export function replacePlaceholdersInContent(
