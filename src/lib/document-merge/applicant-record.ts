@@ -63,6 +63,18 @@ export type ApplicantMergeSources = {
 export function buildApplicantMergeRecord(sources: ApplicantMergeSources): Record<string, unknown> {
   const { application, department, dw, worker } = sources;
   const customAnswers = application.customAnswers ?? {};
+  const answer = (...keys: string[]): string | null => {
+    for (const key of keys) {
+      const value = customAnswers[key];
+      if (typeof value === "string" && value.trim()) return value.trim();
+    }
+    return null;
+  };
+
+  const permanentAddress =
+    application.permanentAddress ?? answer("dia_chi_thuong_tru") ?? dw?.permanentAddress ?? worker?.permanentAddress ?? null;
+  const residentialAddress =
+    application.residentialAddress ?? answer("dia_chi_tam_tru") ?? dw?.residentialAddress ?? worker?.residentialAddress ?? null;
 
   return {
     id: application.id,
@@ -72,8 +84,12 @@ export function buildApplicantMergeRecord(sources: ApplicantMergeSources): Recor
     dob: application.dob ?? dw?.bod ?? worker?.dob ?? null,
     phone: application.phone ?? dw?.phone ?? worker?.phone ?? null,
     ethnicity: application.ethnicity ?? null,
-    permanentAddress: application.permanentAddress ?? dw?.permanentAddress ?? worker?.permanentAddress ?? null,
-    residentialAddress: application.residentialAddress ?? dw?.residentialAddress ?? worker?.residentialAddress ?? null,
+    permanentAddress,
+    residentialAddress,
+    dateOfIssue: dw?.dateOfIssue ?? answer("ngay_cap_cccd") ?? null,
+    placeOfIssue: dw?.placeOfIssue ?? answer("noi_cap_cccd") ?? null,
+    code: application.dwCode ?? dw?.code ?? application.itCode ?? worker?.fingerprintCode ?? null,
+    email: answer("email"),
     declaredType: application.declaredType ?? "NEW",
     dwMatch: application.dwMatch ?? "NEW",
     dwCode: application.dwCode ?? dw?.code ?? null,
