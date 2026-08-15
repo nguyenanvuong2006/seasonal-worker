@@ -36,12 +36,19 @@ export const FALLBACK_PLACEHOLDER_MAP: Record<string, string> = {
   Dia_chi_hien_tai: "residentialAddress",
   residentialAddress: "residentialAddress",
   Dia_chi_thuong_tru: "permanentAddress",
+  dia_chi_cu_tru: "permanentAddress",
   permanentAddress: "permanentAddress",
+  Ngay_cap_CCCD: "dateOfIssue",
+  Noi_cap_CCCD: "placeOfIssue",
+  Code: "code",
+  Email: "email",
+  Dia_diem_ky: "location",
   Ngay_dang_ky: "regDate",
   NgayDangKy: "regDate",
   regDate: "regDate",
   Ngay_nhan_viec: "startingDate",
   NgayNhanViec: "startingDate",
+  Ngay_tiep_nhan: "startingDate",
   startingDate: "startingDate",
   Bo_phan: "deptName",
   BoPhan: "deptName",
@@ -52,6 +59,18 @@ export const FALLBACK_PLACEHOLDER_MAP: Record<string, string> = {
   dwCode: "dwCode",
   IT_CODE: "itCode",
   itCode: "itCode",
+};
+
+/** Placeholder aliases whose source lives in daily_applications.customAnswers. */
+const CUSTOM_ANSWER_PLACEHOLDER_MAP: Record<string, string> = {
+  Ten_truong: "ten_truong",
+  Cong_viec_hien_tai_khac: "cong_viec_hien_tai_khac",
+  So_tai_khoan: "so_tai_khoan",
+  Ten_ngan_hang: "ten_ngan_hang",
+  Cong_ty_thu_nhap_khac: "cong_ty_thu_nhap_khac",
+  Dia_diem_thu_nhap_khac: "dia_diem_thu_nhap_khac",
+  Cong_viec_khac: "cong_viec_khac",
+  So_dinh_danh_cu: "so_dinh_danh_cu",
 };
 
 function readPath(record: Record<string, unknown>, path: string): unknown {
@@ -94,21 +113,44 @@ export function applyFallbackPlaceholders(
     if (value) result[placeholder] = value;
   }
 
-  // Also expose flattened core fields under their own names.
-  for (const key of ["fullName", "cccd", "dob", "gender", "phone", "deptName", "groupName", "startingDate", "regDate"]) {
-    if (!result[key]?.trim()) {
-      const value = asDisplayString(record[key]);
-      if (value) result[key] = value;
-    }
-  }
-
   const custom = record.customAnswers;
   if (custom && typeof custom === "object" && !Array.isArray(custom)) {
-    for (const [key, raw] of Object.entries(custom as Record<string, unknown>)) {
+    const customRecord = custom as Record<string, unknown>;
+    for (const [placeholder, fieldKey] of Object.entries(CUSTOM_ANSWER_PLACEHOLDER_MAP)) {
+      if (result[placeholder]?.trim()) continue;
+      const value = asDisplayString(customRecord[fieldKey]);
+      if (value) result[placeholder] = value;
+    }
+    for (const [key, raw] of Object.entries(customRecord)) {
       if (!result[key]?.trim()) {
         const value = asDisplayString(raw);
         if (value) result[key] = value;
       }
+    }
+  }
+
+  // Also expose flattened core fields under their own names.
+  for (const key of [
+    "fullName",
+    "cccd",
+    "dob",
+    "gender",
+    "phone",
+    "permanentAddress",
+    "residentialAddress",
+    "dateOfIssue",
+    "placeOfIssue",
+    "code",
+    "email",
+    "deptName",
+    "groupName",
+    "location",
+    "startingDate",
+    "regDate",
+  ]) {
+    if (!result[key]?.trim()) {
+      const value = asDisplayString(record[key]);
+      if (value) result[key] = value;
     }
   }
 
