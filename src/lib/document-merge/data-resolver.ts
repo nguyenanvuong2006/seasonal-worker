@@ -14,7 +14,7 @@
 
 import type { MergeTemplateField } from '@/db/schema';
 import { formatValue, type FormatType } from './formatters.ts';
-import { isCheckboxMatch, parseCheckboxPlaceholder } from './checkbox-engine.ts';
+import { isCheckboxMatch } from './checkbox-engine.ts';
 
 /** Source types */
 export type SourceType =
@@ -41,7 +41,10 @@ export type ComputedFieldType =
   | 'CURRENT_USER'
   | 'CURRENT_YEAR'
   | 'AGE_FROM_DOB'
-  | 'DAYS_SINCE_DATE';
+  | 'DAYS_SINCE_DATE'
+  | 'DATE_DAY'
+  | 'DATE_MONTH'
+  | 'DATE_YEAR';
 
 /** System field definitions */
 export type SystemFieldType =
@@ -60,6 +63,38 @@ export interface MergeContext {
   mergeIndex?: number;
   mergeCount?: number;
   [key: string]: unknown;
+}
+
+function readRecordPath(recordData: RecordData, path: string): unknown {
+  const parts = path.split('.');
+  let value: unknown = recordData;
+  for (const part of parts) {
+    if (value === null || value === undefined) return undefined;
+    value = (value as Record<string, unknown>)[part];
+  }
+  return value;
+}
+
+function datePart(value: unknown, part: 'day' | 'month' | 'year'): string {
+  if (!value) return '';
+  const raw = String(value).trim();
+  const iso = raw.match(/^(\d{4})-(\d{2})-(\d{2})/);
+  if (iso) {
+    if (part === 'year') return iso[1];
+    if (part === 'month') return iso[2];
+    return iso[3];
+  }
+  const vi = raw.match(/^(\d{1,2})[\/\-.](\d{1,2})[\/\-.](\d{4})$/);
+  if (vi) {
+    if (part === 'year') return vi[3];
+    if (part === 'month') return vi[2].padStart(2, '0');
+    return vi[1].padStart(2, '0');
+  }
+  const parsed = new Date(raw);
+  if (Number.isNaN(parsed.getTime())) return '';
+  if (part === 'year') return String(parsed.getFullYear());
+  if (part === 'month') return String(parsed.getMonth() + 1).padStart(2, '0');
+  return String(parsed.getDate()).padStart(2, '0');
 }
 
 /**
@@ -125,7 +160,7 @@ export function resolveComputedField(
     }
     case 'DAYS_SINCE_DATE': {
       const dateField = field.sourcePath ?? 'createdAt';
-      const dateValue = recordData[dateField];
+      const dateValue = readRecordPath(recordData, dateField);
       if (!dateValue) return field.fallbackValue ?? '';
       try {
         const date = new Date(dateValue as string);
@@ -137,6 +172,12 @@ export function resolveComputedField(
         return field.fallbackValue ?? '';
       }
     }
+    case 'DATE_DAY':
+      return datePart(readRecordPath(recordData, field.sourcePath ?? 'startingDate'), 'day') || field.fallbackValue || '';
+    case 'DATE_MONTH':
+      return datePart(readRecordPath(recordData, field.sourcePath ?? 'startingDate'), 'month') || field.fallbackValue || '';
+    case 'DATE_YEAR':
+      return datePart(readRecordPath(recordData, field.sourcePath ?? 'startingDate'), 'year') || field.fallbackValue || '';
     default:
       return field.fallbackValue ?? '';
   }
@@ -150,15 +191,7 @@ export function resolveCoreField(
   recordData: RecordData
 ): string {
   const sourcePath = field.sourcePath ?? field.sourceField ?? '';
-  
-  // Hỗ trợ nested path như "worker_profiles.fullName"
-  const pathParts = sourcePath.split('.');
-  let value: unknown = recordData;
-  
-  for (const part of pathParts) {
-    if (value === null || value === undefined) break;
-    value = (value as Record<string, unknown>)[part];
-  }
+  const value = readRecordPath(recordData, sourcePath);
   
   if (value === null || value === undefined) {
     return field.fallbackValue ?? '';
@@ -177,15 +210,7 @@ export function resolveCheckboxOption(
 ): string {
   const sourcePath = field.sourcePath ?? field.sourceField ?? '';
   const optionValue = field.optionValue ?? '';
-  
-  // Lấy giá trị từ record
-  const pathParts = sourcePath.split('.');
-  let value: unknown = recordData;
-  
-  for (const part of pathParts) {
-    if (value === null || value === undefined) break;
-    value = (value as Record<string, unknown>)[part];
-  }
+  const value = readRecordPath(recordData, sourcePath);
   
   const isMatch = isCheckboxMatch(
     value as string | null | undefined,
@@ -285,6 +310,9 @@ export const COMPUTED_FIELD_DEFINITIONS: {
   { key: 'CURRENT_YEAR', label: 'Năm hiện tại', description: 'Năm hiện tại (VD: 2026)' },
   { key: 'AGE_FROM_DOB', label: 'Tuổi từ ngày sinh', description: 'Tính tuổi từ trường dob' },
   { key: 'DAYS_SINCE_DATE', label: 'Số ngày từ ngày', description: 'Tính số ngày từ một ngày cụ thể' },
+  { key: 'DATE_DAY', label: 'Ngày của một trường ngày', description: 'Lấy DD từ sourcePath (mặc định startingDate)' },
+  { key: 'DATE_MONTH', label: 'Tháng của một trường ngày', description: 'Lấy MM từ sourcePath (mặc định startingDate)' },
+  { key: 'DATE_YEAR', label: 'Năm của một trường ngày', description: 'Lấy YYYY từ sourcePath (mặc định startingDate)' },
 ];
 
 /**
