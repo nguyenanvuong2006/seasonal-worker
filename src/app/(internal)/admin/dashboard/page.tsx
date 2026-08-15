@@ -1,36 +1,33 @@
+import { Suspense } from "react";
 import { redirect } from "next/navigation";
 import Link from "next/link";
 import { getSession, hasPermission } from "@/lib/auth";
 import { getDashboardOverview } from "@/lib/dashboard";
 import { getPublicBranding } from "@/lib/branding";
-import {
-  AlertPanel,
-  Badge,
-  Card,
-  CardContent,
-  GenderLegend,
-  MetricStrip,
-  MetricStripItem,
-  ProgressBar,
-  SectionLabel,
-} from "@/components/ui";
+import { AlertPanel, SectionLabel, SkeletonKpiRow } from "@/components/ui";
 import DashboardWidgets from "@/components/dashboard-widgets";
+import AnalyticsDashboard from "@/components/analytics/analytics-dashboard";
 import {
   AlertTriangle,
   ArrowLeftRight,
   CalendarRange,
   CheckCircle2,
   ClipboardList,
-  Clock,
   Database,
-  FileText,
-  Leaf,
   Sprout,
   Sun,
-  UserPlus2,
 } from "lucide-react";
 
 export const dynamic = "force-dynamic";
+
+/**
+ * WORKFORCE ANALYTICS & OPERATIONS DASHBOARD (/admin/dashboard)
+ * - Giữ: greeting + branding/year slogan, "Hôm nay cần chú ý", quick links,
+ *   configurable widgets (dashboard_widgets) — chuyển xuống cuối làm "Bảng theo dõi tuỳ chỉnh".
+ * - Phần chính mới: Analytics (KPI / funnel / trend / worker mix / referral / planning /
+ *   department performance / demographics / movements / returning / data quality) —
+ *   client component fetch 1 lần từ GET /api/analytics/dashboard, filter lưu ở query string.
+ */
 
 function greeting(hour: number) {
   if (hour < 11) return "Chào buổi sáng";
@@ -39,9 +36,7 @@ function greeting(hour: number) {
   return "Chào buổi tối";
 }
 
-// Giờ chào phải theo giờ Việt Nam (Asia/Ho_Chi_Minh) chứ không phải giờ của server
-// (Vercel serverless có thể chạy ở bất kỳ region/UTC nào) — dùng Intl.DateTimeFormat
-// với timeZone cố định thay vì new Date().getHours() vốn đọc giờ local của server.
+// Giờ chào theo Asia/Ho_Chi_Minh — không phụ thuộc giờ server (Vercel có thể ở bất kỳ region nào).
 function hourInVietnam(): number {
   const hourStr = new Intl.DateTimeFormat("en-US", {
     timeZone: "Asia/Ho_Chi_Minh",
@@ -64,20 +59,20 @@ function dateInVietnam(): string {
 export default async function DashboardPage() {
   const session = await getSession();
   if (!session) redirect("/login");
-  // DYNAMIC RBAC V2 — Dashboard mở cho mọi role có dashboard.view (fail-closed).
   if (!(await hasPermission(session.role, "dashboard.view"))) redirect("/login");
 
-  const [overview, branding] = await Promise.all([getDashboardOverview(session), getPublicBranding()]);
-  const hour = hourInVietnam();
-  const t = overview.today;
-  const p = overview.planning;
-
-  const [canRegistrations, canPlanning, canProfiles, canMovements] = await Promise.all([
+  const [overview, branding, canExport, canRegistrations, canPlanning, canProfiles, canMovements] = await Promise.all([
+    getDashboardOverview(session),
+    getPublicBranding(),
+    hasPermission(session.role, "registrations.export"),
     hasPermission(session.role, "registrations.view"),
     hasPermission(session.role, "planning.view"),
     hasPermission(session.role, "worker_profile.view"),
     hasPermission(session.role, "workforce_movements.view"),
   ]);
+  const hour = hourInVietnam();
+  const t = overview.today;
+  const p = overview.planning;
 
   const quickLinks = [
     { href: "/hr/registrations", label: "Daily Application", desc: "Tiếp nhận & xếp việc hôm nay", icon: ClipboardList, visible: canRegistrations },
@@ -96,19 +91,19 @@ export default async function DashboardPage() {
 
   return (
     <div className="space-y-5">
-      {/* ============ COMMAND STRIP — greeting + theme + quick jump ============ */}
+      {/* ============ COMMAND STRIP — greeting + theme ============ */}
       <section className="hasfarm-hero field-rows relative overflow-hidden rounded-[20px] px-5 py-5 text-white shadow-[0_10px_30px_rgba(8,41,15,0.25)] md:px-7 md:py-6">
         <div className="relative flex flex-wrap items-center justify-between gap-4">
           <div className="min-w-0">
             <p className="flex items-center gap-2 text-[10.5px] font-bold uppercase tracking-[0.16em] text-gold-200/90">
               <Sun className="h-3.5 w-3.5" aria-hidden />
-              Tổng quan vận hành · {dateInVietnam()}
+              Workforce Analytics & Operations · {dateInVietnam()}
             </p>
             <h1 className="mt-1.5 text-[22px] font-bold leading-tight tracking-[-0.015em] md:text-[26px]">
               {greeting(hour)}, <span className="text-gold-200">{session.fullName}</span>
             </h1>
             <p className="mt-1 max-w-[58ch] text-[13px] leading-relaxed text-white/70">
-              Tổng hợp điểm cần xử lý trong ngày: tiếp nhận hồ sơ, nhu cầu nhân lực và các yêu cầu chờ duyệt.
+              Phân tích tuyển dụng, nhu cầu nhân lực và biến động lao động — lọc theo thời gian và cơ cấu tổ chức.
             </p>
           </div>
           <div className="flex flex-wrap items-center gap-2">
@@ -157,64 +152,28 @@ export default async function DashboardPage() {
         </AlertPanel>
       )}
 
-      {/* ============ RECRUITMENT SNAPSHOT + MOVEMENT ALERTS ============ */}
-      <div className="grid gap-5 lg:grid-cols-3">
-        <Card className="lg:col-span-2">
-          <CardContent className="p-5 md:p-6">
-            <div className="flex flex-wrap items-start justify-between gap-3">
-              <div>
-                <SectionLabel tone="green">Nhu cầu tuyển dụng</SectionLabel>
-                <h2 className="mt-1.5 text-[17px] font-bold tracking-[-0.01em] text-fg">Snapshot theo kế hoạch đang áp dụng</h2>
-              </div>
-              {p ? <Badge tone="green" dot>{p.activePeriods} kế hoạch ACTIVE</Badge> : <Badge tone="gray">Chưa có kế hoạch</Badge>}
-            </div>
+      {/* ============ ANALYTICS (phần chính) ============ */}
+      <Suspense fallback={<SkeletonKpiRow count={8} />}>
+        <AnalyticsDashboard canExport={canExport} />
+      </Suspense>
 
-            {p ? (
-              <div className="mt-5 grid gap-6 md:grid-cols-[auto_1fr]">
-                {/* Shortage hero */}
-                <div className="min-w-[190px] rounded-[16px] border border-accent/20 bg-accent-tint/60 p-5">
-                  <p className="text-[10.5px] font-bold uppercase tracking-[0.14em] text-accent">Cần tuyển thêm</p>
-                  <p className="mt-1.5 text-[44px] font-bold leading-none tracking-tight tabular-nums text-accent">{p.shortageTotal}</p>
-                  <p className="mt-2 text-[11.5px] font-medium leading-relaxed text-fg-secondary">
-                    Nam {p.shortageMale} · Nữ {p.shortageFemale} trên tổng nhu cầu {p.demandTotal} người.
-                  </p>
-                  <div className="mt-3">
-                    <div className="flex items-center justify-between text-[11px] font-semibold text-fg-secondary">
-                      <span>Tỷ lệ đáp ứng</span>
-                      <span className="tabular-nums text-fg">{p.fillRatePercent}%</span>
-                    </div>
-                    <ProgressBar value={p.fillRatePercent} tone={p.fillRatePercent >= 100 ? "success" : "accent"} className="mt-1.5 h-2" />
-                  </div>
+      {/* ============ QUICK ACTIONS ============ */}
+      {quickLinks.length > 0 ? (
+        <div>
+          <SectionLabel tone="green" className="mb-2">Truy cập nhanh</SectionLabel>
+          <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 xl:grid-cols-4">
+            {quickLinks.map((q) => (
+              <Link
+                key={q.href}
+                href={q.href}
+                className="group flex items-center gap-3 rounded-[16px] border border-border bg-surface p-4 shadow-[0_1px_2px_rgba(23,32,18,0.04),0_8px_24px_rgba(23,32,18,0.05)] transition-[border-color,box-shadow,transform] hover:-translate-y-[1px] hover:border-primary/30 hover:shadow-md focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/30"
+              >
+                <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-[11px] bg-primary-tint text-primary ring-1 ring-black/[0.03] transition-colors group-hover:bg-accent-tint group-hover:text-accent">
+                  <q.icon className="h-5 w-5" aria-hidden />
                 </div>
-
-                {/* Gender demand vs allocation */}
                 <div className="min-w-0">
-                  <div className="space-y-4">
-                    <div>
-                      <div className="flex items-center justify-between text-[12.5px] font-semibold">
-                        <span className="inline-flex items-center gap-1.5 text-fg">
-                          <span className="h-2 w-2 rounded-full bg-primary" aria-hidden /> Nam — nhu cầu {p.demandMale}
-                        </span>
-                        <span className="tabular-nums text-fg-secondary">đã bố trí {p.allocatedMale}</span>
-                      </div>
-                      <ProgressBar value={p.demandMale > 0 ? (p.allocatedMale / p.demandMale) * 100 : 100} tone="primary" className="mt-1.5 h-2" />
-                    </div>
-                    <div>
-                      <div className="flex items-center justify-between text-[12.5px] font-semibold">
-                        <span className="inline-flex items-center gap-1.5 text-fg">
-                          <span className="h-2 w-2 rounded-full bg-accent" aria-hidden /> Nữ — nhu cầu {p.demandFemale}
-                        </span>
-                        <span className="tabular-nums text-fg-secondary">đã bố trí {p.allocatedFemale}</span>
-                      </div>
-                      <ProgressBar value={p.demandFemale > 0 ? (p.allocatedFemale / p.demandFemale) * 100 : 100} tone="accent" className="mt-1.5 h-2" />
-                    </div>
-                  </div>
-                  <div className="mt-4 flex flex-wrap items-center justify-between gap-2 border-t border-border pt-3">
-                    <GenderLegend male={p.demandMale} female={p.demandFemale} />
-                    <span className="text-[11.5px] text-fg-muted">
-                      Đã phân bổ {p.allocatedTotal} · Nghỉ việc {p.resignedTotal}
-                    </span>
-                  </div>
+                  <p className="text-[13.5px] font-bold text-fg">{q.label}</p>
+                  <p className="truncate text-[11.5px] text-fg-muted">{q.desc}</p>
                 </div>
               </div>
             ) : (
@@ -305,9 +264,9 @@ export default async function DashboardPage() {
             </Link>
           ))}
         </div>
-      </div>
+      ) : null}
 
-      {/* ============ CUSTOM WIDGETS (existing capability, V2 presentation) ============ */}
+      {/* ============ ADDITIONAL WIDGETS (dashboard_widgets — giữ nguyên chức năng) ============ */}
       <div>
         <SectionLabel tone="green" className="mb-2">Bảng theo dõi tuỳ chỉnh</SectionLabel>
         <DashboardWidgets />
