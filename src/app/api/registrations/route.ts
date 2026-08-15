@@ -193,11 +193,14 @@ export async function GET(req: Request) {
 
   // DYNAMIC RBAC V2 — bỏ proxy role === DEPT_MANAGER: scope do getUserScope quyết định
   // (role-independent; null = không giới hạn, [] = không thấy gì, list = đúng các bộ phận).
+  // Người dùng CÓ Data Scope (Quản lý bộ phận) chỉ thấy người tập nghề ĐANG LÀM VIỆC tại
+  // bộ phận mình quản lý: APPROVED (đã nhận việc) + INACTIVE (đã nghỉ việc, vẫn còn liên kết
+  // bộ phận) — KHÔNG hiện PENDING/REJECTED/WAITLIST như Admin/HR (chưa được xếp bộ phận nào).
   const scope = await getUserScope(session);
   if (scope) {
     if (scope.length === 0) return NextResponse.json({ rows: [] });
     filters.push(inArray(dailyApplications.deptId, scope));
-    filters.push(eq(dailyApplications.status, "APPROVED"));
+    filters.push(inArray(dailyApplications.status, ["APPROVED", "INACTIVE"]));
   } else if (deptParam && deptParam !== "ALL") {
     filters.push(eq(dailyApplications.deptId, deptParam));
   }

@@ -1,7 +1,7 @@
 import "server-only";
-import { and, desc, eq, inArray, sql } from "drizzle-orm";
+import { and, desc, eq, inArray, isNull, sql } from "drizzle-orm";
 import { db, pool } from "@/db";
-import { dailyApplications, planningPeriods, workforceMovements, workerProfiles } from "@/db/schema";
+import { dailyApplications, departments, planningPeriods, workforceMovements, workerProfiles } from "@/db/schema";
 import { exportColumns, getFieldDefinitions } from "@/lib/metadata";
 import { batchComputePlanningMetrics } from "@/lib/planning";
 import { getUserScope, type Session } from "@/lib/auth";
@@ -76,6 +76,61 @@ export async function getRecentApplicationsTable(limit = 10, deptScope: string[]
   return {
     headers: cols.map((c) => c.header),
     rows: rows.map((r) => cols.map((c) => RESOLVERS[c.def.fieldKey]?.(r) ?? "")),
+  };
+}
+
+/**
+ * Widget bảng cho người dùng CÓ Data Scope (vd Quản lý bộ phận) — chỉ hiển thị
+ * 5 cột tối giản: Họ và tên | SĐT | Giới tính | Bộ phận | Nhóm (không hiện CCCD,
+ * địa chỉ... như Recruiter/Admin). Bộ phận/nhóm lấy từ bảng departments (không phải
+ * dữ liệu do ứng viên tự khai trong đơn) và CHỈ gồm người thuộc bộ phận được phân quyền.
+ */
+export async function getScopedDepartmentTable(
+  limit = 10,
+  deptScope: string[] | null = null,
+): Promise<{ headers: string[]; rows: string[][] }> {
+  const headers = ["Họ và tên", "SĐT", "Giới tính", "Bộ phận", "Nhóm"];
+
+  if (!deptScope) {
+    // Không có scope → không giới hạn (giữ hành vi cũ của Admin/HR).
+    const rows = await db
+      .select({
+        fullName: dailyApplications.fullName,
+        phone: dailyApplications.phone,
+        gender: dailyApplications.gender,
+        deptName: departments.deptName,
+        groupName: departments.groupName,
+      })
+      .from(dailyApplications)
+      .leftJoin(departments, eq(dailyApplications.deptId, departments.id))
+      .where(isNull(dailyApplications.deletedAt))
+      .orderBy(desc(dailyApplications.createdAt))
+      .limit(limit);
+    return {
+      headers,
+      rows: rows.map((r) => [r.fullName, r.phone, r.gender ?? "", r.deptName ?? "", r.groupName ?? ""]),
+    };
+  }
+
+  if (deptScope.length === 0) return { headers, rows: [] };
+
+  const rows = await db
+    .select({
+      fullName: dailyApplications.fullName,
+      phone: dailyApplications.phone,
+      gender: dailyApplications.gender,
+      deptName: departments.deptName,
+      groupName: departments.groupName,
+    })
+    .from(dailyApplications)
+    .leftJoin(departments, eq(dailyApplications.deptId, departments.id))
+    .where(and(isNull(dailyApplications.deletedAt), inArray(dailyApplications.deptId, deptScope)))
+    .orderBy(desc(dailyApplications.createdAt))
+    .limit(limit);
+
+  return {
+    headers,
+    rows: rows.map((r) => [r.fullName, r.phone, r.gender ?? "", r.deptName ?? "", r.groupName ?? ""]),
   };
 }
 
