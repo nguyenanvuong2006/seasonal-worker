@@ -4,6 +4,7 @@ import { db, pool } from "@/db";
 import { scheduledJobs } from "@/db/schema";
 import { processNotificationQueue } from "@/lib/notifications";
 import { findStalledJobs, runNextStep } from "@/lib/import-jobs";
+import { cleanupTerminalStaging } from "@/lib/import-staging-cleanup";
 
 /**
  * SCHEDULER FOUNDATION (nền tảng, #15)
@@ -51,12 +52,21 @@ const HANDLERS: Record<string, () => Promise<Record<string, unknown>>> = {
     }
     return { stalledFound: stalled.length, resumed };
   },
+  CLEANUP_IMPORT_STAGING: async () => {
+    // IMPORT ENGINE v3 — STAGING RETENTION: staging là temporary workspace, không phải
+    // historical storage. Dọn staging_* của job DONE/CANCELLED đã terminal > 24h (xem
+    // src/lib/import-staging-cleanup.ts — idempotent, self-guarding, không đụng
+    // import_jobs/import_job_errors/audit_logs hay bảng nghiệp vụ). Chạy qua scheduler
+    // hiện có (Vercel Cron / cron ngoài gọi /api/cron/run) — không thêm dịch vụ mới.
+    return cleanupTerminalStaging(100);
+  },
 };
 
 export const DEFAULT_SCHEDULED_JOBS: { jobKey: string; label: string; schedule: string; handlerKey: string }[] = [
   { jobKey: "process_notifications", label: "Xử lý hàng đợi thông báo", schedule: "daily", handlerKey: "PROCESS_NOTIFICATION_QUEUE" },
   { jobKey: "expire_planning_periods", label: "Tự động hết hạn kế hoạch Planning", schedule: "daily", handlerKey: "EXPIRE_PLANNING_PERIODS" },
   { jobKey: "resume_stalled_import_jobs", label: "Watchdog: phục hồi Import Job bị treo", schedule: "daily", handlerKey: "RESUME_STALLED_IMPORT_JOBS" },
+  { jobKey: "cleanup_import_staging", label: "Dọn staging của Import Job đã hoàn tất/huỷ (>24h)", schedule: "daily", handlerKey: "CLEANUP_IMPORT_STAGING" },
 ];
 
 /** Chạy toàn bộ job đang Active — gọi từ /api/cron/run. */

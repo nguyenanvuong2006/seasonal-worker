@@ -60,7 +60,19 @@ type Job = {
   createdBy: string;
   lastError: string | null;
   createdAt: string;
+  updatedAt: string;
 };
+
+/**
+ * Job "treo": RUNNING/QUEUED nhưng KHÔNG có heartbeat (updated_at) trong 90 giây — khớp
+ * STALE_MS của watchdog phía server. Xử lý thật sự diễn ra qua chuỗi request server tự nối
+ * tiếp nhau; nếu 1 lượt nối chuỗi thất bại (deploy mới, cold start...), job đứng yên dù dữ
+ * liệu ĐÃ xử lý vẫn còn nguyên trong DB — chỉ cần Resume để chạy tiếp từ đúng chỗ dừng.
+ */
+const STALLED_AFTER_MS = 90_000;
+function isStalled(j: { status: string; updatedAt: string }, nowMs: number): boolean {
+  return (j.status === "RUNNING" || j.status === "QUEUED") && nowMs - new Date(j.updatedAt).getTime() > STALLED_AFTER_MS;
+}
 type JobStatusResp = { job: Job; stageLabel: string; rowsPerSec: number; etaSec: number | null; errorSample: { rowNumber: number; reason: string; originalData: Record<string, string> }[]; warningSample: { rowNumber: number; reason: string; originalData: Record<string, string> }[] };
 
 function responseError(status: number, body: string, action: string): string {
@@ -162,6 +174,17 @@ export default function ImportDataPage() {
     // eslint-disable-next-line react-hooks/set-state-in-effect
     void loadHistory();
   }, [loadHistory]);
+
+  // Nhịp thời gian để phát hiện job "treo" (mất heartbeat > 90s) ngay trên UI mà không cần
+  // reload trang; đồng thời làm mới Job Queue định kỳ khi panel đang mở.
+  const [nowMs, setNowMs] = useState(() => Date.now());
+  useEffect(() => {
+    const t = setInterval(() => {
+      setNowMs(Date.now());
+      if (historyOpen) void loadHistory();
+    }, 15_000);
+    return () => clearInterval(t);
+  }, [historyOpen, loadHistory]);
 
   // ---- Polling trạng thái Job (KHÔNG điều khiển xử lý — chỉ để hiển thị) ----
   useEffect(() => {
@@ -332,14 +355,16 @@ export default function ImportDataPage() {
                     {TYPES.find((t) => t.key === j.jobType)?.title} · {j.processedRows.toLocaleString("vi-VN")}/{j.totalRows.toLocaleString("vi-VN")} dòng · {new Date(j.createdAt).toLocaleString("vi-VN")}
                   </p>
                 </div>
-                <span className={`shrink-0 rounded-full px-3 py-1 text-[10px] font-black uppercase ${STATUS_BADGE[j.status]}`}>{STATUS_LABEL[j.status]}</span>
+                <span className={`shrink-0 rounded-full px-3 py-1 text-[10px] font-black uppercase ${isStalled(j, nowMs) ? "bg-amber-100 text-amber-700" : STATUS_BADGE[j.status]}`}>
+                  {isStalled(j, nowMs) ? "Chờ nối lại" : STATUS_LABEL[j.status]}
+                </span>
                 <div className="flex shrink-0 gap-1">
                   {(j.status === "RUNNING" || j.status === "QUEUED") && (
                     <button onClick={() => setActiveJobId(j.id)} className="rounded-full bg-primary-tint px-3 py-1.5 text-[11px] font-bold text-primary hover:bg-primary/15">
                       Theo dõi
                     </button>
                   )}
-                  {(j.status === "FAILED" || j.status === "PAUSED") && (
+                  {(j.status === "FAILED" || j.status === "PAUSED" || isStalled(j, nowMs)) && (
                     <button onClick={() => resumeJob(j.id)} className="flex items-center gap-1 rounded-full bg-primary px-3 py-1.5 text-[11px] font-bold text-white hover:bg-primary">
                       <RotateCcw className="h-3 w-3" /> {j.status === "FAILED" ? "Retry" : "Resume"}
                     </button>
@@ -355,6 +380,14 @@ export default function ImportDataPage() {
                     </a>
                   )}
                 </div>
+                {isStalled(j, nowMs) && (
+                  <p className="w-full rounded-xl bg-amber-50 px-3 py-2 text-xs leading-relaxed text-amber-800 ring-1 ring-amber-200">
+                    <TriangleAlert className="mr-1 inline h-3.5 w-3.5" />
+                    <b>Vì sao chưa hoàn thành?</b> Job xử lý qua chuỗi bước server tự nối tiếp; bước nối tiếp gần nhất bị gián đoạn (triển khai
+                    bản mới, khởi động lạnh...). <b>Dữ liệu đã xử lý vẫn an toàn trong hệ thống, không mất dòng nào</b> — bấm <b>Resume</b> để
+                    chạy tiếp từ đúng chỗ dừng (không nhập lại từ đầu).
+                  </p>
+                )}
               </div>
             ))}
           </CardContent>
@@ -505,9 +538,25 @@ export default function ImportDataPage() {
               </div>
 
               {job.status === "RUNNING" || job.status === "QUEUED" ? (
-                <Button variant="subtle" onClick={() => cancelJob(job.id)} className="w-full gap-2">
-                  <XCircle className="h-4 w-4" /> Huỷ Job
-                </Button>
+                <div className="space-y-2">
+                  {isStalled(job, nowMs) && (
+                    <div className="space-y-2 rounded-xl bg-amber-50 p-3 ring-1 ring-amber-200">
+                      <p className="text-xs leading-relaxed text-amber-800">
+                        <TriangleAlert className="mr-1 inline h-3.5 w-3.5" />
+                        <b>Vì sao chưa hoàn thành?</b> Job xử lý qua chuỗi bước server tự nối tiếp nhau; bước nối tiếp gần nhất bị gián đoạn
+                        (triển khai bản mới, khởi động lạnh...) nên trạng thái đứng yên dù phần dữ liệu đã xử lý{" "}
+                        <b>vẫn an toàn trong hệ thống, không mất dòng nào</b>. Bấm Resume để chạy tiếp từ đúng chỗ dừng — không nhập lại từ đầu,
+                        không tạo dữ liệu trùng.
+                      </p>
+                      <Button onClick={() => resumeJob(job.id)} className="w-full gap-2">
+                        <RotateCcw className="h-4 w-4" /> Resume (tiếp tục từ {STAGE_LABEL[job.currentStage] ?? job.currentStage})
+                      </Button>
+                    </div>
+                  )}
+                  <Button variant="subtle" onClick={() => cancelJob(job.id)} className="w-full gap-2">
+                    <XCircle className="h-4 w-4" /> Huỷ Job
+                  </Button>
+                </div>
               ) : job.status === "FAILED" ? (
                 <div className="space-y-2">
                   <p className="rounded-xl bg-red-50 p-3 text-xs text-red-700">{job.lastError}</p>

@@ -573,6 +573,13 @@ Mỗi request trong chuỗi chỉ tồn tại vài giây — Job không phụ th
 1. Chạy `schema.sql` (khối "Import Engine v3") trên Neon.
 2. Đặt biến môi trường `CRON_SECRET` trên Vercel (nếu chưa) — bảo vệ endpoint watchdog.
 3. **Xác nhận gói Vercel đang dùng có hỗ trợ Cron tần suất cao hay không** (Hobby chỉ 1 lần/ngày — watchdog vẫn chạy nhưng độ trễ phát hiện Job treo có thể tới 24h; nút Resume thủ công vẫn là đường phục hồi chính, không phụ thuộc Cron).
+   - **Khuyến nghị (gói Hobby): dùng cron ngoài miễn phí để watchdog chạy 5 phút/lần.** Tạo tài khoản tại [cron-job.org](https://cron-job.org) (miễn phí) → tạo Cronjob mới:
+     - URL: `https://<domain-production>/api/cron/run`
+     - Schedule: mỗi 5 phút (`*/5 * * * *`)
+     - Headers: thêm `Authorization: Bearer <CRON_SECRET>` (đúng giá trị biến môi trường `CRON_SECRET` trên Vercel — bắt buộc, endpoint fail-closed sẽ trả 401 nếu thiếu/sai)
+     - Bật "Save responses" để xem lịch sử chạy khi cần debug.
+   - Lưu ý từ bản vá job "treo ở 100%": (a) lô merge cuối giờ chốt `DONE` ngay trong cùng invocation — không còn phụ thuộc thêm 1 lượt chain; (b) UI hiện cảnh báo + nút Resume cho job RUNNING/QUEUED mất heartbeat > 90s; (c) endpoint danh sách Job (`GET /api/import/jobs`) tự kích hoạt lại job treo mỗi khi admin mở trang Import (watchdog "cơ hội", không chờ Cron).
+6. **Staging Retention & Cleanup** (`src/lib/import-staging-cleanup.ts`): staging_* là temporary workspace, KHÔNG phải historical storage. Scheduled job `cleanup_import_staging` (tự seed vào `scheduled_jobs`, chạy qua `/api/cron/run`) dọn staging của job **DONE/CANCELLED đã terminal > 24h** — idempotent, self-guarding (DELETE JOIN import_jobs kiểm tra lại status + hạn retention ngay lúc xoá), KHÔNG đụng `import_jobs`/`import_job_errors`/`audit_logs`/bảng nghiệp vụ. QUEUED/RUNNING/PAUSED/FAILED không bao giờ bị dọn (Retry/Resume cần staging + mergeCursor). **CANCELLED là terminal state** — route Retry từ chối job đã huỷ (muốn nhập lại phải tạo Job mới). Mỗi job được dọn ghi structured log `import_staging_cleaned` + audit `IMPORT_STAGING_CLEANED` (category IMPORT, username `system`, kèm số dòng đã xoá từng bảng). Dữ liệu staging legacy của các job DONE/CANCELLED cũ cũng được chính cơ chế này dọn ở lượt cron đầu tiên — không cần script riêng.
 4. Thử import 2 file thật (31.000 dòng DW Data, 15.700 dòng Daily Application) — đo thời gian thật, đối chiếu với mục tiêu ở 13.3.
 5. Thử đóng trình duyệt giữa chừng 1 lần import lớn — xác nhận Job tự chạy tiếp mà không cần thao tác gì.
 
