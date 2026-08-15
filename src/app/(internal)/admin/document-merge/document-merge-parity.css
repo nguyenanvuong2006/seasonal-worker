@@ -1,0 +1,86 @@
+.document-merge-parity {
+  --merge-green: #006838;
+  --merge-green-dark: #004d2c;
+  --merge-orange: #f37021;
+  --merge-cream: #fffdf9;
+  --merge-border: #e5eee8;
+  min-height: 100%;
+  background: var(--merge-cream);
+}
+
+.document-merge-parity .min-h-screen.bg-slate-50 {
+  background: var(--merge-cream) !important;
+}
+
+.document-merge-parity .bg-emerald-700 {
+  background-color: var(--merge-green) !important;
+}
+
+.document-merge-parity .hover\:bg-emerald-800:hover {
+  background-color: var(--merge-green-dark) !important;
+}
+
+.document-merge-parity .text-emerald-700,
+.document-merge-parity .text-emerald-800 {
+  color: var(--merge-green) !important;
+}
+
+.document-merge-parity .border-emerald-700 {
+  border-color: var(--merge-green) !important;
+}
+
+.document-merge-parity main > div > div:first-child,
+.document-merge-parity main section,
+.document-merge-parity main [class*="rounded-xl"][class*="bg-white"] {
+  border-color: var(--merge-border) !important;
+}
+
+.document-merge-parity main section,
+.document-merge-parity main [class*="rounded-xl"][class*="bg-white"],
+.document-merge-parity main [class*="rounded-2xl"][class*="bg-white"] {
+  box-shadow: 0 8px 26px rgba(0, 79, 44, 0.07) !important;
+}
+
+.document-merge-parity input:focus,
+.document-merge-parity select:focus,
+.document-merge-parity textarea:focus {
+  border-color: var(--merge-green) !important;
+  box-shadow: 0 0 0 3px rgba(0, 104, 56, 0.08) !important;
+}
+
+.document-merge-parity button[class*="bg-emerald-700"] {
+  font-weight: 800;
+}
+
+.document-merge-parity main button[class*="bg-emerald-700"]:last-child {
+  border-color: var(--merge-green);
+}
+
+.document-merge-parity table thead {
+  background: #f7faf8 !important;
+}
+
+.document-merge-parity table tbody tr:hover {
+  background: rgba(0, 104, 56, 0.035);
+}
+
+.document-merge-parity .sticky.bottom-3 {
+  border-color: #b9ddc9 !important;
+  box-shadow: 0 16px 38px rgba(0, 77, 44, 0.16) !important;
+}
+
+.document-merge-parity a[class*="bg-emerald-700"],
+.document-merge-parity .merge-orange-cta {
+  background: var(--merge-orange) !important;
+}
+
+@media (max-width: 768px) {
+  .document-merge-parity main {
+    padding-left: 12px !important;
+    padding-right: 12px !important;
+  }
+
+  .document-merge-parity .sticky.bottom-3 {
+    bottom: 8px;
+  }
+}
