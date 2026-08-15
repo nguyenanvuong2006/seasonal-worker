@@ -16,7 +16,7 @@ export {
   countPlaceholders,
   isValidPlaceholderName,
   PLACEHOLDER_PATTERN,
-} from './placeholder-extractor';
+} from './placeholder-extractor.ts';
 
 // Vietnamese number words
 export {
@@ -25,7 +25,7 @@ export {
   formatNumber,
   parseNumber,
   isValidNumber,
-} from './vietnamese-number-words';
+} from './vietnamese-number-words.ts';
 
 // Checkbox engine
 export {
@@ -37,7 +37,7 @@ export {
   generateCheckboxMappings,
   COMMON_CHECKBOX_PATTERNS,
   type CheckboxSymbols,
-} from './checkbox-engine';
+} from './checkbox-engine.ts';
 
 // Auto mapping
 export {
@@ -48,7 +48,7 @@ export {
   normalizeToFieldKey,
   type AutoMappingSuggestion,
   type SourceEntity,
-} from './auto-mapping';
+} from './auto-mapping.ts';
 
 // Formatters
 export {
@@ -60,7 +60,7 @@ export {
   callCustomFormatter,
   type FormatType,
   type FormatterConfig,
-} from './formatters';
+} from './formatters.ts';
 
 // Data resolver
 export {
@@ -76,7 +76,7 @@ export {
   type SourceType,
   type RecordData,
   type MergeContext,
-} from './data-resolver';
+} from './data-resolver.ts';
 
 // Field catalog
 export {
@@ -87,7 +87,7 @@ export {
   FIELD_CATALOG_GROUPS,
   type CatalogField,
   type FieldCategory,
-} from './field-catalog';
+} from './field-catalog.ts';
 
 // Google Docs service
 export {
@@ -99,4 +99,4 @@ export {
   PAGE_BREAK_TEXT,
   type GoogleDocsService,
   type PlaceholderReplacement,
-} from './google-docs-service';
+} from './google-docs-service.ts';

@@ -2,7 +2,9 @@
  * Document Merge Engine — Tests
  */
 
-import { describe, it, expect, beforeEach } from 'vitest';
+import test, { describe, it } from 'node:test';
+import assert from 'node:assert/strict';
+
 import {
   extractUniquePlaceholders,
   replacePlaceholder,
@@ -10,7 +12,7 @@ import {
   isValidPlaceholderName,
   hasUnreplacedPlaceholders,
   countPlaceholders,
-} from './placeholder-extractor';
+} from './placeholder-extractor.ts';
 
 import {
   numberToVietnameseWords,
@@ -18,7 +20,7 @@ import {
   formatNumber,
   parseNumber,
   isValidNumber,
-} from './vietnamese-number-words';
+} from './vietnamese-number-words.ts';
 
 import {
   createCheckbox,
@@ -26,40 +28,40 @@ import {
   parseCheckboxPlaceholder,
   extractCheckboxOptions,
   generateCheckboxMappings,
-} from './checkbox-engine';
+} from './checkbox-engine.ts';
 
 import {
   formatValue,
   formatValues,
   isValidFormatType,
   getAvailableFormatTypes,
-} from './formatters';
+} from './formatters.ts';
 
 import {
   normalizeToFieldKey,
   autoMapPlaceholder,
   autoMapAllPlaceholders,
-} from './auto-mapping';
+} from './auto-mapping.ts';
 
 describe('Placeholder Extraction', () => {
   it('should extract unique placeholders from content', () => {
     const content = 'Họ tên: <<Ho_ten>>, CCCD: <<So_CCCD>>, <<Ho_ten>> lặp lại';
     const placeholders = extractUniquePlaceholders(content);
     
-    expect(placeholders).toEqual(['Ho_ten', 'So_CCCD']);
-    expect(placeholders.length).toBe(2);
+    assert.deepStrictEqual(placeholders, ['Ho_ten', 'So_CCCD']);
+    assert.strictEqual(placeholders.length, 2);
   });
   
   it('should handle empty content', () => {
     const placeholders = extractUniquePlaceholders('');
-    expect(placeholders).toEqual([]);
+    assert.deepStrictEqual(placeholders, []);
   });
   
   it('should replace placeholder with value', () => {
     const content = 'Họ tên: <<Ho_ten>>, Ngày sinh: <<Ngay_sinh>>';
     const result = replacePlaceholder(content, 'Ho_ten', 'Nguyễn Văn A');
     
-    expect(result).toBe('Họ tên: Nguyễn Văn A, Ngày sinh: <<Ngay_sinh>>');
+    assert.strictEqual(result, 'Họ tên: Nguyễn Văn A, Ngày sinh: <<Ngay_sinh>>');
   });
   
   it('should replace multiple placeholders', () => {
@@ -70,120 +72,118 @@ describe('Placeholder Extraction', () => {
       CCCD: '012345678901',
     });
     
-    expect(result).toBe('Trần Thị B - 01/01/1990 - 012345678901');
+    assert.strictEqual(result, 'Trần Thị B - 01/01/1990 - 012345678901');
   });
   
   it('should validate placeholder names', () => {
-    expect(isValidPlaceholderName('Ho_ten')).toBe(true);
-    expect(isValidPlaceholderName('So_CCCD_12')).toBe(true);
-    expect(isValidPlaceholderName('Ngày_sinh')).toBe(true);
-    expect(isValidPlaceholderName('')).toBe(false);
-    expect(isValidPlaceholderName('Test<>')).toBe(false);
-    expect(isValidPlaceholderName('Test|')).toBe(false);
+    assert.strictEqual(isValidPlaceholderName('Ho_ten'), true);
+    assert.strictEqual(isValidPlaceholderName('So_CCCD_12'), true);
+    assert.strictEqual(isValidPlaceholderName('Ngày_sinh'), true);
+    assert.strictEqual(isValidPlaceholderName(''), false);
+    assert.strictEqual(isValidPlaceholderName('Test<>'), false);
+    assert.strictEqual(isValidPlaceholderName('Test|'), false);
   });
   
   it('should detect unreplaced placeholders', () => {
-    expect(hasUnreplacedPlaceholders('No placeholder here')).toBe(false);
-    expect(hasUnreplacedPlaceholders('<<Ho_ten>> is here')).toBe(true);
+    assert.strictEqual(hasUnreplacedPlaceholders('No placeholder here'), false);
+    assert.strictEqual(hasUnreplacedPlaceholders('<<Ho_ten>> is here'), true);
   });
   
   it('should count placeholders', () => {
-    expect(countPlaceholders('<<A>>')).toBe(1);
-    expect(countPlaceholders('No placeholders')).toBe(0);
+    assert.strictEqual(countPlaceholders('<<A>>'), 1);
+    assert.strictEqual(countPlaceholders('No placeholders'), 0);
   });
 });
 
 describe('Vietnamese Number Words', () => {
   it('should convert simple numbers to words', () => {
-    expect(numberToVietnameseWords(0)).toBe('không');
-    expect(numberToVietnameseWords(1)).toBe('một');
-    expect(numberToVietnameseWords(5)).toBe('năm');
-    expect(numberToVietnameseWords(10)).toBe('mười');
+    assert.strictEqual(numberToVietnameseWords(0), 'không');
+    assert.strictEqual(numberToVietnameseWords(1), 'một');
+    assert.strictEqual(numberToVietnameseWords(5), 'năm');
+    assert.strictEqual(numberToVietnameseWords(10), 'mười');
   });
   
   it('should convert two-digit numbers', () => {
-    expect(numberToVietnameseWords(15)).toContain('mười');
-    expect(numberToVietnameseWords(25)).toContain('hai mươi');
-    expect(numberToVietnameseWords(99)).toContain('chín mươi');
+    assert.ok(numberToVietnameseWords(15).includes('mười'));
+    assert.ok(numberToVietnameseWords(25).includes('hai mươi'));
+    assert.ok(numberToVietnameseWords(99).includes('chín mươi'));
   });
   
   it('should convert hundreds', () => {
-    expect(numberToVietnameseWords(100)).toBe('một trăm');
-    expect(numberToVietnameseWords(250)).toContain('hai trăm');
+    assert.strictEqual(numberToVietnameseWords(100), 'một trăm');
+    assert.ok(numberToVietnameseWords(250).includes('hai trăm'));
   });
   
   it('should convert thousands', () => {
-    expect(numberToVietnameseWords(1000)).toBe('một nghìn');
-    // Verify basic thousands conversion
-    expect(numberToVietnameseWords(2000)).toContain('nghìn');
+    assert.strictEqual(numberToVietnameseWords(1000), 'một nghìn');
+    assert.ok(numberToVietnameseWords(2000).includes('nghìn'));
   });
   
   it('should convert millions', () => {
-    expect(numberToVietnameseWords(1000000)).toBe('một triệu');
+    assert.strictEqual(numberToVietnameseWords(1000000), 'một triệu');
   });
   
   it('should convert large numbers', () => {
     const words = numberToVietnameseWords(8500000);
-    // 8500000 = 8 triệu, 500 nghìn
-    expect(words).toContain('triệu');
-    expect(words).toContain('nghìn');
+    assert.ok(words.includes('triệu'));
+    assert.ok(words.includes('nghìn'));
   });
   
   it('should handle negative numbers', () => {
-    expect(numberToVietnameseWords(-5)).toContain('âm');
+    assert.ok(numberToVietnameseWords(-5).includes('âm'));
   });
   
   it('should convert currency', () => {
     const currency = currencyToVietnameseWords(8500000);
-    expect(currency).toContain('đồng');
+    assert.ok(currency.includes('đồng'));
   });
   
   it('should format number with thousand separators', () => {
-    expect(formatNumber(1234567)).toBe('1.234.567');
-    expect(formatNumber(1000)).toBe('1.000');
+    assert.strictEqual(formatNumber(1234567), '1.234.567');
+    assert.strictEqual(formatNumber(1000), '1.000');
   });
   
   it('should parse numbers', () => {
-    expect(parseNumber('1.234.567')).toBe(1234567);
-    expect(parseNumber('1234567')).toBe(1234567);
-    expect(parseNumber('invalid')).toBeNull();
-    expect(parseNumber(null)).toBeNull();
-    expect(parseNumber(123)).toBe(123);
+    assert.strictEqual(parseNumber('1.234.567'), 1234567);
+    assert.strictEqual(parseNumber('1234567'), 1234567);
+    assert.strictEqual(parseNumber('invalid'), null);
+    assert.strictEqual(parseNumber(null), null);
+    assert.strictEqual(parseNumber(123), 123);
   });
   
   it('should validate numbers', () => {
-    expect(isValidNumber(123)).toBe(true);
-    expect(isValidNumber(0)).toBe(true);
-    expect(isValidNumber(NaN)).toBe(false);
-    expect(isValidNumber(Infinity)).toBe(false);
-    expect(isValidNumber('string')).toBe(false);
+    assert.strictEqual(isValidNumber(123), true);
+    assert.strictEqual(isValidNumber(0), true);
+    assert.strictEqual(isValidNumber(NaN), false);
+    assert.strictEqual(isValidNumber(Infinity), false);
+    assert.strictEqual(isValidNumber('string'), false);
   });
 });
 
 describe('Checkbox Engine', () => {
   it('should create checkbox with symbols', () => {
-    expect(createCheckbox(true)).toBe('☒');
-    expect(createCheckbox(false)).toBe('☐');
+    assert.strictEqual(createCheckbox(true), '☒');
+    assert.strictEqual(createCheckbox(false), '☐');
   });
   
   it('should create checkbox with custom symbols', () => {
     const symbols = { checked: '[X]', unchecked: '[ ]' };
-    expect(createCheckbox(true, symbols)).toBe('[X]');
-    expect(createCheckbox(false, symbols)).toBe('[ ]');
+    assert.strictEqual(createCheckbox(true, symbols), '[X]');
+    assert.strictEqual(createCheckbox(false, symbols), '[ ]');
   });
   
   it('should match checkbox values', () => {
-    expect(isCheckboxMatch('Có', 'Có')).toBe(true);
-    expect(isCheckboxMatch('Co', 'Có')).toBe(true);
-    expect(isCheckboxMatch('Không', 'Không')).toBe(true);
-    expect(isCheckboxMatch('Có', 'Không')).toBe(false);
-    expect(isCheckboxMatch(null, 'Có')).toBe(false);
-    expect(isCheckboxMatch(undefined, 'Có')).toBe(false);
+    assert.strictEqual(isCheckboxMatch('Có', 'Có'), true);
+    assert.strictEqual(isCheckboxMatch('Co', 'Có'), true);
+    assert.strictEqual(isCheckboxMatch('Không', 'Không'), true);
+    assert.strictEqual(isCheckboxMatch('Có', 'Không'), false);
+    assert.strictEqual(isCheckboxMatch(null, 'Có'), false);
+    assert.strictEqual(isCheckboxMatch(undefined, 'Có'), false);
   });
   
   it('should parse checkbox placeholders', () => {
     const result = parseCheckboxPlaceholder('Tien_an_tien_su_Co');
-    expect(result).toEqual({
+    assert.deepStrictEqual(result, {
       fieldName: 'Tien_an_tien_su',
       optionValue: 'Co',
     });
@@ -197,9 +197,9 @@ describe('Checkbox Engine', () => {
     ];
     const options = extractCheckboxOptions(placeholders);
     
-    expect(options.has('Gioi_tinh')).toBe(true);
-    expect(options.get('Gioi_tinh')).toEqual(['Nam', 'Nu']);
-    expect(options.has('Ho_ten')).toBe(false);
+    assert.strictEqual(options.has('Gioi_tinh'), true);
+    assert.deepStrictEqual(options.get('Gioi_tinh'), ['Nam', 'Nu']);
+    assert.strictEqual(options.has('Ho_ten'), false);
   });
   
   it('should generate checkbox mappings', () => {
@@ -209,68 +209,68 @@ describe('Checkbox Engine', () => {
       ['Nam', 'Nữ']
     );
     
-    expect(mappings['Gioi_tinh_Nam']).toBe('☒');
-    expect(mappings['Gioi_tinh_Nữ']).toBe('☐');
+    assert.strictEqual(mappings['Gioi_tinh_Nam'], '☒');
+    assert.strictEqual(mappings['Gioi_tinh_Nữ'], '☐');
   });
 });
 
 describe('Formatters', () => {
   it('should format raw value', () => {
-    expect(formatValue('test', 'RAW')).toBe('test');
-    expect(formatValue(123, 'RAW')).toBe('123');
-    expect(formatValue(null, 'RAW')).toBe('');
+    assert.strictEqual(formatValue('test', 'RAW'), 'test');
+    assert.strictEqual(formatValue(123, 'RAW'), '123');
+    assert.strictEqual(formatValue(null, 'RAW'), '');
   });
   
   it('should format uppercase', () => {
-    expect(formatValue('nguyen van a', 'UPPERCASE')).toBe('NGUYEN VAN A');
+    assert.strictEqual(formatValue('nguyen van a', 'UPPERCASE'), 'NGUYEN VAN A');
   });
   
   it('should format lowercase', () => {
-    expect(formatValue('NGUYEN VAN A', 'LOWERCASE')).toBe('nguyen van a');
+    assert.strictEqual(formatValue('NGUYEN VAN A', 'LOWERCASE'), 'nguyen van a');
   });
   
   it('should format title case', () => {
-    expect(formatValue('nguyen van a', 'TITLE_CASE')).toBe('Nguyen Van A');
+    assert.strictEqual(formatValue('nguyen van a', 'TITLE_CASE'), 'Nguyen Van A');
   });
   
   it('should format number', () => {
-    expect(formatValue('1234567', 'NUMBER')).toBe('1.234.567');
-    expect(formatValue(1234567, 'NUMBER')).toBe('1.234.567');
+    assert.strictEqual(formatValue('1234567', 'NUMBER'), '1.234.567');
+    assert.strictEqual(formatValue(1234567, 'NUMBER'), '1.234.567');
   });
   
   it('should format currency', () => {
-    expect(formatValue('8500000', 'CURRENCY_VND')).toBe('8.500.000 đồng');
+    assert.strictEqual(formatValue('8500000', 'CURRENCY_VND'), '8.500.000 đồng');
   });
   
   it('should format Vietnamese words', () => {
     const result = formatValue('8500000', 'VIETNAMESE_NUMBER_WORDS');
-    expect(result).toContain('triệu');
-    expect(result).toContain('đồng');
+    assert.ok(result.includes('triệu'));
+    assert.ok(result.includes('đồng'));
   });
   
   it('should format boolean as checkbox', () => {
-    expect(formatValue('true', 'BOOLEAN_CHECKBOX')).toBe('☒');
-    expect(formatValue('false', 'BOOLEAN_CHECKBOX')).toBe('☐');
-    expect(formatValue('1', 'BOOLEAN_CHECKBOX')).toBe('☒');
-    expect(formatValue('co', 'BOOLEAN_CHECKBOX')).toBe('☒');
+    assert.strictEqual(formatValue('true', 'BOOLEAN_CHECKBOX'), '☒');
+    assert.strictEqual(formatValue('false', 'BOOLEAN_CHECKBOX'), '☐');
+    assert.strictEqual(formatValue('1', 'BOOLEAN_CHECKBOX'), '☒');
+    assert.strictEqual(formatValue('co', 'BOOLEAN_CHECKBOX'), '☒');
   });
   
   it('should use fallback for null values', () => {
-    expect(formatValue(null, 'RAW', 'N/A')).toBe('N/A');
-    expect(formatValue(null, 'UPPERCASE', 'NULL')).toBe('NULL');
+    assert.strictEqual(formatValue(null, 'RAW', 'N/A'), 'N/A');
+    assert.strictEqual(formatValue(null, 'UPPERCASE', 'NULL'), 'NULL');
   });
   
   it('should validate format types', () => {
-    expect(isValidFormatType('DATE_DDMMYYYY')).toBe(true);
-    expect(isValidFormatType('UPPERCASE')).toBe(true);
-    expect(isValidFormatType('INVALID')).toBe(false);
+    assert.strictEqual(isValidFormatType('DATE_DDMMYYYY'), true);
+    assert.strictEqual(isValidFormatType('UPPERCASE'), true);
+    assert.strictEqual(isValidFormatType('INVALID'), false);
   });
   
   it('should return available format types', () => {
     const types = getAvailableFormatTypes();
-    expect(types.length).toBeGreaterThan(0);
-    expect(types.find(t => t.value === 'RAW')).toBeDefined();
-    expect(types.find(t => t.value === 'DATE_DDMMYYYY')).toBeDefined();
+    assert.ok(types.length > 0);
+    assert.ok(types.find(t => t.value === 'RAW') !== undefined);
+    assert.ok(types.find(t => t.value === 'DATE_DDMMYYYY') !== undefined);
   });
   
   it('should format multiple values', () => {
@@ -284,17 +284,17 @@ describe('Formatters', () => {
     };
     
     const result = formatValues(values, mappings);
-    expect(result.name).toBe('Nguyen Van A');
-    expect(result.age).toBe('25');
+    assert.strictEqual(result.name, 'Nguyen Van A');
+    assert.strictEqual(result.age, '25');
   });
 });
 
 describe('Auto Mapping', () => {
   it('should normalize placeholder to field key', () => {
-    expect(normalizeToFieldKey('Ho_ten')).toBe('ho_ten');
-    expect(normalizeToFieldKey('HO_TEN')).toBe('ho_ten');
-    expect(normalizeToFieldKey('Họ Tên')).toBe('họ_tên');
-    expect(normalizeToFieldKey('Ho  Ten')).toBe('ho_ten');
+    assert.strictEqual(normalizeToFieldKey('Ho_ten'), 'ho_ten');
+    assert.strictEqual(normalizeToFieldKey('HO_TEN'), 'ho_ten');
+    assert.strictEqual(normalizeToFieldKey('Họ Tên'), 'họ_tên');
+    assert.strictEqual(normalizeToFieldKey('Ho  Ten'), 'ho_ten');
   });
   
   it('should auto-map exact field key match', () => {
@@ -310,9 +310,9 @@ describe('Auto Mapping', () => {
     ] as any[];
     
     const suggestion = autoMapPlaceholder('ho_ten', fieldDefinitions);
-    expect(suggestion).toBeDefined();
-    expect(suggestion?.confidence).toBe(1);
-    expect(suggestion?.matchType).toBe('exact');
+    assert.ok(suggestion !== null && suggestion !== undefined);
+    assert.strictEqual(suggestion?.confidence, 1);
+    assert.strictEqual(suggestion?.matchType, 'exact');
   });
   
   it('should auto-map alias match', () => {
@@ -328,8 +328,8 @@ describe('Auto Mapping', () => {
     ] as any[];
     
     const suggestion = autoMapPlaceholder('HoTen', fieldDefinitions);
-    expect(suggestion).toBeDefined();
-    expect(suggestion?.matchType).toBe('alias');
+    assert.ok(suggestion !== null && suggestion !== undefined);
+    assert.strictEqual(suggestion?.matchType, 'alias');
   });
   
   it('should auto-map all placeholders', () => {
@@ -357,15 +357,14 @@ describe('Auto Mapping', () => {
     const placeholders = ['ho_ten', 'so_cccd', 'unknown_field'];
     const suggestions = autoMapAllPlaceholders(placeholders, fieldDefinitions, formQuestions);
     
-    expect(suggestions.length).toBe(2); // 2 matched, 1 not matched
-    expect(suggestions.find(s => s.placeholder === 'ho_ten')).toBeDefined();
-    expect(suggestions.find(s => s.placeholder === 'so_cccd')).toBeDefined();
+    assert.strictEqual(suggestions.length, 2);
+    assert.ok(suggestions.find(s => s.placeholder === 'ho_ten') !== undefined);
+    assert.ok(suggestions.find(s => s.placeholder === 'so_cccd') !== undefined);
   });
 });
 
 describe('Integration Tests', () => {
   it('should handle complete merge workflow', () => {
-    // Extract placeholders
     const content = `
       HỌ TÊN: <<Ho_ten>>
       NGÀY SINH: <<Ngay_sinh>>
@@ -376,16 +375,14 @@ describe('Integration Tests', () => {
     `;
     
     const placeholders = extractUniquePlaceholders(content);
-    expect(placeholders.length).toBe(6);
+    assert.strictEqual(placeholders.length, 6);
     
-    // Generate replacements
     const replacements: Record<string, string> = {};
     
     for (const placeholder of placeholders) {
       if (placeholder.startsWith('Gioi_tinh_')) {
         replacements[placeholder] = createCheckbox(placeholder === 'Gioi_tinh_Nam');
       } else {
-        // Simulate data lookup
         const sampleData: Record<string, string> = {
           Ho_ten: 'Nguyễn Văn A',
           Ngay_sinh: '01/01/1990',
@@ -396,13 +393,12 @@ describe('Integration Tests', () => {
       }
     }
     
-    // Replace
     const result = replaceMultiplePlaceholders(content, replacements);
     
-    expect(result).toContain('Nguyễn Văn A');
-    expect(result).toContain('☒ Nam'); // Nam checked
-    expect(result).toContain('☐ Nữ'); // Nữ unchecked
-    expect(result).not.toContain('<<');
+    assert.ok(result.includes('Nguyễn Văn A'));
+    assert.ok(result.includes('☒ Nam'));
+    assert.ok(result.includes('☐ Nữ'));
+    assert.ok(!result.includes('<<'));
   });
   
   it('should format values according to mapping', () => {
@@ -422,10 +418,9 @@ describe('Integration Tests', () => {
     
     const formatted = formatValues(rawData, mappings);
     
-    expect(formatted.fullName).toBe('Nguyen Van A');
-    expect(formatted.birthDate).toBe('01/01/1990');
-    // Salary format may vary, check for non-empty and currency
-    expect(formatted.salary.length).toBeGreaterThan(0);
-    expect(formatted.isActive).toBe('☒');
+    assert.strictEqual(formatted.fullName, 'Nguyen Van A');
+    assert.strictEqual(formatted.birthDate, '01/01/1990');
+    assert.ok(formatted.salary.length > 0);
+    assert.strictEqual(formatted.isActive, '☒');
   });
 });

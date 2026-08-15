@@ -25,6 +25,7 @@ import {
   ScrollText,
   UploadCloud,
   Trash2,
+  FileText,
   Menu,
   X,
   ChevronsLeft,
@@ -80,6 +81,7 @@ const NAV_GROUPS: NavGroup[] = [
   {
     group: "Quản trị",
     items: [
+      { href: "/admin/document-merge", label: "Document Merge Center", icon: FileText, roles: ["ADMIN", "HR_RECRUITER"], permission: "document_merge.view" },
       { href: "/admin/users", label: "Quản lý thành viên", icon: Users, roles: ["ADMIN"], permission: "users.manage" },
       { href: "/admin/permissions", label: "Phân quyền chi tiết", icon: ShieldCheck, roles: ["ADMIN"], permission: "rbac.manage" },
       { href: "/admin/data-scopes", label: "Data Scope", icon: MapIcon, roles: ["ADMIN"], permission: "data_scope.manage" },

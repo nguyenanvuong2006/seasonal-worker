@@ -13,8 +13,8 @@
  */
 
 import type { MergeTemplateField } from '@/db/schema';
-import { formatValue, type FormatType } from './formatters';
-import { isCheckboxMatch, parseCheckboxPlaceholder } from './checkbox-engine';
+import { formatValue, type FormatType } from './formatters.ts';
+import { isCheckboxMatch, parseCheckboxPlaceholder } from './checkbox-engine.ts';
 
 /** Source types */
 export type SourceType =

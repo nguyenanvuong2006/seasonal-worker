@@ -5,7 +5,7 @@
  * Extensible architecture cho phép thêm formatter mới dễ dàng.
  */
 
-import { currencyToVietnameseWords, formatNumber, parseNumber } from './vietnamese-number-words';
+import { currencyToVietnameseWords, formatNumber, parseNumber } from './vietnamese-number-words.ts';
 
 /** Các loại format được hỗ trợ */
 export type FormatType =
