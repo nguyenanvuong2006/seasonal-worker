@@ -30,6 +30,66 @@ import {
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
+type Diagnostic = {
+  code: string;
+  error: string;
+  action: string;
+  details?: string;
+};
+
+function diagnosePreviewError(error: unknown): Diagnostic {
+  const message = error instanceof Error ? error.message : String(error ?? "Unknown preview error");
+  const lower = message.toLowerCase();
+
+  if (
+    lower.includes("chưa kết nối google docs") ||
+    lower.includes("missing google oauth credentials") ||
+    lower.includes("google_service_account") ||
+    lower.includes("google_refresh_token")
+  ) {
+    return {
+      code: "GOOGLE_AUTH_MISSING",
+      error: "Document Merge chưa được kết nối với Google Docs/Drive.",
+      action: "Cấu hình Service Account hoặc OAuth Refresh Token trong Vercel rồi deploy lại.",
+      details: message,
+    };
+  }
+
+  if (lower.includes("403") || lower.includes("forbidden") || lower.includes("permission")) {
+    return {
+      code: "GOOGLE_TEMPLATE_FORBIDDEN",
+      error: "Hệ thống không có quyền đọc Google Docs template này.",
+      action: "Share template cho Service Account/OAuth account đang dùng bởi Seasonal Worker và thử Preview lại.",
+      details: message,
+    };
+  }
+
+  if (lower.includes("404") || lower.includes("not found")) {
+    return {
+      code: "GOOGLE_TEMPLATE_NOT_FOUND",
+      error: "Không tìm thấy Google Docs template hoặc Google Doc ID không còn hợp lệ.",
+      action: "Kiểm tra Google Doc ID/URL trong Template Configuration, sau đó Scan Placeholders lại.",
+      details: message,
+    };
+  }
+
+  if (lower.includes("google api") || lower.includes("không đọc được google docs")) {
+    return {
+      code: "GOOGLE_API_ERROR",
+      error: "Google Docs API trả về lỗi khi đọc template.",
+      action: "Kiểm tra credential, quyền chia sẻ template và trạng thái Google Docs/Drive API.",
+      details: message,
+    };
+  }
+
+  return {
+    code: "PREVIEW_FAILED",
+    error: "Không thể xem trước tài liệu merge.",
+    action: "Mở chi tiết kỹ thuật bên dưới hoặc kiểm tra Mapping Inspector của template trước khi thử lại.",
+    details: message,
+  };
+}
+
 export async function POST(request: Request) {
   const guard = await requirePermission(["ADMIN", "HR_RECRUITER"], "document_merge.execute");
   if (!guard.ok) {
@@ -43,7 +103,14 @@ export async function POST(request: Request) {
     const autoRoute = body.autoRoute !== false;
 
     if (!applicationId) {
-      return NextResponse.json({ error: "Thiếu applicationId để xem trước." }, { status: 400 });
+      return NextResponse.json(
+        {
+          code: "APPLICATION_REQUIRED",
+          error: "Thiếu applicationId để xem trước.",
+          action: "Chọn một ứng viên trong danh sách đã xếp việc rồi bấm Preview.",
+        },
+        { status: 400 },
+      );
     }
 
     const [row] = await db
@@ -71,7 +138,14 @@ export async function POST(request: Request) {
       .limit(1);
 
     if (!row) {
-      return NextResponse.json({ error: "Không tìm thấy hồ sơ ứng viên." }, { status: 404 });
+      return NextResponse.json(
+        {
+          code: "APPLICATION_NOT_FOUND",
+          error: "Không tìm thấy hồ sơ ứng viên.",
+          action: "Tải lại danh sách và chọn lại ứng viên.",
+        },
+        { status: 404 },
+      );
     }
 
     const kind = resolveDocumentKind({
@@ -111,7 +185,9 @@ export async function POST(request: Request) {
     if (!template) {
       return NextResponse.json(
         {
-          error: `Chưa có mẫu ${documentKindLabel(kind)} đang hoạt động. Hãy tạo Tài liệu ${kind} tại tab Templates.`,
+          code: "TEMPLATE_NOT_CONFIGURED",
+          error: `Chưa có mẫu ${documentKindLabel(kind)} đang hoạt động.`,
+          action: `Vào Template Configuration, tạo/kích hoạt Tài liệu ${kind} rồi Scan Placeholders trước khi Preview.`,
           documentKind: kind,
           dwClassification: classification,
         },
@@ -123,6 +199,19 @@ export async function POST(request: Request) {
       .select()
       .from(mergeTemplateFields)
       .where(and(eq(mergeTemplateFields.templateId, template.id), eq(mergeTemplateFields.isOrphaned, false)));
+
+    if (fields.length === 0) {
+      return NextResponse.json(
+        {
+          code: "MAPPING_MISSING",
+          error: `Template “${template.name}” chưa có placeholder mapping đang hoạt động.`,
+          action: "Mở Mapping Inspector, bấm Quét lại Google Docs và kiểm tra mapping trước khi Preview.",
+          templateId: template.id,
+          templateName: template.name,
+        },
+        { status: 422 },
+      );
+    }
 
     const recordData = buildApplicantMergeRecord({
       application: {
@@ -189,6 +278,12 @@ export async function POST(request: Request) {
       templateId: template.id,
       templateName: template.name,
       templateKind: template.documentKind,
+      mappingSummary: {
+        total: fields.length,
+        mapped: fields.filter((field) => Boolean(field.sourceField || field.sourcePath || field.fallbackValue)).length,
+        required: fields.filter((field) => field.isRequired).length,
+        suggested: fields.filter((field) => field.isSuggested).length,
+      },
       content: preview.content,
       fieldValues,
       unreplaced: preview.unreplaced,
@@ -197,6 +292,7 @@ export async function POST(request: Request) {
     });
   } catch (error) {
     console.error("[document-merge/preview] POST error:", error);
-    return NextResponse.json({ error: "Không thể xem trước tài liệu merge." }, { status: 500 });
+    const diagnostic = diagnosePreviewError(error);
+    return NextResponse.json(diagnostic, { status: 500 });
   }
 }
