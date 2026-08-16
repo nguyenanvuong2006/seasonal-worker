@@ -855,6 +855,88 @@ export type PlanningTarget = typeof planningTargets.$inferSelect;
 export type PlanningAllocation = typeof planningAllocations.$inferSelect;
 
 /* ============================================================
+   WORKFORCE RECRUITMENT REQUEST PLANNING (Phase 3)
+   ---------------------------------------------------------------
+   Mở rộng module Planning (Nhu cầu) thành Workforce Recruitment
+   Request Planning, tích hợp với planning_periods, planning_targets,
+   planning_allocations, Daily Application, Employment Session và
+   Workforce Movement.
+   Bảng này lưu chi tiết từng yêu cầu tuyển dụng (import từ Excel/
+   Google Sheets) với header alias mapping linh hoạt, preview và
+   validation trước import.
+   ============================================================ */
+export const recruitmentRequests = pgTable(
+  "recruitment_requests",
+  {
+    id: uuid("id").defaultRandom().primaryKey(),
+    planningPeriodId: uuid("planning_period_id").references(() => planningPeriods.id, { onDelete: "set null" }),
+    requestCode: varchar("request_code", { length: 80 }).notNull(),
+    requester: varchar("requester", { length: 160 }).notNull().default(""),
+    position: varchar("position", { length: 160 }),
+    jobTitle: varchar("job_title", { length: 255 }),
+    location: varchar("location", { length: 120 }),
+    section: varchar("section", { length: 120 }),
+    groupName: varchar("group_name", { length: 120 }),
+    division: varchar("division", { length: 120 }),
+    department: varchar("department", { length: 255 }),
+    reason: text("reason"),
+    noteForReason: text("note_for_reason"),
+    specialRequirements: text("special_requirements"),
+    maleRq: integer("male_rq").notNull().default(0),
+    femaleRq: integer("female_rq").notNull().default(0),
+    maleApplication: integer("male_application").notNull().default(0),
+    femaleApplication: integer("female_application").notNull().default(0),
+    maleInterviewed: integer("male_interviewed").notNull().default(0),
+    femaleInterviewed: integer("female_interviewed").notNull().default(0),
+    maleRecruited: integer("male_recruited").notNull().default(0),
+    femaleRecruited: integer("female_recruited").notNull().default(0),
+    maleQuit: integer("male_quit").notNull().default(0),
+    femaleQuit: integer("female_quit").notNull().default(0),
+    maleBalance: integer("male_balance").notNull().default(0),
+    femaleBalance: integer("female_balance").notNull().default(0),
+    totalBalance: integer("total_balance").notNull().default(0),
+    status: varchar("status", { length: 24 }).notNull().default("PENDING"),
+    requestedDate: date("requested_date"),
+    expectedDate: date("expected_date"),
+    offeredDate: date("offered_date"),
+    completedDate: date("completed_date"),
+    month: varchar("month", { length: 10 }),
+    cost: integer("cost").notNull().default(0),
+    remarks: text("remarks"),
+    to: varchar("to", { length: 160 }),
+    rqStatus: varchar("rq_status", { length: 40 }),
+    monthRc: varchar("month_rc", { length: 10 }),
+    totalRequest: integer("total_request").notNull().default(0),
+    recruitedVsExpected: integer("recruited_vs_expected").notNull().default(0),
+    screened: integer("screened").notNull().default(0),
+    interview: integer("interview").notNull().default(0),
+    recruit: integer("recruit").notNull().default(0),
+    departmentText: varchar("department_text", { length: 255 }),
+    monthReport: varchar("month_report", { length: 10 }),
+    createdBy: varchar("created_by", { length: 64 }).notNull(),
+    deletedAt: timestamp("deleted_at", { withTimezone: true }),
+    deletedBy: varchar("deleted_by", { length: 64 }),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+    updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [
+    uniqueIndex("recruitment_requests_code_uq").on(t.requestCode).where(sql`deleted_at is null`),
+    index("recruitment_requests_period_idx").on(t.planningPeriodId),
+    index("recruitment_requests_status_idx").on(t.status),
+    index("recruitment_requests_month_idx").on(t.month),
+    index("recruitment_requests_location_idx").on(t.location),
+    index("recruitment_requests_division_idx").on(t.division),
+    index("recruitment_requests_dept_idx").on(t.department),
+    index("recruitment_requests_section_idx").on(t.section),
+    index("recruitment_requests_group_idx").on(t.groupName),
+    index("recruitment_requests_requester_idx").on(t.requester),
+  ],
+);
+
+export type RecruitmentRequest = typeof recruitmentRequests.$inferSelect;
+export type NewRecruitmentRequest = typeof recruitmentRequests.$inferInsert;
+
+/* ============================================================
    DOCUMENT MERGE ENGINE
    Generic Document Merge Center - cho phép Admin tạo Google Docs template,
    quản lý placeholders, map với dữ liệu hệ thống và merge hồ sơ thành Google Docs.
