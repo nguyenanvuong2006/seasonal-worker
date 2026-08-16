@@ -6,7 +6,7 @@ import { importJobs } from "@/db/schema";
 import { requireRoleAndPermission, writeAudit } from "@/lib/auth";
 import { createJob, stageRows, triggerWorker } from "@/lib/import-jobs";
 import { parseImportFile } from "@/lib/file-parser";
-import { getFieldDefinitions, normalizeHeader, type Group } from "@/lib/metadata";
+import { getFieldDefinitions, normalizeHeader } from "@/lib/metadata";
 import { getAcceptedColumnNames } from "@/lib/import-engine";
 
 export const runtime = "nodejs";
@@ -28,7 +28,8 @@ export async function POST(req: Request) {
 
   const form = await req.formData();
   const file = form.get("file") as File | null;
-  const jobType = form.get("jobType") as Group | null;
+  // Import Engine chỉ nhận 3 loại bảng chính (recruitment_request có luồng import riêng).
+  const jobType = form.get("jobType") as "department" | "dw_data" | "daily_application" | null;
   const mappingRaw = form.get("mapping") as string | null;
   const mapping = mappingRaw ? (JSON.parse(mappingRaw) as Record<string, string>) : null;
 

@@ -64,6 +64,7 @@ const NAV_GROUPS: NavGroup[] = [
     items: [
       { href: "/admin/worker-profiles", label: "Hồ sơ Tập nghề", icon: IdCard, roles: ["ADMIN", "HR_RECRUITER"], permission: "worker_profile.view" },
       { href: "/admin/workforce-movements", label: "Nghỉ việc / Thuyên chuyển", icon: ArrowLeftRight, roles: ["ADMIN", "HR_RECRUITER", "DEPT_MANAGER"], permission: "workforce_movements.view" },
+      { href: "/admin/employment-reconciliation", label: "Đối soát Employment", icon: ShieldCheck, roles: ["ADMIN"], permission: "employment.reconcile" },
     ],
   },
   {

@@ -10,6 +10,7 @@ const LABEL: Record<Group, string> = {
   department: "Department",
   dw_data: "DW-Data",
   daily_application: "Daily-Application",
+  recruitment_request: "Recruitment-Request",
 };
 
 /** Sinh file CSV mẫu từ cùng metadata đang dựng bảng dán trực tiếp. */

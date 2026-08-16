@@ -1,9 +1,9 @@
 import { NextResponse } from "next/server";
 import { and, desc, eq, gte, ilike, inArray, isNull, lte, or, sql } from "drizzle-orm";
 import { db } from "@/db";
-import { dailyApplications, departments, planningPeriods, planningTargets, workerProfiles, workforceMovements } from "@/db/schema";
+import { dailyApplications, departments, employmentSessions, planningPeriods, planningTargets, startDateCorrections, workerProfiles, workforceMovements } from "@/db/schema";
 import { getUserScope, hasPermission, requirePermission } from "@/lib/auth";
-import { todayStr } from "@/lib/helpers";
+import { maskCccd, todayStr } from "@/lib/helpers";
 import { normalizePersonName } from "@/lib/person-name";
 import { movementScopeVisibility } from "@/lib/data-scope";
 
@@ -176,11 +176,99 @@ export async function GET(req: Request) {
     hiddenSections.push("expiringPlans");
   }
 
+  // 5) EMPLOYMENT LIFECYCLE (#16) — Xác nhận nghỉ bộ phận cũ trước khi xếp việc mới
+  //    (PREVIOUS_EMPLOYMENT_RESIGNATION_CONFIRMATION_REQUIRED). Không có bảng tasks riêng:
+  //    task = workforce_movements(resignation, PENDING_HR, source='RECRUITER_REQUEST').
+  //    CCCD mask theo permission privacy.view_cccd; deep link về hồ sơ worker.
+  let resignationConfirmations: { id: string; workerName: string | null; workerCccd: string | null; deptName: string | null; effectiveDate: string; requestedBy: string; createdAt: string }[] = [];
+  let resignationConfirmationsTotal = 0;
+  const canSeeEmployment = await hasPermission(role, "employment.view");
+  const canSeeFullCccd = await hasPermission(role, "privacy.view_cccd");
+  if (canSeeEmployment && canSeeMovements) {
+    const filters = [
+      eq(workforceMovements.movementType, "resignation"),
+      eq(workforceMovements.status, "PENDING_HR"),
+      eq(workforceMovements.source, "RECRUITER_REQUEST"),
+    ];
+    if (scope) filters.push(inArray(workforceMovements.fromDeptId, scope.length ? scope : ["__none__"]));
+    if (q) filters.push(or(ilike(workerProfiles.fullName, `%${q}%`), ilike(workerProfiles.cccd, `%${q}%`))!);
+    const where = and(...filters);
+
+    resignationConfirmations = await db
+      .select({
+        id: workforceMovements.id,
+        workerName: workerProfiles.fullName,
+        workerCccd: workerProfiles.cccd,
+        deptName: departments.deptName,
+        effectiveDate: workforceMovements.effectiveDate,
+        requestedBy: workforceMovements.requestedBy,
+        createdAt: workforceMovements.createdAt,
+      })
+      .from(workforceMovements)
+      .leftJoin(workerProfiles, eq(workforceMovements.workerId, workerProfiles.id))
+      .leftJoin(departments, eq(workforceMovements.fromDeptId, departments.id))
+      .where(where)
+      .orderBy(desc(workforceMovements.createdAt))
+      .limit(SECTION_LIMIT)
+      .then((rows) => rows.map((r) => ({
+        ...r,
+        workerName: normalizePersonName(r.workerName ?? "") || null,
+        workerCccd: canSeeFullCccd ? r.workerCccd : maskCccd(r.workerCccd),
+        createdAt: r.createdAt.toISOString(),
+      })));
+    const [cnt] = await db.select({ c: sql<number>`count(*)::int` }).from(workforceMovements).leftJoin(workerProfiles, eq(workforceMovements.workerId, workerProfiles.id)).where(where);
+    resignationConfirmationsTotal = cnt?.c ?? resignationConfirmations.length;
+  } else {
+    hiddenSections.push("resignationConfirmations");
+  }
+
+  // 6) EMPLOYMENT LIFECYCLE (#16) — START_DATE_CORRECTION_REQUEST chờ Admin duyệt.
+  let startDateRequests: { id: string; workerName: string | null; workerCccd: string | null; deptName: string | null; currentStartDate: string | null; requestedStartDate: string; reason: string; requestedBy: string; requestedAt: string }[] = [];
+  let startDateRequestsTotal = 0;
+  const canApproveCorrections = await hasPermission(role, "employment.start_date_correction.approve");
+  if (canApproveCorrections) {
+    const filters = [eq(startDateCorrections.status, "PENDING_ADMIN_APPROVAL")];
+    if (q) filters.push(or(ilike(workerProfiles.fullName, `%${q}%`), ilike(workerProfiles.cccd, `%${q}%`))!);
+    const where = and(...filters);
+
+    startDateRequests = await db
+      .select({
+        id: startDateCorrections.id,
+        workerName: workerProfiles.fullName,
+        workerCccd: workerProfiles.cccd,
+        deptName: departments.deptName,
+        currentStartDate: startDateCorrections.currentStartDate,
+        requestedStartDate: startDateCorrections.requestedStartDate,
+        reason: startDateCorrections.reason,
+        requestedBy: startDateCorrections.requestedBy,
+        requestedAt: startDateCorrections.requestedAt,
+      })
+      .from(startDateCorrections)
+      .leftJoin(workerProfiles, eq(startDateCorrections.workerId, workerProfiles.id))
+      .leftJoin(employmentSessions, eq(startDateCorrections.employmentSessionId, employmentSessions.id))
+      .leftJoin(departments, eq(employmentSessions.deptId, departments.id))
+      .where(where)
+      .orderBy(desc(startDateCorrections.requestedAt))
+      .limit(SECTION_LIMIT)
+      .then((rows) => rows.map((r) => ({
+        ...r,
+        workerName: normalizePersonName(r.workerName ?? "") || null,
+        workerCccd: canSeeFullCccd ? r.workerCccd : maskCccd(r.workerCccd),
+        requestedAt: r.requestedAt.toISOString(),
+      })));
+    const [cnt] = await db.select({ c: sql<number>`count(*)::int` }).from(startDateCorrections).leftJoin(workerProfiles, eq(startDateCorrections.workerId, workerProfiles.id)).where(where);
+    startDateRequestsTotal = cnt?.c ?? startDateRequests.length;
+  } else {
+    hiddenSections.push("startDateRequests");
+  }
+
   return NextResponse.json({
     newApplicants: { rows: newApplicants, total: newApplicantsTotal },
     resignations: { rows: resignations, total: resignationsTotal },
     transfers: { rows: transfers, total: transfersTotal },
     expiringPlans: { rows: expiringPlans, total: expiringPlansTotal },
+    resignationConfirmations: { rows: resignationConfirmations, total: resignationConfirmationsTotal },
+    startDateRequests: { rows: startDateRequests, total: startDateRequestsTotal },
     hiddenSections,
     generatedAt: new Date().toISOString(),
   });

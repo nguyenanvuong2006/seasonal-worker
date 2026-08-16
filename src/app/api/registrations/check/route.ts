@@ -3,6 +3,7 @@ import { and, eq } from "drizzle-orm";
 import { db } from "@/db";
 import { dailyApplications, departments } from "@/db/schema";
 import { matchDwWorker } from "@/lib/matching";
+import { findActiveSessionByCccd } from "@/lib/employment";
 import { todayStr } from "@/lib/helpers";
 import { normalizePersonName } from "@/lib/person-name";
 import { CCCD_ERROR_MESSAGE, isValidCccd } from "@/lib/validators";
@@ -56,7 +57,21 @@ export async function POST(req: Request) {
       });
     }
 
-    // 2. Đối chiếu DW Data
+    // 2. EMPLOYMENT LIFECYCLE (#5) — cảnh báo khi người ĐANG có Employment Session ACTIVE
+    // đăng ký lại. KHÔNG chặn đăng ký (application vẫn là lịch sử hợp lệ), chỉ trả cảnh báo để
+    // portal hiển thị + thu self-declaration (#6). Chỉ trả TÊN BỘ PHẬN (không PII khác) — người
+    // gọi đã chứng minh sở hữu CCCD+SĐT hợp lệ ở bước xác thực này.
+    const activeEmployment = await findActiveSessionByCccd(cccd);
+    const activeEmploymentPayload = activeEmployment
+      ? {
+          dept_name: activeEmployment.deptName
+            ? `${activeEmployment.deptName}${activeEmployment.groupName ? " — " + activeEmployment.groupName : ""}`
+            : "Chưa rõ bộ phận",
+          starting_date: activeEmployment.startingDate,
+        }
+      : null;
+
+    // 3. Đối chiếu DW Data
     const match = await matchDwWorker({
       cccd,
       fullName: body.full_name,
@@ -75,10 +90,11 @@ export async function POST(req: Request) {
           full_name: normalizePersonName(match.worker!.fullName),
           address_current: match.worker!.residentialAddress || match.worker!.permanentAddress || null,
         },
+        active_employment: activeEmploymentPayload,
       });
     }
 
-    return NextResponse.json({ status: "NEW", confidence: match.confidence });
+    return NextResponse.json({ status: "NEW", confidence: match.confidence, active_employment: activeEmploymentPayload });
   } catch (error) {
     return NextResponse.json(
       { error: "Lỗi hệ thống: " + (error as Error).message },
