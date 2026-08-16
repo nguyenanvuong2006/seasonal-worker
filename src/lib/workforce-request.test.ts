@@ -10,6 +10,11 @@ import {
   planAllocation,
   resolveTotalRequest,
   TOTAL_OVER_TARGET_MESSAGE,
+  computeRecruitmentBalance,
+  computeRealtimeGap,
+  reconcileRecruitmentKpis,
+  KPI_RECONCILIATION_OK,
+  KPI_RECONCILIATION_MISMATCH,
   type ActiveAllocationRef,
   type AllocationPlanState,
 } from "./workforce-request-kpi.ts";
@@ -151,6 +156,128 @@ test("PHASE 6 v2: công thức KHÔNG nhận Recruited/Quit trong input", () => 
   assert.equal(rWithExtras.maleBalance, 2);
   assert.equal(rWithExtras.femaleBalance, 2);
   assert.equal(rWithExtras.totalBalance, 4);
+});
+
+/* ============================================================
+   RECRUITMENT BALANCE vs REALTIME GAP (Workforce Recruitment Request /
+   Planning upgrade — snapshot + reconciliation)
+   ------------------------------------------------------------
+   Recruitment Balance = max(0, Rq - Current AT REQUEST START + Quit)
+   Realtime Gap         = max(0, Rq - Current NOW)
+   Khi allocation/movement đồng bộ đầy đủ, hai giá trị PHẢI hội tụ.
+   ============================================================ */
+
+test("Production case — Chrysanth Rossi H: Snapshot 16/35/51, Request 17/36/53, Quit=0 → Balance=2, Gap=2, hội tụ", () => {
+  const balance = computeRecruitmentBalance({
+    maleRequest: 17,
+    femaleRequest: 36,
+    maleCurrentAtStart: 16,
+    femaleCurrentAtStart: 35,
+    maleQuitDuringRequest: 0,
+    femaleQuitDuringRequest: 0,
+  });
+  assert.deepEqual(balance, { maleBalance: 1, femaleBalance: 1, totalBalance: 2 });
+
+  const gap = computeRealtimeGap({
+    maleRequest: 17,
+    femaleRequest: 36,
+    maleCurrentNow: 16,
+    femaleCurrentNow: 35,
+  });
+  assert.deepEqual(gap, { maleRealtimeGap: 1, femaleRealtimeGap: 1, totalRealtimeGap: 2 });
+
+  const reconciled = reconcileRecruitmentKpis({
+    maleRequest: 17,
+    femaleRequest: 36,
+    maleCurrentAtStart: 16,
+    femaleCurrentAtStart: 35,
+    maleQuitDuringRequest: 0,
+    femaleQuitDuringRequest: 0,
+    maleCurrentNow: 16,
+    femaleCurrentNow: 35,
+  });
+  assert.equal(reconciled.totalBalance, 2);
+  assert.equal(reconciled.totalRealtimeGap, 2);
+  assert.equal(reconciled.reconciliationStatus, KPI_RECONCILIATION_OK);
+});
+
+test("Quit case — Snapshot 51, Request 53, 2 worker nghỉ sau khi mở Request, Current Now 49 → Balance=4, Gap=4, hội tụ", () => {
+  const reconciled = reconcileRecruitmentKpis({
+    maleRequest: 53,
+    femaleRequest: 0,
+    maleCurrentAtStart: 51,
+    femaleCurrentAtStart: 0,
+    maleQuitDuringRequest: 2,
+    femaleQuitDuringRequest: 0,
+    maleCurrentNow: 49,
+    femaleCurrentNow: 0,
+  });
+  // Balance = 53 - 51 + 2 = 4
+  assert.equal(reconciled.maleBalance, 4);
+  // Realtime Gap = 53 - 49 = 4
+  assert.equal(reconciled.maleRealtimeGap, 4);
+  assert.equal(reconciled.totalBalance, reconciled.totalRealtimeGap, "hai KPI phải khớp");
+  assert.equal(reconciled.reconciliationStatus, KPI_RECONCILIATION_OK);
+});
+
+test("Chống double-count — Request=10, Snapshot=10, Quit=1, Current Now=9 → Balance=1 (KHÔNG PHẢI 2)", () => {
+  const balance = computeRecruitmentBalance({
+    maleRequest: 10,
+    femaleRequest: 0,
+    maleCurrentAtStart: 10,
+    femaleCurrentAtStart: 0,
+    maleQuitDuringRequest: 1,
+    femaleQuitDuringRequest: 0,
+  });
+  // 10 - 10 + 1 = 1. Cấm double-count kiểu Rq - CurrentNow + Quit = 10 - 9 + 1 = 2.
+  assert.equal(balance.maleBalance, 1);
+  assert.notEqual(balance.maleBalance, 2, "CẤM double-count: Quit không được cộng thêm vào Current NOW");
+
+  const gap = computeRealtimeGap({ maleRequest: 10, femaleRequest: 0, maleCurrentNow: 9, femaleCurrentNow: 0 });
+  assert.equal(gap.maleRealtimeGap, 1);
+  assert.equal(balance.maleBalance, gap.maleRealtimeGap, "Balance và Realtime Gap phải khớp = 1");
+});
+
+test("Balance dùng SNAPSHOT tại request start, KHÔNG dùng Current realtime (khác computeBalance)", () => {
+  // Nếu lỡ dùng Current NOW thay vì snapshot AT START, Quit sẽ bị cộng chồng.
+  // Đây là chứng minh: snapshot=51 (cố định) khác currentNow=49 (đã trừ 2 quit).
+  const usingSnapshot = computeRecruitmentBalance({
+    maleRequest: 53,
+    femaleRequest: 0,
+    maleCurrentAtStart: 51,
+    femaleCurrentAtStart: 0,
+    maleQuitDuringRequest: 2,
+    femaleQuitDuringRequest: 0,
+  });
+  const usingCurrentNowWrongly = computeRecruitmentBalance({
+    maleRequest: 53,
+    femaleRequest: 0,
+    maleCurrentAtStart: 49, // SAI — lẽ ra phải là snapshot 51, không phải current now
+    femaleCurrentAtStart: 0,
+    maleQuitDuringRequest: 2,
+    femaleQuitDuringRequest: 0,
+  });
+  assert.equal(usingSnapshot.maleBalance, 4);
+  assert.equal(usingCurrentNowWrongly.maleBalance, 6, "double-count nếu nhầm Current NOW làm snapshot");
+  assert.notEqual(usingSnapshot.maleBalance, usingCurrentNowWrongly.maleBalance);
+});
+
+test("reconciliationStatus = KPI_RECONCILIATION_MISMATCH khi Balance != Realtime Gap (dữ liệu chưa đồng bộ)", () => {
+  // Snapshot=10, Quit=0 (chưa ghi nhận quit) nhưng Current Now đã giảm còn 8
+  // (vd allocation bị đóng thủ công mà không qua RESIGNATION) → hai KPI lệch nhau.
+  const reconciled = reconcileRecruitmentKpis({
+    maleRequest: 10,
+    femaleRequest: 0,
+    maleCurrentAtStart: 10,
+    femaleCurrentAtStart: 0,
+    maleQuitDuringRequest: 0,
+    femaleQuitDuringRequest: 0,
+    maleCurrentNow: 8,
+    femaleCurrentNow: 0,
+  });
+  assert.equal(reconciled.maleBalance, 0); // 10-10+0
+  assert.equal(reconciled.maleRealtimeGap, 2); // 10-8
+  assert.equal(reconciled.reconciliationStatus, KPI_RECONCILIATION_MISMATCH);
 });
 
 test("Total Request = Male + Female; fallback legacy total_request khi cả 2 = 0", () => {

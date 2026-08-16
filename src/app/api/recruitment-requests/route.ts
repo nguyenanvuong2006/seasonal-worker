@@ -7,11 +7,11 @@ import { scopeAllowsDepartment } from "@/lib/data-scope";
 import { listRecruitmentRequests, matchHierarchy, type RecruitmentRequestFilter } from "@/lib/recruitment-request";
 import {
   REQUEST_STATUSES,
-  computeBalance,
   computeDateDeltas,
   computeTotalRequest,
   stripSystemOwnedFields,
 } from "@/lib/planning-recruitment-core";
+import { provisionRecruitmentRequest } from "@/lib/recruitment-request-provisioning";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -121,10 +121,9 @@ export async function POST(req: Request) {
   const maleRq = Math.max(0, Number(safeBody.maleRq) || 0);
   const femaleRq = Math.max(0, Number(safeBody.femaleRq) || 0);
 
-  // Balance = max(0, Rq - Current Workforce). Yêu cầu mới chưa có allocation
-  // nào → Current = 0 → Balance = Rq (PHASE 6 v2 — dùng Current Workforce
-  // làm source-of-truth, KHÔNG dùng Recruited/Quit).
-  const balance = computeBalance({ maleRq, femaleRq, maleCurrent: 0, femaleCurrent: 0 });
+  // Balance khởi tạo = Rq (chưa snapshot) — provisionRecruitmentRequest() bên
+  // dưới sẽ snapshot Current Workforce THEO DEPARTMENT ngay khi có request.id
+  // và ghi lại Balance đúng công thức (mục C/D): max(0, Rq - Snapshot + Quit).
   const totalRequest = computeTotalRequest(maleRq, femaleRq);
 
   // Khớp cây tổ chức để có department_id — Data Scope lọc theo FK này (Yêu cầu #15).
@@ -173,56 +172,83 @@ export async function POST(req: Request) {
     }
   }
 
+  const status = normalizeStatus(body.status);
+
   try {
-    const [row] = await db
-      .insert(recruitmentRequests)
-      .values({
-        requestCode,
-        requester: body.requester?.trim() ?? guard.session.username,
-        position: body.position ?? null,
-        jobTitle: body.jobTitle ?? null,
-        location: body.location ?? null,
-        section: body.section ?? null,
-        groupName: body.groupName ?? null,
-        division: body.division ?? null,
-        department: body.department ?? null,
-        reason: body.reason ?? null,
-        noteForReason: body.noteForReason ?? null,
-        specialRequirements: body.specialRequirements ?? null,
-        maleRq,
-        femaleRq,
-        maleBalance: balance.maleBalance,
-        femaleBalance: balance.femaleBalance,
-        totalBalance: balance.totalBalance,
-        status: normalizeStatus(body.status),
-        requestedDate: body.requestedDate || null,
-        expectedDate: body.expectedDate || null,
-        startingDate: body.startingDate || null,
-        endDate: body.endDate || null,
-        offeredDate: body.offeredDate || null,
-        completedDate: body.completedDate || null,
-        ...computeDateDeltas({
+    const row = await db.transaction(async (tx) => {
+      const [inserted] = await tx
+        .insert(recruitmentRequests)
+        .values({
+          requestCode,
+          requester: body.requester?.trim() ?? guard.session.username,
+          position: body.position ?? null,
+          jobTitle: body.jobTitle ?? null,
+          location: body.location ?? null,
+          section: body.section ?? null,
+          groupName: body.groupName ?? null,
+          division: body.division ?? null,
+          department: body.department ?? null,
+          reason: body.reason ?? null,
+          noteForReason: body.noteForReason ?? null,
+          specialRequirements: body.specialRequirements ?? null,
+          maleRq,
+          femaleRq,
+          maleBalance: maleRq,
+          femaleBalance: femaleRq,
+          totalBalance: totalRequest,
+          status,
           requestedDate: body.requestedDate || null,
+          expectedDate: body.expectedDate || null,
+          startingDate: body.startingDate || null,
+          endDate: body.endDate || null,
           offeredDate: body.offeredDate || null,
           completedDate: body.completedDate || null,
-        }),
+          ...computeDateDeltas({
+            requestedDate: body.requestedDate || null,
+            offeredDate: body.offeredDate || null,
+            completedDate: body.completedDate || null,
+          }),
+          departmentId,
+          month: body.month || null,
+          cost: Math.max(0, Number(body.cost) || 0),
+          remarks: body.remarks ?? null,
+          to: body.to ?? null,
+          rqStatus: body.rqStatus ?? null,
+          monthRc: body.monthRc ?? null,
+          totalRequest,
+          recruitedVsExpected: 0,
+          departmentText: body.departmentText ?? body.department ?? null,
+          monthReport: body.monthReport ?? null,
+          planningPeriodId: body.planningPeriodId ?? null,
+          previousRequestId: body.previousRequestId || null,
+          supersedesRequestId: body.supersedesRequestId || null,
+          createdBy: guard.session.username,
+        })
+        .returning();
+
+      // SNAPSHOT Current Workforce + auto-link Planning Period/Target +
+      // auto-allocate ACTIVE workforce theo Department (mục C, E, F, G) —
+      // trong CÙNG transaction với insert để đảm bảo tính nguyên tử.
+      await provisionRecruitmentRequest(tx, {
+        requestId: inserted.id,
         departmentId,
-        month: body.month || null,
-        cost: Math.max(0, Number(body.cost) || 0),
-        remarks: body.remarks ?? null,
-        to: body.to ?? null,
-        rqStatus: body.rqStatus ?? null,
-        monthRc: body.monthRc ?? null,
-        totalRequest,
-        recruitedVsExpected: 0,
-        departmentText: body.departmentText ?? body.department ?? null,
-        monthReport: body.monthReport ?? null,
-        planningPeriodId: body.planningPeriodId ?? null,
-        previousRequestId: body.previousRequestId || null,
-        supersedesRequestId: body.supersedesRequestId || null,
-        createdBy: guard.session.username,
-      })
-      .returning();
+        maleRq,
+        femaleRq,
+        location: body.location ?? null,
+        division: body.division ?? null,
+        section: body.section ?? null,
+        groupName: body.groupName ?? null,
+        startingDate: body.startingDate || null,
+        expectedDate: body.expectedDate || null,
+        requestedDate: body.requestedDate || null,
+        endDate: body.endDate || null,
+        status,
+        actor: guard.session.username,
+      });
+
+      const [refreshed] = await tx.select().from(recruitmentRequests).where(eq(recruitmentRequests.id, inserted.id));
+      return refreshed ?? inserted;
+    });
 
     await writeAudit(guard.session, "CREATE_RECRUITMENT_REQUEST", "recruitment_requests", {
       id: row.id,

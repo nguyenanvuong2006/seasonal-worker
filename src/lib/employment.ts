@@ -2,6 +2,7 @@ import "server-only";
 import { and, desc, eq, inArray, isNull, ne, sql } from "drizzle-orm";
 import { db } from "@/db";
 import { endActiveRequestAllocationsForWorker } from "@/lib/workforce-request";
+import { recomputeStoredRecruitmentBalance } from "@/lib/recruitment-kpi";
 import {
   dailyApplications,
   departments,
@@ -214,12 +215,17 @@ export async function confirmResignation(input: {
     // WORKFORCE REQUEST LINKAGE — nghỉ việc đã xác nhận → kết thúc mọi ACTIVE
     // request allocation của worker (history action=END). KPI của Workforce
     // Request tự cập nhật vì tính lại từ source (Current giảm, Quit tăng).
-    await endActiveRequestAllocationsForWorker(
+    const { affectedRequestIds } = await endActiveRequestAllocationsForWorker(
       input.workerId,
       input.confirmedBy,
       `Nghỉ việc được xác nhận (movement ${movementId!})`,
       tx,
     );
+    // Trigger recompute KPI cho request bị ảnh hưởng (mục I.5) — Balance lưu
+    // trong DB phản ánh ngay Quit During Request vừa tăng, không đợi lần đọc kế tiếp.
+    for (const requestId of affectedRequestIds) {
+      await recomputeStoredRecruitmentBalance(tx, requestId);
+    }
 
     return { sessionId: active.id, movementId: movementId! };
   };

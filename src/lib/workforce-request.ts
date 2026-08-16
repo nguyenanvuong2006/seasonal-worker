@@ -1022,12 +1022,18 @@ export async function allocateWorkersToRequest(input: {
  *  Đồng thời ĐÓNG (allocation_end_date) các phân bổ planning đang mở của worker — khớp mô hình
  *  vòng đời append-only của Planning (đóng phân bổ ≠ nghỉ việc; ở đây là nghỉ việc THẬT nên
  *  phân bổ phải đóng). */
+export type EndActiveRequestAllocationsResult = {
+  ended: number;
+  /** Request bị ảnh hưởng (Balance cần recompute — mục I.5). */
+  affectedRequestIds: string[];
+};
+
 export async function endActiveRequestAllocationsForWorker(
   workerId: string,
   endedBy: string,
   reason: string,
   executor: Executor = db,
-): Promise<number> {
+): Promise<EndActiveRequestAllocationsResult> {
   const rows = await executor
     .select({
       id: requestAllocations.id,
@@ -1078,7 +1084,7 @@ export async function endActiveRequestAllocationsForWorker(
       );
   }
 
-  return rows.length;
+  return { ended: rows.length, affectedRequestIds: [...new Set(rows.map((r) => r.requestId))] };
 }
 
 /* ============================================================

@@ -186,6 +186,115 @@ export function computeBalance(input: {
 }
 
 /* ============================================================
+   RECRUITMENT BALANCE vs REALTIME GAP (Workforce Recruitment Request /
+   Planning — snapshot + reconciliation upgrade)
+   ------------------------------------------------------------
+   HAI KPI KHÁC NHAU, KHÔNG ĐƯỢC GỘP LÀM MỘT:
+
+     Recruitment Balance = max(0, Request − Current AT REQUEST START + Quit
+                            During Request)
+       "Current At Request Start" = SNAPSHOT cố định chụp khi Request được mở
+       (recruitment_requests.male_current_at_start / female_current_at_start).
+       KHÔNG được thay bằng Current Workforce realtime — nếu không sẽ
+       double-count worker đã nghỉ (họ đã bị loại khỏi Current realtime rồi,
+       cộng thêm Quit lần nữa là đếm hai lần).
+
+     Realtime Gap = max(0, Request − Current Workforce NOW)
+       "Current Workforce Now" = ACTIVE worker HIỆN TẠI (employment_sessions
+       APPROVED + end_date NULL, theo department_id của Request).
+
+   Khi mọi movement/session/allocation được cập nhật đầy đủ, hai giá trị này
+   PHẢI HỘI TỤ (Balance === Realtime Gap) — nếu không, đó là tín hiệu dữ liệu
+   chưa đồng bộ (allocation/movement bị bỏ sót), KHÔNG được âm thầm ghi đè:
+   xem KPI_RECONCILIATION_MISMATCH bên dưới.
+
+   CÔNG THỨC BỊ CẤM (regression guard — xem thêm computeBalance ở trên):
+     - Rq − Recruited (+ Quit)         ← dùng historical KPI, sai
+     - Rq − Current NOW + Quit         ← double-count (Quit đã nằm trong
+                                          Current NOW đã giảm)
+   Quit CHỈ được cộng với Current AT START (snapshot), KHÔNG BAO GIỜ cộng
+   với Current NOW.
+   ============================================================ */
+export type RecruitmentBalanceInput = {
+  maleRequest: number;
+  femaleRequest: number;
+  /** Snapshot cố định tại thời điểm Request mở — KHÔNG phải Current realtime. */
+  maleCurrentAtStart: number;
+  femaleCurrentAtStart: number;
+  /** RESIGNATION đã xác nhận, effective_date trong khoảng thời gian Request. */
+  maleQuitDuringRequest: number;
+  femaleQuitDuringRequest: number;
+};
+
+export type RecruitmentBalanceResult = {
+  maleBalance: number;
+  femaleBalance: number;
+  totalBalance: number;
+};
+
+function toSafeInt(v: number): number {
+  return Number.isFinite(v) ? Math.trunc(v) : 0;
+}
+
+export function computeRecruitmentBalance(input: RecruitmentBalanceInput): RecruitmentBalanceResult {
+  const maleBalance = Math.max(
+    0,
+    toSafeInt(input.maleRequest) - toSafeInt(input.maleCurrentAtStart) + toSafeInt(input.maleQuitDuringRequest),
+  );
+  const femaleBalance = Math.max(
+    0,
+    toSafeInt(input.femaleRequest) - toSafeInt(input.femaleCurrentAtStart) + toSafeInt(input.femaleQuitDuringRequest),
+  );
+  return { maleBalance, femaleBalance, totalBalance: maleBalance + femaleBalance };
+}
+
+export type RealtimeGapInput = {
+  maleRequest: number;
+  femaleRequest: number;
+  /** Current Workforce NOW — realtime, theo department_id của Request. */
+  maleCurrentNow: number;
+  femaleCurrentNow: number;
+};
+
+export type RealtimeGapResult = {
+  maleRealtimeGap: number;
+  femaleRealtimeGap: number;
+  totalRealtimeGap: number;
+};
+
+export function computeRealtimeGap(input: RealtimeGapInput): RealtimeGapResult {
+  const maleRealtimeGap = Math.max(0, toSafeInt(input.maleRequest) - toSafeInt(input.maleCurrentNow));
+  const femaleRealtimeGap = Math.max(0, toSafeInt(input.femaleRequest) - toSafeInt(input.femaleCurrentNow));
+  return { maleRealtimeGap, femaleRealtimeGap, totalRealtimeGap: maleRealtimeGap + femaleRealtimeGap };
+}
+
+export const KPI_RECONCILIATION_OK = "OK" as const;
+export const KPI_RECONCILIATION_MISMATCH = "KPI_RECONCILIATION_MISMATCH" as const;
+export type ReconciliationStatus = typeof KPI_RECONCILIATION_OK | typeof KPI_RECONCILIATION_MISMATCH;
+
+export type RecruitmentKpiSnapshotInput = RecruitmentBalanceInput & RealtimeGapInput;
+
+export type RecruitmentKpiSnapshotResult = RecruitmentBalanceResult &
+  RealtimeGapResult & {
+    reconciliationStatus: ReconciliationStatus;
+  };
+
+/**
+ * Đối chiếu Recruitment Balance vs Realtime Gap (mục K). KHÔNG âm thầm ghi
+ * đè khi hai giá trị lệch nhau — trả về reconciliationStatus để tầng gọi (API
+ * / service DB) đính kèm chi tiết snapshot/quit/current cho Admin audit.
+ * Đây là hàm THUẦN — không đụng DB; bản async query DB nằm ở
+ * src/lib/recruitment-kpi.ts (computeRecruitmentKpis(requestId)).
+ */
+export function reconcileRecruitmentKpis(input: RecruitmentKpiSnapshotInput): RecruitmentKpiSnapshotResult {
+  const balance = computeRecruitmentBalance(input);
+  const gap = computeRealtimeGap(input);
+  const reconciliationStatus: ReconciliationStatus =
+    balance.totalBalance === gap.totalRealtimeGap ? KPI_RECONCILIATION_OK : KPI_RECONCILIATION_MISMATCH;
+  return { ...balance, ...gap, reconciliationStatus };
+}
+
+/* ============================================================
    REQUEST KPI (mục 2 + 3 + 7) — đầu ra chuẩn cho mọi view
    ============================================================ */
 export type RequestKpiInput = {

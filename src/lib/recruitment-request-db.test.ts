@@ -33,8 +33,15 @@ const schemaStub = {
   planningAllocations: makeTable("planning_allocations"),
   employmentSessions: makeTable("employment_sessions"),
   requestAllocations: makeTable("request_allocations"),
+  requestAllocationHistory: makeTable("request_allocation_history"),
   workerProfiles: makeTable("worker_profiles"),
   workforceMovements: makeTable("workforce_movements"),
+};
+
+const helpersStub = {
+  todayStr: () => "2026-08-16",
+  isMale: (g: string | null) => String(g ?? "").toUpperCase().startsWith("M") || g === "Nam",
+  isFemale: (g: string | null) => String(g ?? "").toUpperCase().startsWith("F") || g === "Nữ",
 };
 
 function load(db: FakeDb) {
@@ -43,20 +50,39 @@ function load(db: FakeDb) {
   const core = loadModule(new URL("./planning-recruitment-core.ts", import.meta.url), {
     stubs: { "./recruitment-request-columns.ts": columns },
   });
+  const workforceRequestKpi = loadModule(new URL("./workforce-request-kpi.ts", import.meta.url), { stubs: {} });
+  const recruitmentKpi = loadModule(new URL("./recruitment-kpi.ts", import.meta.url), {
+    stubs: {
+      "server-only": serverOnlyStub,
+      "drizzle-orm": drizzleStub,
+      "@/db": { db },
+      "@/db/schema": schemaStub,
+      "@/lib/helpers": helpersStub,
+      "@/lib/workforce-request-kpi": workforceRequestKpi,
+    },
+  });
+  const provisioning = loadModule(new URL("./recruitment-request-provisioning.ts", import.meta.url), {
+    stubs: {
+      "server-only": serverOnlyStub,
+      "drizzle-orm": drizzleStub,
+      "@/db": { db },
+      "@/db/schema": schemaStub,
+      "@/lib/helpers": helpersStub,
+      "@/lib/workforce-request-kpi": workforceRequestKpi,
+      "@/lib/recruitment-kpi": recruitmentKpi,
+    },
+  });
   return loadModule(new URL("./recruitment-request.ts", import.meta.url), {
     stubs: {
       "server-only": serverOnlyStub,
       "drizzle-orm": drizzleStub,
       "@/db": { db },
       "@/db/schema": schemaStub,
-      "@/lib/helpers": {
-        todayStr: () => "2026-08-16",
-        isMale: (g: string | null) => String(g ?? "").toUpperCase().startsWith("M") || g === "Nam",
-        isFemale: (g: string | null) => String(g ?? "").toUpperCase().startsWith("F") || g === "Nữ",
-      },
+      "@/lib/helpers": helpersStub,
       "@/lib/planning-recruitment-core": core,
       "@/lib/recruitment-request-utils": utils,
       "@/lib/recruitment-request-columns": columns,
+      "@/lib/recruitment-request-provisioning": provisioning,
       "drizzle-orm/pg-core": {},
     },
     fallback(spec) {
@@ -77,6 +103,19 @@ function listQuery(db: FakeDb): QueryCall {
 
 function orderByArgs(q: QueryCall): unknown[] {
   return q.ops.find((o) => o.fn === "orderBy")?.args ?? [];
+}
+
+/**
+ * UPDATE ghi các trường Excel (requester...) trên recruitment_requests —
+ * phân biệt với UPDATE riêng do provisionRecruitmentRequest() phát ra
+ * (snapshot/Balance/planning_period_id), chạy cho CẢ dòng mới lẫn dòng cũ.
+ */
+function fieldUpdatesOf(db: FakeDb): QueryCall[] {
+  return db.writesTo("recruitment_requests").filter((c) => {
+    if (c.root !== "update") return false;
+    const set = argOf(c, "set");
+    return !!set && typeof set === "object" && "requester" in (set as Record<string, unknown>);
+  });
 }
 
 /* ------------------------------------------------------------
@@ -332,13 +371,16 @@ test("trùng Request Code: cập nhật thay vì tạo bản ghi thứ hai", asy
   ) => Promise<ImportResult[]>)(rows, "recruiter-1", { updateDuplicates: true })) as ImportResult[];
 
   const inserts = db.writesTo("recruitment_requests").filter((c) => c.root === "insert");
-  const updates = db.writesTo("recruitment_requests").filter((c) => c.root === "update");
+  // "Field update" = UPDATE ghi các cột từ Excel (requester...) — phân biệt với
+  // các UPDATE riêng do provisionRecruitmentRequest() phát ra (snapshot, Balance,
+  // planning_period_id) chạy cho CẢ dòng mới lẫn dòng đã tồn tại (mục C/E/F/G).
+  const fieldUpdates = fieldUpdatesOf(db);
 
   assert.equal(inserts.length, 3, "chỉ 3 mã mới được tạo");
-  assert.equal(updates.length, 2, "2 mã đã tồn tại được cập nhật");
+  assert.equal(fieldUpdates.length, 2, "2 mã đã tồn tại được cập nhật");
   assert.equal(results.length, 5);
   // Không bao giờ có bản ghi trùng mã.
-  assert.equal(inserts.length + updates.length, 5);
+  assert.equal(inserts.length + fieldUpdates.length, 5);
 });
 
 test("trùng Request Code với chế độ bỏ qua: không ghi đè dữ liệu cũ", async () => {
@@ -352,7 +394,7 @@ test("trùng Request Code với chế độ bỏ qua: không ghi đè dữ liệ
   ) => Promise<ImportResult[]>)(rows, "recruiter-1", { skipDuplicates: true })) as ImportResult[];
 
   assert.equal(results.filter((r) => r.status === "SKIPPED").length, 2);
-  assert.equal(db.writesTo("recruitment_requests").filter((c) => c.root === "update").length, 0);
+  assert.equal(fieldUpdatesOf(db).length, 0);
   assert.equal(db.writesTo("recruitment_requests").filter((c) => c.root === "insert").length, 3);
 });
 
