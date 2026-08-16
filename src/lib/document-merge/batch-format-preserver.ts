@@ -4,7 +4,7 @@ import {
   PAGE_BREAK_TEXT,
   RealGoogleDocsService,
   type PlaceholderReplacement,
-} from "./google-docs-service";
+} from "./google-docs-service.ts";
 
 type TokenResponse = {
   access_token?: string;
@@ -322,10 +322,26 @@ function writableTextStyle(style: any): any {
   return copy;
 }
 
-function writableParagraphStyle(style: any): any {
+// Fields of ParagraphStyle that the Google Docs API returns on read but
+// rejects when sent inside an updateParagraphStyle request (400
+// "Unallowed field"). They must be stripped before building the request,
+// and must never appear in the `fields` update mask either.
+const READ_ONLY_PARAGRAPH_STYLE_FIELDS = ["headingId", "tabStops", "linkedContentReference"] as const;
+
+function writableParagraphStyle(
+  style: any,
+  options: { inTableCell?: boolean } = {},
+): any {
   if (!style) return {};
   const copy = { ...style };
-  delete copy.headingId;
+  for (const field of READ_ONLY_PARAGRAPH_STYLE_FIELDS) {
+    delete copy[field];
+  }
+  // The API rejects pageBreakBefore for paragraphs inside unsupported
+  // regions (Table, Header, Footer, Footnote) with a 400 error.
+  if (options.inTableCell) {
+    delete copy.pageBreakBefore;
+  }
   return copy;
 }
 
@@ -333,8 +349,8 @@ function textStyleFields(style: any): string {
   return Object.keys(writableTextStyle(style)).join(",");
 }
 
-function paragraphStyleFields(style: any): string {
-  return Object.keys(writableParagraphStyle(style)).join(",");
+function paragraphStyleFields(style: any, options: { inTableCell?: boolean } = {}): string {
+  return Object.keys(writableParagraphStyle(style, options)).join(",");
 }
 
 async function appendParagraph(
@@ -484,13 +500,13 @@ async function populateTableCellParagraphs(
     }
     if (styleRequests.length) await docsBatchUpdate(destinationDocId, styleRequests);
 
-    const pFields = paragraphStyleFields(paragraph.paragraphStyle);
+    const pFields = paragraphStyleFields(paragraph.paragraphStyle, { inTableCell: true });
     if (pFields) {
       await docsBatchUpdate(destinationDocId, [
         {
           updateParagraphStyle: {
             range: range(cellInsertIndex, cellInsertIndex + text.length, tabId),
-            paragraphStyle: writableParagraphStyle(paragraph.paragraphStyle),
+            paragraphStyle: writableParagraphStyle(paragraph.paragraphStyle, { inTableCell: true }),
             fields: pFields,
           },
         },
