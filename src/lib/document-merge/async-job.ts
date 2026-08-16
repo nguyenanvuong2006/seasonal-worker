@@ -234,6 +234,7 @@ export async function createAsyncMergeJob(input: CreateAsyncJobInput): Promise<C
       mergeJobId: job.id,
       sourceEntity: entityType,
       sourceRecordId: p.recordId,
+      templateId: p.templateId,
       sortOrder: p.sortOrder,
       status: ITEM_STATUS.QUEUED,
       attemptCount: 0,

@@ -181,3 +181,22 @@ Vercel/Next.js (UI + API) ──POST /api/document-merge/jobs──▶ Neon (mer
 - **Storage abstraction** `StorageProvider` (put/get/delete/getSignedUrl/exists) +
   provider `local` (dev/test) làm mặc định; GCS/S3 provider = Phase 5.
 - **Feature flag default** = `GOOGLE_DOCS` (an toàn, giữ nguyên hành vi hiện tại).
+
+---
+
+## 6. ENV variables mới
+
+| Var | Default | Mô tả |
+| --- | --- | --- |
+| `DOCUMENT_MERGE_ENGINE` | `GOOGLE_DOCS` | `GOOGLE_DOCS` (legacy) / `HTML_PDF` (mới) |
+| `STORAGE_PROVIDER` | `local` | `local` / `gcs` / `s3` / `vercel-blob` |
+| `STORAGE_LOCAL_ROOT` | `.storage` | Root cho provider local |
+| `PDF_RENDER_CONCURRENCY` | `4` | Concurrency render Chromium trên worker |
+| `MERGE_WORKER_SECRET` | — | Bearer token gọi worker |
+
+## 7. Cloud Run worker setup (Phase 3)
+
+Xem `worker/README.md`. Tóm tắt:
+- Base image `mcr.microsoft.com/playwright:v1.49.0-noble` (kèm Chromium).
+- Service `min-instances=0`, `--no-allow-unauthenticated`, 2 vCPU / 4 GB, concurrency 4.
+- Vercel → Cloud Run qua service account `run.invoker` + `MERGE_WORKER_SECRET`.

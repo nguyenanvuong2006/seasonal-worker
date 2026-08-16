@@ -36,6 +36,7 @@ CREATE INDEX IF NOT EXISTS merge_job_status_updated_idx ON merge_jobs (status, u
 -- status      = QUEUED | PROCESSING | COMPLETED | FAILED | RETRY | PAUSED | CANCELLED
 --               (legacy PENDING/RUNNING được normalize tương đương QUEUED/PROCESSING)
 -- ============================================================
+ALTER TABLE merge_job_records ADD COLUMN IF NOT EXISTS template_id uuid;
 ALTER TABLE merge_job_records ADD COLUMN IF NOT EXISTS attempt_count integer NOT NULL DEFAULT 0;
 ALTER TABLE merge_job_records ADD COLUMN IF NOT EXISTS leased_until timestamptz;
 ALTER TABLE merge_job_records ADD COLUMN IF NOT EXISTS retry_at timestamptz;

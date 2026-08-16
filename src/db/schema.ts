@@ -1379,6 +1379,8 @@ export const mergeJobRecords = pgTable(
     // --- ASYNC PDF ENGINE (migration 2026-08-20) -----------------------------
     // Bảng này CHÍNH LÀ bảng "item" của async queue (không tạo bảng trùng).
     // sort_order = sequence (thứ tự user chọn, source of truth khi gộp PDF).
+    // template_id = template áp dụng cho record này (auto-route A/B có thể khác nhau/record).
+    templateId: uuid("template_id"),
     attemptCount: integer("attempt_count").notNull().default(0),
     leasedUntil: timestamp("leased_until", { withTimezone: true }),
     retryAt: timestamp("retry_at", { withTimezone: true }),

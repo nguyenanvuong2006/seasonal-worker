@@ -36,6 +36,7 @@ export interface QueueItem {
   mergeJobId: string;
   sourceEntity: string;
   sourceRecordId: string;
+  templateId: string | null;
   sortOrder: number;
   status: ItemStatus;
   attemptCount: number;
@@ -46,6 +47,7 @@ type RawItemRow = {
   merge_job_id: string;
   source_entity: string;
   source_record_id: string;
+  template_id: string | null;
   sort_order: number;
   status: string;
   attempt_count: number;
@@ -57,6 +59,7 @@ function toQueueItem(row: RawItemRow): QueueItem {
     mergeJobId: row.merge_job_id,
     sourceEntity: row.source_entity,
     sourceRecordId: row.source_record_id,
+    templateId: row.template_id,
     sortOrder: row.sort_order,
     status: row.status as ItemStatus,
     attemptCount: row.attempt_count,
@@ -74,7 +77,7 @@ export async function claimItems(jobId: string, limit = 1): Promise<QueueItem[]>
     await client.query("BEGIN");
 
     const result = await client.query<RawItemRow>(
-      `SELECT id, merge_job_id, source_entity, source_record_id, sort_order, status, attempt_count
+      `SELECT id, merge_job_id, source_entity, source_record_id, template_id, sort_order, status, attempt_count
          FROM merge_job_records
         WHERE merge_job_id = $1
           AND status IN ('QUEUED','RETRY')
