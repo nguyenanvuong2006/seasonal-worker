@@ -13,6 +13,8 @@ type TokenResponse = {
   error_description?: string;
 };
 
+type AuthSource = "oauth_user" | "service_account";
+
 type Snapshot = {
   docId: string;
   content: string;
@@ -25,7 +27,7 @@ type DocsDocument = Record<string, any>;
 const snapshots = new Map<string, Snapshot>();
 const SNAPSHOT_TTL_MS = 5 * 60 * 1000;
 const MAX_SNAPSHOTS = 40;
-let cachedToken: { value: string; expiresAt: number } | null = null;
+let cachedToken: { value: string; expiresAt: number; source: AuthSource } | null = null;
 let installed = false;
 
 function base64Url(input: string | Buffer): string {
@@ -82,28 +84,56 @@ async function exchangeRefreshToken(
   return response.json() as Promise<TokenResponse>;
 }
 
+function configuredAuthSource(): AuthSource | null {
+  if (
+    process.env.GOOGLE_CLIENT_ID?.trim() &&
+    process.env.GOOGLE_CLIENT_SECRET?.trim() &&
+    process.env.GOOGLE_REFRESH_TOKEN?.trim()
+  ) {
+    return "oauth_user";
+  }
+  if (
+    process.env.GOOGLE_SERVICE_ACCOUNT_EMAIL?.trim() &&
+    process.env.GOOGLE_SERVICE_ACCOUNT_PRIVATE_KEY?.trim()
+  ) {
+    return "service_account";
+  }
+  return null;
+}
+
 async function resolveAccessToken(): Promise<string> {
-  if (cachedToken && cachedToken.expiresAt > Date.now() + 60_000) return cachedToken.value;
+  const preferredSource = configuredAuthSource();
+  if (
+    cachedToken &&
+    cachedToken.source === preferredSource &&
+    cachedToken.expiresAt > Date.now() + 60_000
+  ) {
+    return cachedToken.value;
+  }
 
   let result: TokenResponse | null = null;
-  const serviceEmail = process.env.GOOGLE_SERVICE_ACCOUNT_EMAIL;
-  const servicePrivateKey = process.env.GOOGLE_SERVICE_ACCOUNT_PRIVATE_KEY;
-  if (serviceEmail && servicePrivateKey) {
-    result = await exchangeServiceAccountToken(
-      serviceEmail,
-      servicePrivateKey,
-      process.env.GOOGLE_IMPERSONATE_USER_EMAIL?.trim() || undefined,
-    );
+  let source: AuthSource | null = null;
+
+  const clientId = process.env.GOOGLE_CLIENT_ID?.trim();
+  const clientSecret = process.env.GOOGLE_CLIENT_SECRET?.trim();
+  const refreshToken = process.env.GOOGLE_REFRESH_TOKEN?.trim();
+  if (clientId && clientSecret && refreshToken) {
+    source = "oauth_user";
+    result = await exchangeRefreshToken(clientId, clientSecret, refreshToken);
   } else {
-    const clientId = process.env.GOOGLE_CLIENT_ID;
-    const clientSecret = process.env.GOOGLE_CLIENT_SECRET;
-    const refreshToken = process.env.GOOGLE_REFRESH_TOKEN;
-    if (clientId && clientSecret && refreshToken) {
-      result = await exchangeRefreshToken(clientId, clientSecret, refreshToken);
+    const serviceEmail = process.env.GOOGLE_SERVICE_ACCOUNT_EMAIL?.trim();
+    const servicePrivateKey = process.env.GOOGLE_SERVICE_ACCOUNT_PRIVATE_KEY;
+    if (serviceEmail && servicePrivateKey) {
+      source = "service_account";
+      result = await exchangeServiceAccountToken(
+        serviceEmail,
+        servicePrivateKey,
+        process.env.GOOGLE_IMPERSONATE_USER_EMAIL?.trim() || undefined,
+      );
     }
   }
 
-  if (!result?.access_token) {
+  if (!result?.access_token || !source) {
     throw new Error(
       `BATCH_GOOGLE_AUTH_FAILED: ${result?.error_description || result?.error || "missing Google OAuth credentials"}`,
     );
@@ -112,6 +142,7 @@ async function resolveAccessToken(): Promise<string> {
   cachedToken = {
     value: result.access_token,
     expiresAt: Date.now() + Math.max(300, result.expires_in ?? 3600) * 1000,
+    source,
   };
   return cachedToken.value;
 }
@@ -468,6 +499,14 @@ async function populateTableCellParagraphs(
   }
 }
 
+function lastTableElement(document: DocsDocument): { element: any; table: any; tabId?: string; startIndex: number } | null {
+  const { body, tabId } = getFirstDocumentTab(document);
+  const tableElements = (body?.content ?? []).filter((item: any) => item.table);
+  const element = tableElements[tableElements.length - 1];
+  if (!element?.table || typeof element.startIndex !== "number") return null;
+  return { element, table: element.table, tabId, startIndex: element.startIndex };
+}
+
 async function appendTable(
   destinationDocId: string,
   sourceTable: any,
@@ -482,24 +521,23 @@ async function appendTable(
   if (!rows || !columns) return;
 
   let destination = await docsGet(destinationDocId);
-  let end = endIndexOf(destination);
-  const tableStartIndex = Math.max(1, end.endIndex - 1);
+  const end = endIndexOf(destination);
+  const insertAt = Math.max(1, end.endIndex - 1);
   await docsBatchUpdate(destinationDocId, [
     {
       insertTable: {
         rows,
         columns,
-        location: location(tableStartIndex, end.tabId),
+        location: location(insertAt, end.tabId),
       },
     },
   ]);
 
   destination = await docsGet(destinationDocId);
-  end = endIndexOf(destination);
-  const destinationBody = getFirstDocumentTab(destination).body;
-  const tables = (destinationBody?.content ?? []).filter((item: any) => item.table);
-  const inserted = tables[tables.length - 1]?.table;
-  if (!inserted) throw new Error("FORMAT_TABLE_INSERT_FAILED: Không tìm thấy bảng vừa chèn trong Google Docs output.");
+  let actualTable = lastTableElement(destination);
+  if (!actualTable) {
+    throw new Error("FORMAT_TABLE_INSERT_FAILED: Không tìm thấy bảng vừa chèn trong Google Docs output.");
+  }
 
   const mergeRequests: Record<string, unknown>[] = [];
   for (let r = 0; r < rows; r++) {
@@ -512,7 +550,7 @@ async function appendTable(
           mergeTableCells: {
             tableRange: {
               tableCellLocation: {
-                tableStartLocation: location(tableStartIndex, end.tabId),
+                tableStartLocation: location(actualTable.startIndex, actualTable.tabId),
                 rowIndex: r,
                 columnIndex: c,
               },
@@ -527,12 +565,12 @@ async function appendTable(
   if (mergeRequests.length) {
     await docsBatchUpdate(destinationDocId, mergeRequests);
     destination = await docsGet(destinationDocId);
+    actualTable = lastTableElement(destination);
+    if (!actualTable) throw new Error("FORMAT_TABLE_LOCATION_LOST: Không xác định được vị trí bảng sau khi merge ô.");
   }
 
-  const bodyAfterMerge = getFirstDocumentTab(destination).body;
-  const destinationTables = (bodyAfterMerge?.content ?? []).filter((item: any) => item.table);
-  const targetTable = destinationTables[destinationTables.length - 1]?.table;
-  const targetTabId = getFirstDocumentTab(destination).tabId;
+  let targetTable = actualTable.table;
+  const targetTabId = actualTable.tabId;
 
   for (let r = rows - 1; r >= 0; r--) {
     for (let c = columns - 1; c >= 0; c--) {
@@ -549,6 +587,13 @@ async function appendTable(
     }
   }
 
+  // Cell text insertion changes document indices. Re-read the document and use
+  // the table element's actual startIndex from Google Docs for style requests.
+  destination = await docsGet(destinationDocId);
+  actualTable = lastTableElement(destination);
+  if (!actualTable) throw new Error("FORMAT_TABLE_LOCATION_LOST: Không xác định được vị trí bảng trước khi áp style.");
+  targetTable = actualTable.table;
+
   const cellStyleRequests: Record<string, unknown>[] = [];
   for (let r = 0; r < rows; r++) {
     for (let c = 0; c < columns; c++) {
@@ -563,7 +608,7 @@ async function appendTable(
         updateTableCellStyle: {
           tableRange: {
             tableCellLocation: {
-              tableStartLocation: location(tableStartIndex, targetTabId),
+              tableStartLocation: location(actualTable.startIndex, actualTable.tabId),
               rowIndex: r,
               columnIndex: c,
             },
@@ -578,6 +623,10 @@ async function appendTable(
   }
   if (cellStyleRequests.length) await docsBatchUpdate(destinationDocId, cellStyleRequests);
 
+  destination = await docsGet(destinationDocId);
+  actualTable = lastTableElement(destination);
+  if (!actualTable) throw new Error("FORMAT_TABLE_LOCATION_LOST: Không xác định được vị trí bảng trước khi áp độ rộng cột.");
+
   const columnProperties = sourceTable.tableStyle?.tableColumnProperties ?? [];
   const columnRequests: Record<string, unknown>[] = [];
   for (let c = 0; c < Math.min(columns, columnProperties.length); c++) {
@@ -588,7 +637,7 @@ async function appendTable(
     if (!fields) continue;
     columnRequests.push({
       updateTableColumnProperties: {
-        tableStartLocation: location(tableStartIndex, targetTabId),
+        tableStartLocation: location(actualTable.startIndex, actualTable.tabId),
         columnIndices: [c],
         tableColumnProperties: writable,
         fields,
