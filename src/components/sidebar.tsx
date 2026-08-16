@@ -13,6 +13,7 @@ import {
   IdCard,
   ArrowLeftRight,
   CalendarRange,
+  UsersRound,
   FormInput,
   Layers,
   GitBranch,
@@ -27,6 +28,7 @@ import {
   Files,
   Trash2,
   FileText,
+  FileSpreadsheet,
   Menu,
   X,
   ChevronsLeft,
@@ -63,11 +65,16 @@ const NAV_GROUPS: NavGroup[] = [
     items: [
       { href: "/admin/worker-profiles", label: "Hồ sơ Tập nghề", icon: IdCard, roles: ["ADMIN", "HR_RECRUITER"], permission: "worker_profile.view" },
       { href: "/admin/workforce-movements", label: "Nghỉ việc / Thuyên chuyển", icon: ArrowLeftRight, roles: ["ADMIN", "HR_RECRUITER", "DEPT_MANAGER"], permission: "workforce_movements.view" },
+      { href: "/admin/employment-reconciliation", label: "Đối soát Employment", icon: ShieldCheck, roles: ["ADMIN"], permission: "employment.reconcile" },
     ],
   },
   {
     group: "Kế hoạch nhu cầu",
-    items: [{ href: "/admin/planning", label: "Planning (Nhu cầu)", icon: CalendarRange, roles: ["ADMIN", "HR_RECRUITER", "DEPT_MANAGER"], permission: "planning.view" }],
+    items: [
+      { href: "/admin/planning", label: "Planning (Nhu cầu)", icon: CalendarRange, roles: ["ADMIN", "HR_RECRUITER", "DEPT_MANAGER"], permission: "planning.view" },
+      { href: "/admin/workforce-requests", label: "Workforce Request", icon: UsersRound, roles: ["ADMIN", "HR_RECRUITER", "DEPT_MANAGER", "HR_DIRECTOR"], permission: "workforce_request.view" },
+      { href: "/admin/recruitment-requests", label: "Yêu cầu tuyển dụng", icon: FileSpreadsheet, roles: ["ADMIN", "HR_RECRUITER", "DEPT_MANAGER"], permission: "planning.view" },
+    ],
   },
   {
     group: "Cấu hình nghiệp vụ",

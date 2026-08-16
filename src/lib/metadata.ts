@@ -16,7 +16,7 @@ import { fieldDefinitions, formQuestions, type FieldDefinition, type FormQuestio
  * qua đây, KHÔNG tự ý đọc row["Tên cột cố định"] ở nơi khác.
  */
 
-export type Group = "department" | "dw_data" | "daily_application";
+export type Group = "department" | "dw_data" | "daily_application" | "recruitment_request";
 
 let cache: { at: number; defs: FieldDefinition[] } | null = null;
 const CACHE_MS = 15_000; // tránh query lại field_definitions trên từng dòng của 1 lô import

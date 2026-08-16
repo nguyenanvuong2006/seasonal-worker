@@ -1,9 +1,17 @@
 import { NextResponse } from "next/server";
 import { and, desc, eq, inArray } from "drizzle-orm";
 import { db } from "@/db";
-import { departments, planningPeriods, planningTargets } from "@/db/schema";
+import { departments, planningPeriods, planningTargets, recruitmentRequests } from "@/db/schema";
 import { getUserScope, requirePermission, writeAudit } from "@/lib/auth";
-import { batchComputePlanningMetrics, createPeriod } from "@/lib/planning";
+import {
+  batchComputePlanningMetrics,
+  createPeriod,
+  legacyPlanningMetrics,
+  requestKpiToPlanningMetrics,
+  type PlanningMetricsWithSource,
+} from "@/lib/planning";
+import { batchComputeRequestKpis } from "@/lib/workforce-request";
+import { todayStr } from "@/lib/helpers";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -50,6 +58,7 @@ export async function GET(req: Request) {
       supplementIndex: planningPeriods.supplementIndex,
       parentPeriodId: planningPeriods.parentPeriodId,
       supersededBy: planningPeriods.supersededBy,
+      requestId: planningPeriods.requestId,
       createdBy: planningPeriods.createdBy,
       createdAt: planningPeriods.createdAt,
       demandMale: planningTargets.demandMale,
@@ -65,9 +74,38 @@ export async function GET(req: Request) {
     .limit(300);
 
   const periodIds = rows.map((r) => r.id);
-  const metricsMap = await batchComputePlanningMetrics(periodIds);
+
+  // WORKFORCE REQUEST LINKAGE (mục 8 + 9): period CÓ request_id → KPI lấy từ
+  // Workforce Request (source of truth); period không liên kết → luồng cũ.
+  const linkedIds = rows.filter((r) => r.requestId).map((r) => r.requestId as string);
+  const requestRows = linkedIds.length > 0
+    ? await db
+        .select({
+          id: recruitmentRequests.id,
+          maleRq: recruitmentRequests.maleRq,
+          femaleRq: recruitmentRequests.femaleRq,
+          totalRequest: recruitmentRequests.totalRequest,
+          requestedDate: recruitmentRequests.requestedDate,
+          expectedDate: recruitmentRequests.expectedDate,
+          createdAt: recruitmentRequests.createdAt,
+        })
+        .from(recruitmentRequests)
+        .where(inArray(recruitmentRequests.id, linkedIds))
+    : [];
+  const requestKpis = await batchComputeRequestKpis(requestRows, todayStr());
+  const requestKpiByRequestId = new Map(requestRows.map((r) => [r.id, requestKpis.get(r.id)]));
+
+  const legacyIds = rows.filter((r) => !r.requestId).map((r) => r.id);
+  const metricsMap = await batchComputePlanningMetrics(legacyIds);
 
   const withMetrics = rows.map((r) => {
+    // Period liên kết request → metrics từ request (không tự tính khác đi).
+    if (r.requestId) {
+      const kpi = requestKpiByRequestId.get(r.requestId);
+      if (kpi) return { ...r, metrics: requestKpiToPlanningMetrics(kpi, r.requestId), fillRate: fillRateFromMetrics(requestKpiToPlanningMetrics(kpi, r.requestId)) };
+      return { ...r, metrics: emptyMetricsWithSource(r), fillRate: fillRateFromMetrics(emptyMetricsWithSource(r)) };
+    }
+
     const metrics = metricsMap.get(r.id) ?? {
       demandMale: r.demandMale ?? 0,
       demandFemale: r.demandFemale ?? 0,
@@ -90,7 +128,7 @@ export async function GET(req: Request) {
 
     return {
       ...r,
-      metrics,
+      metrics: legacyPlanningMetrics(metrics, null),
       // Backward compatibility fields for legacy clients
       fillRate: {
         demand: metrics.demandTotal,
@@ -102,6 +140,39 @@ export async function GET(req: Request) {
   });
 
   return NextResponse.json({ rows: withMetrics });
+}
+
+function fillRateFromMetrics(metrics: PlanningMetricsWithSource) {
+  return {
+    demand: metrics.demandTotal,
+    active: metrics.allocatedTotal,
+    missing: metrics.recruitmentNeededTotal,
+    percent: metrics.fillRatePercent,
+  };
+}
+
+function emptyMetricsWithSource(r: { demandMale: number | null; demandFemale: number | null; targetCount: number | null }): PlanningMetricsWithSource {
+  const demandMale = r.demandMale ?? 0;
+  const demandFemale = r.demandFemale ?? 0;
+  const demandTotal = demandMale + demandFemale > 0 ? demandMale + demandFemale : r.targetCount ?? 0;
+  return {
+    demandMale,
+    demandFemale,
+    demandTotal,
+    allocatedMale: 0,
+    allocatedFemale: 0,
+    allocatedTotal: 0,
+    resignedMale: 0,
+    resignedFemale: 0,
+    resignedTotal: 0,
+    recruitmentNeededMale: demandMale,
+    recruitmentNeededFemale: demandFemale,
+    recruitmentNeededTotal: demandTotal,
+    fillRatePercent: 0,
+    metricsSource: "linked_request",
+    requestId: null,
+    warnings: [],
+  };
 }
 
 /** Tạo kế hoạch mới (Kế hoạch gốc hoặc Yêu cầu bổ sung). */

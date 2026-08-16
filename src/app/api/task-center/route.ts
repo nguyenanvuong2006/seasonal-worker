@@ -1,9 +1,19 @@
 import { NextResponse } from "next/server";
 import { and, desc, eq, gte, ilike, inArray, isNull, lte, or, sql } from "drizzle-orm";
 import { db } from "@/db";
-import { dailyApplications, departments, planningPeriods, planningTargets, workerProfiles, workforceMovements } from "@/db/schema";
+import {
+  dailyApplications,
+  departments,
+  employmentSessions,
+  planningPeriods,
+  planningTargets,
+  planningTasks,
+  startDateCorrections,
+  workerProfiles,
+  workforceMovements,
+} from "@/db/schema";
 import { getUserScope, hasPermission, requirePermission } from "@/lib/auth";
-import { todayStr } from "@/lib/helpers";
+import { maskCccd, todayStr } from "@/lib/helpers";
 import { normalizePersonName } from "@/lib/person-name";
 import { movementScopeVisibility } from "@/lib/data-scope";
 
@@ -176,11 +186,174 @@ export async function GET(req: Request) {
     hiddenSections.push("expiringPlans");
   }
 
+  // 5) EMPLOYMENT LIFECYCLE (#16) — Xác nhận nghỉ bộ phận cũ trước khi xếp việc mới
+  //    (PREVIOUS_EMPLOYMENT_RESIGNATION_CONFIRMATION_REQUIRED). Không có bảng tasks riêng:
+  //    task = workforce_movements(resignation, PENDING_HR, source='RECRUITER_REQUEST').
+  //    CCCD mask theo permission privacy.view_cccd; deep link về hồ sơ worker.
+  let resignationConfirmations: { id: string; workerName: string | null; workerCccd: string | null; deptName: string | null; effectiveDate: string; requestedBy: string; createdAt: string }[] = [];
+  let resignationConfirmationsTotal = 0;
+  const canSeeEmployment = await hasPermission(role, "employment.view");
+  const canSeeFullCccd = await hasPermission(role, "privacy.view_cccd");
+  if (canSeeEmployment && canSeeMovements) {
+    const filters = [
+      eq(workforceMovements.movementType, "resignation"),
+      eq(workforceMovements.status, "PENDING_HR"),
+      eq(workforceMovements.source, "RECRUITER_REQUEST"),
+    ];
+    if (scope) filters.push(inArray(workforceMovements.fromDeptId, scope.length ? scope : ["__none__"]));
+    if (q) filters.push(or(ilike(workerProfiles.fullName, `%${q}%`), ilike(workerProfiles.cccd, `%${q}%`))!);
+    const where = and(...filters);
+
+    resignationConfirmations = await db
+      .select({
+        id: workforceMovements.id,
+        workerName: workerProfiles.fullName,
+        workerCccd: workerProfiles.cccd,
+        deptName: departments.deptName,
+        effectiveDate: workforceMovements.effectiveDate,
+        requestedBy: workforceMovements.requestedBy,
+        createdAt: workforceMovements.createdAt,
+      })
+      .from(workforceMovements)
+      .leftJoin(workerProfiles, eq(workforceMovements.workerId, workerProfiles.id))
+      .leftJoin(departments, eq(workforceMovements.fromDeptId, departments.id))
+      .where(where)
+      .orderBy(desc(workforceMovements.createdAt))
+      .limit(SECTION_LIMIT)
+      .then((rows) => rows.map((r) => ({
+        ...r,
+        workerName: normalizePersonName(r.workerName ?? "") || null,
+        workerCccd: canSeeFullCccd ? r.workerCccd : maskCccd(r.workerCccd),
+        createdAt: r.createdAt.toISOString(),
+      })));
+    const [cnt] = await db.select({ c: sql<number>`count(*)::int` }).from(workforceMovements).leftJoin(workerProfiles, eq(workforceMovements.workerId, workerProfiles.id)).where(where);
+    resignationConfirmationsTotal = cnt?.c ?? resignationConfirmations.length;
+  } else {
+    hiddenSections.push("resignationConfirmations");
+  }
+
+  // 6) EMPLOYMENT LIFECYCLE (#16) — START_DATE_CORRECTION_REQUEST chờ Admin duyệt.
+  let startDateRequests: { id: string; workerName: string | null; workerCccd: string | null; deptName: string | null; currentStartDate: string | null; requestedStartDate: string; reason: string; requestedBy: string; requestedAt: string }[] = [];
+  let startDateRequestsTotal = 0;
+  const canApproveCorrections = await hasPermission(role, "employment.start_date_correction.approve");
+  if (canApproveCorrections) {
+    const filters = [eq(startDateCorrections.status, "PENDING_ADMIN_APPROVAL")];
+    if (q) filters.push(or(ilike(workerProfiles.fullName, `%${q}%`), ilike(workerProfiles.cccd, `%${q}%`))!);
+    const where = and(...filters);
+
+    startDateRequests = await db
+      .select({
+        id: startDateCorrections.id,
+        workerName: workerProfiles.fullName,
+        workerCccd: workerProfiles.cccd,
+        deptName: departments.deptName,
+        currentStartDate: startDateCorrections.currentStartDate,
+        requestedStartDate: startDateCorrections.requestedStartDate,
+        reason: startDateCorrections.reason,
+        requestedBy: startDateCorrections.requestedBy,
+        requestedAt: startDateCorrections.requestedAt,
+      })
+      .from(startDateCorrections)
+      .leftJoin(workerProfiles, eq(startDateCorrections.workerId, workerProfiles.id))
+      .leftJoin(employmentSessions, eq(startDateCorrections.employmentSessionId, employmentSessions.id))
+      .leftJoin(departments, eq(employmentSessions.deptId, departments.id))
+      .where(where)
+      .orderBy(desc(startDateCorrections.requestedAt))
+      .limit(SECTION_LIMIT)
+      .then((rows) => rows.map((r) => ({
+        ...r,
+        workerName: normalizePersonName(r.workerName ?? "") || null,
+        workerCccd: canSeeFullCccd ? r.workerCccd : maskCccd(r.workerCccd),
+        requestedAt: r.requestedAt.toISOString(),
+      })));
+    const [cnt] = await db.select({ c: sql<number>`count(*)::int` }).from(startDateCorrections).leftJoin(workerProfiles, eq(startDateCorrections.workerId, workerProfiles.id)).where(where);
+    startDateRequestsTotal = cnt?.c ?? startDateRequests.length;
+  } else {
+    hiddenSections.push("startDateRequests");
+  }
+
+  // 7) Yêu cầu tuyển dụng hết hạn còn DW cần chuyển phân bổ (Yêu cầu #7 & #14).
+  //    Đây là mục DUY NHẤT đọc từ bảng `planning_tasks` — task được job
+  //    `expire_recruitment_requests` tạo sẵn, có unique index chống trùng, nên
+  //    không thể tổng hợp bằng live-query như bốn mục trên.
+  //
+  //    LƯU Ý NGHIỆP VỤ: task này CHỈ nói "yêu cầu đã hết hạn, cần xác nhận
+  //    chuyển DW sang yêu cầu mới". Nó KHÔNG có nghĩa là DW nghỉ việc.
+  let reallocationTasks: {
+    id: string;
+    requestCode: string | null;
+    departmentName: string | null;
+    section: string | null;
+    groupName: string | null;
+    endDate: string | null;
+    totalActiveAllocations: number;
+    maleCount: number;
+    femaleCount: number;
+    recruitmentRequestId: string | null;
+    dueDate: string | null;
+  }[] = [];
+  let reallocationTasksTotal = 0;
+  // Chỉ người thực sự chuyển được phân bổ mới thấy mục này — Dept Manager
+  // không có `planning.reallocate` nên không bị giao việc họ không làm được.
+  const canReallocate = await hasPermission(role, "planning.reallocate");
+  if (canReallocate) {
+    const filters = [
+      eq(planningTasks.taskType, "PLANNING_REALLOCATION_REQUIRED"),
+      inArray(planningTasks.status, ["OPEN", "IN_PROGRESS"]),
+    ];
+    if (scope) filters.push(inArray(planningTasks.departmentId, scope.length ? scope : ["__none__"]));
+    if (q) filters.push(ilike(planningTasks.title, `%${q}%`));
+    const where = and(...filters);
+
+    const rows = await db
+      .select({
+        id: planningTasks.id,
+        detail: planningTasks.detail,
+        dueDate: planningTasks.dueDate,
+        recruitmentRequestId: planningTasks.recruitmentRequestId,
+        departmentName: departments.deptName,
+      })
+      .from(planningTasks)
+      .leftJoin(departments, eq(planningTasks.departmentId, departments.id))
+      .where(where)
+      .orderBy(planningTasks.dueDate)
+      .limit(SECTION_LIMIT);
+
+    reallocationTasks = rows.map((r) => {
+      const d = (r.detail ?? {}) as Record<string, unknown>;
+      return {
+        id: r.id,
+        requestCode: (d.requestCode as string) ?? null,
+        departmentName: r.departmentName ?? ((d.department as string) || null),
+        section: (d.section as string) ?? null,
+        groupName: (d.groupName as string) ?? null,
+        endDate: (d.endDate as string) ?? null,
+        totalActiveAllocations: Number(d.totalActiveAllocations ?? 0),
+        maleCount: Number(d.maleCount ?? 0),
+        femaleCount: Number(d.femaleCount ?? 0),
+        recruitmentRequestId: r.recruitmentRequestId,
+        dueDate: r.dueDate,
+      };
+    });
+
+    const [cnt] = await db
+      .select({ c: sql<number>`count(*)::int` })
+      .from(planningTasks)
+      .leftJoin(departments, eq(planningTasks.departmentId, departments.id))
+      .where(where);
+    reallocationTasksTotal = cnt?.c ?? reallocationTasks.length;
+  } else {
+    hiddenSections.push("reallocationTasks");
+  }
+
   return NextResponse.json({
     newApplicants: { rows: newApplicants, total: newApplicantsTotal },
     resignations: { rows: resignations, total: resignationsTotal },
     transfers: { rows: transfers, total: transfersTotal },
     expiringPlans: { rows: expiringPlans, total: expiringPlansTotal },
+    resignationConfirmations: { rows: resignationConfirmations, total: resignationConfirmationsTotal },
+    startDateRequests: { rows: startDateRequests, total: startDateRequestsTotal },
+    reallocationTasks: { rows: reallocationTasks, total: reallocationTasksTotal },
     hiddenSections,
     generatedAt: new Date().toISOString(),
   });

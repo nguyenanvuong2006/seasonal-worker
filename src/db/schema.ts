@@ -127,8 +127,22 @@ export const dailyApplications = pgTable(
     workDuration: varchar("work_duration", { length: 40 }),
     referralChannel: varchar("referral_channel", { length: 120 }),
 
+    // EMPLOYMENT LIFECYCLE (#5-6) — SELF-DECLARATION khi người ĐANG có Employment Session ACTIVE
+    // đăng ký lại: NLĐ tự khai "đã báo nghỉ bộ phận cũ". CHỈ là thông tin chờ Recruiter xác minh —
+    // KHÔNG tự đóng session, KHÔNG tạo resignation, KHÔNG xoá allocation (xem lib/employment.ts).
+    workerDeclaredPreviousResignation: boolean("worker_declared_previous_resignation").notNull().default(false),
+    declaredPreviousDeptId: uuid("declared_previous_dept_id"),
+    declaredPreviousSessionId: uuid("declared_previous_session_id"),
+    declaredResignationDate: date("declared_resignation_date"),
+    declaredResignationNote: text("declared_resignation_note"),
+    declaredAt: timestamp("declared_at", { withTimezone: true }),
+
     // HR xếp việc
     deptId: uuid("dept_id").references(() => departments.id, { onDelete: "set null" }),
+    // WORKFORCE REQUEST LINKAGE — pipeline Application/Screened/Interviewed/Recruited
+    // của request này đọc từ daily_applications theo cột này (source of truth), không
+    // dùng các cột số import tay (male_application...) trên recruitment_requests.
+    requestId: uuid("request_id").references(() => recruitmentRequests.id, { onDelete: "set null" }),
     status: varchar("status", { length: 24 }).notNull().default("PENDING"),
     startingDate: date("starting_date"),
     appointmentList: varchar("appointment_list", { length: 60 }),
@@ -490,7 +504,18 @@ export const workerProfiles = pgTable(
   ],
 );
 
-/** 1 lần đăng ký / 1 đợt làm việc = 1 employment session, gắn vào đúng 1 worker_profiles. */
+/**
+ * 1 lần đăng ký / 1 đợt làm việc = 1 employment session, gắn vào đúng 1 worker_profiles.
+ *
+ * EMPLOYMENT LIFECYCLE (2026-08-16) — SOURCE OF TRUTH:
+ *   - daily_applications        = LỊCH SỬ ĐĂNG KÝ/XIN VIỆC (không bao giờ overwrite/xoá).
+ *   - employment_sessions       = LỊCH SỬ LÀM VIỆC THẬT (mỗi đợt làm 1 dòng; ai/ở đâu/từ ngày/đến ngày/vì sao nghỉ).
+ *   - workforce_movements       = SỰ KIỆN nghỉ việc/thuyên chuyển đã được xác nhận.
+ * Trạng thái "ĐANG LÀM" (ACTIVE) := status = 'APPROVED' AND end_date IS NULL.
+ * INVARIANT bắt buộc: 1 worker chỉ có TỐI ĐA 1 session ACTIVE tại một thời điểm —
+ * enforce bằng partial unique index `employment_session_one_active_uq` (lưới cuối cấp DB)
+ * + kiểm tra transaction-safe ở lib/employment.ts (lớp chính).
+ */
 export const employmentSessions = pgTable(
   "employment_sessions",
   {
@@ -502,6 +527,13 @@ export const employmentSessions = pgTable(
     status: varchar("status", { length: 40 }).notNull().default("PENDING"), // đồng bộ với workflow_stages.stageKey
     startingDate: date("starting_date"),
     endDate: date("end_date"), // rời việc/kết thúc đợt làm (nếu có)
+    // EMPLOYMENT LIFECYCLE — vì sao/ai/lúc nào kết thúc đợt làm việc (audit-able, không suy đoán từ status).
+    endReason: varchar("end_reason", { length: 40 }), // RESIGNATION | TRANSFER | RECONCILIATION | OTHER
+    endedBy: varchar("ended_by", { length: 64 }), // username người xác nhận kết thúc
+    endedAt: timestamp("ended_at", { withTimezone: true }),
+    endMovementId: uuid("end_movement_id"), // -> workforce_movements.id (movement đã kết thúc session này)
+    // Nguồn gốc starting_date: ASSIGNMENT (mặc định = ngày Recruiter xếp việc) | CORRECTION (Admin duyệt điều chỉnh) | IMPORT | RECONCILIATION
+    startDateSource: varchar("start_date_source", { length: 24 }).default("ASSIGNMENT"),
     note: text("note"),
     createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
   },
@@ -509,6 +541,44 @@ export const employmentSessions = pgTable(
     uniqueIndex("employment_session_daily_app_uq").on(t.dailyApplicationId).where(sql`daily_application_id is not null`),
     // Already present in schema.sql; declare here too so Drizzle metadata matches production.
     index("employment_session_worker_idx").on(t.workerId),
+    // INVARIANT #1 (Employment Lifecycle): 1 worker = tối đa 1 session ACTIVE. Đây là lưới an
+    // toàn cấp DB cho race thật (double-click/retry/2 request đồng thời) — lớp chính là
+    // transaction check trong lib/employment.ts. Migration chỉ tạo được index này khi dữ liệu
+    // sạch — xem migrations/2026-08-16-employment-lifecycle.sql (audit trước, không auto-fix).
+    uniqueIndex("employment_session_one_active_uq").on(t.workerId).where(sql`status = 'APPROVED' and end_date is null`),
+  ],
+);
+
+/**
+ * START DATE CORRECTION (Employment Lifecycle #11-12) — Recruiter KHÔNG được tự backdate
+ * starting_date. Nếu thực tế nhận việc sớm hơn ngày thao tác: tạo yêu cầu điều chỉnh,
+ * Admin duyệt qua Task Center. Giá trị cũ/mới + người duyệt được giữ lại làm audit trail.
+ */
+export const startDateCorrections = pgTable(
+  "start_date_corrections",
+  {
+    id: uuid("id").defaultRandom().primaryKey(),
+    employmentSessionId: uuid("employment_session_id").notNull(),
+    workerId: uuid("worker_id").notNull(),
+    currentStartDate: date("current_start_date"), // starting_date tại thời điểm yêu cầu (audit)
+    requestedStartDate: date("requested_start_date").notNull(),
+    reason: text("reason").notNull(),
+    note: text("note"),
+    status: varchar("status", { length: 32 }).notNull().default("PENDING_ADMIN_APPROVAL"), // PENDING_ADMIN_APPROVAL | APPROVED | REJECTED
+    requestedBy: varchar("requested_by", { length: 64 }).notNull(),
+    requestedAt: timestamp("requested_at", { withTimezone: true }).notNull().defaultNow(),
+    decidedBy: varchar("decided_by", { length: 64 }),
+    decidedAt: timestamp("decided_at", { withTimezone: true }),
+    decisionNote: text("decision_note"),
+    // Audit sau khi APPROVE — không mất giá trị cũ.
+    oldStartDate: date("old_start_date"),
+    newStartDate: date("new_start_date"),
+  },
+  (t) => [
+    // Idempotent: 1 session chỉ có 1 yêu cầu điều chỉnh đang chờ — retry/double-click không tạo trùng.
+    uniqueIndex("start_date_correction_pending_uq").on(t.employmentSessionId).where(sql`status = 'PENDING_ADMIN_APPROVAL'`),
+    index("start_date_correction_status_idx").on(t.status),
+    index("start_date_correction_worker_idx").on(t.workerId),
   ],
 );
 
@@ -555,6 +625,12 @@ export const workforceMovements = pgTable(
     note: text("note"),
     status: varchar("status", { length: 40 }).notNull().default("PENDING_HR"),
     relatedMovementId: uuid("related_movement_id"), // liên kết Transfer "Không đến" -> Resignation được sinh ra
+    // EMPLOYMENT LIFECYCLE (#4) — truy vết đầy đủ: movement kết thúc ĐÚNG session nào, ai xác
+    // nhận, lúc nào, đến từ nguồn nào (DEPT_REPORT | RECRUITER_CONFIRM | SELF_DECLARATION | RECONCILIATION | LEGACY).
+    employmentSessionId: uuid("employment_session_id"), // -> employment_sessions.id
+    confirmedBy: varchar("confirmed_by", { length: 64 }),
+    confirmedAt: timestamp("confirmed_at", { withTimezone: true }),
+    source: varchar("source", { length: 32 }),
     requestedBy: varchar("requested_by", { length: 64 }).notNull(),
     createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
     updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
@@ -571,6 +647,8 @@ export const workforceMovements = pgTable(
     uniqueIndex("workforce_movement_spawn_resignation_uq")
       .on(t.relatedMovementId)
       .where(sql`movement_type = 'resignation' and related_movement_id is not null`),
+    // EMPLOYMENT LIFECYCLE (#4) — tra cứu nhanh movement theo session (Worker Profile timeline).
+    index("workforce_movement_session_idx").on(t.employmentSessionId),
   ],
 );
 
@@ -599,6 +677,13 @@ export const planningPeriods = pgTable(
     supplementIndex: integer("supplement_index").notNull().default(0), // 0: Gốc, 1: Bổ sung 1, 2: Bổ sung 2...
     parentPeriodId: uuid("parent_period_id"), // trỏ tới kế hoạch gốc nếu là bổ sung
     supersededBy: uuid("superseded_by"), // trỏ tới bản ghi version mới hơn (tự tham chiếu khi revise)
+    // WORKFORCE REQUEST LINKAGE (mục 8) — liên kết ID rõ ràng tới Workforce Request;
+    // KHÔNG match bằng text Department/Date. Khi có liên kết, KPI của Planning được
+    // tính TỪ Workforce Request (source of truth), không tự tính riêng.
+    // Ghi chú kỹ thuật: khai báo soft reference ở Drizzle (FK thật nằm trong SQL
+    // migration planning_periods.request_id REFERENCES recruitment_requests) để tránh
+    // vòng tham chiếu kiểu giữa planningPeriods ↔ recruitmentRequests.
+    requestId: uuid("request_id"),
     createdBy: varchar("created_by", { length: 64 }).notNull(),
     createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
     updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
@@ -630,11 +715,93 @@ export const planningAllocations = pgTable(
     planningPeriodId: uuid("planning_period_id").notNull(),
     allocatedAt: timestamp("allocated_at", { withTimezone: true }).notNull().defaultNow(),
     allocatedBy: varchar("allocated_by", { length: 64 }).notNull(),
+
+    /* --- VÒNG ĐỜI PHÂN BỔ (migration 2026-08-17) ------------------------
+       Cho phép CHUYỂN phân bổ sang yêu cầu mới mà KHÔNG mất lịch sử.
+       LƯU Ý NGHIỆP VỤ: đóng phân bổ (allocation_end_date) KHÔNG đồng nghĩa
+       DW nghỉ việc. Chỉ workforce_movements RESIGNATION mới là nghỉ việc. */
+    allocationStartDate: date("allocation_start_date"),
+    allocationEndDate: date("allocation_end_date"),
+    previousAllocationId: uuid("previous_allocation_id"),
+    reallocatedBy: varchar("reallocated_by", { length: 64 }),
+    reallocatedAt: timestamp("reallocated_at", { withTimezone: true }),
+    recruitmentRequestId: uuid("recruitment_request_id"),
   },
   (t) => [
     index("planning_alloc_session_idx").on(t.employmentSessionId),
     index("planning_alloc_period_idx").on(t.planningPeriodId),
-    uniqueIndex("planning_alloc_session_period_uq").on(t.employmentSessionId, t.planningPeriodId),
+    // Unique CHỈ áp dụng cho phân bổ đang mở — lịch sử phân bổ đã đóng
+    // được giữ lại đầy đủ (append-only).
+    uniqueIndex("planning_alloc_active_uq")
+      .on(t.employmentSessionId, t.planningPeriodId)
+      .where(sql`allocation_end_date is null`),
+    index("planning_alloc_request_idx").on(t.recruitmentRequestId),
+  ],
+);
+
+/* ============================================================
+   PLANNING COLUMN CONFIG (Yêu cầu #2)
+   ---------------------------------------------------------------
+   Cấu hình cột bảng Planning theo VAI TRÒ + THIẾT BỊ, do Admin quản lý.
+   Danh mục cột gốc nằm ở src/lib/recruitment-request-columns.ts (thuần),
+   bảng này CHỈ lưu bật/tắt, thứ tự và ghim — không hardcode trong UI,
+   không chỉ lưu localStorage.
+   ============================================================ */
+export const planningColumnConfigs = pgTable(
+  "planning_column_configs",
+  {
+    id: uuid("id").defaultRandom().primaryKey(),
+    role: varchar("role", { length: 32 }).notNull(),
+    device: varchar("device", { length: 16 }).notNull().default("desktop"), // desktop | mobile
+    columnKey: varchar("column_key", { length: 64 }).notNull(),
+    visible: boolean("visible").notNull().default(true),
+    sticky: boolean("sticky").notNull().default(false),
+    sortOrder: integer("sort_order").notNull().default(0),
+    updatedBy: varchar("updated_by", { length: 64 }),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+    updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [
+    uniqueIndex("planning_column_configs_uq").on(t.role, t.device, t.columnKey),
+    index("planning_column_configs_role_idx").on(t.role, t.device),
+  ],
+);
+
+/* ============================================================
+   PLANNING TASKS (Yêu cầu #7 & #14)
+   ---------------------------------------------------------------
+   Task Center BỀN VỮNG cho Planning. Task Center cũ chỉ truy vấn trực
+   tiếp nên không thể auto-DONE hay chống trùng khi cron chạy lại.
+
+   PLANNING_REALLOCATION_REQUIRED: yêu cầu tuyển dụng đã hết hạn nhưng
+   vẫn còn DW đang được phân bổ → Recruiter phải chuyển phân bổ sang
+   yêu cầu mới. TUYỆT ĐỐI KHÔNG tự tạo nghỉ việc / ngày nghỉ / inactive.
+   ============================================================ */
+export const planningTasks = pgTable(
+  "planning_tasks",
+  {
+    id: uuid("id").defaultRandom().primaryKey(),
+    taskType: varchar("task_type", { length: 48 }).notNull(),
+    status: varchar("status", { length: 24 }).notNull().default("OPEN"), // OPEN | IN_PROGRESS | DONE | DISMISSED
+    recruitmentRequestId: uuid("recruitment_request_id"),
+    planningPeriodId: uuid("planning_period_id"),
+    departmentId: uuid("department_id"),
+    title: text("title").notNull(),
+    detail: jsonb("detail").$type<Record<string, unknown>>().notNull().default({}),
+    dueDate: date("due_date"),
+    resolvedAt: timestamp("resolved_at", { withTimezone: true }),
+    resolvedBy: varchar("resolved_by", { length: 64 }),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+    updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [
+    // CHỐNG TRÙNG: cron/retry chạy bao nhiêu lần cũng chỉ 1 task đang mở
+    // cho mỗi (task_type, recruitment_request_id).
+    uniqueIndex("planning_tasks_open_uq")
+      .on(t.taskType, t.recruitmentRequestId)
+      .where(sql`status in ('OPEN', 'IN_PROGRESS')`),
+    index("planning_tasks_status_idx").on(t.status, t.taskType),
+    index("planning_tasks_dept_idx").on(t.departmentId),
   ],
 );
 
@@ -853,6 +1020,239 @@ export type WorkforceMovement = typeof workforceMovements.$inferSelect;
 export type PlanningPeriod = typeof planningPeriods.$inferSelect;
 export type PlanningTarget = typeof planningTargets.$inferSelect;
 export type PlanningAllocation = typeof planningAllocations.$inferSelect;
+
+/* ============================================================
+   WORKFORCE RECRUITMENT REQUEST PLANNING (Phase 3)
+   ---------------------------------------------------------------
+   Mở rộng module Planning (Nhu cầu) thành Workforce Recruitment
+   Request Planning, tích hợp với planning_periods, planning_targets,
+   planning_allocations, Daily Application, Employment Session và
+   Workforce Movement.
+   Bảng này lưu chi tiết từng yêu cầu tuyển dụng (import từ Excel/
+   Google Sheets) với header alias mapping linh hoạt, preview và
+   validation trước import.
+   ============================================================ */
+export const recruitmentRequests = pgTable(
+  "recruitment_requests",
+  {
+    id: uuid("id").defaultRandom().primaryKey(),
+    planningPeriodId: uuid("planning_period_id").references(() => planningPeriods.id, { onDelete: "set null" }),
+    requestCode: varchar("request_code", { length: 80 }).notNull(),
+    requester: varchar("requester", { length: 160 }).notNull().default(""),
+    position: varchar("position", { length: 160 }),
+    jobTitle: varchar("job_title", { length: 255 }),
+    location: varchar("location", { length: 120 }),
+    section: varchar("section", { length: 120 }),
+    groupName: varchar("group_name", { length: 120 }),
+    division: varchar("division", { length: 120 }),
+    department: varchar("department", { length: 255 }),
+    reason: text("reason"),
+    noteForReason: text("note_for_reason"),
+    specialRequirements: text("special_requirements"),
+    maleRq: integer("male_rq").notNull().default(0),
+    femaleRq: integer("female_rq").notNull().default(0),
+    maleApplication: integer("male_application").notNull().default(0),
+    femaleApplication: integer("female_application").notNull().default(0),
+    maleInterviewed: integer("male_interviewed").notNull().default(0),
+    femaleInterviewed: integer("female_interviewed").notNull().default(0),
+    maleRecruited: integer("male_recruited").notNull().default(0),
+    femaleRecruited: integer("female_recruited").notNull().default(0),
+    maleQuit: integer("male_quit").notNull().default(0),
+    femaleQuit: integer("female_quit").notNull().default(0),
+    maleBalance: integer("male_balance").notNull().default(0),
+    femaleBalance: integer("female_balance").notNull().default(0),
+    totalBalance: integer("total_balance").notNull().default(0),
+    // PENDING | PROCESSING | COMPLETED | CANCELLED | EXPIRED
+    // EXPIRED TÁCH BIỆT với CANCELLED: quá End Date KHÔNG BAO GIỜ tự thành CANCELLED.
+    status: varchar("status", { length: 24 }).notNull().default("PENDING"),
+
+    /* --- SÁU TRƯỜNG NGÀY TÁCH BIỆT (Yêu cầu #6) ------------------------
+       requestedDate  Ngày yêu cầu
+       expectedDate   Ngày cần nhân lực   ← mốc SẮP XẾP MẶC ĐỊNH
+       startingDate   Ngày nhận việc
+       endDate        Ngày kết thúc yêu cầu (hết hạn ≠ DW nghỉ việc)
+       offeredDate    Ngày đề nghị
+       completedDate  Ngày tuyển đủ                                     */
+    requestedDate: date("requested_date"),
+    expectedDate: date("expected_date"),
+    startingDate: date("starting_date"),
+    endDate: date("end_date"),
+    offeredDate: date("offered_date"),
+    completedDate: date("completed_date"),
+    /** DERIVED: offeredDate − requestedDate (số ngày). */
+    offeredVsRequested: integer("offered_vs_requested"),
+    /** DERIVED: completedDate − requestedDate (số ngày). */
+    completedVsRequested: integer("completed_vs_requested"),
+
+    month: varchar("month", { length: 10 }),
+    cost: integer("cost").notNull().default(0),
+    remarks: text("remarks"),
+    to: varchar("to", { length: 160 }),
+    rqStatus: varchar("rq_status", { length: 40 }),
+    monthRc: varchar("month_rc", { length: 10 }),
+    totalRequest: integer("total_request").notNull().default(0),
+    recruitedVsExpected: integer("recruited_vs_expected").notNull().default(0),
+    screened: integer("screened").notNull().default(0),
+    interview: integer("interview").notNull().default(0),
+    recruit: integer("recruit").notNull().default(0),
+    departmentText: varchar("department_text", { length: 255 }),
+    monthReport: varchar("month_report", { length: 10 }),
+
+    /** FK thật tới departments.id — khoá lọc Data Scope phía server.
+     *  Cột text `department` chỉ dùng để hiển thị/import từ Excel. */
+    departmentId: uuid("department_id").references(() => departments.id, { onDelete: "set null" }),
+
+    /* --- CHUỖI LỊCH SỬ APPEND-ONLY (Yêu cầu #4) ------------------------
+       Không bao giờ ghi đè/xoá yêu cầu cũ; yêu cầu mới nối vào chuỗi. */
+    previousRequestId: uuid("previous_request_id"),
+    supersedesRequestId: uuid("supersedes_request_id"),
+
+    createdBy: varchar("created_by", { length: 64 }).notNull(),
+    deletedAt: timestamp("deleted_at", { withTimezone: true }),
+    deletedBy: varchar("deleted_by", { length: 64 }),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+    updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [
+    uniqueIndex("recruitment_requests_code_uq").on(t.requestCode).where(sql`deleted_at is null`),
+    index("recruitment_requests_period_idx").on(t.planningPeriodId),
+    index("recruitment_requests_status_idx").on(t.status),
+    index("recruitment_requests_month_idx").on(t.month),
+    index("recruitment_requests_location_idx").on(t.location),
+    index("recruitment_requests_division_idx").on(t.division),
+    index("recruitment_requests_dept_idx").on(t.department),
+    index("recruitment_requests_section_idx").on(t.section),
+    index("recruitment_requests_group_idx").on(t.groupName),
+    index("recruitment_requests_requester_idx").on(t.requester),
+    index("recruitment_requests_department_id_idx").on(t.departmentId),
+    index("recruitment_requests_previous_idx").on(t.previousRequestId),
+    index("recruitment_requests_supersedes_idx").on(t.supersedesRequestId),
+    index("recruitment_requests_expected_date_idx")
+      .on(t.expectedDate)
+      .where(sql`deleted_at is null`),
+    index("recruitment_requests_end_date_idx")
+      .on(t.endDate)
+      .where(sql`deleted_at is null`),
+  ],
+);
+
+export type PlanningColumnConfig = typeof planningColumnConfigs.$inferSelect;
+export type PlanningTask = typeof planningTasks.$inferSelect;
+export type NewPlanningTask = typeof planningTasks.$inferInsert;
+
+export type RecruitmentRequest = typeof recruitmentRequests.$inferSelect;
+export type NewRecruitmentRequest = typeof recruitmentRequests.$inferInsert;
+
+/* ============================================================
+   WORKFORCE REQUEST LINKAGE (Phase 4)
+   ------------------------------------------------------------
+   Architecture: Workforce Request ↔ Planning ↔ Employment/Allocation.
+   Bảng dưới đây là LỚP ALLOCATION CỦA WORKFORCE REQUEST:
+     - request_allocations:        1 ACTIVE worker → 1 ACTIVE request
+                                   allocation (source of truth "worker đang
+                                   được tính vào request nào").
+     - request_allocation_history:  audit mọi thay đổi allocation (mục 15).
+     - request_allocation_overrides: log RIÊNG cho override vượt tổng
+                                   nhu cầu (mục 6 + 15).
+     - request_comments:            bình luận của Dept Manager (mục 11).
+     - request_kpi_cache:           cache KPI có timestamp + recompute job
+                                   (mục 9) — KHÔNG phải source of truth.
+   ============================================================ */
+export const requestAllocations = pgTable(
+  "request_allocations",
+  {
+    id: uuid("id").defaultRandom().primaryKey(),
+    employmentSessionId: uuid("employment_session_id").notNull(), // tham chiếu mềm tới employment_sessions
+    workerId: uuid("worker_id").notNull(), // denormalized — để chốt unique theo WORKER
+    requestId: uuid("request_id").notNull(), // tham chiếu mềm tới recruitment_requests
+    status: varchar("status", { length: 16 }).notNull().default("ACTIVE"), // ACTIVE | ENDED
+    startedAt: timestamp("started_at", { withTimezone: true }).notNull().defaultNow(),
+    endedAt: timestamp("ended_at", { withTimezone: true }),
+    allocatedBy: varchar("allocated_by", { length: 64 }).notNull(),
+    endedBy: varchar("ended_by", { length: 64 }),
+    endReason: text("end_reason"),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+    updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [
+    // CHỐT DB (mục 4): 1 worker tối đa 1 ACTIVE request allocation tại 1 thời điểm.
+    // Lớp cuối chống double-click/race sau khi transaction đã kiểm tra logic.
+    uniqueIndex("request_alloc_one_active_per_worker_uq").on(t.workerId).where(sql`status = 'ACTIVE'`),
+    index("request_alloc_request_status_idx").on(t.requestId, t.status),
+    index("request_alloc_session_idx").on(t.employmentSessionId),
+    index("request_alloc_worker_idx").on(t.workerId),
+  ],
+);
+
+export const requestAllocationHistory = pgTable(
+  "request_allocation_history",
+  {
+    id: uuid("id").defaultRandom().primaryKey(),
+    requestId: uuid("request_id").notNull(), // request liên quan (to trước, from nếu END)
+    workerId: uuid("worker_id").notNull(),
+    employmentSessionId: uuid("employment_session_id"),
+    fromRequestId: uuid("from_request_id"),
+    toRequestId: uuid("to_request_id"),
+    action: varchar("action", { length: 24 }).notNull(), // ALLOCATE | REALLOCATE | END | OVERRIDE
+    reason: text("reason"),
+    overrideConfirmed: boolean("override_confirmed").notNull().default(false),
+    changedBy: varchar("changed_by", { length: 64 }).notNull(),
+    changedAt: timestamp("changed_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [
+    index("request_alloc_history_request_idx").on(t.requestId, t.changedAt),
+    index("request_alloc_history_worker_idx").on(t.workerId, t.changedAt),
+    index("request_alloc_history_from_idx").on(t.fromRequestId),
+    index("request_alloc_history_to_idx").on(t.toRequestId),
+  ],
+);
+
+export const requestAllocationOverrides = pgTable(
+  "request_allocation_overrides",
+  {
+    id: uuid("id").defaultRandom().primaryKey(),
+    requestId: uuid("request_id").notNull(),
+    workerId: uuid("worker_id").notNull(),
+    changedBy: varchar("changed_by", { length: 64 }).notNull(),
+    reason: text("reason").notNull(),
+    confirmed: boolean("confirmed").notNull().default(true),
+    currentTotal: integer("current_total").notNull().default(0), // tổng hiện có tại thời điểm override
+    totalRequest: integer("total_request").notNull().default(0), // tổng nhu cầu
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [index("request_override_request_idx").on(t.requestId, t.createdAt)],
+);
+
+export const requestComments = pgTable(
+  "request_comments",
+  {
+    id: uuid("id").defaultRandom().primaryKey(),
+    requestId: uuid("request_id").notNull(),
+    userId: uuid("user_id"),
+    username: varchar("username", { length: 64 }).notNull(),
+    body: text("body").notNull(),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [index("request_comment_request_idx").on(t.requestId, t.createdAt)],
+);
+
+export const requestKpiCache = pgTable(
+  "request_kpi_cache",
+  {
+    requestId: uuid("request_id").primaryKey(),
+    asOfDate: date("as_of_date").notNull(),
+    payload: jsonb("payload").$type<Record<string, unknown>>().notNull(),
+    computedAt: timestamp("computed_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [index("request_kpi_cache_computed_idx").on(t.computedAt)],
+);
+
+export type RequestAllocation = typeof requestAllocations.$inferSelect;
+export type NewRequestAllocation = typeof requestAllocations.$inferInsert;
+export type RequestAllocationHistory = typeof requestAllocationHistory.$inferSelect;
+export type RequestAllocationOverride = typeof requestAllocationOverrides.$inferSelect;
+export type RequestComment = typeof requestComments.$inferSelect;
+export type RequestKpiCache = typeof requestKpiCache.$inferSelect;
 
 /* ============================================================
    DOCUMENT MERGE ENGINE

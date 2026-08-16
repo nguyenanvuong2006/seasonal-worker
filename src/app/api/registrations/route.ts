@@ -8,6 +8,8 @@ import { todayStr } from "@/lib/helpers";
 import { normalizePersonName } from "@/lib/person-name";
 import { runRules } from "@/lib/rule-engine";
 import { persistRegistrationAtomically, type RegistrationTransactionRunner } from "@/lib/registration-persistence";
+import { findActiveSessionByCccd } from "@/lib/employment";
+import { normalizeSelfDeclaration } from "@/lib/employment-lifecycle";
 import { isQuestionForAudience } from "@/lib/form-targeting";
 import { CCCD_ERROR_MESSAGE, isValidCccd } from "@/lib/validators";
 
@@ -109,6 +111,23 @@ export async function POST(req: Request) {
     type ProfileInsert = typeof workerProfiles.$inferInsert;
     type ProfileRow = typeof workerProfiles.$inferSelect;
 
+    // EMPLOYMENT LIFECYCLE (#5-6) — nếu người này ĐANG có Employment Session ACTIVE:
+    //   - application mới VẪN ĐƯỢC LƯU (lịch sử đăng ký không bị chặn/ghi đè);
+    //   - self-declaration "đã báo nghỉ bộ phận cũ" (nếu có) được lưu vào application để
+    //     Recruiter xác minh — KHÔNG tự đóng session, KHÔNG tạo resignation, KHÔNG xoá allocation;
+    //   - employment session mới được tạo ở trạng thái PENDING (chưa phải employment) — invariant
+    //     "1 ACTIVE/worker" không bị ảnh hưởng vì chỉ thao tác XẾP VIỆC mới chuyển sang APPROVED.
+    const activeEmployment = await findActiveSessionByCccd(cccd);
+    const declaration = normalizeSelfDeclaration({
+      hasActiveSession: Boolean(activeEmployment),
+      declared: body.declared_previous_resignation === true,
+      declaredResignationDate: typeof body.declared_resignation_date === "string" ? body.declared_resignation_date : null,
+      declaredNote: typeof body.declared_resignation_note === "string" ? body.declared_resignation_note : null,
+      activeDeptId: activeEmployment?.deptId ?? null,
+      activeSessionId: activeEmployment?.id ?? null,
+      now: new Date(),
+    });
+
     const normalizedName = normalizePersonName(match.worker?.fullName ?? fullName);
     const applicationValues: ApplicationInsert = {
       regDate: today,
@@ -131,6 +150,12 @@ export async function POST(req: Request) {
       customAnswers: answers,
       status: ruleStatus ?? "PENDING",
       noteWorker: ruleNote,
+      workerDeclaredPreviousResignation: declaration.workerDeclaredPreviousResignation,
+      declaredPreviousDeptId: declaration.declaredPreviousDeptId,
+      declaredPreviousSessionId: declaration.declaredPreviousSessionId,
+      declaredResignationDate: declaration.declaredResignationDate,
+      declaredResignationNote: declaration.declaredResignationNote,
+      declaredAt: declaration.declaredAt,
     };
     const profileValues: ProfileInsert = {
       cccd,
@@ -167,11 +192,15 @@ export async function POST(req: Request) {
           return row;
         },
         createEmploymentSession: async ({ application, profile }) => {
+          // EMPLOYMENT LIFECYCLE — session sinh từ đăng ký công khai KHÔNG bao giờ được tự
+          // APPROVED (kể cả khi Rule Engine set status APPROVED cho application): chuyển sang
+          // APPROVED là nghiệp vụ XẾP VIỆC có kiểm tra invariant "1 ACTIVE/worker" riêng.
+          const sessionStatus = application.status === "APPROVED" ? "PENDING" : application.status;
           await tx.insert(employmentSessions).values({
             workerId: profile.id,
             dailyApplicationId: application.id,
             regDate: today,
-            status: application.status,
+            status: sessionStatus,
           });
         },
       }));
@@ -272,6 +301,35 @@ export async function GET(req: Request) {
       isImported: dailyApplications.isImported,
       customAnswers: dailyApplications.customAnswers,
       workerId: workerProfiles.id,
+      // EMPLOYMENT LIFECYCLE — self-declaration chờ Recruiter xác minh (#6).
+      workerDeclaredPreviousResignation: dailyApplications.workerDeclaredPreviousResignation,
+      declaredResignationDate: dailyApplications.declaredResignationDate,
+      declaredResignationNote: dailyApplications.declaredResignationNote,
+      // EMPLOYMENT LIFECYCLE — trạng thái employment cho badge/warning (#7, #14, #23).
+      // ACTIVE := APPROVED + end_date IS NULL; session của CHÍNH application này không tính là "nơi khác".
+      activeElsewhereDeptName: sql<string | null>`(
+        select d.dept_name from employment_sessions es
+        left join departments d on d.id = es.dept_id
+        where es.worker_id = ${workerProfiles.id}
+          and es.status = 'APPROVED' and es.end_date is null
+          and (es.daily_application_id is distinct from ${dailyApplications.id})
+        order by es.reg_date desc limit 1
+      )`,
+      activeSessionCount: sql<number>`(
+        select count(*)::int from employment_sessions es
+        where es.worker_id = ${workerProfiles.id}
+          and es.status = 'APPROVED' and es.end_date is null
+      )`,
+      endedSessionCount: sql<number>`(
+        select count(*)::int from employment_sessions es
+        where es.worker_id = ${workerProfiles.id}
+          and (es.end_date is not null or es.status = 'ENDED')
+      )`,
+      pendingResignationCount: sql<number>`(
+        select count(*)::int from workforce_movements wm
+        where wm.worker_id = ${workerProfiles.id}
+          and wm.movement_type = 'resignation' and wm.status = 'PENDING_HR'
+      )`,
     })
     .from(dailyApplications)
     .leftJoin(departments, eq(dailyApplications.deptId, departments.id))

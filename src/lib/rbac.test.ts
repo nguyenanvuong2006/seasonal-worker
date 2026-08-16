@@ -17,15 +17,15 @@ import {
 
 const allKeys = PERMISSION_CATALOG.map((p) => p.key);
 
-test("catalog: ~42 permissions, mỗi key duy nhất", () => {
-  assert.ok(allKeys.length >= 40 && allKeys.length <= 55, `expected ~43 permissions, got ${allKeys.length}`);
+test("catalog: ~42-60 permissions, mỗi key duy nhất", () => {
+  assert.ok(allKeys.length >= 40 && allKeys.length <= 65, `expected 40-65 permissions, got ${allKeys.length}`);
   assert.equal(new Set(allKeys).size, allKeys.length, "permission keys must be unique");
 });
 
 test("catalog: mỗi permission thuộc đúng 1 nhóm đã khai báo", () => {
   const groupKeys = new Set(PERMISSION_GROUPS.map((g) => g.key));
   assert.equal(groupKeys.size, PERMISSION_GROUPS.length, "group keys must be unique");
-  assert.equal(PERMISSION_GROUPS.length, 16, "16 nhóm quyền mặc định (bao gồm document_merge)");
+  assert.equal(PERMISSION_GROUPS.length, 17, "17 nhóm quyền mặc định (bao gồm document_merge + employment)");
   for (const p of PERMISSION_CATALOG) {
     assert.ok(groupKeys.has(p.group), `permission ${p.key} has unknown group ${p.group}`);
   }

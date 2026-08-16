@@ -87,7 +87,38 @@ export async function POST(req: Request) {
         results.push({ id: t.id, cccd: t.cccd, fullName: normalizePersonName(t.fullName), ok: false, reason: "Hồ sơ đã ở đúng trạng thái này từ trước — không có gì để duyệt lại (bỏ qua)" });
       }
 
-      const targets = allTargets.filter((target) => target.status !== finalStatus && !invalidIdentityIds.has(target.id));
+      let targets = allTargets.filter((target) => target.status !== finalStatus && !invalidIdentityIds.has(target.id));
+
+      // EMPLOYMENT LIFECYCLE (#3/#8) — KHÔNG xếp việc âm thầm: loại khỏi lô duyệt bất kỳ hồ sơ
+      // nào mà worker đang có Employment Session ACTIVE Ở NƠI KHÁC (session không thuộc chính
+      // application này). Phải xử lý riêng qua “Yêu cầu xác nhận nghỉ” / “Xác nhận nghỉ & xếp việc mới”.
+      if (finalStatus === "APPROVED" && targets.length > 0) {
+        const targetIds = targets.map((t) => t.id);
+        const conflicts = await tx.execute(sql`
+          SELECT es.daily_application_id AS "dailyApplicationId", d.dept_name AS "activeDeptName"
+          FROM employment_sessions es
+          JOIN employment_sessions active_es ON active_es.worker_id = es.worker_id
+            AND active_es.status = 'APPROVED' AND active_es.end_date IS NULL
+            AND active_es.id <> es.id
+          LEFT JOIN departments d ON d.id = active_es.dept_id
+          WHERE es.daily_application_id IN (${sql.join(targetIds.map((tid) => sql`${tid}`), sql`, `)})`);
+        const conflictByApp = new Map<string, string | null>();
+        for (const c of conflicts.rows as { dailyApplicationId: string; activeDeptName: string | null }[]) {
+          conflictByApp.set(c.dailyApplicationId, c.activeDeptName);
+        }
+        const blocked = targets.filter((t) => conflictByApp.has(t.id));
+        for (const t of blocked) {
+          results.push({
+            id: t.id,
+            cccd: t.cccd,
+            fullName: normalizePersonName(t.fullName),
+            ok: false,
+            reason: `Đang được ghi nhận ĐANG LÀM VIỆC tại "${conflictByApp.get(t.id) ?? "bộ phận khác"}" — cần xác nhận nghỉ bộ phận cũ trước khi xếp việc mới (không duyệt trong lô)`,
+          });
+        }
+        targets = targets.filter((t) => !conflictByApp.has(t.id));
+      }
+
       if (targets.length === 0) {
         return { updated: 0, newImported: 0, results, processedIds: [] as string[] };
       }
@@ -164,7 +195,9 @@ export async function POST(req: Request) {
         .set({
           status: finalStatus,
           ...(deptId ? { deptId } : {}),
-          ...(finalStatus === "APPROVED" ? { startingDate: today } : {}),
+          // RULE #10 — DEFAULT START DATE = hôm nay (Asia/Ho_Chi_Minh) tại thời điểm Recruiter
+          // xếp việc, KHÔNG phải reg_date của application (application_date ≠ employment_start_date).
+          ...(finalStatus === "APPROVED" ? { startingDate: today, startDateSource: "ASSIGNMENT" } : {}),
         })
         .where(inArray(employmentSessions.dailyApplicationId, targets.map((t) => t.id)))
         .returning({ id: employmentSessions.id, deptId: employmentSessions.deptId, startingDate: employmentSessions.startingDate });
@@ -243,6 +276,14 @@ export async function POST(req: Request) {
       results: result.results,
     });
   } catch (error) {
+    // Lưới cuối cấp DB (employment_session_one_active_uq) — race thật giữa 2 lô duyệt đồng thời.
+    if ((error as { code?: string; constraint?: string }).code === "23505" &&
+        (error as { constraint?: string }).constraint === "employment_session_one_active_uq") {
+      return NextResponse.json(
+        { error: "Có lao động trong lô đã được xếp việc ACTIVE ở thao tác khác cùng lúc — tải lại trang và duyệt lại.", code: "DUPLICATE_ACTIVE_EMPLOYMENT" },
+        { status: 409 },
+      );
+    }
     return NextResponse.json(
       { error: "Lỗi hệ thống: " + (error as Error).message },
       { status: 500 },
