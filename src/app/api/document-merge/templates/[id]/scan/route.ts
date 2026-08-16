@@ -15,6 +15,79 @@ import { extractGoogleDocId } from "@/lib/document-merge/template-routing";
 
 type RouteContext = { params: Promise<{ id: string }> };
 
+type ScanDiagnostic = {
+  code: string;
+  error: string;
+  action: string;
+  details?: string;
+};
+
+function diagnoseScanError(error: unknown): ScanDiagnostic {
+  const message = error instanceof Error ? error.message : String(error ?? "Unknown scan error");
+  const lower = message.toLowerCase();
+
+  if (
+    lower.includes("chưa kết nối google docs") ||
+    lower.includes("missing google oauth credentials") ||
+    lower.includes("google_service_account") ||
+    lower.includes("google_refresh_token")
+  ) {
+    return {
+      code: "GOOGLE_AUTH_MISSING",
+      error: "Document Merge chưa được kết nối với Google Docs/Drive.",
+      action:
+        "Cấu hình GOOGLE_SERVICE_ACCOUNT_EMAIL + GOOGLE_SERVICE_ACCOUNT_PRIVATE_KEY (khuyến nghị) hoặc OAuth Refresh Token trên Vercel, sau đó redeploy.",
+      details: message,
+    };
+  }
+
+  if (lower.includes("401") || lower.includes("unauthorized") || lower.includes("invalid_grant")) {
+    return {
+      code: "GOOGLE_AUTH_INVALID",
+      error: "Thông tin xác thực Google Docs/Drive không còn hợp lệ.",
+      action:
+        "Kiểm tra Service Account private key/OAuth refresh token trên Vercel. Nếu còn GOOGLE_ACCESS_TOKEN cũ dùng để debug, hãy xoá biến đó và redeploy.",
+      details: message,
+    };
+  }
+
+  if (lower.includes("403") || lower.includes("forbidden") || lower.includes("permission")) {
+    return {
+      code: "GOOGLE_TEMPLATE_FORBIDDEN",
+      error: "Hệ thống không có quyền đọc Google Docs template này.",
+      action:
+        "Share Google Docs template cho đúng GOOGLE_SERVICE_ACCOUNT_EMAIL với quyền Editor; đồng thời kiểm tra Google Drive API và Google Docs API đã được bật.",
+      details: message,
+    };
+  }
+
+  if (lower.includes("404") || lower.includes("not found")) {
+    return {
+      code: "GOOGLE_TEMPLATE_NOT_FOUND",
+      error: "Không tìm thấy Google Docs template hoặc Google Doc ID không còn hợp lệ.",
+      action: "Kiểm tra lại Google Docs URL/ID trong Template rồi thử quét lại.",
+      details: message,
+    };
+  }
+
+  if (lower.includes("không đọc được google docs") || lower.includes("google api")) {
+    return {
+      code: "GOOGLE_API_ERROR",
+      error: "Google Drive/Docs API trả về lỗi khi đọc template.",
+      action:
+        "Kiểm tra credential, quyền share tài liệu, Google Drive API/Docs API và deployment Vercel rồi thử lại.",
+      details: message,
+    };
+  }
+
+  return {
+    code: "PLACEHOLDER_SCAN_FAILED",
+    error: "Không thể quét placeholder từ Google Docs template.",
+    action: "Kiểm tra cấu hình Google Docs/Drive và thử lại. Chi tiết kỹ thuật đã được ghi trong server log.",
+    details: message,
+  };
+}
+
 export async function POST(request: Request, context: RouteContext) {
   const guard = await requirePermission(["ADMIN", "HR_RECRUITER"], "document_merge.templates.manage");
   if (!guard.ok) {
@@ -34,13 +107,33 @@ export async function POST(request: Request, context: RouteContext) {
 
     const [template] = await db.select().from(mergeTemplates).where(eq(mergeTemplates.id, id)).limit(1);
     if (!template) {
-      return NextResponse.json({ error: "Template not found" }, { status: 404 });
+      return NextResponse.json(
+        {
+          code: "TEMPLATE_NOT_FOUND",
+          error: "Không tìm thấy Template trong hệ thống.",
+          action: "Tải lại trang Document Merge Center và chọn lại Template.",
+        },
+        { status: 404 },
+      );
     }
 
     const extracted = extractGoogleDocId(googleDocIdFromBody || template.googleDocId);
-    const docId = extracted || template.googleDocId;
+    const docId = (extracted || template.googleDocId || "").trim();
+    if (!docId) {
+      return NextResponse.json(
+        {
+          code: "GOOGLE_DOC_ID_REQUIRED",
+          error: "Template chưa có Google Docs ID hợp lệ.",
+          action: "Dán Google Docs URL/ID vào Template, lưu thông tin mẫu rồi quét lại.",
+        },
+        { status: 400 },
+      );
+    }
 
-    const docsService = createGoogleDocsService(process.env.GOOGLE_ACCESS_TOKEN);
+    // Không truyền GOOGLE_ACCESS_TOKEN từ env vào constructor. Token tĩnh chỉ dành
+    // cho debug và có thể đã hết hạn; service sẽ tự ưu tiên credential bền vững
+    // (Service Account / OAuth Refresh Token) và tự refresh access token.
+    const docsService = createGoogleDocsService();
     const content = await docsService.getDocumentContent(docId);
     const placeholders = extractUniquePlaceholders(content);
 
@@ -89,6 +182,7 @@ export async function POST(request: Request, context: RouteContext) {
 
     await writeAudit(guard.session, "SCAN_MERGE_TEMPLATE", "merge_templates", {
       templateId: id,
+      googleDocId: docId,
       placeholderCount: placeholders.length,
     });
 
@@ -102,6 +196,7 @@ export async function POST(request: Request, context: RouteContext) {
     });
   } catch (error) {
     console.error("[document-merge/templates/scan] error:", error);
-    return NextResponse.json({ error: "Failed to scan placeholders" }, { status: 500 });
+    const diagnostic = diagnoseScanError(error);
+    return NextResponse.json(diagnostic, { status: 500 });
   }
 }
