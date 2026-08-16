@@ -3,7 +3,15 @@ import { and, eq, isNull } from "drizzle-orm";
 import { db } from "@/db";
 import { recruitmentRequests } from "@/db/schema";
 import { getUserScope, requirePermission, writeAudit } from "@/lib/auth";
-import { listRecruitmentRequests, type RecruitmentRequestFilter } from "@/lib/recruitment-request";
+import { scopeAllowsDepartment } from "@/lib/data-scope";
+import { listRecruitmentRequests, matchHierarchy, type RecruitmentRequestFilter } from "@/lib/recruitment-request";
+import {
+  REQUEST_STATUSES,
+  computeBalance,
+  computeDateDeltas,
+  computeTotalRequest,
+  stripSystemOwnedFields,
+} from "@/lib/planning-recruitment-core";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -23,7 +31,18 @@ export async function GET(req: Request) {
     group: url.searchParams.get("group") || undefined,
     status: url.searchParams.get("status") || undefined,
     requester: url.searchParams.get("requester") || undefined,
+    reason: url.searchParams.get("reason") || undefined,
     searchQuery: url.searchParams.get("q") || undefined,
+    // Yêu cầu #12 — lọc theo khoảng Ngày yêu cầu / Ngày cần nhân lực.
+    requestedFrom: url.searchParams.get("requestedFrom") || undefined,
+    requestedTo: url.searchParams.get("requestedTo") || undefined,
+    expectedFrom: url.searchParams.get("expectedFrom") || undefined,
+    expectedTo: url.searchParams.get("expectedTo") || undefined,
+    fulfillment: (url.searchParams.get("fulfillment") as RecruitmentRequestFilter["fulfillment"]) || undefined,
+    // Yêu cầu #5 — bỏ trống = sắp xếp mặc định theo Ngày cần nhân lực
+    // (quá hạn chưa xong lên đầu), KHÔNG theo ngày kết thúc mùa vụ.
+    sortBy: (url.searchParams.get("sortBy") as RecruitmentRequestFilter["sortBy"]) || undefined,
+    sortDir: url.searchParams.get("sortDir") === "desc" ? "desc" : url.searchParams.get("sortDir") === "asc" ? "asc" : undefined,
   };
 
   const scope = await getUserScope(guard.session);
@@ -57,17 +76,12 @@ export async function POST(req: Request) {
     specialRequirements?: string;
     maleRq?: number;
     femaleRq?: number;
-    maleApplication?: number;
-    femaleApplication?: number;
-    maleInterviewed?: number;
-    femaleInterviewed?: number;
-    maleRecruited?: number;
-    femaleRecruited?: number;
-    maleQuit?: number;
-    femaleQuit?: number;
     status?: string;
+    // Yêu cầu #6 — sáu loại ngày tách bạch.
     requestedDate?: string;
     expectedDate?: string;
+    startingDate?: string;
+    endDate?: string;
     offeredDate?: string;
     completedDate?: string;
     month?: string;
@@ -76,11 +90,6 @@ export async function POST(req: Request) {
     to?: string;
     rqStatus?: string;
     monthRc?: string;
-    totalRequest?: number;
-    recruitedVsExpected?: number;
-    screened?: number;
-    interview?: number;
-    recruit?: number;
     departmentText?: string;
     monthReport?: string;
     planningPeriodId?: string | null;
@@ -101,17 +110,33 @@ export async function POST(req: Request) {
     return NextResponse.json({ error: `Request Code "${requestCode}" đã tồn tại. Dùng Import để cập nhật hoặc đổi mã khác.` }, { status: 409 });
   }
 
-  const maleRq = Math.max(0, Number(body.maleRq) || 0);
-  const femaleRq = Math.max(0, Number(body.femaleRq) || 0);
-  const maleRecruited = Math.max(0, Number(body.maleRecruited) || 0);
-  const femaleRecruited = Math.max(0, Number(body.femaleRecruited) || 0);
-  const maleQuit = Math.max(0, Number(body.maleQuit) || 0);
-  const femaleQuit = Math.max(0, Number(body.femaleQuit) || 0);
+  // Yêu cầu #10 — chỉ Male/Female Rq là số do người dùng nhập. Mọi KPI khác
+  // (Application/Interviewed/Recruited/Quit/Screened/Interview/Recruit) do hệ
+  // thống dẫn xuất từ Daily Application / phân bổ / Workforce Movement, nên
+  // yêu cầu MỚI luôn bắt đầu từ 0 và không nhận giá trị từ payload.
+  const { safe: safeBody, rejected } = stripSystemOwnedFields(body as Record<string, unknown>);
+  const maleRq = Math.max(0, Number(safeBody.maleRq) || 0);
+  const femaleRq = Math.max(0, Number(safeBody.femaleRq) || 0);
 
-  // CÔNG THỨC Balance: Male Balance = Male Rq - Male Allocated/Recruited + Male Quit
-  const maleBalance = Math.max(0, maleRq - maleRecruited + maleQuit);
-  const femaleBalance = Math.max(0, femaleRq - femaleRecruited + femaleQuit);
-  const totalBalance = maleBalance + femaleBalance;
+  // Balance = Rq - Recruited + Quit; yêu cầu mới chưa tuyển ai nên = Rq.
+  const balance = computeBalance({ maleRq, femaleRq, maleRecruited: 0, femaleRecruited: 0, maleQuit: 0, femaleQuit: 0 });
+  const totalRequest = computeTotalRequest(maleRq, femaleRq);
+
+  // Khớp cây tổ chức để có department_id — Data Scope lọc theo FK này (Yêu cầu #15).
+  const { deptId: departmentId } = await matchHierarchy(
+    body.location,
+    body.division,
+    body.department,
+    body.section,
+    body.groupName,
+  );
+  // Người dùng bị giới hạn Data Scope không được tạo yêu cầu ngoài phạm vi.
+  if (!scopeAllowsDepartment(await getUserScope(guard.session), departmentId)) {
+    return NextResponse.json(
+      { error: "Phòng ban của yêu cầu nằm ngoài Data Scope được cấp cho tài khoản này." },
+      { status: 403 },
+    );
+  }
 
   try {
     const [row] = await db
@@ -131,33 +156,30 @@ export async function POST(req: Request) {
         specialRequirements: body.specialRequirements ?? null,
         maleRq,
         femaleRq,
-        maleApplication: Math.max(0, Number(body.maleApplication) || 0),
-        femaleApplication: Math.max(0, Number(body.femaleApplication) || 0),
-        maleInterviewed: Math.max(0, Number(body.maleInterviewed) || 0),
-        femaleInterviewed: Math.max(0, Number(body.femaleInterviewed) || 0),
-        maleRecruited,
-        femaleRecruited,
-        maleQuit,
-        femaleQuit,
-        maleBalance,
-        femaleBalance,
-        totalBalance,
+        maleBalance: balance.maleBalance,
+        femaleBalance: balance.femaleBalance,
+        totalBalance: balance.totalBalance,
         status: normalizeStatus(body.status),
         requestedDate: body.requestedDate || null,
         expectedDate: body.expectedDate || null,
+        startingDate: body.startingDate || null,
+        endDate: body.endDate || null,
         offeredDate: body.offeredDate || null,
         completedDate: body.completedDate || null,
+        ...computeDateDeltas({
+          requestedDate: body.requestedDate || null,
+          offeredDate: body.offeredDate || null,
+          completedDate: body.completedDate || null,
+        }),
+        departmentId,
         month: body.month || null,
         cost: Math.max(0, Number(body.cost) || 0),
         remarks: body.remarks ?? null,
         to: body.to ?? null,
         rqStatus: body.rqStatus ?? null,
         monthRc: body.monthRc ?? null,
-        totalRequest: Math.max(0, Number(body.totalRequest) || 0),
-        recruitedVsExpected: Math.max(0, Number(body.recruitedVsExpected) || 0),
-        screened: Math.max(0, Number(body.screened) || 0),
-        interview: Math.max(0, Number(body.interview) || 0),
-        recruit: Math.max(0, Number(body.recruit) || 0),
+        totalRequest,
+        recruitedVsExpected: 0,
         departmentText: body.departmentText ?? body.department ?? null,
         monthReport: body.monthReport ?? null,
         planningPeriodId: body.planningPeriodId ?? null,
@@ -171,9 +193,10 @@ export async function POST(req: Request) {
       status: row.status,
       maleRq,
       femaleRq,
+      rejectedSystemOwnedFields: rejected,
     });
 
-    return NextResponse.json({ success: true, row });
+    return NextResponse.json({ success: true, row, rejectedFields: rejected });
   } catch (error) {
     return NextResponse.json({ error: (error as Error).message }, { status: 400 });
   }
@@ -181,8 +204,9 @@ export async function POST(req: Request) {
 
 function normalizeStatus(s?: string): string {
   const upper = (s ?? "PENDING").trim().toUpperCase();
-  const valid = ["PENDING", "PROCESSING", "COMPLETED", "CANCELLED"];
-  if (valid.includes(upper)) return upper;
+  // EXPIRED nằm trong tập trạng thái hợp lệ (Yêu cầu #13) — hết hạn KHÁC huỷ.
+  if ((REQUEST_STATUSES as readonly string[]).includes(upper)) return upper;
+  if (upper.includes("EXPIR") || upper.includes("HET HAN")) return "EXPIRED";
   if (upper.includes("PEND")) return "PENDING";
   if (upper.includes("PROCESS") || upper.includes("PROGRESS")) return "PROCESSING";
   if (upper.includes("COMPLETE") || upper.includes("DONE")) return "COMPLETED";
