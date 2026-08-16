@@ -178,36 +178,74 @@ test("normalizeStatus maps status variants", () => {
   assert.equal(normalizeStatus(undefined), null);
 });
 
-test("computeBalanceFromCanonical formula: Male Balance = Male Rq - Male Recruited + Male Quit", () => {
-  // Normal case
+test("computeBalanceFromCanonical formula: Balance = max(0, Rq - Current Workforce). PHASE 6 v2: Recruited/Quit are historical KPIs, NOT in formula", () => {
+  // Default: Current = 0/0 (luồng INSERT yêu cầu mới, chưa có allocation nào).
+  // Balance = Rq - 0 = Rq. Recruited/Quit giá trị tuỳ ý KHÔNG ảnh hưởng.
   let b = computeBalanceFromCanonical({
     "Male Rq": "10", "Female Rq": "8",
     "Male Recruited": "4", "Female Recruited": "3",
     "Male Quit": "1", "Female Quit": "0",
   });
-  assert.equal(b.maleBalance, 7); // 10 - 4 + 1 = 7
-  assert.equal(b.femaleBalance, 5); // 8 - 3 + 0 = 5
-  assert.equal(b.totalBalance, 12); // 7 + 5 = 12
+  assert.equal(b.maleBalance, 10, "INSERT mới, Current=0 → Balance = Rq");
+  assert.equal(b.femaleBalance, 8);
+  assert.equal(b.totalBalance, 18);
 
-  // Over-recruited (clamp to 0)
+  // Có Current truyền vào (luồng UPDATE yêu cầu đã tồn tại).
+  b = computeBalanceFromCanonical({
+    "Male Rq": "10", "Female Rq": "8",
+    "Male Recruited": "4", "Female Recruited": "3",
+    "Male Quit": "1", "Female Quit": "0",
+  }, { maleCurrent: 4, femaleCurrent: 3 });
+  assert.equal(b.maleBalance, 6, "10 - 4 = 6 (Current=4) — Quit vẫn ignored");
+  assert.equal(b.femaleBalance, 5, "8 - 3 = 5 (Current=3) — Quit vẫn ignored");
+  assert.equal(b.totalBalance, 11);
+
+  // Current vượt Rq → clamp về 0
   b = computeBalanceFromCanonical({
     "Male Rq": "5", "Female Rq": "5",
     "Male Recruited": "6", "Female Recruited": "7",
     "Male Quit": "0", "Female Quit": "0",
-  });
+  }, { maleCurrent: 8, femaleCurrent: 9 });
   assert.equal(b.maleBalance, 0);
   assert.equal(b.femaleBalance, 0);
   assert.equal(b.totalBalance, 0);
 
-  // With quits
+  // PHASE 6 v2 regression A: Rq=10, Current=9, Quit=1 → Balance = max(0, 10-9) = 1
   b = computeBalanceFromCanonical({
-    "Male Rq": "10", "Female Rq": "10",
-    "Male Recruited": "5", "Female Recruited": "5",
-    "Male Quit": "3", "Female Quit": "2",
-  });
-  assert.equal(b.maleBalance, 8); // 10 - 5 + 3 = 8
-  assert.equal(b.femaleBalance, 7); // 10 - 5 + 2 = 7
-  assert.equal(b.totalBalance, 15);
+    "Male Rq": "10", "Female Rq": "0",
+    "Male Recruited": "9", "Female Recruited": "0",
+    "Male Quit": "1", "Female Quit": "0",
+  }, { maleCurrent: 9, femaleCurrent: 0 });
+  assert.equal(b.maleBalance, 1);
+  assert.equal(b.femaleBalance, 0);
+  assert.equal(b.totalBalance, 1);
+
+  // PHASE 6 v2 regression B: Rq=10, Current=8, Quit=4 → Balance = 2
+  b = computeBalanceFromCanonical({
+    "Male Rq": "10", "Female Rq": "0",
+    "Male Recruited": "12", "Female Recruited": "0",
+    "Male Quit": "4", "Female Quit": "0",
+  }, { maleCurrent: 8, femaleCurrent: 0 });
+  assert.equal(b.maleBalance, 2);
+  assert.equal(b.totalBalance, 2);
+
+  // PHASE 6 v2 regression C: Rq=10, Current=10, Quit=5 → Balance = 0
+  b = computeBalanceFromCanonical({
+    "Male Rq": "10", "Female Rq": "0",
+    "Male Recruited": "15", "Female Recruited": "0",
+    "Male Quit": "5", "Female Quit": "0",
+  }, { maleCurrent: 10, femaleCurrent: 0 });
+  assert.equal(b.maleBalance, 0);
+  assert.equal(b.totalBalance, 0);
+
+  // PHASE 6 v2 regression D: Rq=10, Current=0, Quit=10 → Balance = 10
+  b = computeBalanceFromCanonical({
+    "Male Rq": "10", "Female Rq": "0",
+    "Male Recruited": "10", "Female Recruited": "0",
+    "Male Quit": "10", "Female Quit": "0",
+  }, { maleCurrent: 0, femaleCurrent: 0 });
+  assert.equal(b.maleBalance, 10);
+  assert.equal(b.totalBalance, 10);
 
   // Zero demand
   b = computeBalanceFromCanonical({

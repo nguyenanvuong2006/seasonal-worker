@@ -1,7 +1,7 @@
 import { NextResponse } from "next/server";
 import { and, eq, inArray, isNull, or } from "drizzle-orm";
 import { db } from "@/db";
-import { recruitmentRequests } from "@/db/schema";
+import { employmentSessions, recruitmentRequests, requestAllocations, workerProfiles } from "@/db/schema";
 import { getUserScope, requirePermission, writeAudit } from "@/lib/auth";
 import { scopeAllowsDepartment } from "@/lib/data-scope";
 import { getRecruitmentRequest, batchUpdateStatus, softDeleteRecruitmentRequests } from "@/lib/recruitment-request";
@@ -162,15 +162,38 @@ export async function PATCH(req: Request, ctx: { params: Promise<{ id: string }>
       patch[key] !== undefined ? Number(patch[key]) : Number(fallback ?? 0);
     const maleRq = num("maleRq", existing.maleRq);
     const femaleRq = num("femaleRq", existing.femaleRq);
-    const balance = computeBalance({
-      maleRq,
-      femaleRq,
-      // Đã tuyển / đã nghỉ luôn lấy từ bản ghi hệ thống, không từ payload.
-      maleRecruited: Number(existing.maleRecruited ?? 0),
-      femaleRecruited: Number(existing.femaleRecruited ?? 0),
-      maleQuit: Number(existing.maleQuit ?? 0),
-      femaleQuit: Number(existing.femaleQuit ?? 0),
-    });
+    // PHASE 6 v2: Balance = max(0, Rq - Current Workforce). Current Workforce
+    // phải đếm TRỰC TIẾP từ source-of-truth (request_allocations ∩
+    // employment_sessions ACTIVE), KHÔNG dùng male_recruited/female_recruited/
+    // male_quit/female_quit. Các cột này là historical KPI, không phải Current.
+    const currentRows = await db
+      .select({
+        gender: workerProfiles.gender,
+      })
+      .from(requestAllocations)
+      .innerJoin(employmentSessions, eq(requestAllocations.employmentSessionId, employmentSessions.id))
+      .innerJoin(workerProfiles, eq(requestAllocations.workerId, workerProfiles.id))
+      .where(
+        and(
+          eq(requestAllocations.requestId, id),
+          eq(requestAllocations.status, "ACTIVE"),
+          eq(employmentSessions.status, "APPROVED"),
+          isNull(employmentSessions.endDate),
+          isNull(workerProfiles.deletedAt),
+        ),
+      );
+    const lc = (s: string | null) => (s ?? "").trim().toLowerCase();
+    const isMale = (g: string | null) => {
+      const s = lc(g);
+      return s === "nam" || s === "male" || s === "m";
+    };
+    const isFemale = (g: string | null) => {
+      const s = lc(g);
+      return s === "nữ" || s === "nu" || s === "female" || s === "f";
+    };
+    const maleCurrent = currentRows.filter((r) => isMale(r.gender)).length;
+    const femaleCurrent = currentRows.filter((r) => isFemale(r.gender)).length;
+    const balance = computeBalance({ maleRq, femaleRq, maleCurrent, femaleCurrent });
     const totalRequest = computeTotalRequest(maleRq, femaleRq);
     patch.maleBalance = balance.maleBalance;
     patch.femaleBalance = balance.femaleBalance;

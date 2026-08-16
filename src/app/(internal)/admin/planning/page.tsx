@@ -8,6 +8,7 @@ import {
   Card,
   CardContent,
   EmptyState,
+  ErrorState,
   FormField,
   GenderSplit,
   Input,
@@ -16,6 +17,7 @@ import {
   PeriodBar,
   ProgressBar,
   SectionLabel,
+  SkeletonTable,
   cn,
   toast,
 } from "@/components/ui";
@@ -31,6 +33,7 @@ import {
   Users,
 } from "lucide-react";
 import { formatDate } from "@/lib/helpers";
+import { fetchJsonWithTimeout, type ApiResult } from "@/lib/api-client";
 
 type PlanningMetrics = {
   demandMale: number;
@@ -142,18 +145,56 @@ export default function PlanningPage() {
     note: "",
   });
 
-  const load = useCallback(async (status = statusFilter) => {
-    setLoading(true);
-    const [pRes, dRes] = await Promise.all([
-      fetch(`/api/planning?status=${status}`),
-      fetch("/api/departments"),
-    ]);
-    const pData = await pRes.json();
-    const dData = await dRes.json();
-    setRows(pData.rows ?? []);
-    setDepts(dData.rows ?? []);
-    setLoading(false);
-  }, [statusFilter]);
+  const [loadError, setLoadError] = useState<{ code: string; message: string } | null>(null);
+
+  const load = useCallback(
+    async (status = statusFilter) => {
+      setLoading(true);
+      setLoadError(null);
+      let pRes: ApiResult<{ rows?: Period[] }>;
+      let dRes: ApiResult<{ rows?: Dept[] }>;
+      try {
+        [pRes, dRes] = await Promise.all([
+          fetchJsonWithTimeout<{ rows?: Period[] }>(`/api/planning?status=${status}`, {
+            timeoutMs: 12_000,
+            label: "planning.list",
+          }),
+          fetchJsonWithTimeout<{ rows?: Dept[] }>(`/api/departments`, {
+            timeoutMs: 12_000,
+            label: "departments.list",
+          }),
+        ]);
+      } catch (err) {
+        // Defensive: helper should not throw, but network-level crash must not hang the UI.
+        setLoadError({
+          code: "NETWORK",
+          message: "Không kết nối được tới máy chủ. Vui lòng thử lại.",
+        });
+        setLoading(false);
+        return;
+      }
+
+      if (!pRes.ok) {
+        setLoadError({ code: pRes.code, message: pRes.message });
+        setRows([]);
+        setLoading(false);
+        return;
+      }
+      if (!dRes.ok) {
+        // Departments failure: planning vẫn chạy được với dept list rỗng (filter sẽ rỗng).
+        setDepts([]);
+        toast({
+          title: `Không tải được danh sách bộ phận: ${dRes.message}`,
+          variant: "destructive",
+        });
+      } else {
+        setDepts(dRes.data.rows ?? []);
+      }
+      setRows(pRes.data.rows ?? []);
+      setLoading(false);
+    },
+    [statusFilter],
+  );
 
   useEffect(() => {
     void load(statusFilter);
@@ -578,18 +619,26 @@ export default function PlanningPage() {
       <Card className="overflow-hidden p-0">
         <CardContent className="p-0">
           {loading ? (
-            <div className="v2-scroll overflow-x-auto p-6">
-              {Array.from({ length: 5 }).map((_, i) => (
-                <div key={i} className="flex items-center gap-4 border-b border-border py-3.5">
-                  <div className="skeleton h-4 w-44" />
-                  <div className="skeleton h-4 w-28" />
-                  <div className="skeleton h-4 w-24" />
-                  <div className="skeleton h-4 w-20" />
-                  <div className="skeleton ml-auto h-6 w-16 rounded-full" />
-                </div>
-              ))}
+            <div className="p-6">
+              <SkeletonTable rows={6} cols={5} />
               <p className="mt-4 text-center text-[12.5px] text-fg-muted">Đang tải kế hoạch nhu cầu...</p>
             </div>
+          ) : loadError ? (
+            <ErrorState
+              title="Không tải được kế hoạch nhu cầu"
+              description={
+                <span>
+                  {loadError.message}
+                  {loadError.code ? (
+                    <>
+                      {" "}
+                      <span className="text-fg-muted">Mã lỗi: {loadError.code}</span>
+                    </>
+                  ) : null}
+                </span>
+              }
+              onRetry={() => void load(statusFilter)}
+            />
           ) : filteredRows.length === 0 ? (
             <EmptyState
               icon={<CalendarRange className="h-5 w-5" aria-hidden />}

@@ -32,6 +32,7 @@ const schemaStub = {
   planningTargets: makeTable("planning_targets"),
   planningAllocations: makeTable("planning_allocations"),
   employmentSessions: makeTable("employment_sessions"),
+  requestAllocations: makeTable("request_allocations"),
   workerProfiles: makeTable("worker_profiles"),
   workforceMovements: makeTable("workforce_movements"),
 };
@@ -317,6 +318,10 @@ test("dán 100 dòng từ Excel: tạo đủ 100 yêu cầu trong MỘT transact
 });
 
 test("trùng Request Code: cập nhật thay vì tạo bản ghi thứ hai", async () => {
+  // PHASE 6 v2: UPDATE path của import giờ phải query Current Workforce từ
+  // request_allocations ∩ employment_sessions ACTIVE — fake-drizzle chưa mô
+  // phỏng join này nên SELECT trên request_allocations trả về rỗng, coi như
+  // chưa có allocation ACTIVE nào. Công thức Balance = max(0, Rq - 0) = Rq.
   const { db, mod } = importSetup(new Set(["RQ-2026-001", "RQ-2026-002"]));
   const rows = makeRows(5);
 
@@ -389,6 +394,13 @@ test("mã lặp trong CHÍNH file chỉ nhận dòng đầu tiên", async () => 
 });
 
 test("Excel KHÔNG ghi đè KPI hệ thống: Balance và Total Request luôn được tính lại", async () => {
+  // PHASE 6 v2: Balance = max(0, Rq - Current Workforce). Với INSERT (yêu cầu
+  // mới, chưa có row nào trong DB), Current = 0 → Balance = Rq.
+  //   Male Balance   = 10 - 0 = 10
+  //   Female Balance =  5 - 0 =  5
+  //   Total Balance  = 15
+  // Công thức CŨ "Rq - Recruited" sẽ ra 6/4/10 — đã bị loại bỏ vì
+  // Recruited là historical KPI, không phải Current Workforce.
   const { db, mod } = importSetup(new Set());
   const rows = [
     {
@@ -417,10 +429,11 @@ test("Excel KHÔNG ghi đè KPI hệ thống: Balance và Total Request luôn đ
 
   // Total Request = Male Rq + Female Rq = 15, không phải 999.
   assert.equal(v.totalRequest, 15);
-  // Balance = Rq - Recruited + Quit
-  assert.equal(v.maleBalance, 10 - 4 + 1);
-  assert.equal(v.femaleBalance, 5 - 1 + 0);
-  assert.equal(v.totalBalance, 7 + 4);
+  // PHASE 6 v2: Balance = max(0, Rq - 0) = Rq (Current = 0 vì yêu cầu mới chưa có allocation).
+  // Quit/Recruited KHÔNG ảnh hưởng (chúng là historical KPI, không nằm trong công thức).
+  assert.equal(v.maleBalance, 10);
+  assert.equal(v.femaleBalance, 5);
+  assert.equal(v.totalBalance, 15);
   assert.notEqual(v.totalBalance, 666);
   assert.notEqual(v.recruitedVsExpected, 555);
 });

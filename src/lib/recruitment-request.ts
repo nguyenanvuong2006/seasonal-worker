@@ -9,6 +9,7 @@ import {
   planningTargets,
   planningAllocations,
   employmentSessions,
+  requestAllocations,
   workerProfiles,
   workforceMovements,
   type RecruitmentRequest,
@@ -146,7 +147,27 @@ export async function importRecruitmentRequests(
           continue;
         }
         if (update) {
-          const balance = computeBalanceFromCanonical(canonical);
+          // PHASE 6 v2: Balance = max(0, Rq - Current Workforce). Cập nhật yêu cầu
+          // đã tồn tại → query số ACTIVE từ source-of-truth (request_allocations
+          // ∩ employment_sessions ACTIVE ∩ worker_profiles) trước khi tính Balance.
+          // KHÔNG dùng male_recruited/female_recruited/male_quit/female_quit.
+          const currentRows = await tx
+            .select({ gender: workerProfiles.gender })
+            .from(requestAllocations)
+            .innerJoin(employmentSessions, eq(requestAllocations.employmentSessionId, employmentSessions.id))
+            .innerJoin(workerProfiles, eq(requestAllocations.workerId, workerProfiles.id))
+            .where(
+              and(
+                eq(requestAllocations.requestId, existing[0].id),
+                eq(requestAllocations.status, "ACTIVE"),
+                eq(employmentSessions.status, "APPROVED"),
+                isNull(employmentSessions.endDate),
+                isNull(workerProfiles.deletedAt),
+              ),
+            );
+          const maleCurrent = currentRows.filter((r) => isMale(r.gender)).length;
+          const femaleCurrent = currentRows.filter((r) => isFemale(r.gender)).length;
+          const balance = computeBalanceFromCanonical(canonical, { maleCurrent, femaleCurrent });
           await tx
             .update(recruitmentRequests)
             .set({

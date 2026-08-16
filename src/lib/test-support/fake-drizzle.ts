@@ -83,6 +83,16 @@ export const drizzleStub = {
   asc: (inner: unknown): Cond => ({ op: "asc", inner }),
   like: (c: unknown, v: unknown): Cond => ({ op: "eq", ...pick(c), val: v }),
   ilike: (c: unknown, v: unknown): Cond => ({ op: "eq", ...pick(c), val: v }),
+  // Join helpers: cần để test chạy code có innerJoin/leftJoin — ghi nhận bảng
+  // phụ để respond() có thể soi được.
+  innerJoin: (_left: unknown, right: unknown): { __op: "innerJoin"; right: unknown } => ({
+    __op: "innerJoin",
+    right,
+  }),
+  leftJoin: (_left: unknown, right: unknown): { __op: "leftJoin"; right: unknown } => ({
+    __op: "leftJoin",
+    right,
+  }),
   count: () => ({ op: "sql", text: "count(*)", values: [] }),
   sql: makeSqlTag(),
 };
