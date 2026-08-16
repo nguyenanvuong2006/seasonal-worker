@@ -115,17 +115,24 @@ export async function POST(req: Request) {
   // tự xác định bộ phận HIỆN TẠI của lao động từ employment_sessions gần nhất (nguồn dữ liệu
   // nghiệp vụ chuẩn — cùng cách applyMovementAction() xác định bộ phận thật ở lib/workforce-movements.ts),
   // KHÔNG tin giá trị `fromDeptId` do client gửi lên.
-  const [latestSession] = await db
-    .select({ deptId: employmentSessions.deptId, status: employmentSessions.status, endDate: employmentSessions.endDate })
+  // EMPLOYMENT LIFECYCLE (#4) — yêu cầu Nghỉ việc/Thuyên chuyển phải bám vào ĐÚNG Employment
+  // Session ACTIVE (APPROVED + end_date IS NULL), không phải "session gần nhất theo regDate"
+  // (session gần nhất có thể là 1 đăng ký PENDING mới của cùng người).
+  const [activeSession] = await db
+    .select({ id: employmentSessions.id, deptId: employmentSessions.deptId })
     .from(employmentSessions)
     .innerJoin(workerProfiles, and(eq(employmentSessions.workerId, workerProfiles.id), isNull(workerProfiles.deletedAt)))
-    .where(eq(employmentSessions.workerId, body.workerId))
+    .where(and(
+      eq(employmentSessions.workerId, body.workerId),
+      eq(employmentSessions.status, "APPROVED"),
+      isNull(employmentSessions.endDate),
+    ))
     .orderBy(desc(employmentSessions.regDate), desc(employmentSessions.createdAt))
     .limit(1);
-  if (!latestSession || latestSession.status !== "APPROVED" || (latestSession.endDate && latestSession.endDate <= todayStr())) {
+  if (!activeSession) {
     return NextResponse.json({ error: "Lao động không có Employment Session active để tạo yêu cầu." }, { status: 400 });
   }
-  const actualFromDeptId = latestSession.deptId;
+  const actualFromDeptId = activeSession.deptId;
 
   // DYNAMIC RBAC V2 — bỏ proxy role === DEPT_MANAGER: user có Data Scope (scope != null) chỉ
   // được tạo yêu cầu cho lao động thuộc bộ phận mình quản lý.
@@ -141,6 +148,9 @@ export async function POST(req: Request) {
       workerId: body.workerId,
       fromDeptId: actualFromDeptId,
       toDeptId: body.movementType === "transfer" ? body.toDeptId : null,
+      // EMPLOYMENT LIFECYCLE — truy vết đủ: movement thuộc session nào + nguồn báo cáo.
+      employmentSessionId: activeSession.id,
+      source: "DEPT_REPORT",
       effectiveDate: body.effectiveDate,
       reason: body.reason || null,
       note: body.note || null,

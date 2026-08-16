@@ -127,6 +127,16 @@ export const dailyApplications = pgTable(
     workDuration: varchar("work_duration", { length: 40 }),
     referralChannel: varchar("referral_channel", { length: 120 }),
 
+    // EMPLOYMENT LIFECYCLE (#5-6) — SELF-DECLARATION khi người ĐANG có Employment Session ACTIVE
+    // đăng ký lại: NLĐ tự khai "đã báo nghỉ bộ phận cũ". CHỈ là thông tin chờ Recruiter xác minh —
+    // KHÔNG tự đóng session, KHÔNG tạo resignation, KHÔNG xoá allocation (xem lib/employment.ts).
+    workerDeclaredPreviousResignation: boolean("worker_declared_previous_resignation").notNull().default(false),
+    declaredPreviousDeptId: uuid("declared_previous_dept_id"),
+    declaredPreviousSessionId: uuid("declared_previous_session_id"),
+    declaredResignationDate: date("declared_resignation_date"),
+    declaredResignationNote: text("declared_resignation_note"),
+    declaredAt: timestamp("declared_at", { withTimezone: true }),
+
     // HR xếp việc
     deptId: uuid("dept_id").references(() => departments.id, { onDelete: "set null" }),
     // WORKFORCE REQUEST LINKAGE — pipeline Application/Screened/Interviewed/Recruited
@@ -494,7 +504,18 @@ export const workerProfiles = pgTable(
   ],
 );
 
-/** 1 lần đăng ký / 1 đợt làm việc = 1 employment session, gắn vào đúng 1 worker_profiles. */
+/**
+ * 1 lần đăng ký / 1 đợt làm việc = 1 employment session, gắn vào đúng 1 worker_profiles.
+ *
+ * EMPLOYMENT LIFECYCLE (2026-08-16) — SOURCE OF TRUTH:
+ *   - daily_applications        = LỊCH SỬ ĐĂNG KÝ/XIN VIỆC (không bao giờ overwrite/xoá).
+ *   - employment_sessions       = LỊCH SỬ LÀM VIỆC THẬT (mỗi đợt làm 1 dòng; ai/ở đâu/từ ngày/đến ngày/vì sao nghỉ).
+ *   - workforce_movements       = SỰ KIỆN nghỉ việc/thuyên chuyển đã được xác nhận.
+ * Trạng thái "ĐANG LÀM" (ACTIVE) := status = 'APPROVED' AND end_date IS NULL.
+ * INVARIANT bắt buộc: 1 worker chỉ có TỐI ĐA 1 session ACTIVE tại một thời điểm —
+ * enforce bằng partial unique index `employment_session_one_active_uq` (lưới cuối cấp DB)
+ * + kiểm tra transaction-safe ở lib/employment.ts (lớp chính).
+ */
 export const employmentSessions = pgTable(
   "employment_sessions",
   {
@@ -506,6 +527,13 @@ export const employmentSessions = pgTable(
     status: varchar("status", { length: 40 }).notNull().default("PENDING"), // đồng bộ với workflow_stages.stageKey
     startingDate: date("starting_date"),
     endDate: date("end_date"), // rời việc/kết thúc đợt làm (nếu có)
+    // EMPLOYMENT LIFECYCLE — vì sao/ai/lúc nào kết thúc đợt làm việc (audit-able, không suy đoán từ status).
+    endReason: varchar("end_reason", { length: 40 }), // RESIGNATION | TRANSFER | RECONCILIATION | OTHER
+    endedBy: varchar("ended_by", { length: 64 }), // username người xác nhận kết thúc
+    endedAt: timestamp("ended_at", { withTimezone: true }),
+    endMovementId: uuid("end_movement_id"), // -> workforce_movements.id (movement đã kết thúc session này)
+    // Nguồn gốc starting_date: ASSIGNMENT (mặc định = ngày Recruiter xếp việc) | CORRECTION (Admin duyệt điều chỉnh) | IMPORT | RECONCILIATION
+    startDateSource: varchar("start_date_source", { length: 24 }).default("ASSIGNMENT"),
     note: text("note"),
     createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
   },
@@ -513,6 +541,44 @@ export const employmentSessions = pgTable(
     uniqueIndex("employment_session_daily_app_uq").on(t.dailyApplicationId).where(sql`daily_application_id is not null`),
     // Already present in schema.sql; declare here too so Drizzle metadata matches production.
     index("employment_session_worker_idx").on(t.workerId),
+    // INVARIANT #1 (Employment Lifecycle): 1 worker = tối đa 1 session ACTIVE. Đây là lưới an
+    // toàn cấp DB cho race thật (double-click/retry/2 request đồng thời) — lớp chính là
+    // transaction check trong lib/employment.ts. Migration chỉ tạo được index này khi dữ liệu
+    // sạch — xem migrations/2026-08-16-employment-lifecycle.sql (audit trước, không auto-fix).
+    uniqueIndex("employment_session_one_active_uq").on(t.workerId).where(sql`status = 'APPROVED' and end_date is null`),
+  ],
+);
+
+/**
+ * START DATE CORRECTION (Employment Lifecycle #11-12) — Recruiter KHÔNG được tự backdate
+ * starting_date. Nếu thực tế nhận việc sớm hơn ngày thao tác: tạo yêu cầu điều chỉnh,
+ * Admin duyệt qua Task Center. Giá trị cũ/mới + người duyệt được giữ lại làm audit trail.
+ */
+export const startDateCorrections = pgTable(
+  "start_date_corrections",
+  {
+    id: uuid("id").defaultRandom().primaryKey(),
+    employmentSessionId: uuid("employment_session_id").notNull(),
+    workerId: uuid("worker_id").notNull(),
+    currentStartDate: date("current_start_date"), // starting_date tại thời điểm yêu cầu (audit)
+    requestedStartDate: date("requested_start_date").notNull(),
+    reason: text("reason").notNull(),
+    note: text("note"),
+    status: varchar("status", { length: 32 }).notNull().default("PENDING_ADMIN_APPROVAL"), // PENDING_ADMIN_APPROVAL | APPROVED | REJECTED
+    requestedBy: varchar("requested_by", { length: 64 }).notNull(),
+    requestedAt: timestamp("requested_at", { withTimezone: true }).notNull().defaultNow(),
+    decidedBy: varchar("decided_by", { length: 64 }),
+    decidedAt: timestamp("decided_at", { withTimezone: true }),
+    decisionNote: text("decision_note"),
+    // Audit sau khi APPROVE — không mất giá trị cũ.
+    oldStartDate: date("old_start_date"),
+    newStartDate: date("new_start_date"),
+  },
+  (t) => [
+    // Idempotent: 1 session chỉ có 1 yêu cầu điều chỉnh đang chờ — retry/double-click không tạo trùng.
+    uniqueIndex("start_date_correction_pending_uq").on(t.employmentSessionId).where(sql`status = 'PENDING_ADMIN_APPROVAL'`),
+    index("start_date_correction_status_idx").on(t.status),
+    index("start_date_correction_worker_idx").on(t.workerId),
   ],
 );
 
@@ -559,6 +625,12 @@ export const workforceMovements = pgTable(
     note: text("note"),
     status: varchar("status", { length: 40 }).notNull().default("PENDING_HR"),
     relatedMovementId: uuid("related_movement_id"), // liên kết Transfer "Không đến" -> Resignation được sinh ra
+    // EMPLOYMENT LIFECYCLE (#4) — truy vết đầy đủ: movement kết thúc ĐÚNG session nào, ai xác
+    // nhận, lúc nào, đến từ nguồn nào (DEPT_REPORT | RECRUITER_CONFIRM | SELF_DECLARATION | RECONCILIATION | LEGACY).
+    employmentSessionId: uuid("employment_session_id"), // -> employment_sessions.id
+    confirmedBy: varchar("confirmed_by", { length: 64 }),
+    confirmedAt: timestamp("confirmed_at", { withTimezone: true }),
+    source: varchar("source", { length: 32 }),
     requestedBy: varchar("requested_by", { length: 64 }).notNull(),
     createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
     updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
@@ -575,6 +647,8 @@ export const workforceMovements = pgTable(
     uniqueIndex("workforce_movement_spawn_resignation_uq")
       .on(t.relatedMovementId)
       .where(sql`movement_type = 'resignation' and related_movement_id is not null`),
+    // EMPLOYMENT LIFECYCLE (#4) — tra cứu nhanh movement theo session (Worker Profile timeline).
+    index("workforce_movement_session_idx").on(t.employmentSessionId),
   ],
 );
 

@@ -1,5 +1,5 @@
 import "server-only";
-import { and, desc, eq } from "drizzle-orm";
+import { and, desc, eq, sql } from "drizzle-orm";
 import { db } from "@/db";
 import { dailyApplications, employmentSessions, workforceMovements } from "@/db/schema";
 import { queueNotification } from "@/lib/notifications";
@@ -78,15 +78,48 @@ export async function applyMovementAction(
     switch (action) {
       case "APPROVE_RESIGNATION": {
         newStatus = "INACTIVE";
-        // Cập nhật session làm việc gần nhất của worker sang kết thúc.
-        const [latestSession] = await tx
+        // EMPLOYMENT LIFECYCLE (#4) — kết thúc ĐÚNG session ACTIVE (APPROVED + end_date IS NULL),
+        // không phải "session gần nhất theo regDate" (session gần nhất có thể là 1 đăng ký
+        // PENDING mới — đóng nhầm sẽ làm sai cả 2 dòng lịch sử). Ghi đầy đủ end_reason/
+        // ended_by/ended_at/end_movement_id để truy vết ai xác nhận nghỉ, lúc nào, vì sao.
+        const [activeSession] = await tx
           .select()
           .from(employmentSessions)
-          .where(eq(employmentSessions.workerId, movement.workerId))
-          .orderBy(desc(employmentSessions.regDate));
-        if (latestSession) {
-          await tx.update(employmentSessions).set({ endDate: movement.effectiveDate }).where(eq(employmentSessions.id, latestSession.id));
+          .where(and(
+            eq(employmentSessions.workerId, movement.workerId),
+            eq(employmentSessions.status, "APPROVED"),
+            sql`${employmentSessions.endDate} is null`,
+          ))
+          .orderBy(desc(employmentSessions.regDate))
+          .for("update");
+        const fallbackSession = activeSession
+          ? null
+          : (await tx
+              .select()
+              .from(employmentSessions)
+              .where(eq(employmentSessions.workerId, movement.workerId))
+              .orderBy(desc(employmentSessions.regDate))
+              .limit(1))[0] ?? null;
+        const sessionToEnd = activeSession ?? fallbackSession;
+        if (sessionToEnd) {
+          await tx
+            .update(employmentSessions)
+            .set({
+              status: "ENDED",
+              endDate: movement.effectiveDate,
+              endReason: "RESIGNATION",
+              endedBy: session.username,
+              endedAt: new Date(),
+              endMovementId: movement.id,
+            })
+            .where(eq(employmentSessions.id, sessionToEnd.id));
+          movementPatch.employmentSessionId = sessionToEnd.id;
         }
+
+        movementPatch.confirmedBy = session.username;
+        movementPatch.confirmedAt = new Date();
+        movementPatch.source = movement.source ?? "DEPT_REPORT";
+
         // WORKFORCE REQUEST LINKAGE (mục 4 + 9): nghỉ việc được xác nhận → kết thúc
         // mọi ACTIVE request allocation của worker (ghi history action=END). KHÔNG
         // xoá allocation history — Quit KPI đọc từ đây. KPI Request tự giảm Current
@@ -105,13 +138,19 @@ export async function applyMovementAction(
       case "CONFIRM_ARRIVED": {
         newStatus = "TRANSFER_COMPLETED";
         if (movement.toDeptId) {
-          // Cập nhật bộ phận thật — chỉ session GẦN NHẤT (đang hoạt động) + đúng 1 bản ghi
-          // daily_applications liên kết trực tiếp qua FK, không đụng lịch sử các lần đăng ký cũ.
+          // EMPLOYMENT LIFECYCLE (#15) — Transfer đổi bộ phận của session ĐANG ACTIVE (không
+          // phải session gần nhất theo regDate). Transfer KHÔNG kết thúc employment — cùng 1
+          // session tiếp tục ở bộ phận mới (không phải Resignation).
           const [currentSession] = await tx
             .select()
             .from(employmentSessions)
-            .where(eq(employmentSessions.workerId, movement.workerId))
-            .orderBy(desc(employmentSessions.regDate));
+            .where(and(
+              eq(employmentSessions.workerId, movement.workerId),
+              eq(employmentSessions.status, "APPROVED"),
+              sql`${employmentSessions.endDate} is null`,
+            ))
+            .orderBy(desc(employmentSessions.regDate))
+            .for("update");
           if (currentSession) {
             await tx.update(employmentSessions).set({ deptId: movement.toDeptId }).where(eq(employmentSessions.id, currentSession.id));
             if (currentSession.dailyApplicationId) {

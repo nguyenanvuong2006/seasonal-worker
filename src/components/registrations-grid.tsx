@@ -13,8 +13,10 @@ import {
 } from "@tanstack/react-table";
 import { Badge, Button, Card, Input, MetricStrip, MetricStripItem, Modal, toast, cn } from "@/components/ui";
 import { formatDate, STATUS_META, todayStr } from "@/lib/helpers";
+import { classifyEmploymentBadge, EMPLOYMENT_BADGE_META } from "@/lib/employment-lifecycle";
 import { normalizePersonName } from "@/lib/person-name";
 import { CCCD_ERROR_MESSAGE, isValidCccd, normalizeCccd } from "@/lib/validators";
+import EmploymentGuardModal from "@/components/employment-guard-modal";
 import {
   AlertTriangle,
   Calendar,
@@ -59,6 +61,15 @@ export type AppRow = {
   noteWorker: string | null;
   isImported: boolean;
   customAnswers: Record<string, string> | null;
+  // EMPLOYMENT LIFECYCLE — trạng thái vòng đời làm việc (từ employment_sessions, không phải từ application).
+  workerId?: string | null;
+  activeElsewhereDeptName?: string | null;
+  activeSessionCount?: number;
+  endedSessionCount?: number;
+  pendingResignationCount?: number;
+  workerDeclaredPreviousResignation?: boolean;
+  declaredResignationDate?: string | null;
+  declaredResignationNote?: string | null;
 };
 
 export type DeptOption = {
@@ -238,9 +249,12 @@ function HistoryPanel({ row, canRestore, onClose, onRestored }: { row: AppRow; c
 export default function RegistrationsGrid({
   departments,
   canEdit,
+  canConfirmResignation = false,
 }: {
   departments: DeptOption[];
   canEdit: boolean;
+  /** employment.resignation.confirm — cho phép “Xác nhận nghỉ & xếp việc mới” (server vẫn enforce). */
+  canConfirmResignation?: boolean;
 }) {
   // MẶC ĐỊNH CHỈ HÔM NAY (màn hình tinh gọn) — trừ khi đến từ Tìm kiếm toàn hệ thống
   // (?q=&from=&to=&rangeMode=1), lúc đó mở đúng khoảng ngày + từ khoá của kết quả đã bấm.
@@ -266,6 +280,13 @@ export default function RegistrationsGrid({
   const [newDept, setNewDept] = React.useState("");
   // Xác nhận đồng bộ IT CODE sang DW Data trước khi ghi (chỉ áp dụng cho lao động ĐÃ có DW Data).
   const [itCodeConfirm, setItCodeConfirm] = React.useState<{ id: string; value: string; workerName: string } | null>(null);
+  // EMPLOYMENT LIFECYCLE (#7-9, #23) — modal chặn "xếp việc âm thầm" khi ứng viên còn ACTIVE session.
+  const [employmentGuard, setEmploymentGuard] = React.useState<{ row: AppRow; pendingPatch: Partial<AppRow> } | null>(null);
+  // EMPLOYMENT LIFECYCLE (#11) — modal yêu cầu điều chỉnh ngày nhận việc (không backdate trực tiếp).
+  const [correctionModal, setCorrectionModal] = React.useState<AppRow | null>(null);
+  const [correctionDate, setCorrectionDate] = React.useState("");
+  const [correctionReason, setCorrectionReason] = React.useState("");
+  const [correctionNote, setCorrectionNote] = React.useState("");
 
   const load = React.useCallback(async () => {
     setLoading(true);
@@ -317,6 +338,16 @@ export default function RegistrationsGrid({
 
   const patchRow = React.useCallback(
     async (id: string, patch: Partial<AppRow>) => {
+      // EMPLOYMENT LIFECYCLE (#8) — chặn "xếp việc âm thầm" NGAY TRÊN UI: chuyển sang APPROVED
+      // khi ứng viên còn Employment Session ACTIVE ở nơi khác → mở modal lựa chọn (Từ chối /
+      // Yêu cầu xác nhận nghỉ / Xác nhận nghỉ & xếp việc). Server vẫn enforce độc lập.
+      if (patch.status === "APPROVED") {
+        const row = rows.find((r) => r.id === id);
+        if (row && row.status !== "APPROVED" && row.activeElsewhereDeptName) {
+          setEmploymentGuard({ row, pendingPatch: patch });
+          return;
+        }
+      }
       if (patch.cccd !== undefined) {
         const cccd = normalizeCccd(patch.cccd);
         if (!isValidCccd(cccd)) {
@@ -452,6 +483,35 @@ export default function RegistrationsGrid({
                 </span>
               )}
             </span>
+          );
+        },
+      }),
+      ch.display({
+        id: "employment",
+        header: "Employment",
+        cell: ({ row }) => {
+          const r = row.original;
+          const badge = classifyEmploymentBadge({
+            hasActiveSession: (r.activeSessionCount ?? 0) > 0,
+            pastEndedSessions: r.endedSessionCount ?? 0,
+            hasPendingResignationConfirmation: (r.pendingResignationCount ?? 0) > 0,
+            hasDuplicateActive: (r.activeSessionCount ?? 0) > 1,
+          });
+          const meta = EMPLOYMENT_BADGE_META[badge];
+          return (
+            <div className="flex flex-col gap-0.5 px-1">
+              <Badge tone={meta.tone}>{meta.label}</Badge>
+              {r.activeElsewhereDeptName && (
+                <span className="text-[10px] font-semibold text-danger" title={`Đang được ghi nhận đang làm việc tại ${r.activeElsewhereDeptName}`}>
+                  @ {r.activeElsewhereDeptName}
+                </span>
+              )}
+              {r.workerDeclaredPreviousResignation && (
+                <span className="text-[10px] text-warning" title={`NLĐ khai đã báo nghỉ ngày ${formatDate(r.declaredResignationDate)} — chưa xác nhận trên hệ thống`}>
+                  Khai đã nghỉ {formatDate(r.declaredResignationDate)}
+                </span>
+              )}
+            </div>
           );
         },
       }),
@@ -1064,9 +1124,96 @@ export default function RegistrationsGrid({
                 </ul>
               </div>
             )}
+            {/* EMPLOYMENT LIFECYCLE (#11) — hồ sơ đã xếp việc: Recruiter không sửa Starting Date
+                về quá khứ trực tiếp; yêu cầu điều chỉnh để Admin duyệt. */}
+            {canEdit && detail.status === "APPROVED" && (
+              <div className="rounded-[14px] border border-border bg-surface p-4">
+                <p className="mb-1 text-[11px] font-semibold uppercase tracking-wide text-fg-secondary">Ngày nhận việc</p>
+                <p className="text-sm text-fg">
+                  Hệ thống ghi nhận: <b>{formatDate(detail.startingDate)}</b>
+                </p>
+                <p className="mt-1 text-[12px] leading-5 text-fg-muted">
+                  Nếu thực tế người lao động đã nhận việc trước ngày này, dùng nút bên dưới — hệ thống sẽ tạo yêu cầu chờ Admin duyệt (không sửa trực tiếp).
+                </p>
+                <Button
+                  size="sm"
+                  variant="outline"
+                  className="mt-2"
+                  onClick={() => {
+                    setCorrectionModal(detail);
+                    setDetail(null);
+                  }}
+                >
+                  <Calendar className="h-3.5 w-3.5" /> Yêu cầu điều chỉnh ngày nhận việc
+                </Button>
+              </div>
+            )}
           </div>
         )}
       </Modal>
+
+      {correctionModal && (
+        <Modal open onClose={() => setCorrectionModal(null)} title={`Yêu cầu điều chỉnh ngày nhận việc — ${correctionModal.fullName}`} width="max-w-md">
+          <div className="space-y-3">
+            <div className="rounded-[12px] border border-border bg-surface-raised p-3 text-[13px] leading-6 text-fg-secondary">
+              Ngày hệ thống: <b className="text-fg">{formatDate(correctionModal.startingDate)}</b>. Yêu cầu sẽ ở trạng thái
+              <b className="text-fg"> PENDING_ADMIN_APPROVAL</b> — ngày nhận việc chỉ thay đổi sau khi Admin duyệt.
+            </div>
+            <div>
+              <p className="mb-1 text-[13px] font-semibold text-fg">Ngày nhận việc thực tế <span className="text-danger">*</span></p>
+              <Input type="date" value={correctionDate} max={todayStr()} onChange={(e) => setCorrectionDate(e.target.value)} />
+            </div>
+            <div>
+              <p className="mb-1 text-[13px] font-semibold text-fg">Lý do điều chỉnh <span className="text-danger">*</span></p>
+              <Input value={correctionReason} onChange={(e) => setCorrectionReason(e.target.value)} placeholder="Ví dụ: NLĐ đã nhận việc từ 12/08 nhưng hệ thống cập nhật trễ..." />
+            </div>
+            <div>
+              <p className="mb-1 text-[13px] font-semibold text-fg">Ghi chú / chứng từ</p>
+              <Input value={correctionNote} onChange={(e) => setCorrectionNote(e.target.value)} placeholder="Không bắt buộc" />
+            </div>
+            <div className="flex justify-end gap-2">
+              <Button variant="ghost" onClick={() => setCorrectionModal(null)}>Hủy</Button>
+              <Button
+                variant="primary"
+                disabled={busy}
+                onClick={async () => {
+                  if (!correctionDate || !correctionReason.trim()) {
+                    toast({ title: "Cần nhập Ngày thực tế và Lý do", variant: "destructive" });
+                    return;
+                  }
+                  setBusy(true);
+                  try {
+                    const res = await fetch("/api/employment/start-date-corrections", {
+                      method: "POST",
+                      headers: { "Content-Type": "application/json" },
+                      body: JSON.stringify({
+                        dailyApplicationId: correctionModal.id,
+                        requestedStartDate: correctionDate,
+                        reason: correctionReason.trim(),
+                        note: correctionNote || null,
+                      }),
+                    });
+                    const d = await res.json();
+                    if (!res.ok) {
+                      toast({ title: d.error ?? "Không tạo được yêu cầu", variant: "destructive" });
+                      return;
+                    }
+                    toast({ title: d.alreadyPending ? "Đã có yêu cầu điều chỉnh đang chờ duyệt cho hồ sơ này" : "Đã gửi yêu cầu — chờ Admin duyệt tại Task Center" });
+                    setCorrectionModal(null);
+                    setCorrectionDate("");
+                    setCorrectionReason("");
+                    setCorrectionNote("");
+                  } finally {
+                    setBusy(false);
+                  }
+                }}
+              >
+                Gửi yêu cầu
+              </Button>
+            </div>
+          </div>
+        </Modal>
+      )}
 
       {itCodeConfirm && (
         <Modal open onClose={() => setItCodeConfirm(null)} title="Cập nhật IT CODE đồng bộ DW Data" width="max-w-md">
@@ -1103,6 +1250,18 @@ export default function RegistrationsGrid({
           canRestore={canEdit}
           onClose={() => setHistoryRow(null)}
           onRestored={() => void load()}
+        />
+      )}
+
+      {employmentGuard && (
+        <EmploymentGuardModal
+          cccd={employmentGuard.row.cccd}
+          workerName={employmentGuard.row.fullName}
+          applicationId={employmentGuard.row.id}
+          targetDeptId={(employmentGuard.pendingPatch.deptId as string | null) ?? employmentGuard.row.deptId}
+          canConfirmResignation={canConfirmResignation}
+          onClose={() => setEmploymentGuard(null)}
+          onResolved={() => void load()}
         />
       )}
 

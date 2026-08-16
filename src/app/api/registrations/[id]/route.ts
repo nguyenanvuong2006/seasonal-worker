@@ -2,12 +2,15 @@ import { NextResponse } from "next/server";
 import { and, eq, isNull, ne } from "drizzle-orm";
 import { db } from "@/db";
 import { dailyApplications, dwData, employmentSessions, workerProfiles } from "@/db/schema";
-import { getUserScope, requireRoleAndPermission, writeAudit } from "@/lib/auth";
+import { getUserScope, hasPermission, requireRoleAndPermission, writeAudit } from "@/lib/auth";
 import { scopeAllowsDepartment } from "@/lib/data-scope";
 import { getWorkflowStages } from "@/lib/workflow";
 import { autoAllocateInternship } from "@/lib/planning";
 import { normalizePersonName } from "@/lib/person-name";
+import { todayStr } from "@/lib/helpers";
 import { CCCD_ERROR_MESSAGE, isValidCccd, normalizeCccd } from "@/lib/validators";
+import { assertNoOtherActiveSession, confirmResignationAndAssign, EmploymentRuleError } from "@/lib/employment";
+import { validateStartingDateInput } from "@/lib/employment-lifecycle";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -93,6 +96,93 @@ export async function PATCH(req: Request, ctx: { params: Promise<{ id: string }>
       }
     }
 
+    // ============ EMPLOYMENT LIFECYCLE ============
+    const today = todayStr();
+    const isAssigning = patch.status === "APPROVED" && existing.status !== "APPROVED";
+
+    // RULE #11 — KHÔNG backdate tuỳ ý: sửa startingDate về quá khứ phải qua
+    // START_DATE_CORRECTION_REQUEST (POST /api/employment/start-date-corrections) để Admin duyệt.
+    if (typeof patch.startingDate === "string" && patch.startingDate !== existing.startingDate) {
+      const dateError = validateStartingDateInput(patch.startingDate, today);
+      if (dateError) return NextResponse.json({ error: dateError, code: "BACKDATE_FORBIDDEN" }, { status: 400 });
+    }
+
+    // RULE #10 — DEFAULT START DATE = ngày Recruiter thao tác (Asia/Ho_Chi_Minh),
+    // KHÔNG phải ngày đăng ký (application_date ≠ employment_start_date).
+    if (isAssigning && !("startingDate" in patch) && !existing.startingDate) {
+      patch.startingDate = today;
+    }
+
+    // RULE #8-C — "Xác nhận nghỉ & xếp việc mới": client gửi kèm confirmPreviousResignation +
+    // actualResignationDate. Chỉ role có employment.resignation.confirm được đi đường này —
+    // toàn bộ (đóng session A + movement + mở session B) chạy 1 transaction trong lib/employment.ts.
+    const confirmPreviousResignation = body.confirmPreviousResignation === true;
+    const actualResignationDate = typeof body.actualResignationDate === "string" ? body.actualResignationDate : null;
+
+    if (isAssigning) {
+      const [linkedForGuard] = await db
+        .select({ id: employmentSessions.id, workerId: employmentSessions.workerId })
+        .from(employmentSessions)
+        .where(eq(employmentSessions.dailyApplicationId, id));
+      if (linkedForGuard) {
+        if (confirmPreviousResignation) {
+          const canConfirm = await hasPermission(guard.session.role, "employment.resignation.confirm");
+          if (!canConfirm) {
+            return NextResponse.json(
+              { error: "Bạn không có quyền “Xác nhận nghỉ & xếp việc mới”. Hãy dùng “Yêu cầu xác nhận nghỉ”.", code: "CONFIRMATION_REQUIRES_PERMISSION" },
+              { status: 403 },
+            );
+          }
+          if (!actualResignationDate) {
+            return NextResponse.json(
+              { error: "Cần nhập Ngày nghỉ thực tế (Actual Resignation Date).", code: "CONFIRMATION_REQUIRES_DATE" },
+              { status: 400 },
+            );
+          }
+          const newDeptId = (patch.deptId as string | null) ?? existing.deptId;
+          if (!newDeptId) {
+            return NextResponse.json({ error: "Cần chọn Bộ phận mới trước khi xác nhận nghỉ & xếp việc." }, { status: 400 });
+          }
+          try {
+            const result = await confirmResignationAndAssign({
+              workerId: linkedForGuard.workerId,
+              newSessionId: linkedForGuard.id,
+              newDeptId,
+              actualResignationDate,
+              startingDate: (patch.startingDate as string | null) ?? today,
+              reason: reason ?? "Xác nhận nghỉ bộ phận cũ khi xếp việc mới",
+              confirmedBy: guard.session.username,
+            });
+            await writeAudit(guard.session, "CONFIRM_RESIGNATION_AND_ASSIGN", "employment_sessions", {
+              dailyApplicationId: id,
+              endedSessionId: result.endedSessionId,
+              movementId: result.movementId,
+              newSessionId: result.newSessionId,
+              actualResignationDate,
+              newDeptId,
+              reason,
+            });
+            const [row] = await db.select().from(dailyApplications).where(eq(dailyApplications.id, id));
+            return NextResponse.json({ success: true, row, employment: result });
+          } catch (e) {
+            if (e instanceof EmploymentRuleError) {
+              return NextResponse.json({ error: e.message, code: e.code }, { status: 409 });
+            }
+            throw e;
+          }
+        }
+        // RULE #3/#8 — server-side reject: không xếp việc âm thầm khi còn ACTIVE session khác.
+        try {
+          await assertNoOtherActiveSession(db, linkedForGuard.workerId, linkedForGuard.id);
+        } catch (e) {
+          if (e instanceof EmploymentRuleError) {
+            return NextResponse.json({ error: e.message, code: e.code }, { status: 409 });
+          }
+          throw e;
+        }
+      }
+    }
+
     // P1-4 (Production Hardening Audit) — TRƯỚC ĐÂY chỉ status/deptId/startingDate được đồng bộ
     // sang employment_sessions; sửa CCCD/họ tên/SĐT/DOB/địa chỉ trên daily_applications KHÔNG hề
     // cập nhật worker_profiles liên kết — hồ sơ điện tử "duy nhất/người" (nguồn sự thật danh
@@ -129,6 +219,13 @@ export async function PATCH(req: Request, ctx: { params: Promise<{ id: string }>
       if ("deptId" in patch) sessionPatch.deptId = patch.deptId;
       if ("startingDate" in patch) sessionPatch.startingDate = patch.startingDate;
       if (linkedSession && Object.keys(sessionPatch).length > 0) {
+        // EMPLOYMENT LIFECYCLE — kiểm tra invariant "1 ACTIVE/worker" LẦN NỮA bên trong
+        // transaction (guard phía trên chạy ngoài transaction — 2 request đồng thời có thể
+        // cùng vượt qua). Partial unique index là lưới chốt cuối.
+        if (patch.status === "APPROVED") {
+          await assertNoOtherActiveSession(tx, linkedSession.workerId, linkedSession.id);
+          sessionPatch.startDateSource = "ASSIGNMENT";
+        }
         await tx.update(employmentSessions).set(sessionPatch).where(eq(employmentSessions.id, linkedSession.id));
       }
 
@@ -198,6 +295,17 @@ export async function PATCH(req: Request, ctx: { params: Promise<{ id: string }>
   } catch (error) {
     if (error instanceof CccdConflictError) {
       return NextResponse.json({ error: error.message }, { status: 409 });
+    }
+    if (error instanceof EmploymentRuleError) {
+      return NextResponse.json({ error: error.message, code: error.code }, { status: 409 });
+    }
+    // Lưới cuối cấp DB: unique index "1 ACTIVE/worker" — dịch 23505 thành lỗi nghiệp vụ rõ ràng.
+    if ((error as { code?: string; constraint?: string }).code === "23505" &&
+        (error as { constraint?: string }).constraint === "employment_session_one_active_uq") {
+      return NextResponse.json(
+        { error: "Người lao động đã có một đợt làm việc ACTIVE khác (thao tác trùng lặp). Tải lại trang để xem trạng thái mới nhất.", code: "DUPLICATE_ACTIVE_EMPLOYMENT" },
+        { status: 409 },
+      );
     }
     return NextResponse.json(
       { error: "Lỗi hệ thống: " + (error as Error).message },

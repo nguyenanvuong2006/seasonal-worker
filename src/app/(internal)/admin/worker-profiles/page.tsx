@@ -24,9 +24,15 @@ type Session = {
   status: string;
   startingDate: string | null;
   endDate: string | null;
+  endReason: string | null;
+  endedBy: string | null;
+  startDateSource: string | null;
+  dailyApplicationId: string | null;
+  endMovementId: string | null;
   note: string | null;
   deptName: string | null;
   groupName: string | null;
+  section: string | null;
 };
 type Profile = {
   id: string;
@@ -195,21 +201,52 @@ export default function WorkerProfilesPage() {
           </Card>
 
           <Card className="p-0">
-            <CardHeader title={`Lịch sử đợt Tập nghề — ${sessions.length} đợt`} />
+            <CardHeader
+              title={`Lịch sử làm việc — ${sessions.length} đợt`}
+              subtitle="Nguồn sự thật: Employment Sessions (không phải Daily Application). Mỗi lần nhận việc = 1 đợt; ĐANG LÀM = APPROVED chưa có ngày kết thúc."
+            />
             <CardContent className="p-0">
               {sessions.length === 0 ? (
-                <EmptyState title="Chưa có lịch sử Tập nghề" description="Người này chưa có đợt Tập nghề nào được ghi nhận." />
+                <EmptyState title="Chưa có lịch sử làm việc" description="Người này chưa có đợt làm việc nào được ghi nhận." />
               ) : (
                 <ul className="divide-y divide-border">
-                  {sessions.map((s) => (
-                    <li key={s.id} className="flex flex-wrap items-center gap-3 p-4 text-sm">
-                      <StatusBadge status={s.status} />
-                      <span className="font-semibold text-fg">{s.deptName ?? "Chưa xếp bộ phận"}</span>
-                      <span className="text-fg-muted">Đăng ký: {s.regDate}</span>
-                      {s.startingDate && <span className="text-fg-muted">Bắt đầu: {s.startingDate}</span>}
-                      {s.endDate && <span className="text-fg-muted">Kết thúc: {s.endDate}</span>}
-                    </li>
-                  ))}
+                  {[...sessions].reverse().map((s, idx) => {
+                    const isActive = s.status === "APPROVED" && !s.endDate;
+                    const days = s.startingDate
+                      ? Math.max(0, Math.round((Date.parse(s.endDate ?? new Date().toISOString().slice(0, 10)) - Date.parse(s.startingDate)) / 86400000))
+                      : null;
+                    return (
+                      <li key={s.id} className="space-y-1.5 p-4 text-sm">
+                        <div className="flex flex-wrap items-center gap-2">
+                          <span className="rounded-full bg-surface-hover px-2 py-0.5 text-[11px] font-bold text-fg-secondary">LẦN {idx + 1}</span>
+                          <span className="font-semibold text-fg">{s.deptName ?? "Chưa xếp bộ phận"}{s.groupName ? ` — ${s.groupName}` : ""}</span>
+                          {s.section && <span className="text-[12px] text-fg-muted">Section: {s.section}</span>}
+                          {isActive ? (
+                            <Badge tone="green" dot>Đang làm</Badge>
+                          ) : s.endDate || s.status === "ENDED" ? (
+                            <Badge tone="red">Đã nghỉ</Badge>
+                          ) : (
+                            <StatusBadge status={s.status} />
+                          )}
+                        </div>
+                        <div className="flex flex-wrap gap-x-4 gap-y-1 text-[12.5px] text-fg-muted">
+                          <span>Đăng ký: {s.regDate}</span>
+                          {s.startingDate && <span>Nhận việc: {s.startingDate}{s.startDateSource === "CORRECTION" ? " (đã điều chỉnh)" : ""}</span>}
+                          <span>{s.endDate ? `Nghỉ: ${s.endDate}` : "→ Hiện tại"}</span>
+                          {days !== null && <span>Thời gian: {days} ngày</span>}
+                          {s.endReason && <span>Lý do nghỉ: {s.endReason}</span>}
+                          {s.endedBy && <span>Xác nhận nghỉ: {s.endedBy}</span>}
+                        </div>
+                        {(s.dailyApplicationId || s.endMovementId) && (
+                          <div className="flex flex-wrap gap-3 text-[11.5px] text-fg-muted">
+                            {s.dailyApplicationId && <span className="font-mono">Application: {s.dailyApplicationId.slice(0, 8)}…</span>}
+                            {s.endMovementId && <span className="font-mono">Movement: {s.endMovementId.slice(0, 8)}…</span>}
+                          </div>
+                        )}
+                        {s.note && <p className="text-[12px] italic text-fg-secondary">{s.note}</p>}
+                      </li>
+                    );
+                  })}
                 </ul>
               )}
             </CardContent>

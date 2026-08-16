@@ -29,6 +29,9 @@ type TaskData = {
   resignations: Section<{ id: string; workerName: string | null; workerCccd: string | null; effectiveDate: string; requestedBy: string; createdAt: string }>;
   transfers: Section<{ id: string; workerName: string | null; workerCccd: string | null; status: string; effectiveDate: string; requestedBy: string; createdAt: string }>;
   expiringPlans: Section<{ id: string; deptName: string | null; section: string | null; endDate: string; targetCount: number | null }>;
+  // EMPLOYMENT LIFECYCLE (#16) — 2 loại task mới.
+  resignationConfirmations: Section<{ id: string; workerName: string | null; workerCccd: string | null; deptName: string | null; effectiveDate: string; requestedBy: string; createdAt: string }>;
+  startDateRequests: Section<{ id: string; workerName: string | null; workerCccd: string | null; deptName: string | null; currentStartDate: string | null; requestedStartDate: string; reason: string; requestedBy: string; requestedAt: string }>;
   reallocationTasks: Section<{
     id: string;
     requestCode: string | null;
@@ -191,6 +194,8 @@ export default function TaskCenterPage() {
         json.resignations.total +
         json.transfers.total +
         json.expiringPlans.total +
+        (json.resignationConfirmations?.total ?? 0) +
+        (json.startDateRequests?.total ?? 0) +
         (json.reallocationTasks?.total ?? 0);
       setState(total === 0 ? "empty" : "success");
     } catch {
@@ -333,6 +338,48 @@ export default function TaskCenterPage() {
                   title={`${r.requestCode ?? "—"} · ${r.totalActiveAllocations} DW cần xác nhận`}
                   meta={`${[r.departmentName, r.section, r.groupName].filter(Boolean).join(" / ") || "—"} · Nam ${r.maleCount} / Nữ ${r.femaleCount}`}
                   badge={<Badge tone="red" dot>Hết hạn {r.endDate ?? "—"}</Badge>}
+                />
+              ))}
+            </TaskGroup>
+          )}
+
+          {!hidden.has("resignationConfirmations") && data.resignationConfirmations && (
+            <TaskGroup
+              icon={LogOut}
+              title="Cần xác nhận nghỉ bộ phận cũ trước khi xếp việc mới"
+              total={data.resignationConfirmations.total}
+              visibleCount={data.resignationConfirmations.rows.length}
+              emptyLabel="Không có."
+              moreHref="/admin/workforce-movements"
+            >
+              {data.resignationConfirmations.rows.map((r) => (
+                <TaskRow
+                  key={r.id}
+                  href="/admin/workforce-movements"
+                  title={r.workerName}
+                  meta={`${r.workerCccd ?? "—"} · đang ghi nhận tại ${r.deptName ?? "—"} · đăng ký xin việc mới`}
+                  badge={priorityBadge(ageDays(r.createdAt))}
+                />
+              ))}
+            </TaskGroup>
+          )}
+
+          {!hidden.has("startDateRequests") && data.startDateRequests && (
+            <TaskGroup
+              icon={CalendarClock}
+              title="Yêu cầu điều chỉnh ngày nhận việc"
+              total={data.startDateRequests.total}
+              visibleCount={data.startDateRequests.rows.length}
+              emptyLabel="Không có."
+              moreHref="/admin/employment-reconciliation"
+            >
+              {data.startDateRequests.rows.map((r) => (
+                <TaskRow
+                  key={r.id}
+                  href="/admin/employment-reconciliation"
+                  title={r.workerName}
+                  meta={`${r.workerCccd ?? "—"} · ${r.deptName ?? "—"} · ${r.currentStartDate ?? "—"} → ${r.requestedStartDate} · ${r.requestedBy}`}
+                  badge={priorityBadge(ageDays(r.requestedAt))}
                 />
               ))}
             </TaskGroup>
