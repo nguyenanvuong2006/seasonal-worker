@@ -334,6 +334,30 @@ export class RealGoogleDocsService implements GoogleDocsService {
     });
     if (!response.ok) {
       const detail = await response.text();
+      const retryableStatuses = new Set([429, 502, 503]);
+      if (retryableStatuses.has(response.status)) {
+        // Google Docs quotas are per user and can be briefly exhausted. Retry
+        // with truncated exponential backoff and a little jitter, while still
+        // surfacing a deterministic error after the final attempt.
+        const maxRetries = 3;
+        for (let attempt = 0; attempt < maxRetries; attempt++) {
+          const delay = Math.min(4000, 1000 * 2 ** attempt) + Math.floor(Math.random() * 250);
+          await new Promise((resolve) => setTimeout(resolve, delay));
+          const retryResponse = await fetch(url, {
+            ...options,
+            headers: {
+              ...(await this.authHeader()),
+              ...(options.body ? { "Content-Type": "application/json" } : {}),
+              ...options.headers,
+            },
+          });
+          if (retryResponse.ok) return retryResponse.json() as Promise<T>;
+          if (!retryableStatuses.has(retryResponse.status)) {
+            const retryDetail = await retryResponse.text();
+            throw new Error(`Google API ${retryResponse.status}: ${retryDetail.slice(0, 1000)}`);
+          }
+        }
+      }
       if (response.status === 403) {
         throw new Error(`Google API 403: ${explainWrite403(detail)} Chi tiết: ${detail.slice(0, 500)}`);
       }

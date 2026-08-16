@@ -159,6 +159,20 @@ async function requestJson<T>(url: string, options: RequestInit = {}): Promise<T
   });
   if (!response.ok) {
     const detail = await response.text();
+    if ([429, 502, 503].includes(response.status)) {
+      for (let attempt = 0; attempt < 3; attempt++) {
+        await new Promise((resolve) => setTimeout(resolve, Math.min(4000, 1000 * 2 ** attempt) + Math.floor(Math.random() * 250)));
+        const retry = await fetch(url, {
+          ...options,
+          headers: { Authorization: `Bearer ${await resolveAccessToken()}`, ...(options.body ? { "Content-Type": "application/json" } : {}), ...options.headers },
+        });
+        if (retry.ok) return retry.json() as Promise<T>;
+        if (![429, 502, 503].includes(retry.status)) {
+          const retryDetail = await retry.text();
+          throw new Error(`BATCH_GOOGLE_API_${retry.status}: ${retryDetail.slice(0, 1000)}`);
+        }
+      }
+    }
     throw new Error(`BATCH_GOOGLE_API_${response.status}: ${detail.slice(0, 1000)}`);
   }
   return response.json() as Promise<T>;
