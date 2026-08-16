@@ -22,7 +22,17 @@ import { CCCD_PATTERN, NUMBER_PATTERN, VN_PHONE_PATTERN } from "@/lib/validators
 export const STAGE_CHUNK = 8000; // số dòng merge / 1 câu lệnh SQL — đủ nhỏ để không chạm giới hạn, đủ lớn để nhanh
 export const STALE_MS = 90_000; // job không có heartbeat > 90s coi là "treo", watchdog được phép resume
 
-type JobType = "department" | "dw_data" | "daily_application";
+/** Nhóm dữ liệu dùng ĐƯỢC với Import Engine chung (staging + merge theo lô).
+ *  `recruitment_request` KHÔNG nằm ở đây: yêu cầu tuyển dụng có đường import
+ *  riêng (paste TSV + transaction, xem src/lib/recruitment-request.ts) vì cần
+ *  upsert theo Request Code và bảo vệ các cột hệ thống tự tính. */
+export type JobType = "department" | "dw_data" | "daily_application";
+
+export const IMPORT_ENGINE_JOB_TYPES: readonly JobType[] = ["department", "dw_data", "daily_application"];
+
+export function isImportEngineJobType(value: unknown): value is JobType {
+  return typeof value === "string" && (IMPORT_ENGINE_JOB_TYPES as readonly string[]).includes(value);
+}
 
 export async function createJob(jobType: JobType, fileName: string, checksum: string, createdBy: string, totalRows: number) {
   const [job] = await db

@@ -7,6 +7,7 @@ import {
   validateRow,
   resolveHeaderAlias,
   normalizeHeaderName,
+  matchHierarchy,
 } from "@/lib/recruitment-request";
 import { parseImportFile } from "@/lib/file-parser";
 
@@ -21,7 +22,11 @@ export const dynamic = "force-dynamic";
  *   - body.options: { skipDuplicates, updateDuplicates }
  */
 export async function POST(req: Request) {
-  const guard = await requirePermission(["ADMIN", "HR_RECRUITER", "DEPT_MANAGER"], "planning.request");
+  // QUYỀN IMPORT TÁCH RIÊNG (Yêu cầu #11): chỉ ADMIN / HR_RECRUITER có
+  // `planning.import` mới được dán hoặc tải kế hoạch lên.
+  // DEPT_MANAGER bị loại ở CẢ hai lớp: không nằm trong danh sách vai trò, và
+  // `planning.import` = allowed:false ở cấp DB.
+  const guard = await requirePermission(["ADMIN", "HR_RECRUITER"], "planning.import");
   if (!guard.ok) return NextResponse.json({ error: guard.error }, { status: guard.status });
 
   const body = (await req.json()) as {
@@ -127,14 +132,23 @@ export async function POST(req: Request) {
   const scope = await getUserScope(guard.session);
   const validRows = preview.filter((p) => p.valid).map((p) => p.mapped);
 
-  // Check data scope for department-based requests
-  // Only import rows that don't have a department outside scope
+  // DATA SCOPE PHÍA SERVER (Yêu cầu #15).
+  // scope chứa UUID phòng ban, còn dòng Excel chỉ có TÊN phòng ban dạng text.
+  // Vì vậy phải phân giải tên -> department_id qua cây tổ chức rồi mới so khớp,
+  // thay vì so chuỗi lỏng lẻo (cách cũ `dept.includes(uuid)` không bao giờ đúng).
   let rowsToImport = validRows;
-  if (scope !== null && scope.length > 0) {
-    rowsToImport = validRows.filter((r) => {
-      const dept = r["Department"] || r["Department"] || "";
-      return !dept || scope.some((s) => dept.includes(s) || s.includes(dept));
-    });
+  let outOfScopeCount = 0;
+  if (scope !== null) {
+    if (scope.length === 0) {
+      return NextResponse.json({ error: "Tài khoản chưa được cấp Data Scope nào." }, { status: 403 });
+    }
+    const allowed: Record<string, string>[] = [];
+    for (const r of validRows) {
+      const { deptId } = await matchHierarchy(r["Location"], r["Division"], r["Department"], r["Section"], r["Group"]);
+      if (deptId && scope.includes(deptId)) allowed.push(r);
+      else outOfScopeCount++;
+    }
+    rowsToImport = allowed;
   }
 
   const results = await importRecruitmentRequests(
@@ -145,6 +159,7 @@ export async function POST(req: Request) {
 
   await writeAudit(guard.session, "IMPORT_RECRUITMENT_REQUESTS", "recruitment_requests", {
     totalRows: dataRows.length,
+    outOfScope: outOfScopeCount,
     imported: results.filter((r) => r.status === "INSERTED").length,
     updated: results.filter((r) => r.status === "UPDATED").length,
     skipped: results.filter((r) => r.status === "SKIPPED").length,
@@ -154,6 +169,7 @@ export async function POST(req: Request) {
   return NextResponse.json({
     success: true,
     totalRows: dataRows.length,
+    outOfScope: outOfScopeCount,
     results,
   });
 }

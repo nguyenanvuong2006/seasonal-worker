@@ -5,14 +5,15 @@ import { db } from "@/db";
 import { importJobs } from "@/db/schema";
 import { requireRoleAndPermission, writeAudit } from "@/lib/auth";
 import { getImportTemplate } from "@/lib/import-template";
-import { cleanupPartialImportJob, createJob, stageRows, triggerWorker } from "@/lib/import-jobs";
-import type { Group } from "@/lib/metadata";
+import { cleanupPartialImportJob, createJob, isImportEngineJobType, stageRows, triggerWorker } from "@/lib/import-jobs";
+
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 export const maxDuration = 60;
 
-const JOB_TYPES = new Set<Group>(["department", "dw_data", "daily_application"]);
+// Bảng dán trực tiếp chỉ phục vụ Import Engine chung; recruitment_request
+// dùng luồng import riêng tại /api/recruitment-requests/import.
 const MAX_ROWS = 10_000;
 const MAX_COLUMNS = 150;
 const MAX_CELL_LENGTH = 50_000;
@@ -48,11 +49,10 @@ export async function POST(req: Request) {
       return errorJson("Nội dung JSON không hợp lệ hoặc đã vượt giới hạn request.", 400);
     }
 
-    if (typeof body.jobType !== "string" || !JOB_TYPES.has(body.jobType as Group)) {
+    if (!isImportEngineJobType(body.jobType)) {
       return errorJson("Loại dữ liệu không hợp lệ. Chỉ chấp nhận department, dw_data hoặc daily_application.", 400);
     }
-    // Import Engine chỉ nhận 3 loại bảng chính (recruitment_request có luồng import riêng).
-    const jobType = body.jobType as "department" | "dw_data" | "daily_application";
+    const jobType = body.jobType;
 
     if (!Array.isArray(body.columnIds) || body.columnIds.length === 0) {
       return errorJson("Bảng chưa có cột để xử lý.", 400);

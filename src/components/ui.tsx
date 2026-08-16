@@ -376,6 +376,8 @@ export function Badge({
  * until added here. */
 const STATUS_BADGE_MAP: Record<string, { label: string; tone: BadgeTone }> = {
   PENDING: { label: "Chờ duyệt", tone: "amber" },
+  PROCESSING: { label: "Đang xử lý", tone: "blue" },
+  COMPLETED: { label: "Hoàn tất", tone: "green" },
   APPROVED: { label: "Đã nhận việc", tone: "green" },
   REJECTED: { label: "Không nhận", tone: "red" },
   WAITLIST: { label: "Dự phòng", tone: "blue" },
