@@ -228,7 +228,48 @@ export async function reviseActivePeriod(
       targetCount,
       note: input.note ?? oldTarget?.note ?? null,
     });
-    await tx.update(planningAllocations).set({ planningPeriodId: newVersion.id }).where(eq(planningAllocations.planningPeriodId, old.id));
+    /* Yêu cầu #4 & #8 — LỊCH SỬ CHỈ THÊM, KHÔNG GHI ĐÈ.
+       Trước đây dòng phân bổ bị UPDATE sang planning_period_id mới, nên bản
+       kế hoạch cũ mất sạch dấu vết ai đã từng được phân bổ vào nó. Nay ta
+       ĐÓNG phân bổ cũ (allocation_end_date) rồi MỞ phân bổ mới trỏ tới bản
+       version mới, nối chuỗi qua previous_allocation_id.
+       LƯU Ý: đóng phân bổ KHÔNG phải nghỉ việc — không đụng employment_sessions
+       hay workforce_movements (Yêu cầu #9). */
+    const openAllocs = await tx
+      .select({
+        id: planningAllocations.id,
+        employmentSessionId: planningAllocations.employmentSessionId,
+        allocationStartDate: planningAllocations.allocationStartDate,
+        recruitmentRequestId: planningAllocations.recruitmentRequestId,
+      })
+      .from(planningAllocations)
+      .where(
+        and(
+          eq(planningAllocations.planningPeriodId, old.id),
+          isNull(planningAllocations.allocationEndDate),
+        ),
+      )
+      .for("update");
+
+    const today = todayStr();
+    for (const alloc of openAllocs) {
+      await tx
+        .update(planningAllocations)
+        .set({ allocationEndDate: today, reallocatedBy: revisedBy, reallocatedAt: new Date() })
+        .where(eq(planningAllocations.id, alloc.id));
+
+      await tx
+        .insert(planningAllocations)
+        .values({
+          employmentSessionId: alloc.employmentSessionId,
+          planningPeriodId: newVersion.id,
+          recruitmentRequestId: alloc.recruitmentRequestId,
+          allocationStartDate: alloc.allocationStartDate ?? today,
+          previousAllocationId: alloc.id,
+          allocatedBy: revisedBy,
+        })
+        .onConflictDoNothing();
+    }
 
     return newVersion;
   });
@@ -310,6 +351,8 @@ export async function autoAllocateInternship(
     .where(
       and(
         inArray(planningAllocations.planningPeriodId, periodIds),
+        // Chỉ đếm phân bổ ĐANG mở — dòng lịch sử đã đóng không được tính hai lần.
+        isNull(planningAllocations.allocationEndDate),
         eq(employmentSessions.status, "APPROVED"),
         isNull(employmentSessions.endDate),
       ),
@@ -348,16 +391,43 @@ export async function autoAllocateInternship(
     }
   }
 
-  // Xoá phân bổ cũ nếu đã có (tránh double-allocation khi đổi bộ phận / gán lại)
-  await executor
-    .delete(planningAllocations)
-    .where(eq(planningAllocations.employmentSessionId, employmentSessionId));
+  /* Yêu cầu #4 — trước đây phân bổ cũ bị DELETE, xoá luôn lịch sử. Nay ta
+     ĐÓNG nó lại: dòng cũ vẫn truy vết được, dòng mới nối qua
+     previous_allocation_id. Nếu người này đã ở đúng kế hoạch đích rồi thì
+     không làm gì cả (idempotent). */
+  const today = todayStr();
+  const existing = await executor
+    .select({
+      id: planningAllocations.id,
+      planningPeriodId: planningAllocations.planningPeriodId,
+      allocationStartDate: planningAllocations.allocationStartDate,
+    })
+    .from(planningAllocations)
+    .where(
+      and(
+        eq(planningAllocations.employmentSessionId, employmentSessionId),
+        isNull(planningAllocations.allocationEndDate),
+      ),
+    );
+
+  if (existing.some((a) => a.planningPeriodId === chosenPeriodId)) return chosenPeriodId;
+
+  let previousAllocationId: string | null = null;
+  for (const alloc of existing) {
+    await executor
+      .update(planningAllocations)
+      .set({ allocationEndDate: today, reallocatedBy: allocatedBy, reallocatedAt: new Date() })
+      .where(eq(planningAllocations.id, alloc.id));
+    previousAllocationId = alloc.id;
+  }
 
   await executor
     .insert(planningAllocations)
     .values({
       employmentSessionId,
       planningPeriodId: chosenPeriodId,
+      allocationStartDate: startingDate ?? today,
+      previousAllocationId,
       allocatedBy,
     })
     .onConflictDoNothing();
@@ -371,7 +441,7 @@ export async function getUnplannedSessions(departmentIds?: string[]) {
     .select({ sessionId: planningAllocations.employmentSessionId })
     .from(planningAllocations)
     .innerJoin(planningPeriods, eq(planningAllocations.planningPeriodId, planningPeriods.id))
-    .where(eq(planningPeriods.status, "ACTIVE"));
+    .where(and(eq(planningPeriods.status, "ACTIVE"), isNull(planningAllocations.allocationEndDate)));
   const allocatedIds = allocatedToActive.map((r) => r.sessionId);
 
   const filters = [
@@ -443,6 +513,8 @@ export async function batchComputePlanningMetrics(periodIds: string[]): Promise<
     .where(
       and(
         inArray(planningAllocations.planningPeriodId, periodIds),
+        // Chỉ đếm phân bổ ĐANG mở (Yêu cầu #4: lịch sử được giữ nhưng không cộng dồn).
+        isNull(planningAllocations.allocationEndDate),
         eq(employmentSessions.status, "APPROVED"),
         isNull(employmentSessions.endDate),
       ),
@@ -478,7 +550,12 @@ export async function batchComputePlanningMetrics(periodIds: string[]): Promise<
         eq(workforceMovements.status, "INACTIVE"),
       ),
     )
-    .where(inArray(planningAllocations.planningPeriodId, periodIds));
+    .where(
+      and(
+        inArray(planningAllocations.planningPeriodId, periodIds),
+        isNull(planningAllocations.allocationEndDate),
+      ),
+    );
 
   const resignCountMap = new Map<string, { male: number; female: number; total: number }>();
   for (const pid of periodIds) {
