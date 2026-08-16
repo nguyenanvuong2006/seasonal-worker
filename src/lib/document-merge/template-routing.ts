@@ -3,7 +3,11 @@
  *
  * Tài liệu A — Cam kết / Tái ký          → DW Cũ (MATCHED / declaredType OLD)
  * Tài liệu B — Hợp đồng đào tạo nghề     → DW Mới (NEW)
- * GENERIC                                 → fallback khi chưa gán A/B
+ * GENERIC                                 → fallback chung khi được cấu hình chủ đích
+ *
+ * IMPORTANT:
+ * Không fallback sang một template A/B khác loại chỉ vì template đó đang active.
+ * Nếu thiếu đúng kind (và không có GENERIC), caller phải coi là chưa cấu hình mẫu.
  */
 
 export type DocumentKind = "A" | "B" | "GENERIC";
@@ -49,10 +53,13 @@ export function selectTemplateForKind<T extends RoutableTemplate>(
   kind: Exclude<DocumentKind, "GENERIC">,
 ): T | null {
   const active = templates.filter((template) => template.isActive !== false);
+
+  // Ưu tiên template đúng loại. GENERIC chỉ là fallback có chủ đích.
+  // Tuyệt đối không lấy active[0], vì điều đó có thể dùng Tài liệu B cho DW Cũ
+  // (hoặc Tài liệu A cho DW Mới) và khiến Preview/Merge khác với cảnh báo trên UI.
   return (
     active.find((template) => template.documentKind === kind) ??
     active.find((template) => template.documentKind === "GENERIC" || !template.documentKind) ??
-    active[0] ??
     null
   );
 }
