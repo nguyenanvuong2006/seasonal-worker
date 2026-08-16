@@ -1,19 +1,20 @@
 import { NextResponse } from "next/server";
 import { and, eq, inArray, isNull, or } from "drizzle-orm";
 import { db } from "@/db";
-import { employmentSessions, recruitmentRequests, requestAllocations, workerProfiles } from "@/db/schema";
+import { recruitmentRequests } from "@/db/schema";
 import { getUserScope, requirePermission, writeAudit } from "@/lib/auth";
 import { scopeAllowsDepartment } from "@/lib/data-scope";
 import { getRecruitmentRequest, batchUpdateStatus, softDeleteRecruitmentRequests } from "@/lib/recruitment-request";
 import { listOpenAllocationsForRequest } from "@/lib/planning-reallocation";
 import {
   REQUEST_STATUSES,
-  computeBalance,
   computeDateDeltas,
   computeRecruitedVsExpected,
   computeTotalRequest,
   stripSystemOwnedFields,
 } from "@/lib/planning-recruitment-core";
+import { provisionRecruitmentRequest } from "@/lib/recruitment-request-provisioning";
+import { computeRecruitmentKpis } from "@/lib/recruitment-kpi";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -75,6 +76,11 @@ export async function GET(_req: Request, ctx: { params: Promise<{ id: string }> 
   // Phân bổ đang mở của yêu cầu này — cần cho panel chuyển phân bổ.
   const allocations = await listOpenAllocationsForRequest(id);
 
+  // Recruitment Balance (snapshot + quit) vs Realtime Gap (current now) —
+  // đối chiếu (mục 5 + K). KHÔNG âm thầm ghi đè khi lệch nhau; trả về đủ chi
+  // tiết snapshot/quit/current để Admin/Recruiter audit.
+  const kpi = await computeRecruitmentKpis(id);
+
   return NextResponse.json({
     row,
     lineage: {
@@ -84,6 +90,7 @@ export async function GET(_req: Request, ctx: { params: Promise<{ id: string }> 
       successors,
     },
     openAllocations: allocations,
+    kpi,
     canEdit: guard.session.role === "ADMIN" || guard.session.role === "HR_RECRUITER",
   });
 }
@@ -162,42 +169,7 @@ export async function PATCH(req: Request, ctx: { params: Promise<{ id: string }>
       patch[key] !== undefined ? Number(patch[key]) : Number(fallback ?? 0);
     const maleRq = num("maleRq", existing.maleRq);
     const femaleRq = num("femaleRq", existing.femaleRq);
-    // PHASE 6 v2: Balance = max(0, Rq - Current Workforce). Current Workforce
-    // phải đếm TRỰC TIẾP từ source-of-truth (request_allocations ∩
-    // employment_sessions ACTIVE), KHÔNG dùng male_recruited/female_recruited/
-    // male_quit/female_quit. Các cột này là historical KPI, không phải Current.
-    const currentRows = await db
-      .select({
-        gender: workerProfiles.gender,
-      })
-      .from(requestAllocations)
-      .innerJoin(employmentSessions, eq(requestAllocations.employmentSessionId, employmentSessions.id))
-      .innerJoin(workerProfiles, eq(requestAllocations.workerId, workerProfiles.id))
-      .where(
-        and(
-          eq(requestAllocations.requestId, id),
-          eq(requestAllocations.status, "ACTIVE"),
-          eq(employmentSessions.status, "APPROVED"),
-          isNull(employmentSessions.endDate),
-          isNull(workerProfiles.deletedAt),
-        ),
-      );
-    const lc = (s: string | null) => (s ?? "").trim().toLowerCase();
-    const isMale = (g: string | null) => {
-      const s = lc(g);
-      return s === "nam" || s === "male" || s === "m";
-    };
-    const isFemale = (g: string | null) => {
-      const s = lc(g);
-      return s === "nữ" || s === "nu" || s === "female" || s === "f";
-    };
-    const maleCurrent = currentRows.filter((r) => isMale(r.gender)).length;
-    const femaleCurrent = currentRows.filter((r) => isFemale(r.gender)).length;
-    const balance = computeBalance({ maleRq, femaleRq, maleCurrent, femaleCurrent });
     const totalRequest = computeTotalRequest(maleRq, femaleRq);
-    patch.maleBalance = balance.maleBalance;
-    patch.femaleBalance = balance.femaleBalance;
-    patch.totalBalance = balance.totalBalance;
     patch.totalRequest = totalRequest;
     patch.recruitedVsExpected = computeRecruitedVsExpected(
       Number(existing.maleRecruited ?? 0),
@@ -215,11 +187,35 @@ export async function PATCH(req: Request, ctx: { params: Promise<{ id: string }>
       }),
     );
 
-    const [updated] = await db
-      .update(recruitmentRequests)
-      .set({ ...patch, updatedAt: new Date() })
-      .where(eq(recruitmentRequests.id, id))
-      .returning();
+    const updated = await db.transaction(async (tx) => {
+      await tx
+        .update(recruitmentRequests)
+        .set({ ...patch, updatedAt: new Date() })
+        .where(eq(recruitmentRequests.id, id));
+
+      // Balance = max(0, Rq - Snapshot At Start + Quit During Request) — dùng
+      // snapshot CỐ ĐỊNH đã có (không reset), recompute Quit live (mục C/J).
+      // Idempotent: gọi lại nhiều lần không tạo Planning/Allocation trùng.
+      await provisionRecruitmentRequest(tx, {
+        requestId: id,
+        departmentId: existing.departmentId,
+        maleRq,
+        femaleRq,
+        location: str("location", existing.location),
+        division: str("division", existing.division),
+        section: str("section", existing.section),
+        groupName: str("groupName", existing.groupName),
+        startingDate: str("startingDate", existing.startingDate),
+        expectedDate: str("expectedDate", existing.expectedDate),
+        requestedDate: str("requestedDate", existing.requestedDate),
+        endDate: str("endDate", existing.endDate),
+        status: (patch.status as string | undefined) ?? existing.status,
+        actor: guard.session.username,
+      });
+
+      const [row] = await tx.select().from(recruitmentRequests).where(eq(recruitmentRequests.id, id));
+      return row;
+    });
 
     await writeAudit(guard.session, "UPDATE_RECRUITMENT_REQUEST", "recruitment_requests", {
       id,

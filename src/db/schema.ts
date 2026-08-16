@@ -1062,6 +1062,21 @@ export const recruitmentRequests = pgTable(
     maleBalance: integer("male_balance").notNull().default(0),
     femaleBalance: integer("female_balance").notNull().default(0),
     totalBalance: integer("total_balance").notNull().default(0),
+
+    /* --- SNAPSHOT TẠI THỜI ĐIỂM MỞ REQUEST (Workforce Recruitment Request
+       Planning upgrade) ---------------------------------------------------
+       CỐ ĐỊNH — không recompute lại mỗi lần refresh. Chỉ được ghi MỘT LẦN khi
+       Request được tạo (import lần đầu hoặc POST); import lại cùng Request
+       Code KHÔNG được overwrite. Chỉ Admin explicit correction mới sửa được.
+       Dùng làm đầu vào công thức Recruitment Balance:
+         Balance = max(0, Rq − CurrentAtStart + QuitDuringRequest)
+       PHÂN BIỆT với Realtime Gap = max(0, Rq − Current Workforce NOW), là
+       KPI tính live, KHÔNG lưu cột riêng — xem src/lib/recruitment-kpi.ts. */
+    maleCurrentAtStart: integer("male_current_at_start").notNull().default(0),
+    femaleCurrentAtStart: integer("female_current_at_start").notNull().default(0),
+    totalCurrentAtStart: integer("total_current_at_start").notNull().default(0),
+    snapshotAt: timestamp("snapshot_at", { withTimezone: true }),
+
     // PENDING | PROCESSING | COMPLETED | CANCELLED | EXPIRED
     // EXPIRED TÁCH BIỆT với CANCELLED: quá End Date KHÔNG BAO GIỜ tự thành CANCELLED.
     status: varchar("status", { length: 24 }).notNull().default("PENDING"),

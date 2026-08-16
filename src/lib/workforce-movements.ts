@@ -5,6 +5,7 @@ import { dailyApplications, employmentSessions, workforceMovements } from "@/db/
 import { queueNotification } from "@/lib/notifications";
 import { autoAllocateInternship } from "@/lib/planning";
 import { endActiveRequestAllocationsForWorker } from "@/lib/workforce-request";
+import { recomputeStoredRecruitmentBalance } from "@/lib/recruitment-kpi";
 import type { Session } from "@/lib/auth";
 
 /**
@@ -124,12 +125,17 @@ export async function applyMovementAction(
         // mọi ACTIVE request allocation của worker (ghi history action=END). KHÔNG
         // xoá allocation history — Quit KPI đọc từ đây. KPI Request tự giảm Current
         // Workforce vì Employment Session đã đóng (tính lại từ source, không lưu tay).
-        await endActiveRequestAllocationsForWorker(
+        const { affectedRequestIds } = await endActiveRequestAllocationsForWorker(
           movement.workerId,
           session.username,
           `Nghỉ việc được xác nhận (movement ${movementId})`,
           tx,
         );
+        // Trigger recompute KPI cho request bị ảnh hưởng (mục I.5) — Quit During
+        // Request vừa tăng, Balance lưu trong DB phải phản ánh ngay lập tức.
+        for (const requestId of affectedRequestIds) {
+          await recomputeStoredRecruitmentBalance(tx, requestId);
+        }
         break;
       }
       case "REJECT":
