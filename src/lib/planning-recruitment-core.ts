@@ -56,11 +56,19 @@ export function normalizeRequestStatus(s: string | undefined | null): RequestSta
 }
 
 /* ============================================================
-   2. BALANCE (Yêu cầu #10)
+   2. BALANCE (Yêu cầu #10 + PHASE 6 double-count fix)
    ------------------------------------------------------------
-   Male Balance   = Male Rq   − Male Recruited/Allocated   + Male Quit
-   Female Balance = Female Rq − Female Recruited/Allocated + Female Quit
+   Male Balance   = max(0, Male Rq − Male Recruited/Allocated)
+   Female Balance = max(0, Female Rq − Female Recruited/Allocated)
    Total Balance  = Male Balance + Female Balance
+
+   LÝ DO ĐỔI (PHASE 6 audit): Công thức cũ cộng thêm `Quit` đã double-count
+   khi worker nghỉ — vì worker nghỉ đã bị loại khỏi "Recruited/Allocated" rồi
+   (qua workforce_movement RESIGNATION set employment_session.end_date). Test
+   bắt buộc: Rq=10, Current-before=10, 1 quit → Current=9, Quit=1 → Balance
+   cũ = 10 − 9 + 1 = 2 (SAI); Balance mới = max(0, 10 − 9) = 1 (ĐÚNG).
+   `Quit` vẫn được lưu như historical KPI riêng (attrition reporting), KHÔNG
+   cộng vào nhu cầu tuyển mới.
 
    Clamp về 0: phân bổ vượt nhu cầu thì "còn thiếu" = 0, không âm.
    Đây là công thức DUY NHẤT trong hệ thống — mọi nơi khác phải gọi vào đây.
@@ -70,8 +78,9 @@ export type BalanceInput = {
   femaleRq: number;
   maleRecruited: number;
   femaleRecruited: number;
-  maleQuit: number;
-  femaleQuit: number;
+  /** Nhận nhưng KHÔNG dùng trong công thức — giữ để không phá call-site cũ. */
+  maleQuit?: number;
+  femaleQuit?: number;
 };
 
 export type BalanceResult = {
@@ -82,8 +91,8 @@ export type BalanceResult = {
 
 export function computeBalance(input: BalanceInput): BalanceResult {
   const n = (v: number) => (Number.isFinite(v) ? Math.trunc(v) : 0);
-  const maleBalance = Math.max(0, n(input.maleRq) - n(input.maleRecruited) + n(input.maleQuit));
-  const femaleBalance = Math.max(0, n(input.femaleRq) - n(input.femaleRecruited) + n(input.femaleQuit));
+  const maleBalance = Math.max(0, n(input.maleRq) - n(input.maleRecruited));
+  const femaleBalance = Math.max(0, n(input.femaleRq) - n(input.femaleRecruited));
   return { maleBalance, femaleBalance, totalBalance: maleBalance + femaleBalance };
 }
 

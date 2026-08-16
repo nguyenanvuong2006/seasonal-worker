@@ -610,13 +610,17 @@ export async function batchComputePlanningMetrics(periodIds: string[]): Promise<
     const resignedFemale = resign.female;
     const resignedTotal = resign.total;
 
-    // CÔNG THỨC: Nhu cầu - Phân bổ + Nghỉ việc (clamp về 0 nếu âm)
-    // Nghiệp vụ tuyển dụng: Nếu phân bổ vượt nhu cầu, số cần tuyển không được âm.
-    const recruitmentNeededMale = Math.max(0, demandMale - allocatedMale + resignedMale);
-    const recruitmentNeededFemale = Math.max(0, demandFemale - allocatedFemale + resignedFemale);
+    // CÔNG THỨC (PHASE 6 — double-count fix): Nhu cầu - Phân bổ (clamp về 0 nếu âm)
+    // KHÔNG cộng `resigned` vì worker nghỉ đã bị loại khỏi Phân bổ (xem
+    // `isActiveEmploymentSession` — ACTIVE = APPROVED + end_date IS NULL).
+    // Công thức cũ cộng resigned gây DOUBLE COUNT — test bắt buộc: Rq=10,
+    // Phân bổ trước nghỉ=10, 1 resign → Phân bổ sau=9, Resigned=1 → Cũ=2 (SAI);
+    // Mới = max(0, 10-9) = 1 (ĐÚNG). Resigned vẫn là historical KPI riêng.
+    const recruitmentNeededMale = Math.max(0, demandMale - allocatedMale);
+    const recruitmentNeededFemale = Math.max(0, demandFemale - allocatedFemale);
     const recruitmentNeededTotal = demandMale + demandFemale > 0
       ? (recruitmentNeededMale + recruitmentNeededFemale)
-      : Math.max(0, demandTotal - allocatedTotal + resignedTotal);
+      : Math.max(0, demandTotal - allocatedTotal);
 
     const fillRatePercent = demandTotal > 0
       ? Math.min(100, Math.round((allocatedTotal / demandTotal) * 100))

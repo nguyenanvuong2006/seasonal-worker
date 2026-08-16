@@ -174,5 +174,8 @@ export function joinWithPageBreaks(sections: string[]): string {
 
 export function countPageBreaks(content: string): number {
   if (!content) return 0;
-  return content.split("--- PAGE BREAK ---").length - 1;
+  // Đếm theo đúng hằng số `PAGE_BREAK_TEXT` (cùng dòng với `joinWithPageBreaks`)
+  // để tránh lệch khi cấu trúc marker đổi. Marker cũ "--- PAGE BREAK ---" đã
+  // được thay bằng `--- DOCUMENT_MERGE_PAGE_BREAK ---` để tăng uniqueness.
+  return content.split(PAGE_BREAK_TEXT).length - 1;
 }

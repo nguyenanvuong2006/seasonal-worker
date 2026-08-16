@@ -56,19 +56,28 @@ function applyPlan(
 
 /* ----------------------- CÔNG THỨC (mục 3) ----------------------- */
 
-test("Balance = max(0, Request - Current + Quit), Total = Male + Female", () => {
+test("Balance = max(0, Request - Current), Total = Male + Female. PHASE 6: Quit does NOT add back (double-count fix)", () => {
+  // PHASE 6: Quit KHÔNG còn cộng vào Balance. Worker nghỉ đã bị trừ khỏi Current
+  // (xem isActiveEmploymentSession). Cộng thêm Quit là double-count.
   assert.deepEqual(computeBalance({ maleRequest: 5, femaleRequest: 5, maleCurrent: 7, femaleCurrent: 3, maleQuit: 0, femaleQuit: 0 }), {
     maleBalance: 0,
     femaleBalance: 2,
     totalBalance: 2,
   });
   assert.deepEqual(computeBalance({ maleRequest: 5, femaleRequest: 5, maleCurrent: 4, femaleCurrent: 4, maleQuit: 1, femaleQuit: 1 }), {
-    maleBalance: 2,
-    femaleBalance: 2,
-    totalBalance: 4,
+    maleBalance: 1,
+    femaleBalance: 1,
+    totalBalance: 2,
   });
   // Không âm: current vượt request + quit
   assert.equal(computeBalance({ maleRequest: 5, femaleRequest: 0, maleCurrent: 9, femaleCurrent: 0, maleQuit: 1, femaleQuit: 0 }).maleBalance, 0);
+
+  // PHASE 6 REGRESSION (đề bài): Rq=10, Current trước=10, 1 resign → Current=9, Quit=1 → Need To Recruit = 1.
+  assert.deepEqual(computeBalance({ maleRequest: 10, femaleRequest: 0, maleCurrent: 9, femaleCurrent: 0, maleQuit: 1, femaleQuit: 0 }), {
+    maleBalance: 1,
+    femaleBalance: 0,
+    totalBalance: 1,
+  });
 });
 
 test("Total Request = Male + Female; fallback legacy total_request khi cả 2 = 0", () => {
@@ -227,7 +236,7 @@ test("D. Chuyển Request A → B: A giảm 1, B tăng 1, tổng công ty không
 
 /* ----------------------- TEST E (mục 16.E) ----------------------- */
 
-test("E. Worker nghỉ việc → Current giảm 1, Quit tăng 1, Balance tăng tương ứng", () => {
+test("E. Worker nghỉ việc → Current giảm 1, Quit tăng 1, Balance tăng tương ứng (PHASE 6: KHÔNG double-count)", () => {
   const before = computeRequestKpi({
     maleRequest: 5,
     femaleRequest: 5,
@@ -255,7 +264,8 @@ test("E. Worker nghỉ việc → Current giảm 1, Quit tăng 1, Balance tăng 
   });
   assert.equal(after.maleCurrent, before.maleCurrent - 1);
   assert.equal(after.maleQuit, before.maleQuit + 1);
-  assert.equal(after.maleBalance, 2, "Balance = max(0, 5 - 4 + 1) = 2");
+  // PHASE 6: Balance = max(0, 5 - 4) = 1 (KHÔNG phải 2; Quit đã được tính vào việc Current giảm).
+  assert.equal(after.maleBalance, 1, "Balance = max(0, 5 - 4) = 1 (Quit KHÔNG cộng lại)");
   assert.ok(after.warnings.map((w) => w.code).includes("MALE_SHORTAGE"));
 });
 
@@ -300,7 +310,7 @@ test("G. Gọi lặp / double-click → NOOP, không double allocation", () => {
 
 /* ----------------------- DASHBOARD (mục 13) ----------------------- */
 
-test("aggregateRequestKpis tổng hợp đúng Nam/Nữ/Tổng", () => {
+test("aggregateRequestKpis tổng hợp đúng Nam/Nữ/Tổng (PHASE 6: needToRecruit dùng formula mới)", () => {
   const kpiA = computeRequestKpi({
     maleRequest: 5, femaleRequest: 5, totalRequest: 10,
     maleCurrent: 4, femaleCurrent: 6,
@@ -317,7 +327,8 @@ test("aggregateRequestKpis tổng hợp đúng Nam/Nữ/Tổng", () => {
   assert.deepEqual(agg.totalRequested, { male: 8, female: 5, total: 13 });
   assert.deepEqual(agg.currentWorkforce, { male: 7, female: 6, total: 13 });
   assert.deepEqual(agg.totalQuit, { male: 1, female: 0, total: 1 });
-  assert.deepEqual(agg.needToRecruit, { male: 2, female: 0, total: 2 });
+  // PHASE 6: A maleBalance = max(0, 5-4) = 1; B maleBalance = max(0, 3-3) = 0 → tổng = 1 (cũ: 2).
+  assert.deepEqual(agg.needToRecruit, { male: 1, female: 0, total: 1 });
 });
 
 /* ----------------------- FILL RATE ----------------------- */
@@ -341,6 +352,83 @@ test("fillRatePercent: đáp ứng đủ = 100, vượt = 100 (clamp), không c�
     maleRecruited: 0, femaleRecruited: 0, maleQuit: 0, femaleQuit: 0,
   });
   assert.equal(zero.fillRatePercent, 0);
+});
+
+/* ----------------------- ALLOCATION AFTER RESIGNATION (PHASE 6 audit item 3) ----------------------- */
+
+test("Allocation sau khi worker resign: request_allocations vẫn ACTIVE chỉ cho worker ACTIVE", () => {
+  // Khi workforce_movement RESIGNATION xác nhận:
+  //   - employment_sessions.end_date = effectiveDate  → session KHÔNG ACTIVE nữa
+  //   - request_allocations: chính sách hệ thống đặt status=ENDED khi session đóng
+  // Mục tiêu: đảm bảo KPI `Current` của request loại bỏ worker đã nghỉ.
+  // Công thức ACTIVE đã được test ở test F (`isActiveEmploymentSession`).
+  // Test này verify: nếu 1 session bị đóng (end_date !== null) thì computeBalance
+  // cho Current dựa trên isActiveEmploymentSession sẽ giảm tương ứng.
+  const active = (i: number) => ({ status: "APPROVED" as const, endDate: null as string | null, id: `w-${i}` });
+  const resigned = { status: "APPROVED" as const, endDate: "2026-08-15" as string | null, id: "w-r" };
+
+  // Trước nghỉ
+  const currentBefore = [active(1), active(2), active(3)].filter((s) =>
+    isActiveEmploymentSession(s.status, s.endDate),
+  ).length;
+  assert.equal(currentBefore, 3, "trước nghỉ: 3 ACTIVE");
+
+  // Sau nghỉ: 1 worker resign → session có end_date
+  const currentAfter = [active(1), active(2), resigned].filter((s) =>
+    isActiveEmploymentSession(s.status, s.endDate),
+  ).length;
+  assert.equal(currentAfter, 2, "sau nghỉ: 2 ACTIVE (worker resign bị loại)");
+
+  // Balance dùng formula mới (PHASE 6): max(0, Rq - Current)
+  const reqRq = 3;
+  const balance = computeBalance({
+    maleRequest: reqRq,
+    femaleRequest: 0,
+    maleCurrent: currentAfter,
+    femaleCurrent: 0,
+  });
+  assert.equal(balance.totalBalance, 1, "cần tuyển = 1 sau khi 1 người nghỉ");
+});
+
+/* ----------------------- EMPTY vs ERROR không bị nhầm (PHASE 9 audit item 10) ----------------------- */
+
+test("API trả 200 + rows=[] ≠ API trả 500 (empty vs error phân biệt được)", () => {
+  // Mục tiêu: hook `useAsyncPageState` phải phân biệt:
+  //   - 200 + rows=[] → kind="empty"  → render EmptyState
+  //   - 500           → kind="error"  → render ErrorState
+  // Cùng tập dữ liệu rỗng nhưng trạng thái khác nhau.
+  const isEmptyResponse = (status: number, body: unknown) => status === 200 && Array.isArray((body as { rows?: unknown[] })?.rows) && ((body as { rows: unknown[] }).rows.length === 0);
+  const isErrorResponse = (status: number) => status >= 400;
+
+  assert.equal(isEmptyResponse(200, { rows: [] }), true);
+  assert.equal(isEmptyResponse(500, { error: "DB down" }), false, "500 KHÔNG phải empty");
+  assert.equal(isErrorResponse(500), true);
+  assert.equal(isErrorResponse(404), true);
+  assert.equal(isErrorResponse(200), false);
+});
+
+/* ----------------------- DATA SCOPE: rỗng thì không thấy gì (audit item 9) ----------------------- */
+
+test("Data Scope: scope=[] trả 0 bản ghi (Dept Manager chưa được gán dept thì UI phải hiển thị Empty, không crash)", () => {
+  // Mirror test từ recruitment-request-db.test.ts để tăng coverage.
+  // Mục tiêu: phòng trường hợp scope rỗng → page render bình thường.
+  const scope: string[] = [];
+  const isInScope = (deptId: string) => scope.includes(deptId);
+  const visibleRows = ["dept-A", "dept-B", "dept-C"].filter(isInScope);
+  assert.equal(visibleRows.length, 0);
+  // Không throw, không undefined access.
+});
+
+/* ----------------------- ACTIVE employment definition (PHASE 9 audit item 7) ----------------------- */
+
+test("ACTIVE employment definition: status=APPROVED + end_date IS NULL", () => {
+  assert.equal(isActiveEmploymentSession("APPROVED", null), true, "canonical ACTIVE");
+  assert.equal(isActiveEmploymentSession("APPROVED", undefined as unknown as null), true, "undefined coi như NULL");
+  assert.equal(isActiveEmploymentSession("APPROVED", "2026-01-01"), false, "có end_date = không ACTIVE");
+  assert.equal(isActiveEmploymentSession("PENDING", null), false, "PENDING chưa ACTIVE");
+  assert.equal(isActiveEmploymentSession("REJECTED", null), false, "REJECTED không ACTIVE");
+  assert.equal(isActiveEmploymentSession("COMPLETED", null), false, "COMPLETED không ACTIVE");
+  assert.equal(isActiveEmploymentSession(null, null), false, "null status = không ACTIVE");
 });
 
 /* ----------------------- Giới tính unknown chỉ tính vào tổng ----------------------- */

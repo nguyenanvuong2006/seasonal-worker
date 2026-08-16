@@ -78,12 +78,12 @@ test("normalizeRequestStatus never turns an expiry wording into CANCELLED", () =
 /* 2. BALANCE ĐƯỢC TÍNH LẠI TỰ ĐỘNG                                    */
 /* ------------------------------------------------------------------ */
 
-test("Balance recalculated: Balance = Rq - Recruited + Quit, per gender, clamped at 0", () => {
-  // 10 nam yêu cầu, tuyển 4, nghỉ 1 -> còn thiếu 7.
+test("Balance recalculated: Balance = max(0, Rq - Recruited), per gender, clamped at 0. PHASE 6: Quit does NOT add back (double-count fix)", () => {
+  // 10 nam yêu cầu, tuyển 4, nghỉ 1 -> còn thiếu 6 (KHÔNG phải 7; Quit ignored).
   // 5 nữ yêu cầu, tuyển 2, nghỉ 0  -> còn thiếu 3.
   assert.deepEqual(
     computeBalance({ maleRq: 10, femaleRq: 5, maleRecruited: 4, femaleRecruited: 2, maleQuit: 1, femaleQuit: 0 }),
-    { maleBalance: 7, femaleBalance: 3, totalBalance: 10 },
+    { maleBalance: 6, femaleBalance: 3, totalBalance: 9 },
   );
 
   // Tuyển đủ -> 0, không âm.
@@ -98,9 +98,20 @@ test("Balance recalculated: Balance = Rq - Recruited + Quit, per gender, clamped
     { maleBalance: 0, femaleBalance: 0, totalBalance: 0 },
   );
 
-  // Người nghỉ làm nhu cầu mở lại: tuyển đủ 5 rồi 2 người nghỉ -> thiếu lại 2.
+  // PHASE 6 REGRESSION (theo đề bài):
+  // Rq = 10, Current trước nghỉ = 10, 1 resign → Current = 9, Quit = 1
+  // Expected Need To Recruit = 1, KHÔNG phải 2.
+  // Công thức CŨ (bug): 10 - 9 + 1 = 2 → SAI (double-count).
+  // Công thức MỚI:        max(0, 10 - 9) = 1 → ĐÚNG.
+  assert.deepEqual(
+    computeBalance({ maleRq: 10, femaleRq: 0, maleRecruited: 9, femaleRecruited: 0, maleQuit: 1, femaleQuit: 0 }),
+    { maleBalance: 1, femaleBalance: 0, totalBalance: 1 },
+  );
+
+  // Người nghỉ KHÔNG làm nhu cầu mở lại khi Current đã giảm tương ứng.
+  // (Tuyển đủ 5 rồi 2 người nghỉ → Current = 3 → thiếu 2; KHÔNG phải 4).
   assert.equal(
-    computeBalance({ maleRq: 5, femaleRq: 0, maleRecruited: 5, femaleRecruited: 0, maleQuit: 2, femaleQuit: 0 })
+    computeBalance({ maleRq: 5, femaleRq: 0, maleRecruited: 3, femaleRecruited: 0, maleQuit: 2, femaleQuit: 0 })
       .totalBalance,
     2,
   );

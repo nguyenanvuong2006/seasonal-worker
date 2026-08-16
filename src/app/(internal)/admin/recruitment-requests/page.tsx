@@ -22,6 +22,7 @@ import {
   Card,
   CardContent,
   EmptyState,
+  ErrorState,
   FormField,
   Modal,
   PageHeader,
@@ -30,6 +31,7 @@ import {
   cn,
   toast,
 } from "@/components/ui";
+import { fetchJsonWithTimeout, type ApiResult } from "@/lib/api-client";
 import { ColumnChooser } from "@/components/planning/column-chooser";
 import { ReallocationPanel } from "@/components/planning/reallocation-panel";
 import {
@@ -319,46 +321,52 @@ export default function RecruitmentRequestsPage() {
     expectedFrom, expectedTo, searchQuery, sortBy, sortDir,
   ]);
 
+  const [dataError, setDataError] = useState<{ code: string; message: string } | null>(null);
   const loadData = useCallback(async () => {
     setLoading(true);
+    setDataError(null);
     const params = queryParams();
-    params.set("limit", "1000");
-    try {
-      const res = await fetch(`/api/recruitment-requests?${params}`);
-      const data = await res.json();
-      if (res.ok) {
-        setRows(data.rows ?? []);
-        setTotal(data.total ?? 0);
-      } else {
-        toast({ title: data.error ?? "Không tải được danh sách.", variant: "destructive" });
-      }
-    } catch {
-      toast({ title: "Lỗi kết nối.", variant: "destructive" });
-    } finally {
-      setLoading(false);
+    // PHASE 5: cap initial list ở 100 bản ghi / trang — không tải toàn bộ dataset.
+    // Distinct values lấy từ /api/recruitment-requests/facets (chỉ DISTINCT, không rows).
+    params.set("limit", "100");
+    const result: ApiResult<{ rows?: RecruitmentRequest[]; total?: number }> =
+      await fetchJsonWithTimeout(`/api/recruitment-requests?${params}`, {
+        timeoutMs: 12_000,
+        label: "recruitment-requests.list",
+      });
+    if (result.ok) {
+      setRows(result.data.rows ?? []);
+      setTotal(result.data.total ?? 0);
+    } else {
+      setRows([]);
+      setTotal(0);
+      setDataError({ code: result.code, message: result.message });
     }
+    setLoading(false);
   }, [queryParams]);
 
   const loadDistinct = useCallback(async () => {
-    try {
-      const res = await fetch("/api/recruitment-requests?limit=5000");
-      const data = await res.json();
-      if (!res.ok) return;
-      const all: RecruitmentRequest[] = data.rows ?? [];
-      const pick = (key: string) =>
-        [...new Set(all.map((r) => (r[key] as string | null) ?? "").filter(Boolean))].sort();
+    // PHASE 5: dùng endpoint /facets chuyên dụng — chỉ trả DISTINCT values,
+    // không load rows. Tránh được việc phải tải 5000 bản ghi chỉ để dựng dropdown.
+    const result: ApiResult<{ facets?: Record<string, string[]> }> = await fetchJsonWithTimeout(
+      "/api/recruitment-requests/facets",
+      { timeoutMs: 12_000, label: "recruitment-requests.facets" },
+    );
+    if (result.ok) {
+      const f = result.data.facets ?? {};
       setDistinct({
-        month: pick("month"),
-        location: pick("location"),
-        division: pick("division"),
-        department: [...new Set(all.map((r) => (r.department as string) ?? (r.departmentText as string) ?? "").filter(Boolean))].sort(),
-        section: pick("section"),
-        groupName: pick("groupName"),
-        requester: pick("requester"),
-        reason: pick("reason"),
-        status: pick("status"),
+        month: f.month ?? [],
+        location: f.location ?? [],
+        division: f.division ?? [],
+        department: f.department ?? [],
+        section: f.section ?? [],
+        groupName: f.group_name ?? [],
+        requester: f.requester ?? [],
+        reason: f.reason ?? [],
+        status: f.status ?? [],
       });
-    } catch { /* bỏ qua — bộ lọc vẫn dùng được ở dạng trống */ }
+    }
+    // Failure của facets không blocking — bộ lọc vẫn dùng được ở dạng trống.
   }, []);
 
   useEffect(() => { void loadData(); }, [loadData]);
@@ -855,6 +863,24 @@ export default function RecruitmentRequestsPage() {
             <div className="flex items-center justify-center gap-2 py-16 text-[13px] text-fg-muted">
               <Loader2 className="h-4 w-4 animate-spin" /> Đang tải dữ liệu...
             </div>
+          ) : dataError ? (
+            // PHASE 3 — ErrorState thay cho toast bay: hiển thị thông báo rõ ràng,
+            // mã lỗi, nút "Thử lại" — không để trang trống im lặng.
+            <ErrorState
+              title="Không tải được danh sách yêu cầu"
+              description={
+                <span>
+                  {dataError.message}
+                  {dataError.code ? (
+                    <>
+                      {" "}
+                      <span className="text-fg-muted">Mã lỗi: {dataError.code}</span>
+                    </>
+                  ) : null}
+                </span>
+              }
+              onRetry={() => void loadData()}
+            />
           ) : rows.length === 0 ? (
             <EmptyState
               icon={<FileSpreadsheet className="h-5 w-5" />}

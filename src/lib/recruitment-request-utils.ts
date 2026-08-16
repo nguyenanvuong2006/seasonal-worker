@@ -201,20 +201,22 @@ export function toInt(v: string | undefined, def = 0): number {
 }
 
 /* ============================================================
-   BALANCE COMPUTATION
+   BALANCE COMPUTATION (PHASE 6 — double-count fix)
    ============================================================ */
 export function computeBalanceFromCanonical(canonical: Record<string, string>) {
   const maleRq = toInt(canonical["Male Rq"]);
   const femaleRq = toInt(canonical["Female Rq"]);
   const maleRecruited = toInt(canonical["Male Recruited"]);
   const femaleRecruited = toInt(canonical["Female Recruited"]);
-  const maleQuit = toInt(canonical["Male Quit"]);
-  const femaleQuit = toInt(canonical["Female Quit"]);
+  // Male Quit / Female Quit giữ lại để đọc nhưng KHÔNG cộng vào Balance
+  // (xem PHASE 6 audit AUDIT_REPORT.md mục E1). Quit là historical KPI riêng.
+  toInt(canonical["Male Quit"]);
+  toInt(canonical["Female Quit"]);
 
-  // Male Balance = Male Rq - Male Allocated/Recruited + Male Quit
-  const maleBalance = Math.max(0, maleRq - maleRecruited + maleQuit);
-  // Female Balance = Female Rq - Female Allocated/Recruited + Female Quit
-  const femaleBalance = Math.max(0, femaleRq - femaleRecruited + femaleQuit);
+  // Male Balance = max(0, Male Rq − Male Allocated/Recruited)
+  const maleBalance = Math.max(0, maleRq - maleRecruited);
+  // Female Balance = max(0, Female Rq − Female Allocated/Recruited)
+  const femaleBalance = Math.max(0, femaleRq - femaleRecruited);
   // Total Balance = Male Balance + Female Balance
   const totalBalance = maleBalance + femaleBalance;
 

@@ -178,16 +178,16 @@ test("normalizeStatus maps status variants", () => {
   assert.equal(normalizeStatus(undefined), null);
 });
 
-test("computeBalanceFromCanonical formula: Male Balance = Male Rq - Male Recruited + Male Quit", () => {
+test("computeBalanceFromCanonical formula: Male Balance = max(0, Male Rq - Male Recruited). PHASE 6: Quit does NOT add back to balance (worker already left 'Recruited')", () => {
   // Normal case
   let b = computeBalanceFromCanonical({
     "Male Rq": "10", "Female Rq": "8",
     "Male Recruited": "4", "Female Recruited": "3",
     "Male Quit": "1", "Female Quit": "0",
   });
-  assert.equal(b.maleBalance, 7); // 10 - 4 + 1 = 7
-  assert.equal(b.femaleBalance, 5); // 8 - 3 + 0 = 5
-  assert.equal(b.totalBalance, 12); // 7 + 5 = 12
+  assert.equal(b.maleBalance, 6); // 10 - 4 = 6 (Quit ignored)
+  assert.equal(b.femaleBalance, 5); // 8 - 3 = 5
+  assert.equal(b.totalBalance, 11); // 6 + 5
 
   // Over-recruited (clamp to 0)
   b = computeBalanceFromCanonical({
@@ -199,15 +199,27 @@ test("computeBalanceFromCanonical formula: Male Balance = Male Rq - Male Recruit
   assert.equal(b.femaleBalance, 0);
   assert.equal(b.totalBalance, 0);
 
-  // With quits
+  // PHASE 6 regression: quit must NOT inflate the gap.
+  // Scenario per đề bài: Rq=10, Current trước=10, 1 resign → Current=9, Quit=1.
+  // Need To Recruit phải = 1, KHÔNG PHẢI 2.
+  b = computeBalanceFromCanonical({
+    "Male Rq": "10", "Female Rq": "0",
+    "Male Recruited": "9", "Female Recruited": "0",
+    "Male Quit": "1", "Female Quit": "0",
+  });
+  assert.equal(b.maleBalance, 1); // max(0, 10 - 9) = 1 (Quit ignored)
+  assert.equal(b.femaleBalance, 0);
+  assert.equal(b.totalBalance, 1);
+
+  // Quits in record do not affect the balance even when larger than the gap.
   b = computeBalanceFromCanonical({
     "Male Rq": "10", "Female Rq": "10",
     "Male Recruited": "5", "Female Recruited": "5",
     "Male Quit": "3", "Female Quit": "2",
   });
-  assert.equal(b.maleBalance, 8); // 10 - 5 + 3 = 8
-  assert.equal(b.femaleBalance, 7); // 10 - 5 + 2 = 7
-  assert.equal(b.totalBalance, 15);
+  assert.equal(b.maleBalance, 5); // 10 - 5 = 5 (Quit ignored)
+  assert.equal(b.femaleBalance, 5); // 10 - 5 = 5
+  assert.equal(b.totalBalance, 10);
 
   // Zero demand
   b = computeBalanceFromCanonical({

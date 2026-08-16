@@ -18,8 +18,40 @@ export const dynamic = "force-dynamic";
 
 /** Danh sách kế hoạch — lọc theo Data Scope cho DEPT_MANAGER, kèm nhu cầu Nam/Nữ, phân bổ, nghỉ việc, cần tuyển. */
 export async function GET(req: Request) {
+  const requestId = cryptoRandomRequestId();
+  const t0 = Date.now();
+  try {
+    return await handlePlanningList(req, requestId, t0);
+  } catch (err) {
+    const queryDurationMs = Date.now() - t0;
+    const errorCode = (err as { code?: string })?.code ?? "INTERNAL_ERROR";
+    // PHASE 4 — server log: structured (requestId, errorCode, queryDurationMs).
+    console.error("[planning.list] failure", {
+      requestId,
+      errorCode,
+      message: (err as Error).message,
+      queryDurationMs,
+    });
+    return NextResponse.json(
+      {
+        error: "Máy chủ gặp sự cố khi tải kế hoạch. Vui lòng thử lại.",
+        code: errorCode,
+        requestId,
+        queryDurationMs,
+      },
+      { status: 500 },
+    );
+  }
+}
+
+function cryptoRandomRequestId(): string {
+  // 12 hex chars from time + random — sufficient for log correlation, no extra deps.
+  return `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
+}
+
+async function handlePlanningList(req: Request, requestId: string, t0: number) {
   const guard = await requirePermission(["ADMIN", "HR_RECRUITER", "DEPT_MANAGER", "HR_DIRECTOR"], "planning.view");
-  if (!guard.ok) return NextResponse.json({ error: guard.error }, { status: guard.status });
+  if (!guard.ok) return NextResponse.json({ error: guard.error, requestId }, { status: guard.status });
 
   const url = new URL(req.url);
   const statusParam = url.searchParams.get("status");
@@ -33,8 +65,8 @@ export async function GET(req: Request) {
 
   const scope = await getUserScope(guard.session);
   if (scope !== null) {
-    if (scope.length === 0) return NextResponse.json({ rows: [] });
-    if (deptParam && !scope.includes(deptParam)) return NextResponse.json({ rows: [] });
+    if (scope.length === 0) return NextResponse.json({ rows: [], requestId, queryDurationMs: Date.now() - t0, rowCount: 0 });
+    if (deptParam && !scope.includes(deptParam)) return NextResponse.json({ rows: [], requestId, queryDurationMs: Date.now() - t0, rowCount: 0 });
     filters.push(inArray(planningPeriods.departmentId, scope));
   }
 
@@ -139,7 +171,16 @@ export async function GET(req: Request) {
     };
   });
 
-  return NextResponse.json({ rows: withMetrics });
+  const queryDurationMs = Date.now() - t0;
+  // PHASE 4 — structured log: rowCount, requestId, queryDurationMs, errorCode (null on success).
+  console.log("[planning.list] ok", {
+    requestId,
+    rowCount: withMetrics.length,
+    queryDurationMs,
+    errorCode: null,
+  });
+
+  return NextResponse.json({ rows: withMetrics, requestId, queryDurationMs, rowCount: withMetrics.length });
 }
 
 function fillRateFromMetrics(metrics: PlanningMetricsWithSource) {

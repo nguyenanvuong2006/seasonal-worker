@@ -139,22 +139,31 @@ export function computeWarnings(input: WarningInput): WarningDetail[] {
 }
 
 /* ============================================================
-   CÔNG THỨC BALANCE (mục 3)
+   CÔNG THỨC BALANCE (mục 3) + PHASE 6 (double-count fix)
    ------------------------------------------------------------
-   Male Balance   = max(0, Male Request - Male Current + Male Quit)
-   Female Balance = max(0, Female Request - Female Current + Female Quit)
+   Male Balance   = max(0, Male Request − Male Current)
+   Female Balance = max(0, Female Request − Female Current)
    Total Balance  = Male Balance + Female Balance
+
+   LÝ DO ĐỔI (PHASE 6 audit): Quit đã được tính vào "Current" rồi — worker
+   nghỉ bị loại khỏi ACTIVE Employment Session (xem
+   `isActiveEmploymentSession` ở trên), nên Current đã giảm đúng 1. Cộng
+   thêm Quit ở đây là double-count. Test bắt buộc: Rq=10, Current-before=10,
+   1 quit → Current=9, Quit=1 → Balance cũ = 2 (SAI); Balance mới = 1 (ĐÚNG).
+   Quit vẫn còn là historical KPI (attrition reporting) nhưng KHÔNG cộng vào
+   nhu cầu tuyển mới.
    ============================================================ */
 export function computeBalance(input: {
   maleRequest: number;
   femaleRequest: number;
   maleCurrent: number;
   femaleCurrent: number;
-  maleQuit: number;
-  femaleQuit: number;
+  /** Nhận nhưng KHÔNG dùng trong công thức — giữ để không phá call-site cũ. */
+  maleQuit?: number;
+  femaleQuit?: number;
 }): { maleBalance: number; femaleBalance: number; totalBalance: number } {
-  const maleBalance = Math.max(0, input.maleRequest - input.maleCurrent + input.maleQuit);
-  const femaleBalance = Math.max(0, input.femaleRequest - input.femaleCurrent + input.femaleQuit);
+  const maleBalance = Math.max(0, input.maleRequest - input.maleCurrent);
+  const femaleBalance = Math.max(0, input.femaleRequest - input.femaleCurrent);
   return { maleBalance, femaleBalance, totalBalance: maleBalance + femaleBalance };
 }
 

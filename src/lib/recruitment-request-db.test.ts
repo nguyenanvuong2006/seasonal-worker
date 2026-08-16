@@ -417,10 +417,10 @@ test("Excel KHÔNG ghi đè KPI hệ thống: Balance và Total Request luôn đ
 
   // Total Request = Male Rq + Female Rq = 15, không phải 999.
   assert.equal(v.totalRequest, 15);
-  // Balance = Rq - Recruited + Quit
-  assert.equal(v.maleBalance, 10 - 4 + 1);
-  assert.equal(v.femaleBalance, 5 - 1 + 0);
-  assert.equal(v.totalBalance, 7 + 4);
+  // PHASE 6: Balance = max(0, Rq - Recruited) — Quit KHÔNG cộng lại (double-count fix).
+  assert.equal(v.maleBalance, 10 - 4);
+  assert.equal(v.femaleBalance, 5 - 1);
+  assert.equal(v.totalBalance, 6 + 4);
   assert.notEqual(v.totalBalance, 666);
   assert.notEqual(v.recruitedVsExpected, 555);
 });
