@@ -18,6 +18,8 @@ async function scopedProfileAndSessions(cccd: string, scope: string[] | null) {
 
   const filters = [eq(employmentSessions.workerId, profile.id)];
   if (scope !== null) filters.push(inArray(employmentSessions.deptId, scope));
+  // EMPLOYMENT LIFECYCLE (#13) — Lịch sử làm việc đầy đủ: department/section/group, start/end,
+  // end_reason, movement liên kết, application liên quan. employment_sessions là SOURCE OF TRUTH.
   const sessions = await db
     .select({
       id: employmentSessions.id,
@@ -25,10 +27,16 @@ async function scopedProfileAndSessions(cccd: string, scope: string[] | null) {
       status: employmentSessions.status,
       startingDate: employmentSessions.startingDate,
       endDate: employmentSessions.endDate,
+      endReason: employmentSessions.endReason,
+      endedBy: employmentSessions.endedBy,
+      startDateSource: employmentSessions.startDateSource,
+      dailyApplicationId: employmentSessions.dailyApplicationId,
+      endMovementId: employmentSessions.endMovementId,
       note: employmentSessions.note,
       deptId: employmentSessions.deptId,
       deptName: departments.deptName,
       groupName: departments.groupName,
+      section: departments.section,
     })
     .from(employmentSessions)
     .leftJoin(departments, eq(employmentSessions.deptId, departments.id))

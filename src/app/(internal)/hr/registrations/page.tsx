@@ -22,6 +22,9 @@ export default async function HrRegistrationsPage() {
   const scope = await getUserScope(session);
   const scoped = scope !== null;
 
+  // EMPLOYMENT LIFECYCLE (#8-C) — quyền "Xác nhận nghỉ & xếp việc mới" (server enforce lại độc lập).
+  const canConfirmResignation = await hasPermission(session.role, "employment.resignation.confirm");
+
   const depts =
     scoped && scope.length === 0
       ? []
@@ -103,7 +106,7 @@ export default async function HrRegistrationsPage() {
       {scoped ? (
         <DailyApplicationScoped departments={depts} initialFrom={todayStr()} />
       ) : (
-        <RegistrationsGrid departments={depts} canEdit />
+        <RegistrationsGrid departments={depts} canEdit canConfirmResignation={canConfirmResignation} />
       )}
     </div>
   );

@@ -33,6 +33,12 @@ type WorkerInfo = {
   dept_location?: string | null;
 };
 
+/** EMPLOYMENT LIFECYCLE (#5) — thông tin nơi đang được ghi nhận làm việc (nếu có). */
+type ActiveEmployment = {
+  dept_name: string;
+  starting_date: string | null;
+};
+
 /** Progress journey shared by every stage (1 Xác thực → 2 Đăng ký → 3 Hoàn tất). */
 function Journey({ current }: { current: 1 | 2 | 3 }) {
   const steps = [
@@ -193,12 +199,92 @@ function FieldError({ message }: { message?: string | null }) {
 const inputClass =
   "h-14 rounded-2xl border-2 border-primary/30 bg-surface-raised px-5 text-[16px] font-medium tracking-[0.02em] text-fg placeholder:text-fg-muted focus:border-accent focus:ring-2 focus:ring-accent/25 focus:shadow-[0_0_0_3px_rgba(15,68,36,0.12)]";
 
+/**
+ * EMPLOYMENT LIFECYCLE (#5-6) — banner cảnh báo "đang được ghi nhận đang làm việc" + form
+ * self-declaration. Hiển thị trong cả 2 luồng (người cũ / người mới) khi hệ thống còn ghi nhận
+ * 1 Employment Session ACTIVE cho CCCD này.
+ */
+function ActiveEmploymentWarning({
+  employment,
+  declared,
+  onDeclaredChange,
+  date,
+  onDateChange,
+  note,
+  onNoteChange,
+}: {
+  employment: ActiveEmployment;
+  declared: boolean;
+  onDeclaredChange: (v: boolean) => void;
+  date: string;
+  onDateChange: (v: string) => void;
+  note: string;
+  onNoteChange: (v: string) => void;
+}) {
+  return (
+    <div className="space-y-4 rounded-[20px] border-2 border-warning/40 bg-warning-tint/70 p-5">
+      <div className="flex items-start gap-3">
+        <AlertTriangle className="mt-0.5 h-5 w-5 shrink-0 text-warning" aria-hidden />
+        <div>
+          <p className="font-bold text-fg">Bạn hiện đang được ghi nhận đang làm việc tại:</p>
+          <p className="mt-1 text-[16px] font-black text-primary">{employment.dept_name}</p>
+          <p className="mt-2 text-[13px] leading-6 text-fg-secondary">
+            Nếu bạn đã nghỉ tại bộ phận này nhưng hệ thống chưa cập nhật, vui lòng xác nhận thông tin bên dưới.
+            Việc đăng ký mới sẽ được bộ phận Tuyển dụng xem xét sau khi xác minh.
+          </p>
+        </div>
+      </div>
+
+      <label className="flex cursor-pointer items-start gap-3 rounded-[14px] border border-border bg-surface p-4">
+        <input
+          type="checkbox"
+          checked={declared}
+          onChange={(e) => onDeclaredChange(e.target.checked)}
+          className="mt-1 h-5 w-5 shrink-0 accent-[var(--color-primary,#0f4424)]"
+        />
+        <span className="text-[13.5px] leading-6 text-fg">
+          Tôi xác nhận đã báo nghỉ tại <b>{employment.dept_name}</b> trước khi đăng ký công việc mới.
+        </span>
+      </label>
+
+      {declared && (
+        <div className="space-y-3 rounded-[14px] border border-border bg-surface p-4">
+          <div>
+            <Label className="text-[13px] font-bold text-fg">
+              Ngày đã nghỉ / ngày cuối cùng làm việc <span className="text-danger">*</span>
+            </Label>
+            <Input type="date" value={date} onChange={(e) => onDateChange(e.target.value)} className="mt-1.5 h-12 rounded-xl" />
+          </div>
+          <div>
+            <Label className="text-[13px] font-bold text-fg">Ghi chú (không bắt buộc)</Label>
+            <Input
+              value={note}
+              onChange={(e) => onNoteChange(e.target.value)}
+              placeholder="Ví dụ: đã báo tổ trưởng ngày nghỉ..."
+              className="mt-1.5 h-12 rounded-xl"
+            />
+          </div>
+          <p className="text-[12px] leading-5 text-fg-muted">
+            Thông tin này chỉ dùng để bộ phận Tuyển dụng xác minh — hệ thống <b>không</b> tự động kết thúc
+            công việc cũ của bạn.
+          </p>
+        </div>
+      )}
+    </div>
+  );
+}
+
 export default function ApplicantPortal({ questions }: { questions: FormQuestion[] }) {
   const [cccd, setCccd] = useState("");
   const [phone, setPhone] = useState("");
   const [loading, setLoading] = useState(false);
   const [stage, setStage] = useState<Stage>("check");
   const [workerInfo, setWorkerInfo] = useState<WorkerInfo | null>(null);
+  // EMPLOYMENT LIFECYCLE (#5-6) — warning "đang được ghi nhận đang làm việc" + self-declaration.
+  const [activeEmployment, setActiveEmployment] = useState<ActiveEmployment | null>(null);
+  const [declaredResigned, setDeclaredResigned] = useState(false);
+  const [declaredResignationDate, setDeclaredResignationDate] = useState("");
+  const [declaredResignationNote, setDeclaredResignationNote] = useState("");
   const [customAnswers, setCustomAnswers] = useState<Record<string, string>>({});
   const [fullName, setFullName] = useState("");
   const [dob, setDob] = useState("");
@@ -231,6 +317,10 @@ export default function ApplicantPortal({ questions }: { questions: FormQuestion
   const reset = () => {
     setStage("check");
     setWorkerInfo(null);
+    setActiveEmployment(null);
+    setDeclaredResigned(false);
+    setDeclaredResignationDate("");
+    setDeclaredResignationNote("");
     setCustomAnswers({});
     setFullName("");
     setDob("");
@@ -282,6 +372,7 @@ export default function ApplicantPortal({ questions }: { questions: FormQuestion
         toast({ title: data.error ?? "Có lỗi xảy ra", variant: "destructive" });
         return;
       }
+      setActiveEmployment(data.active_employment ?? null);
       if (data.status === "ALREADY_REGISTERED_TODAY") {
         setWorkerInfo(data.reg);
         setStage("already_registered");
@@ -303,8 +394,28 @@ export default function ApplicantPortal({ questions }: { questions: FormQuestion
     }
   };
 
+  // EMPLOYMENT LIFECYCLE (#6) — payload self-declaration gửi kèm đơn đăng ký. CHỈ là lời khai
+  // chờ Recruiter xác minh — server không tự đóng session/tạo resignation từ dữ liệu này.
+  const declarationPayload = () =>
+    activeEmployment && declaredResigned
+      ? {
+          declared_previous_resignation: true,
+          declared_resignation_date: declaredResignationDate || null,
+          declared_resignation_note: declaredResignationNote || null,
+        }
+      : {};
+
+  const validateDeclaration = () => {
+    if (activeEmployment && declaredResigned && !declaredResignationDate) {
+      toast({ title: "Vui lòng chọn Ngày đã nghỉ / ngày cuối cùng làm việc", variant: "destructive" });
+      return false;
+    }
+    return true;
+  };
+
   const handleConfirmReturning = async () => {
     if (!validateAnswers(returningQuestions)) return;
+    if (!validateDeclaration()) return;
     setLoading(true);
     try {
       const res = await fetch("/api/registrations", {
@@ -315,6 +426,7 @@ export default function ApplicantPortal({ questions }: { questions: FormQuestion
           phone,
           full_name: workerInfo?.full_name,
           custom_answers: customAnswers,
+          ...declarationPayload(),
         }),
       });
       const data = await res.json();
@@ -338,6 +450,7 @@ export default function ApplicantPortal({ questions }: { questions: FormQuestion
       return;
     }
     if (!validateAnswers(newQuestions)) return;
+    if (!validateDeclaration()) return;
     setLoading(true);
     try {
       const res = await fetch("/api/registrations", {
@@ -350,6 +463,7 @@ export default function ApplicantPortal({ questions }: { questions: FormQuestion
           dob,
           address_current: address,
           custom_answers: customAnswers,
+          ...declarationPayload(),
         }),
       });
       const data = await res.json();
@@ -534,6 +648,18 @@ export default function ApplicantPortal({ questions }: { questions: FormQuestion
               <p className="mt-2 leading-7 text-fg-secondary">{workerInfo?.address_current || "Chưa cập nhật"}</p>
             </div>
 
+            {activeEmployment && (
+              <ActiveEmploymentWarning
+                employment={activeEmployment}
+                declared={declaredResigned}
+                onDeclaredChange={setDeclaredResigned}
+                date={declaredResignationDate}
+                onDateChange={setDeclaredResignationDate}
+                note={declaredResignationNote}
+                onNoteChange={setDeclaredResignationNote}
+              />
+            )}
+
             {returningQuestions.length > 0 && (
               <DynamicQuestionFields questions={returningQuestions} answers={customAnswers} onChange={setAnswer} title="Thông tin cần cập nhật" />
             )}
@@ -569,6 +695,18 @@ export default function ApplicantPortal({ questions }: { questions: FormQuestion
             icon={<UserPlus className="h-6 w-6" />}
           />
           <CardContent className="space-y-8 p-6 md:p-8">
+            {activeEmployment && (
+              <ActiveEmploymentWarning
+                employment={activeEmployment}
+                declared={declaredResigned}
+                onDeclaredChange={setDeclaredResigned}
+                date={declaredResignationDate}
+                onDateChange={setDeclaredResignationDate}
+                note={declaredResignationNote}
+                onNoteChange={setDeclaredResignationNote}
+              />
+            )}
+
             {/* QR */}
             <div className="flex flex-col gap-4 rounded-[20px] border border-info/15 bg-info-tint p-5 md:flex-row md:items-center md:justify-between">
               <div>

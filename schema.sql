@@ -833,3 +833,75 @@ DO $$ BEGIN
 END $$;
 
 CREATE INDEX IF NOT EXISTS merge_template_kind_idx ON merge_templates (document_kind, is_active);
+
+-- ============================================================
+-- CẬP NHẬT 2026-08-16 — EMPLOYMENT LIFECYCLE (Vòng đời làm việc)
+-- ------------------------------------------------------------
+-- SOURCE OF TRUTH: daily_applications = lịch sử ĐĂNG KÝ;
+-- employment_sessions + workforce_movements = lịch sử LÀM VIỆC.
+-- ACTIVE := status='APPROVED' AND end_date IS NULL.
+-- Bản apply production dùng migrations/2026-08-16-employment-lifecycle.sql
+-- (có bước audit dữ liệu bẩn trước khi tạo unique index).
+-- An toàn chạy lại nhiều lần.
+-- ============================================================
+
+ALTER TABLE employment_sessions ADD COLUMN IF NOT EXISTS end_reason varchar(40);
+ALTER TABLE employment_sessions ADD COLUMN IF NOT EXISTS ended_by varchar(64);
+ALTER TABLE employment_sessions ADD COLUMN IF NOT EXISTS ended_at timestamptz;
+ALTER TABLE employment_sessions ADD COLUMN IF NOT EXISTS end_movement_id uuid;
+ALTER TABLE employment_sessions ADD COLUMN IF NOT EXISTS start_date_source varchar(24) DEFAULT 'ASSIGNMENT';
+
+ALTER TABLE workforce_movements ADD COLUMN IF NOT EXISTS employment_session_id uuid;
+ALTER TABLE workforce_movements ADD COLUMN IF NOT EXISTS confirmed_by varchar(64);
+ALTER TABLE workforce_movements ADD COLUMN IF NOT EXISTS confirmed_at timestamptz;
+ALTER TABLE workforce_movements ADD COLUMN IF NOT EXISTS source varchar(32);
+CREATE INDEX IF NOT EXISTS workforce_movement_session_idx ON workforce_movements (employment_session_id);
+
+ALTER TABLE daily_applications ADD COLUMN IF NOT EXISTS worker_declared_previous_resignation boolean NOT NULL DEFAULT false;
+ALTER TABLE daily_applications ADD COLUMN IF NOT EXISTS declared_previous_dept_id uuid;
+ALTER TABLE daily_applications ADD COLUMN IF NOT EXISTS declared_previous_session_id uuid;
+ALTER TABLE daily_applications ADD COLUMN IF NOT EXISTS declared_resignation_date date;
+ALTER TABLE daily_applications ADD COLUMN IF NOT EXISTS declared_resignation_note text;
+ALTER TABLE daily_applications ADD COLUMN IF NOT EXISTS declared_at timestamptz;
+
+CREATE TABLE IF NOT EXISTS start_date_corrections (
+  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  employment_session_id uuid NOT NULL,
+  worker_id uuid NOT NULL,
+  current_start_date date,
+  requested_start_date date NOT NULL,
+  reason text NOT NULL,
+  note text,
+  status varchar(32) NOT NULL DEFAULT 'PENDING_ADMIN_APPROVAL',
+  requested_by varchar(64) NOT NULL,
+  requested_at timestamptz NOT NULL DEFAULT now(),
+  decided_by varchar(64),
+  decided_at timestamptz,
+  decision_note text,
+  old_start_date date,
+  new_start_date date
+);
+CREATE UNIQUE INDEX IF NOT EXISTS start_date_correction_pending_uq
+  ON start_date_corrections (employment_session_id) WHERE status = 'PENDING_ADMIN_APPROVAL';
+CREATE INDEX IF NOT EXISTS start_date_correction_status_idx ON start_date_corrections (status);
+CREATE INDEX IF NOT EXISTS start_date_correction_worker_idx ON start_date_corrections (worker_id);
+
+CREATE OR REPLACE VIEW v_duplicate_active_employment AS
+SELECT worker_id, count(*) AS active_sessions, array_agg(id ORDER BY reg_date DESC) AS session_ids
+FROM employment_sessions
+WHERE status = 'APPROVED' AND end_date IS NULL
+GROUP BY worker_id
+HAVING count(*) > 1;
+
+-- INVARIANT: 1 worker = tối đa 1 ACTIVE session. Với DB mới (sạch) tạo trực tiếp;
+-- với DB đang chạy dùng migration (có kiểm tra dữ liệu bẩn + NOTICE thay vì fail).
+DO $$
+DECLARE dirty integer;
+BEGIN
+  SELECT count(*) INTO dirty FROM v_duplicate_active_employment;
+  IF dirty = 0 AND NOT EXISTS (SELECT 1 FROM pg_indexes WHERE indexname = 'employment_session_one_active_uq') THEN
+    CREATE UNIQUE INDEX employment_session_one_active_uq
+      ON employment_sessions (worker_id)
+      WHERE status = 'APPROVED' AND end_date IS NULL;
+  END IF;
+END $$;
