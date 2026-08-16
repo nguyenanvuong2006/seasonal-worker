@@ -6,7 +6,7 @@
  * Hỗ trợ:
  * - Dual-template auto-route (Tài liệu A = DW Cũ, Tài liệu B = DW Mới)
  * - dispatchToApplicant: ghi link vào daily_applications để /lookup hiển thị
- * - ONE_DOCUMENT / batchPrint: gộp danh sách, có page break để in hàng loạt
+ * - Batch print: mỗi hồ sơ = 1 Google Doc giữ nguyên format, sau đó export + gộp PDF để in
  */
 
 import { NextResponse } from "next/server";
@@ -25,11 +25,12 @@ import {
   type MergeTemplate,
   type MergeTemplateField,
 } from "@/db/schema";
-import { createGoogleDocsService, PAGE_BREAK_TEXT } from "@/lib/document-merge/google-docs-service";
-import { installFormatPreservingBatchPatch } from "@/lib/document-merge/batch-format-preserver";
+import { createGoogleDocsService } from "@/lib/document-merge/google-docs-service";
 import { resolveAllFields, validateRequiredFields, type MergeContext } from "@/lib/document-merge/data-resolver";
-import { applyFallbackPlaceholders, buildPreviewContent, joinWithPageBreaks } from "@/lib/document-merge/preview-merge";
+import { applyFallbackPlaceholders, buildPreviewContent } from "@/lib/document-merge/preview-merge";
 import { buildApplicantMergeRecord } from "@/lib/document-merge/applicant-record";
+import { mergePdfBuffers } from "@/lib/document-merge/batch-pdf";
+import { exportGoogleDocAsPdf, uploadPdfToDrive } from "@/lib/document-merge/google-drive-pdf";
 import {
   documentKindLabel,
   googleDocEditUrl,
@@ -43,6 +44,12 @@ interface RecordSelection {
   entityType: "worker_profiles" | "employment_sessions" | "daily_applications";
   recordIds: string[];
 }
+
+type CreatedDocument = {
+  outputDocId: string;
+  outputUrl: string;
+  outputPdfUrl: string;
+};
 
 function buildMergeContext(session: Session, index = 1, count = 1): MergeContext {
   return {
@@ -160,12 +167,11 @@ async function createMergedDocument(
   title: string,
   content: string,
   folderId?: string | null,
-): Promise<{ outputDocId: string; outputUrl: string; outputPdfUrl: string }> {
-  // Install in the same server bundle/module graph that creates the service.
-  // Relying only on Next instrumentation can leave the route with an unpatched
-  // RealGoogleDocsService prototype in some Vercel bundles, which triggers the
-  // FORMAT_PRESERVING_BATCH_REQUIRED fail-safe for multi-record output.
-  installFormatPreservingBatchPatch();
+): Promise<CreatedDocument> {
+  // Single-record production merge is intentionally simple and fast:
+  // copy the original Google Docs template and replace all placeholders in one
+  // batchUpdate. This preserves the original formatting and avoids rebuilding
+  // paragraphs/tables for every candidate.
   const docsService = createGoogleDocsService(process.env.GOOGLE_ACCESS_TOKEN);
   const outputDocId = await docsService.createDocument(title, content, folderId || undefined);
   await docsService.updateDocumentContent(outputDocId, content);
@@ -331,6 +337,7 @@ export async function POST(request: Request) {
           autoRoute: shouldAutoRoute,
           dispatchToApplicant: shouldDispatch,
           batchPrint: shouldBatchPrint,
+          outputStrategy: shouldBatchPrint ? "INDIVIDUAL_DOCS_PLUS_BATCH_PDF" : "INDIVIDUAL_DOCS",
         },
       })
       .returning();
@@ -346,9 +353,6 @@ export async function POST(request: Request) {
     );
 
     try {
-      // Install before the first service instance and before template reads so
-      // the patch can capture source snapshots used by the structural batch engine.
-      installFormatPreservingBatchPatch();
       const docsService = createGoogleDocsService(process.env.GOOGLE_ACCESS_TOKEN);
       const templateContentCache = new Map<string, string>();
       const getTemplateContent = async (googleDocId: string) => {
@@ -377,6 +381,19 @@ export async function POST(request: Request) {
         });
       }
 
+      const createdByRecord = new Map<string, CreatedDocument>();
+      const ensureCreated = async (item: (typeof rendered)[number]): Promise<CreatedDocument> => {
+        const existing = createdByRecord.get(item.recordId);
+        if (existing) return existing;
+        const created = await createMergedDocument(
+          `${item.kind}_${item.fullName}_${Date.now()}`,
+          item.content,
+          item.template.outputFolderId,
+        );
+        createdByRecord.set(item.recordId, created);
+        return created;
+      };
+
       const dispatched: {
         applicationId: string;
         docUrl: string;
@@ -388,11 +405,7 @@ export async function POST(request: Request) {
       if (shouldDispatch) {
         const sentAt = new Date();
         for (const item of rendered) {
-          const created = await createMergedDocument(
-            `${item.kind}_${item.fullName}_${Date.now()}`,
-            item.content,
-            item.template.outputFolderId,
-          );
+          const created = await ensureCreated(item);
           await db
             .update(dailyApplications)
             .set({
@@ -422,25 +435,49 @@ export async function POST(request: Request) {
       let outputDocId = "";
 
       if (shouldBatchPrint) {
-        const combined = joinWithPageBreaks(rendered.map((item) => item.content));
-        const created = await createMergedDocument(
-          `In_hang_loat_${planned.length}_${Date.now()}`,
-          combined.includes(PAGE_BREAK_TEXT) ? combined : combined,
+        // Fast path selected for this project:
+        // 1 candidate = 1 exact copy of the source Google Docs template.
+        // Only placeholder replacement writes to Docs. PDF export is read-only.
+        // The PDFs are then merged server-side and uploaded once to Drive.
+        const individualDocs: CreatedDocument[] = [];
+        for (const item of rendered) individualDocs.push(await ensureCreated(item));
+
+        const pdfBuffers: Uint8Array[] = [];
+        for (const created of individualDocs) {
+          pdfBuffers.push(await exportGoogleDocAsPdf(created.outputDocId));
+        }
+        const mergedPdf = await mergePdfBuffers(pdfBuffers);
+        const uploadedPdf = await uploadPdfToDrive(
+          `In_hang_loat_${planned.length}_${Date.now()}.pdf`,
+          mergedPdf,
           primaryTemplate.outputFolderId,
         );
-        printUrl = created.outputUrl;
-        printDocId = created.outputDocId;
-        outputUrl = created.outputUrl;
-        outputDocId = created.outputDocId;
+
+        printUrl = uploadedPdf.webViewLink || uploadedPdf.webContentLink;
+        printDocId = uploadedPdf.id;
+        outputUrl = printUrl || individualDocs[0]?.outputUrl || "";
+        outputDocId = uploadedPdf.id;
       } else if (!shouldDispatch && rendered.length > 0) {
-        const created = await createMergedDocument(
-          `${rendered[0].fullName}_${Date.now()}`,
-          rendered[0].content,
-          rendered[0].template.outputFolderId,
-        );
+        const created = await ensureCreated(rendered[0]);
         outputUrl = created.outputUrl;
         outputDocId = created.outputDocId;
       }
+
+      const individualDocs = rendered
+        .map((item) => {
+          const created = createdByRecord.get(item.recordId);
+          if (!created) return null;
+          return {
+            recordId: item.recordId,
+            fullName: item.fullName,
+            templateId: item.template.id,
+            documentKind: item.kind,
+            docId: created.outputDocId,
+            docUrl: created.outputUrl,
+            pdfUrl: created.outputPdfUrl,
+          };
+        })
+        .filter(Boolean);
 
       await db
         .update(mergeJobs)
@@ -453,9 +490,11 @@ export async function POST(request: Request) {
             autoRoute: shouldAutoRoute,
             dispatchToApplicant: shouldDispatch,
             batchPrint: shouldBatchPrint,
+            outputStrategy: shouldBatchPrint ? "INDIVIDUAL_DOCS_PLUS_BATCH_PDF" : "INDIVIDUAL_DOCS",
             printUrl,
             printDocId,
             dispatched,
+            individualDocs,
             kinds: rendered.map((item) => item.kind),
           },
         })
@@ -472,6 +511,7 @@ export async function POST(request: Request) {
         autoRoute: shouldAutoRoute,
         dispatchToApplicant: shouldDispatch,
         batchPrint: shouldBatchPrint,
+        outputStrategy: shouldBatchPrint ? "INDIVIDUAL_DOCS_PLUS_BATCH_PDF" : "INDIVIDUAL_DOCS",
         recordCount: planned.length,
       });
 
@@ -481,6 +521,7 @@ export async function POST(request: Request) {
         outputDocId: outputDocId || printDocId,
         outputUrl: outputUrl || printUrl,
         printUrl,
+        individualDocs,
         dispatched,
         dispatchedCount: dispatched.length,
         status: "COMPLETED",
