@@ -18,6 +18,7 @@ import { db } from "@/db";
 import { mergeJobs } from "@/db/schema";
 import { createAsyncMergeJob, AsyncJobValidationError } from "@/lib/document-merge/async-job";
 import { getDocumentMergeEngine } from "@/lib/document-merge/engine-config";
+import { triggerPdfWorker } from "@/lib/document-merge/worker-trigger";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -59,6 +60,11 @@ export async function POST(request: Request) {
       recordCount: result.total,
       autoRoute: Boolean(autoRoute),
     });
+
+    // Enqueue: trigger Cloud Run worker (nếu engine HTML_PDF). Không chờ kết quả.
+    if (result.engine === "HTML_PDF") {
+      triggerPdfWorker(result.jobId);
+    }
 
     return NextResponse.json(result, { status: 202 });
   } catch (error) {
