@@ -26,6 +26,7 @@ import {
   type MergeTemplateField,
 } from "@/db/schema";
 import { createGoogleDocsService, PAGE_BREAK_TEXT } from "@/lib/document-merge/google-docs-service";
+import { installFormatPreservingBatchPatch } from "@/lib/document-merge/batch-format-preserver";
 import { resolveAllFields, validateRequiredFields, type MergeContext } from "@/lib/document-merge/data-resolver";
 import { applyFallbackPlaceholders, buildPreviewContent, joinWithPageBreaks } from "@/lib/document-merge/preview-merge";
 import { buildApplicantMergeRecord } from "@/lib/document-merge/applicant-record";
@@ -160,6 +161,11 @@ async function createMergedDocument(
   content: string,
   folderId?: string | null,
 ): Promise<{ outputDocId: string; outputUrl: string; outputPdfUrl: string }> {
+  // Install in the same server bundle/module graph that creates the service.
+  // Relying only on Next instrumentation can leave the route with an unpatched
+  // RealGoogleDocsService prototype in some Vercel bundles, which triggers the
+  // FORMAT_PRESERVING_BATCH_REQUIRED fail-safe for multi-record output.
+  installFormatPreservingBatchPatch();
   const docsService = createGoogleDocsService(process.env.GOOGLE_ACCESS_TOKEN);
   const outputDocId = await docsService.createDocument(title, content, folderId || undefined);
   await docsService.updateDocumentContent(outputDocId, content);
@@ -340,6 +346,9 @@ export async function POST(request: Request) {
     );
 
     try {
+      // Install before the first service instance and before template reads so
+      // the patch can capture source snapshots used by the structural batch engine.
+      installFormatPreservingBatchPatch();
       const docsService = createGoogleDocsService(process.env.GOOGLE_ACCESS_TOKEN);
       const templateContentCache = new Map<string, string>();
       const getTemplateContent = async (googleDocId: string) => {
