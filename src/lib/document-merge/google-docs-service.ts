@@ -36,13 +36,15 @@ type TokenResponse = {
   error_description?: string;
 };
 
+type AuthSource = "oauth_user" | "service_account";
+
 type TemplateSnapshot = {
   docId: string;
   content: string;
   capturedAt: number;
 };
 
-let cachedToken: { value: string; expiresAt: number } | null = null;
+let cachedToken: { value: string; expiresAt: number; source: AuthSource } | null = null;
 
 // The merge route reads the source template before it creates the output.
 // Keep a short-lived in-process snapshot so createDocument() can identify
@@ -106,38 +108,71 @@ async function exchangeRefreshToken(clientId: string, clientSecret: string, refr
   return response.json() as Promise<TokenResponse>;
 }
 
+function configuredAuthSource(): AuthSource | null {
+  const hasOAuth = Boolean(
+    process.env.GOOGLE_CLIENT_ID?.trim() &&
+      process.env.GOOGLE_CLIENT_SECRET?.trim() &&
+      process.env.GOOGLE_REFRESH_TOKEN?.trim(),
+  );
+  if (hasOAuth) return "oauth_user";
+
+  const hasServiceAccount = Boolean(
+    process.env.GOOGLE_SERVICE_ACCOUNT_EMAIL?.trim() &&
+      process.env.GOOGLE_SERVICE_ACCOUNT_PRIVATE_KEY?.trim(),
+  );
+  if (hasServiceAccount) return "service_account";
+
+  return null;
+}
+
 async function resolveAccessToken(explicitToken?: string): Promise<string> {
   if (explicitToken) return explicitToken;
-  if (cachedToken && cachedToken.expiresAt > Date.now() + 60_000) return cachedToken.value;
+
+  const preferredSource = configuredAuthSource();
+  if (
+    cachedToken &&
+    cachedToken.source === preferredSource &&
+    cachedToken.expiresAt > Date.now() + 60_000
+  ) {
+    return cachedToken.value;
+  }
 
   let result: TokenResponse | null = null;
-  const serviceEmail = process.env.GOOGLE_SERVICE_ACCOUNT_EMAIL;
-  const servicePrivateKey = process.env.GOOGLE_SERVICE_ACCOUNT_PRIVATE_KEY;
-  if (serviceEmail && servicePrivateKey) {
-    result = await exchangeServiceAccountToken(
-      serviceEmail,
-      servicePrivateKey,
-      process.env.GOOGLE_IMPERSONATE_USER_EMAIL?.trim() || undefined,
-    );
+  let source: AuthSource | null = null;
+
+  // OAuth user credentials are intentionally preferred over Service Account.
+  // A real OAuth user can own/copy files in My Drive, while a Service Account
+  // has no personal Drive storage quota and may fail with storageQuotaExceeded.
+  const clientId = process.env.GOOGLE_CLIENT_ID?.trim();
+  const clientSecret = process.env.GOOGLE_CLIENT_SECRET?.trim();
+  const refreshToken = process.env.GOOGLE_REFRESH_TOKEN?.trim();
+  if (clientId && clientSecret && refreshToken) {
+    source = "oauth_user";
+    result = await exchangeRefreshToken(clientId, clientSecret, refreshToken);
   } else {
-    const clientId = process.env.GOOGLE_CLIENT_ID;
-    const clientSecret = process.env.GOOGLE_CLIENT_SECRET;
-    const refreshToken = process.env.GOOGLE_REFRESH_TOKEN;
-    if (clientId && clientSecret && refreshToken) {
-      result = await exchangeRefreshToken(clientId, clientSecret, refreshToken);
+    const serviceEmail = process.env.GOOGLE_SERVICE_ACCOUNT_EMAIL?.trim();
+    const servicePrivateKey = process.env.GOOGLE_SERVICE_ACCOUNT_PRIVATE_KEY;
+    if (serviceEmail && servicePrivateKey) {
+      source = "service_account";
+      result = await exchangeServiceAccountToken(
+        serviceEmail,
+        servicePrivateKey,
+        process.env.GOOGLE_IMPERSONATE_USER_EMAIL?.trim() || undefined,
+      );
     }
   }
 
-  if (!result?.access_token) {
+  if (!result?.access_token || !source) {
     const detail = result?.error_description || result?.error || "missing Google OAuth credentials";
     throw new Error(
-      `Document Merge chưa kết nối Google Docs/Drive (${detail}). Cấu hình service account hoặc OAuth refresh token trong Vercel.`,
+      `Document Merge chưa kết nối Google Docs/Drive (${detail}). Ưu tiên cấu hình GOOGLE_CLIENT_ID + GOOGLE_CLIENT_SECRET + GOOGLE_REFRESH_TOKEN; Service Account chỉ là fallback.`,
     );
   }
 
   cachedToken = {
     value: result.access_token,
     expiresAt: Date.now() + Math.max(300, result.expires_in ?? 3600) * 1000,
+    source,
   };
   return cachedToken.value;
 }
@@ -214,13 +249,13 @@ function explainWrite403(detail: string): string {
   const lower = detail.toLowerCase();
   if (lower.includes("storage quota") || lower.includes("service account")) {
     return (
-      "Google Drive từ chối tạo bản sao vì Service Account không thể sở hữu file trong My Drive. " +
-      "Hãy dùng Shared Drive hoặc cấu hình GOOGLE_IMPERSONATE_USER_EMAIL với Domain-Wide Delegation/OAuth người dùng."
+      "Google Drive từ chối tạo bản sao. Nếu đã cấu hình OAuth user, kiểm tra GOOGLE_CLIENT_ID / GOOGLE_CLIENT_SECRET / GOOGLE_REFRESH_TOKEN và redeploy. " +
+      "Nếu backend đang fallback sang Service Account thì My Drive có thể trả storageQuotaExceeded; hãy dùng OAuth user, Shared Drive hoặc Domain-Wide Delegation."
     );
   }
   return (
-    "Google Drive từ chối thao tác ghi. Kiểm tra quyền Editor của template/output folder. " +
-    "Nếu đây là My Drive và backend dùng Service Account, hãy dùng Shared Drive hoặc Domain-Wide Delegation/OAuth người dùng."
+    "Google Drive từ chối thao tác ghi. Kiểm tra quyền Editor của template/output folder và tài khoản OAuth đang dùng. " +
+    "Nếu backend đang dùng Service Account với My Drive, hãy chuyển sang OAuth user, Shared Drive hoặc Domain-Wide Delegation."
   );
 }
 
