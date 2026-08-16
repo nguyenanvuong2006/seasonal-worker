@@ -15,7 +15,7 @@
 | #   | Mức độ      | Mô tả                                                                                                                                                                                                                                                                | Vị trí                                                                                                                                                              | Trạng thái fix |
 | --- | ----------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------- | -------------- |
 | A1  | **CRITICAL** | `load()` của trang Planning KHÔNG có `try/catch`/`finally` và KHÔNG kiểm `res.ok`. Khi `/api/planning` trả 500 (do DB lỗi, query timeout, dependency ngoại lệ) → `setLoading(false)` không chạy → trang loading vô hạn.                                              | `src/app/(internal)/admin/planning/page.tsx` `load()`                                                                                                               | **FIXED**      |
-| A2  | **CRITICAL** | **KPI double-counting bug.** Công thức Balance đang là `Rq - Recruited + Quit` ở 3 nơi. Khi 1 worker nghỉ: Current giảm (đã bị trừ), Quit tăng → Balance bị cộng lại 1 lần. Test bắt buộc: Rq=10, Current-before=10, 1 quit → Current=9, Quit=1 → Balance = 2 (Sai); Expected = 1. | `src/lib/planning-recruitment-core.ts:83-87` `computeBalance`; `src/lib/workforce-request-kpi.ts:127-131` `computeBalance`; `src/lib/recruitment-request-utils.ts:206-219` `computeBalanceFromCanonical`; `src/lib/planning.ts:615-619` `recruitmentNeededMale/Female` | **FIXED**      |
+| A2  | **CRITICAL** | **KPI double-counting bug.** Công thức Balance đang là `Rq - Recruited` ở 4 nơi (sau khi fix V1 vẫn sai vì Recruited là historical KPI, không phải Current Workforce). Khi 1 worker nghỉ: Current giảm nhưng Recruited (cumulative qua mùa) KHÔNG giảm → Balance = Rq - Recruited bỏ sót. PHASE 6 v2 ép về source-of-truth: Balance = `max(0, Rq - Current Workforce)` với Current = count(request_allocations ∩ employment_sessions ACTIVE). | `src/lib/planning-recruitment-core.ts:85-92` `computeBalance`; `src/lib/workforce-request-kpi.ts:155-167` `computeBalance`; `src/lib/recruitment-request-utils.ts:206-220` `computeBalanceFromCanonical`; `src/lib/planning.ts:615-619` `recruitmentNeededMale/Female` | **FIXED (v2)** |
 | A3  | **HIGH**   | API `/api/recruitment-requests` cap `limit=1000` nhưng UI gọi `limit=5000` để dựng filter dropdown. Server trả 1000 → distinct facet chỉ dựng được từ tập con → user chọn được filter nhưng kết quả rỗng vì filter không có trong 1000 bản ghi đầu.                      | `src/app/(internal)/admin/recruitment-requests/page.tsx` `loadDistinct`; `src/app/api/recruitment-requests/route.ts:62`                                              | **FIXED** (thêm `/facets`) |
 | A4  | **HIGH**   | `loadDistinct()` ở recruitment-requests page KHÔNG `setLoading`/`finally` — nhưng riêng nó đã có guard qua `try/catch` rỗng. Tuy nhiên khi cả 2 fetch chạy song song (`loadData` + `loadDistinct`), request `limit=5000` luôn fail → facet dropdown rỗng.           | `src/app/(internal)/admin/recruitment-requests/page.tsx` `loadDistinct`                                                                                              | **FIXED**      |
 | A5  | **HIGH**   | `src/lib/planning-recruitment-core.test.ts:99-128` test KHÔNG bao gồm scenario A2 (quit mà Current đã giảm) → CI sẽ pass dù công thức sai. Cần regression test chính xác.                                                                                          | `src/lib/planning-recruitment-core.test.ts`                                                                                                                          | **FIXED** (thêm regression) |
@@ -139,49 +139,60 @@ fetchJsonWithTimeout<T>(url, { timeoutMs = 12000, signal? }): Promise<ApiResult<
 
 ## E. KPI Integrity Issues
 
-### E1 — Double-counting Balance (CRITICAL)
+### E1 — Double-counting / wrong-source Balance (CRITICAL)
 
-**Công thức hiện tại (3 nơi):**
-
-```
-Balance = max(0, Rq - Recruited + Quit)
-```
-
-**Tại sao sai:**
-
-Khi worker nghỉ:
-- `Recruited/Current` giảm (worker rời ACTIVE).
-- `Quit` tăng (ghi nhận workforce movement RESIGNATION).
-- Nhưng `Quit` KHÔNG nên được cộng thêm — vì cùng 1 worker đó đã bị loại khỏi Current.
-
-**Test bắt buộc theo đề bài:**
-| Biến | Trước | Sau 1 resign |
-|------|-------|---------------|
-| Request | 10 | 10 |
-| Current (Active) | 10 | 9 |
-| Quit | 0 | 1 |
-| **Balance (formula cũ)** | 0 | **10 - 9 + 1 = 2 (SAI)** |
-| **Balance (formula mới)** | 0 | **max(0, 10 - 9) = 1 (ĐÚNG)** |
-
-**Source-of-truth mới:**
+**Công thức hiện tại (4 nơi) — PHIÊN BẢN v2 (PHASE 6):**
 
 ```
-Need To Recruit = max(0, Request - Current)
+Balance = max(0, Request - Current Workforce)
+Current Workforce = count(
+  request_allocations.status = 'ACTIVE'
+  ∩ employment_sessions.status = 'APPROVED' AND end_date IS NULL
+  ∩ worker_profiles.deleted_at IS NULL
+)
 ```
 
-`Quit` KHÔNG còn dùng để tính Balance. Nó vẫn được lưu như một **historical KPI** riêng (`totalQuit` để báo cáo attrition), nhưng KHÔNG cộng vào nhu cầu tuyển mới.
+**Các công thức BỊ CẤM (REGRESSION GUARD):**
 
-**Files sửa:**
+```
+Sai #1: Balance = max(0, Rq - Recruited)         ← dùng historical KPI, BỎ SÓT người nghỉ
+Sai #2: Balance = max(0, Rq - Recruited + Quit)  ← double-count (PHASE 6 v1 cũng sai)
+Sai #3: Balance = max(0, Rq - Current + Quit)    ← Quit đã nằm trong Current giảm
+```
 
-1. `src/lib/planning-recruitment-core.ts:83-87` — `computeBalance()` đổi công thức.
-2. `src/lib/workforce-request-kpi.ts:127-131` — `computeBalance()` đổi công thức.
-3. `src/lib/recruitment-request-utils.ts:206-219` — `computeBalanceFromCanonical()` đổi công thức.
-4. `src/lib/planning.ts:615-619` — `recruitmentNeededMale/Female` đổi công thức.
-5. `src/lib/planning.ts:670-674` — `recruitmentNeededMale: kpi.maleBalance` ← nguồn từ `kpi` đã sửa, tự consistent.
-6. `src/app/api/recruitment-requests/route.ts:99-101` (POST handler) — `computeBalance({...})` ← tự consistent.
-7. `src/lib/recruitment-request.ts:154-170` (import path) — `computeBalanceFromCanonical()` ← tự consistent.
+`Recruited` và `Quit` là **HISTORICAL KPI** — chỉ phục vụ báo cáo attrition, KHÔNG BAO GIỜ xuất hiện trong công thức Balance.
 
-**Backfill SQL cần thiết:** Có. Mọi bản ghi `recruitment_requests` hiện tại có `total_balance` được tính bằng công thức cũ. Cần **recompute** sau khi deploy. Xem migration: `migrations/2026-08-18-balance-recompute.sql` (idempotent, không xoá dữ liệu).
+**Lịch sử fix:**
+- **V1 (PR trước)**: Đổi `Rq - Recruited + Quit` → `Rq - Recruited`. Vẫn sai vì Recruited không phải Current (Recruited cộng dồn qua mùa, không giảm khi worker nghỉ).
+- **V2 (commit này)**: Ép về source-of-truth — `Current` = count ACTIVE allocations ∩ ACTIVE employment sessions ∩ worker profiles.
+
+**Test bắt buộc theo đề bài (4 case A/B/C/D):**
+
+| Case | R | C | Rec | Q | Balance mới (V2) | Sai cũ (V1: Rq-Rec) | Sai cũ hơn (Rq-Rec+Q) |
+|------|---|---|-----|---|-------------------|---------------------|------------------------|
+| **A** | 10 | 9 | 10 | 1 | **1** = max(0, 10-9) | 0 (SAI) | 2 (SAI) |
+| **B** | 10 | 8 | 12 | 4 | **2** = max(0, 10-8) | 0 (SAI) | 2 (đúng lý do sai) |
+| **C** | 10 | 10 | 15 | 5 | **0** = max(0, 10-10) | 0 | 0 |
+| **D** | 10 | 0 | 10 | 10 | **10** = max(0, 10-0) | 0 (SAI) | 10 (đúng lý do sai) |
+
+**Files sửa (V2):**
+
+1. `src/lib/planning-recruitment-core.ts` — `computeBalance()` signature đổi: bắt buộc `maleCurrent/femaleCurrent`, KHÔNG nhận `maleRecruited/femaleRecruited/maleQuit/femaleQuit`. Compile-time guard chống regression.
+2. `src/lib/workforce-request-kpi.ts` — `computeBalance()` đổi tương tự.
+3. `src/lib/recruitment-request-utils.ts` — `computeBalanceFromCanonical(canonical, { maleCurrent, femaleCurrent })` — caller truyền current đã query sẵn (mặc định 0 cho INSERT mới).
+4. `src/lib/recruitment-request.ts:147-170` (import path) — UPDATE path query `current` từ source-of-truth trước khi tính Balance.
+5. `src/app/api/recruitment-requests/[id]/route.ts:155-180` (PATCH path) — query `current` từ `request_allocations ∩ employment_sessions ACTIVE ∩ worker_profiles`.
+6. `src/app/api/recruitment-requests/route.ts:127` (POST path) — Balance = Rq - 0 (yêu cầu mới chưa có allocation).
+7. `src/lib/planning.ts:615-619` — `recruitmentNeededMale = max(0, demandMale - allocatedMale)` (đã đúng V2 từ trước).
+8. `migrations/2026-08-18-balance-recompute.sql` — viết lại dùng CTE trên `request_allocations ∩ employment_sessions (APPROVED + end_date IS NULL) ∩ worker_profiles`. KHÔNG đọc `male_recruited/female_recruited/male_quit/female_quit`.
+
+**Test added (V2):**
+- `planning-recruitment-core.test.ts` — case A/B/C/D + regression guard "computeBalance KHÔNG nhận Recruited/Quit trong input".
+- `workforce-request.test.ts` — case A/B/C/D + regression guard tương tự.
+- `recruitment-request.test.ts` — case A/B/C/D qua `computeBalanceFromCanonical`.
+- `recruitment-request-db.test.ts` — cập nhật test Excel (Balance = Rq cho INSERT mới) + thêm `requestAllocations` vào schemaStub.
+
+**Backfill SQL cần thiết:** Có. Mọi bản ghi `recruitment_requests` hiện tại có `male_balance/female_balance/total_balance` được tính bằng công thức cũ. Cần **recompute** sau khi deploy. Xem migration: `migrations/2026-08-18-balance-recompute.sql` (idempotent, CTE-based, không xoá dữ liệu).
 
 ### E2 — ACTIVE Employment Definition
 

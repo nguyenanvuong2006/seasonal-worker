@@ -121,8 +121,10 @@ export async function POST(req: Request) {
   const maleRq = Math.max(0, Number(safeBody.maleRq) || 0);
   const femaleRq = Math.max(0, Number(safeBody.femaleRq) || 0);
 
-  // Balance = Rq - Recruited + Quit; yêu cầu mới chưa tuyển ai nên = Rq.
-  const balance = computeBalance({ maleRq, femaleRq, maleRecruited: 0, femaleRecruited: 0, maleQuit: 0, femaleQuit: 0 });
+  // Balance = max(0, Rq - Current Workforce). Yêu cầu mới chưa có allocation
+  // nào → Current = 0 → Balance = Rq (PHASE 6 v2 — dùng Current Workforce
+  // làm source-of-truth, KHÔNG dùng Recruited/Quit).
+  const balance = computeBalance({ maleRq, femaleRq, maleCurrent: 0, femaleCurrent: 0 });
   const totalRequest = computeTotalRequest(maleRq, femaleRq);
 
   // Khớp cây tổ chức để có department_id — Data Scope lọc theo FK này (Yêu cầu #15).

@@ -201,22 +201,51 @@ export function toInt(v: string | undefined, def = 0): number {
 }
 
 /* ============================================================
-   BALANCE COMPUTATION (PHASE 6 — double-count fix)
+   BALANCE COMPUTATION (PHASE 6 v2 — source-of-truth fix)
+   ------------------------------------------------------------
+   CANONICAL FORMULA (khớp với planning-recruitment-core.computeBalance):
+
+     Male Balance   = max(0, Male Rq   − Male Current Workforce)
+     Female Balance = max(0, Female Rq − Female Current Workforce)
+     Total Balance  = Male Balance + Female Balance
+
+   Hàm này được gọi từ luồng EXCEL IMPORT. Vì Excel không chứa thông tin
+   về ACTIVE workforce của từng yêu cầu, CALLER phải truyền `currentWorkforce`
+   đã đếm sẵn từ source-of-truth (request_allocations ∩ employment_sessions
+   ACTIVE) qua tham số `current`.
+
+   Hành vi theo từng call-site:
+   - INSERT yêu cầu mới (chưa có row nào trong DB)  → current = 0/0 (Balance = Rq)
+   - UPDATE yêu cầu đã tồn tại                       → current được query bằng
+                                                       CTE trước khi gọi hàm
+                                                       (xem recruitment-request.ts:importRecruitmentRequests)
+
+   CÁC CÔNG THỨC BỊ CẤM: Rq-Recruited, Rq-Recruited+Q, Rq-Current+Q.
+   Recruited/Quit giữ lại trong Excel cho mục đích NHẬP LIỆU (audit), KHÔNG
+   dùng trong công thức Balance.
+
+   Lưu ý: Male Recruited/Female Recruited vẫn được LƯU vào recruitment_requests
+   (là historical KPI cho dashboard) — chỉ KHÔNG dùng làm đầu vào Balance.
    ============================================================ */
-export function computeBalanceFromCanonical(canonical: Record<string, string>) {
+export function computeBalanceFromCanonical(
+  canonical: Record<string, string>,
+  current?: { maleCurrent?: number; femaleCurrent?: number },
+) {
   const maleRq = toInt(canonical["Male Rq"]);
   const femaleRq = toInt(canonical["Female Rq"]);
-  const maleRecruited = toInt(canonical["Male Recruited"]);
-  const femaleRecruited = toInt(canonical["Female Recruited"]);
-  // Male Quit / Female Quit giữ lại để đọc nhưng KHÔNG cộng vào Balance
-  // (xem PHASE 6 audit AUDIT_REPORT.md mục E1). Quit là historical KPI riêng.
+  // Source-of-truth: caller cung cấp. Mặc định 0/0 cho luồng INSERT mới.
+  const maleCurrent = Math.max(0, Number(current?.maleCurrent ?? 0));
+  const femaleCurrent = Math.max(0, Number(current?.femaleCurrent ?? 0));
+  // Male Recruited/Female Quit đọc nhưng KHÔNG cộng vào Balance (historical KPI).
+  toInt(canonical["Male Recruited"]);
+  toInt(canonical["Female Recruited"]);
   toInt(canonical["Male Quit"]);
   toInt(canonical["Female Quit"]);
 
-  // Male Balance = max(0, Male Rq − Male Allocated/Recruited)
-  const maleBalance = Math.max(0, maleRq - maleRecruited);
-  // Female Balance = max(0, Female Rq − Female Allocated/Recruited)
-  const femaleBalance = Math.max(0, femaleRq - femaleRecruited);
+  // Male Balance = max(0, Male Rq − Male Current Workforce)
+  const maleBalance = Math.max(0, maleRq - maleCurrent);
+  // Female Balance = max(0, Female Rq − Female Current Workforce)
+  const femaleBalance = Math.max(0, femaleRq - femaleCurrent);
   // Total Balance = Male Balance + Female Balance
   const totalBalance = maleBalance + femaleBalance;
 

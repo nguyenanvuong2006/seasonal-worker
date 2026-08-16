@@ -56,19 +56,39 @@ export function normalizeRequestStatus(s: string | undefined | null): RequestSta
 }
 
 /* ============================================================
-   2. BALANCE (Yêu cầu #10 + PHASE 6 double-count fix)
+   2. BALANCE (Yêu cầu #10 + PHASE 6 v2 source-of-truth fix)
    ------------------------------------------------------------
-   Male Balance   = max(0, Male Rq − Male Recruited/Allocated)
-   Female Balance = max(0, Female Rq − Female Recruited/Allocated)
-   Total Balance  = Male Balance + Female Balance
+   CANONICAL FORMULA (đã khoá — mọi nơi khác phải gọi vào đây):
 
-   LÝ DO ĐỔI (PHASE 6 audit): Công thức cũ cộng thêm `Quit` đã double-count
-   khi worker nghỉ — vì worker nghỉ đã bị loại khỏi "Recruited/Allocated" rồi
-   (qua workforce_movement RESIGNATION set employment_session.end_date). Test
-   bắt buộc: Rq=10, Current-before=10, 1 quit → Current=9, Quit=1 → Balance
-   cũ = 10 − 9 + 1 = 2 (SAI); Balance mới = max(0, 10 − 9) = 1 (ĐÚNG).
-   `Quit` vẫn được lưu như historical KPI riêng (attrition reporting), KHÔNG
-   cộng vào nhu cầu tuyển mới.
+     Male Balance   = max(0, Male Rq   − Male Current Workforce)
+     Female Balance = max(0, Female Rq − Female Current Workforce)
+     Total Balance  = Male Balance + Female Balance
+
+   "Current Workforce" = số worker có:
+     - request_allocations.status = 'ACTIVE'
+     - employment_sessions.status = 'APPROVED'
+     - employment_sessions.end_date IS NULL
+     - worker_profiles.deleted_at IS NULL
+
+   CÁC CÔNG THỨC BỊ CẤM (REGRESSION GUARD):
+     - Rq − Recruited                       (dùng historical KPI, SAI)
+     - Rq − Recruited + Quit                (double-count, SAI)
+     - Rq − Current + Quit                  (Quit đã nằm trong "Current giảm")
+
+   LÝ DO ĐỔI (PHASE 6 audit v1 → v2):
+     V1 đã đổi từ "Rq − Recruited + Quit" thành "Rq − Recruited" — vẫn SAI
+     vì Recruited là historical KPI (cộng dồn qua các mùa), KHÔNG phải
+     Current Workforce tại request hiện tại. Công thức V2 ép về source-of-truth:
+     Current = count(request_allocations ∩ employment_sessions ACTIVE ∩ worker_profiles).
+
+   Recruited và Quit là HISTORICAL KPI — chỉ phục vụ báo cáo / audit / pipeline.
+   KHÔNG BAO GIỜ xuất hiện trong công thức Balance.
+
+   Test bắt buộc (PHASE 6 v2, xem planning-recruitment-core.test.ts):
+     A. R=10, C=9, Rec=10, Q=1  → Balance = 1
+     B. R=10, C=8, Rec=12, Q=4  → Balance = 2
+     C. R=10, C=10, Rec=15, Q=5 → Balance = 0
+     D. R=10, C=0,  Rec=10, Q=10 → Balance = 10
 
    Clamp về 0: phân bổ vượt nhu cầu thì "còn thiếu" = 0, không âm.
    Đây là công thức DUY NHẤT trong hệ thống — mọi nơi khác phải gọi vào đây.
@@ -76,11 +96,9 @@ export function normalizeRequestStatus(s: string | undefined | null): RequestSta
 export type BalanceInput = {
   maleRq: number;
   femaleRq: number;
-  maleRecruited: number;
-  femaleRecruited: number;
-  /** Nhận nhưng KHÔNG dùng trong công thức — giữ để không phá call-site cũ. */
-  maleQuit?: number;
-  femaleQuit?: number;
+  /** Số lao động ACTIVE tại request (xem comment ở trên) — BẮT BUỘC. */
+  maleCurrent: number;
+  femaleCurrent: number;
 };
 
 export type BalanceResult = {
@@ -91,8 +109,8 @@ export type BalanceResult = {
 
 export function computeBalance(input: BalanceInput): BalanceResult {
   const n = (v: number) => (Number.isFinite(v) ? Math.trunc(v) : 0);
-  const maleBalance = Math.max(0, n(input.maleRq) - n(input.maleRecruited));
-  const femaleBalance = Math.max(0, n(input.femaleRq) - n(input.femaleRecruited));
+  const maleBalance = Math.max(0, n(input.maleRq) - n(input.maleCurrent));
+  const femaleBalance = Math.max(0, n(input.femaleRq) - n(input.femaleCurrent));
   return { maleBalance, femaleBalance, totalBalance: maleBalance + femaleBalance };
 }
 

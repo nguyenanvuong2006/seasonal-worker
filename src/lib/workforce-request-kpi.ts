@@ -139,31 +139,49 @@ export function computeWarnings(input: WarningInput): WarningDetail[] {
 }
 
 /* ============================================================
-   CÔNG THỨC BALANCE (mục 3) + PHASE 6 (double-count fix)
+   CÔNG THỨC BALANCE (mục 3) + PHASE 6 v2 (source-of-truth fix)
    ------------------------------------------------------------
-   Male Balance   = max(0, Male Request − Male Current)
-   Female Balance = max(0, Female Request − Female Current)
-   Total Balance  = Male Balance + Female Balance
+   CANONICAL FORMULA (đã khoá — mọi nơi khác phải gọi vào đây):
 
-   LÝ DO ĐỔI (PHASE 6 audit): Quit đã được tính vào "Current" rồi — worker
-   nghỉ bị loại khỏi ACTIVE Employment Session (xem
-   `isActiveEmploymentSession` ở trên), nên Current đã giảm đúng 1. Cộng
-   thêm Quit ở đây là double-count. Test bắt buộc: Rq=10, Current-before=10,
-   1 quit → Current=9, Quit=1 → Balance cũ = 2 (SAI); Balance mới = 1 (ĐÚNG).
-   Quit vẫn còn là historical KPI (attrition reporting) nhưng KHÔNG cộng vào
-   nhu cầu tuyển mới.
+     Male Balance   = max(0, Male Request   − Male Current Workforce)
+     Female Balance = max(0, Female Request − Female Current Workforce)
+     Total Balance  = Male Balance + Female Balance
+
+   "Current Workforce" = số worker có:
+     - request_allocations.status = 'ACTIVE'  (lớp Request)
+     - employment_sessions.status = 'APPROVED' (lớp Employment)
+     - employment_sessions.end_date IS NULL
+     - worker_profiles.deleted_at IS NULL
+   phân nhóm theo worker_profiles.gender (xem AUDIT_REPORT.md mục E1).
+
+   CÁC CÔNG THỨC BỊ CẤM (REGRESSION GUARD):
+     - Rq − Recruited                       ← dùng historical KPI, SAI
+     - Rq − Recruited + Quit                ← double-count
+     - Rq − Current + Quit                  ← Quit đã nằm trong "Current giảm"
+
+   Recruited và Quit là HISTORICAL KPI — chỉ phục vụ báo cáo & audit.
+   Chúng KHÔNG BAO GIỜ xuất hiện trong công thức Balance.
+
+   Test bắt buộc (PHASE 6 v2):
+     A. Rq=10, Current=9, Recruited=10, Quit=1  → Balance = max(0, 10-9) = 1
+     B. Rq=10, Current=8, Recruited=12, Quit=4  → Balance = max(0, 10-8) = 2
+     C. Rq=10, Current=10, Recruited=15, Quit=5 → Balance = max(0, 10-10) = 0
+     D. Rq=10, Current=0,  Recruited=10, Quit=10 → Balance = max(0, 10-0) = 10
    ============================================================ */
 export function computeBalance(input: {
   maleRequest: number;
   femaleRequest: number;
+  /** Số lao động ACTIVE tại request (xem comment ở trên) — đây là đầu vào
+   *  BẮT BUỘC của công thức, không có giá trị mặc định. */
   maleCurrent: number;
   femaleCurrent: number;
-  /** Nhận nhưng KHÔNG dùng trong công thức — giữ để không phá call-site cũ. */
-  maleQuit?: number;
-  femaleQuit?: number;
 }): { maleBalance: number; femaleBalance: number; totalBalance: number } {
-  const maleBalance = Math.max(0, input.maleRequest - input.maleCurrent);
-  const femaleBalance = Math.max(0, input.femaleRequest - input.femaleCurrent);
+  const mr = Number.isFinite(input.maleRequest) ? Math.trunc(input.maleRequest) : 0;
+  const fr = Number.isFinite(input.femaleRequest) ? Math.trunc(input.femaleRequest) : 0;
+  const mc = Number.isFinite(input.maleCurrent) ? Math.trunc(input.maleCurrent) : 0;
+  const fc = Number.isFinite(input.femaleCurrent) ? Math.trunc(input.femaleCurrent) : 0;
+  const maleBalance = Math.max(0, mr - mc);
+  const femaleBalance = Math.max(0, fr - fc);
   return { maleBalance, femaleBalance, totalBalance: maleBalance + femaleBalance };
 }
 

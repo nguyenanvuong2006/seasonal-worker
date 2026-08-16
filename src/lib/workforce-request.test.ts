@@ -56,28 +56,101 @@ function applyPlan(
 
 /* ----------------------- CÔNG THỨC (mục 3) ----------------------- */
 
-test("Balance = max(0, Request - Current), Total = Male + Female. PHASE 6: Quit does NOT add back (double-count fix)", () => {
-  // PHASE 6: Quit KHÔNG còn cộng vào Balance. Worker nghỉ đã bị trừ khỏi Current
-  // (xem isActiveEmploymentSession). Cộng thêm Quit là double-count.
-  assert.deepEqual(computeBalance({ maleRequest: 5, femaleRequest: 5, maleCurrent: 7, femaleCurrent: 3, maleQuit: 0, femaleQuit: 0 }), {
+test("Balance = max(0, Request - Current), Total = Male + Female. PHASE 6 v2: source-of-truth = Current Workforce, Recruited/Quit are historical KPIs (NEVER in formula)", () => {
+  // PHASE 6 v2: công thức BẮT BUỘC dùng Current Workforce (= ACTIVE
+  // request_allocations ∩ ACTIVE employment_sessions), KHÔNG dùng Recruited,
+  // KHÔNG cộng Quit. Worker nghỉ đã bị loại khỏi "Current" rồi (xem
+  // isActiveEmploymentSession) — cộng thêm Quit là double-count.
+  assert.deepEqual(computeBalance({ maleRequest: 5, femaleRequest: 5, maleCurrent: 7, femaleCurrent: 3 }), {
     maleBalance: 0,
     femaleBalance: 2,
     totalBalance: 2,
   });
-  assert.deepEqual(computeBalance({ maleRequest: 5, femaleRequest: 5, maleCurrent: 4, femaleCurrent: 4, maleQuit: 1, femaleQuit: 1 }), {
+  // Current giảm đúng bằng Quit (worker nghỉ bị loại khỏi ACTIVE).
+  assert.deepEqual(computeBalance({ maleRequest: 5, femaleRequest: 5, maleCurrent: 4, femaleCurrent: 4 }), {
     maleBalance: 1,
     femaleBalance: 1,
     totalBalance: 2,
   });
-  // Không âm: current vượt request + quit
-  assert.equal(computeBalance({ maleRequest: 5, femaleRequest: 0, maleCurrent: 9, femaleCurrent: 0, maleQuit: 1, femaleQuit: 0 }).maleBalance, 0);
+  // Không âm: current vượt request.
+  assert.equal(computeBalance({ maleRequest: 5, femaleRequest: 0, maleCurrent: 9, femaleCurrent: 0 }).maleBalance, 0);
 
-  // PHASE 6 REGRESSION (đề bài): Rq=10, Current trước=10, 1 resign → Current=9, Quit=1 → Need To Recruit = 1.
-  assert.deepEqual(computeBalance({ maleRequest: 10, femaleRequest: 0, maleCurrent: 9, femaleCurrent: 0, maleQuit: 1, femaleQuit: 0 }), {
+  // PHASE 6 v2 REGRESSION (đề bài): Rq=10, Current=9 → Balance = 1.
+  assert.deepEqual(computeBalance({ maleRequest: 10, femaleRequest: 0, maleCurrent: 9, femaleCurrent: 0 }), {
     maleBalance: 1,
     femaleBalance: 0,
     totalBalance: 1,
   });
+});
+
+/* ----------------------- PHASE 6 v2 REGRESSION CASES (A/B/C/D) ----------------------- */
+/*
+ * Theo chuẩn mới: Balance = max(0, Rq - Current Workforce). Recruited và Quit
+ * là HISTORICAL KPI — KHÔNG BAO GIỜ xuất hiện trong công thức. Bốn test
+ * dưới đây chứng minh công thức đúng bất kể giá trị Recruited/Quit lưu trong
+ * DB là bao nhiêu (kể cả khi DB lưu bậy / lưu cũ / migration chưa chạy).
+ */
+test("PHASE 6 v2 case A: R=10, C=9, Rec=10, Q=1 → Balance = max(0, 10-9) = 1", () => {
+  // Scenario kinh điển: 1 người nghỉ → Current giảm 1, cần tuyển 1.
+  // Công thức CŨ (V1) dùng Rq-Recruited+Q sẽ ra 10-10+1=1 (trùng); dùng
+  // Rq-Recruited sẽ ra 0 (SAI — bỏ sót). Công thức V2 dùng Current = 9 → 1.
+  const r = computeBalance({ maleRequest: 10, femaleRequest: 0, maleCurrent: 9, femaleCurrent: 0 });
+  assert.equal(r.maleBalance, 1);
+  assert.equal(r.femaleBalance, 0);
+  assert.equal(r.totalBalance, 1);
+  // Quan trọng: Recruited/Quit giá trị tuỳ ý KHÔNG ảnh hưởng (chúng không
+  // nằm trong input của computeBalance nữa).
+});
+
+test("PHASE 6 v2 case B: R=10, C=8, Rec=12, Q=4 → Balance = max(0, 10-8) = 2", () => {
+  // Recruited=12 (>Rq) và Quit=4 — đây là bẫy cố ý: công thức CŨ "Rq-Recruited+Q"
+  // sẽ ra 10-12+4 = 2 (trùng, nhưng LÝ DO sai — vì trong thực tế Recruited chỉ
+  // là pipeline historical, không phải Current). Công thức V2 dùng Current=8 → 2
+  // vì lý do ĐÚNG: còn 2 người chưa có mặt tại request.
+  const r = computeBalance({ maleRequest: 10, femaleRequest: 0, maleCurrent: 8, femaleCurrent: 0 });
+  assert.equal(r.maleBalance, 2);
+  assert.equal(r.femaleBalance, 0);
+  assert.equal(r.totalBalance, 2);
+});
+
+test("PHASE 6 v2 case C: R=10, C=10, Rec=15, Q=5 → Balance = max(0, 10-10) = 0", () => {
+  // Đã đủ người → Balance = 0. Công thức CŨ "Rq-Recruited+Q" = 10-15+5 = 0
+  // (trùng), nhưng nếu chỉ dùng "Rq-Recruited" = 10-15 → 0 cũng đúng, tuy
+  // nhiên hoàn toàn do trùng hợp (Rq-Recruited không phải nguồn sự thật).
+  const r = computeBalance({ maleRequest: 10, femaleRequest: 0, maleCurrent: 10, femaleCurrent: 0 });
+  assert.equal(r.maleBalance, 0);
+  assert.equal(r.femaleBalance, 0);
+  assert.equal(r.totalBalance, 0);
+});
+
+test("PHASE 6 v2 case D: R=10, C=0, Rec=10, Q=10 → Balance = max(0, 10-0) = 10", () => {
+  // Toàn bộ workforce đã nghỉ (Recruited cũ = 10, Quit = 10, Current = 0) →
+  // cần tuyển lại 10. Công thức CŨ "Rq-Recruited" = 0 SAI; "Rq-Recruited+Q"
+  // = 10 ĐÚNG nhưng vì lý do sai. Công thức V2 dùng Current=0 → 10.
+  const r = computeBalance({ maleRequest: 10, femaleRequest: 0, maleCurrent: 0, femaleCurrent: 0 });
+  assert.equal(r.maleBalance, 10);
+  assert.equal(r.femaleBalance, 0);
+  assert.equal(r.totalBalance, 10);
+});
+
+/* ----------------------- REGRESSION GUARD: input KHÔNG còn nhận Quit ----------------------- */
+test("PHASE 6 v2: công thức KHÔNG nhận Recruited/Quit trong input", () => {
+  // Runtime: thêm field thừa, hàm vẫn cho ra kết quả giống hệt.
+  const canonical = {
+    maleRequest: 5,
+    femaleRequest: 5,
+    maleCurrent: 3,
+    femaleCurrent: 3,
+  };
+  const rClean = computeBalance(canonical);
+  const rWithExtras = computeBalance({
+    ...canonical,
+    ...({ maleQuit: 99, femaleQuit: 99, maleRecruited: 99, femaleRecruited: 99 } as Record<string, unknown>),
+  } as Parameters<typeof computeBalance>[0]);
+  assert.deepEqual(rWithExtras, rClean, "thêm field thừa KHÔNG được thay đổi kết quả");
+  assert.equal(rWithExtras.maleBalance, 2);
+  assert.equal(rWithExtras.femaleBalance, 2);
+  assert.equal(rWithExtras.totalBalance, 4);
 });
 
 test("Total Request = Male + Female; fallback legacy total_request khi cả 2 = 0", () => {
