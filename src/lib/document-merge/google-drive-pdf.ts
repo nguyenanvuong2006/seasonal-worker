@@ -108,7 +108,7 @@ async function authHeaders(): Promise<Record<string, string>> {
 
 export async function exportGoogleDocAsPdf(docId: string): Promise<Uint8Array> {
   const response = await fetch(
-    `https://www.googleapis.com/drive/v3/files/${encodeURIComponent(docId)}/export?mimeType=${encodeURIComponent("application/pdf")}&supportsAllDrives=true`,
+    `https://www.googleapis.com/drive/v3/files/${encodeURIComponent(docId)}/export?mimeType=${encodeURIComponent("application/pdf")}`,
     { headers: await authHeaders() },
   );
   if (!response.ok) {
