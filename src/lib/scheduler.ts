@@ -6,6 +6,7 @@ import { processNotificationQueue } from "@/lib/notifications";
 import { findStalledJobs, runNextStep } from "@/lib/import-jobs";
 import { cleanupTerminalStaging } from "@/lib/import-staging-cleanup";
 import { recomputeRequestKpiCache } from "@/lib/workforce-request";
+import { scanExpiredRequestsAndCreateTasks } from "@/lib/planning-reallocation";
 
 /**
  * SCHEDULER FOUNDATION (nền tảng, #15)
@@ -53,6 +54,21 @@ const HANDLERS: Record<string, () => Promise<Record<string, unknown>>> = {
     }
     return { stalledFound: stalled.length, resumed };
   },
+  EXPIRE_RECRUITMENT_REQUESTS: async () => {
+    // PLANNING — YÊU CẦU TUYỂN DỤNG HẾT HẠN (Yêu cầu #7, #13, #14).
+    //
+    // Quét các Recruitment Request đã quá End Date, chuyển sang EXPIRED
+    // (KHÔNG BAO GIỜ là CANCELLED) và tạo Task Center nhắc Recruiter chuyển
+    // phân bổ DW sang yêu cầu mới.
+    //
+    // QUAN TRỌNG: handler này TUYỆT ĐỐI KHÔNG đụng tới employment_sessions
+    // hay workforce_movements. Yêu cầu hết hạn KHÔNG phải DW nghỉ việc —
+    // chỉ Workforce Movement loại RESIGNATION mới là nghỉ việc thật.
+    //
+    // Idempotent: unique index partial planning_tasks_open_uq + onConflictDoNothing
+    // đảm bảo chạy lại (cron trùng, retry) không sinh task trùng.
+    return scanExpiredRequestsAndCreateTasks() as unknown as Promise<Record<string, unknown>>;
+  },
   CLEANUP_IMPORT_STAGING: async () => {
     // IMPORT ENGINE v3 — STAGING RETENTION: staging là temporary workspace, không phải
     // historical storage. Dọn staging_* của job DONE/CANCELLED đã terminal > 24h (xem
@@ -75,6 +91,7 @@ export const DEFAULT_SCHEDULED_JOBS: { jobKey: string; label: string; schedule: 
   { jobKey: "process_notifications", label: "Xử lý hàng đợi thông báo", schedule: "daily", handlerKey: "PROCESS_NOTIFICATION_QUEUE" },
   { jobKey: "expire_planning_periods", label: "Tự động hết hạn kế hoạch Planning", schedule: "daily", handlerKey: "EXPIRE_PLANNING_PERIODS" },
   { jobKey: "resume_stalled_import_jobs", label: "Watchdog: phục hồi Import Job bị treo", schedule: "daily", handlerKey: "RESUME_STALLED_IMPORT_JOBS" },
+  { jobKey: "expire_recruitment_requests", label: "Yêu cầu tuyển dụng hết hạn → EXPIRED + Task tái phân bổ", schedule: "daily", handlerKey: "EXPIRE_RECRUITMENT_REQUESTS" },
   { jobKey: "cleanup_import_staging", label: "Dọn staging của Import Job đã hoàn tất/huỷ (>24h)", schedule: "daily", handlerKey: "CLEANUP_IMPORT_STAGING" },
   { jobKey: "recompute_request_kpi_cache", label: "Recompute KPI cache của Workforce Request", schedule: "hourly", handlerKey: "RECOMPUTE_REQUEST_KPI_CACHE" },
 ];

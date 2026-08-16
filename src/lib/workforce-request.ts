@@ -952,12 +952,17 @@ export async function allocateWorkersToRequest(input: {
       }
 
       // 5) Mirror sang Planning (nếu request có planning_period liên kết) — additive, không xoá dữ liệu planning.
+      //    Ghi cả recruitment_request_id + allocation_start_date để đồng bộ với mô hình vòng đời
+      //    phân bổ append-only của Planning (migration 2026-08-17) — Task tái phân bổ / màn hình
+      //    Planning nhìn thấy phân bổ này theo đúng request.
       if (request.planningPeriodId) {
         await tx
           .insert(planningAllocations)
           .values({
             employmentSessionId: s.id,
             planningPeriodId: request.planningPeriodId,
+            recruitmentRequestId: request.id,
+            allocationStartDate: todayStr(),
             allocatedBy: input.session.username,
           })
           .onConflictDoNothing();
@@ -1013,7 +1018,10 @@ export async function allocateWorkersToRequest(input: {
   return txResult;
 }
 
-/** Kết thúc mọi ACTIVE request allocation của 1 worker (gọi khi nghỉ việc được xác nhận — mục 9). */
+/** Kết thúc mọi ACTIVE request allocation của 1 worker (gọi khi nghỉ việc được xác nhận — mục 9).
+ *  Đồng thời ĐÓNG (allocation_end_date) các phân bổ planning đang mở của worker — khớp mô hình
+ *  vòng đời append-only của Planning (đóng phân bổ ≠ nghỉ việc; ở đây là nghỉ việc THẬT nên
+ *  phân bổ phải đóng). */
 export async function endActiveRequestAllocationsForWorker(
   workerId: string,
   endedBy: string,
@@ -1051,6 +1059,25 @@ export async function endActiveRequestAllocationsForWorker(
       changedBy: endedBy,
     });
   }
+
+  // Đồng bộ phía Planning: đóng phân bổ planning đang mở của worker này.
+  const openPlanning = await executor
+    .select({ sessionId: planningAllocations.employmentSessionId })
+    .from(planningAllocations)
+    .innerJoin(employmentSessions, eq(planningAllocations.employmentSessionId, employmentSessions.id))
+    .where(and(eq(employmentSessions.workerId, workerId), isNull(planningAllocations.allocationEndDate)));
+  if (openPlanning.length > 0) {
+    await executor
+      .update(planningAllocations)
+      .set({ allocationEndDate: todayStr(), reallocatedBy: endedBy, reallocatedAt: new Date() })
+      .where(
+        and(
+          inArray(planningAllocations.employmentSessionId, openPlanning.map((r) => r.sessionId)),
+          isNull(planningAllocations.allocationEndDate),
+        ),
+      );
+  }
+
   return rows.length;
 }
 
@@ -1088,6 +1115,20 @@ export async function mirrorPlanningAllocationToRequest(input: {
     .from(recruitmentRequests)
     .where(eq(recruitmentRequests.id, period.requestId));
   if (!request || request.deletedAt) return false;
+
+  // Gắn recruitment_request_id vào dòng planning vừa được auto-allocate tạo (nếu chưa có)
+  // — đồng bộ với mô hình vòng đời phân bổ của Planning (migration 2026-08-17).
+  await ex
+    .update(planningAllocations)
+    .set({ recruitmentRequestId: request.id })
+    .where(
+      and(
+        eq(planningAllocations.employmentSessionId, input.employmentSessionId),
+        eq(planningAllocations.planningPeriodId, input.planningPeriodId),
+        isNull(planningAllocations.allocationEndDate),
+        isNull(planningAllocations.recruitmentRequestId),
+      ),
+    );
 
   const activeRows = await ex
     .select({ id: requestAllocations.id, requestId: requestAllocations.requestId, workerId: requestAllocations.workerId, sessionId: requestAllocations.employmentSessionId })
@@ -1160,6 +1201,121 @@ export async function mirrorPlanningAllocationToRequest(input: {
     action: plan.existingForWorker ? "REALLOCATE" : "ALLOCATE",
     reason: input.reason ?? "Tự động phân bổ theo Planning (mirror)",
     changedBy: input.allocatedBy,
+  });
+  return true;
+}
+
+/* ============================================================
+   ĐỒNG BỘ NGƯỢC: PLANNING TÁI PHÂN BỔ → REQUEST (mục 4 + 9)
+   Luồng tái phân bổ của Planning (planning-reallocation.ts,
+   migration 2026-08-17) chuyển planning allocation giữa 2 request.
+   Hàm này đồng bộ sang request_allocations để request vẫn là
+   source of truth của KPI. Tôn trọng block vượt tổng nhu cầu:
+   nếu request đích đã đủ thì KHÔNG tạo allocation (chỉ log) —
+   không tự override khi không có người dùng xác nhận.
+   ============================================================ */
+export async function syncRequestAllocationOnPlanningMove(input: {
+  executor: Executor;
+  employmentSessionId: string;
+  fromRequestId: string;
+  toRequestId: string;
+  actor: string;
+  reason?: string;
+}): Promise<boolean> {
+  const ex = input.executor;
+
+  const [session] = await ex
+    .select({ workerId: employmentSessions.workerId })
+    .from(employmentSessions)
+    .where(eq(employmentSessions.id, input.employmentSessionId));
+  if (!session?.workerId) return false;
+
+  const [toRequest] = await ex
+    .select({
+      id: recruitmentRequests.id,
+      maleRq: recruitmentRequests.maleRq,
+      femaleRq: recruitmentRequests.femaleRq,
+      totalRequest: recruitmentRequests.totalRequest,
+      deletedAt: recruitmentRequests.deletedAt,
+    })
+    .from(recruitmentRequests)
+    .where(eq(recruitmentRequests.id, input.toRequestId));
+  if (!toRequest || toRequest.deletedAt) return false;
+
+  const activeRows = await ex
+    .select({
+      id: requestAllocations.id,
+      requestId: requestAllocations.requestId,
+      workerId: requestAllocations.workerId,
+      sessionId: requestAllocations.employmentSessionId,
+    })
+    .from(requestAllocations)
+    .where(
+      and(
+        eq(requestAllocations.status, "ACTIVE"),
+        or(eq(requestAllocations.requestId, input.toRequestId), eq(requestAllocations.workerId, session.workerId)),
+      ),
+    );
+
+  const existingForWorker = activeRows.find((r) => r.workerId === session.workerId) ?? null;
+  const plan = planAllocation(
+    {
+      targetRequestId: input.toRequestId,
+      totalRequest: resolveTotalRequestOf(toRequest),
+      maleRequest: toRequest.maleRq,
+      femaleRequest: toRequest.femaleRq,
+      allocations: activeRows
+        .filter((r) => r.requestId === input.toRequestId)
+        .map((r) => ({ ...r, gender: classifyGender(undefined) })),
+      existingForWorker: existingForWorker ? { ...existingForWorker, gender: classifyGender(undefined) } : null,
+    },
+    { sessionId: input.employmentSessionId, workerId: session.workerId, gender: classifyGender(undefined) },
+  );
+
+  if (plan.outcome === "REJECTED") {
+    console.warn("[workforce-request] planning-move sync skipped (request đích đã đủ)", {
+      from: input.fromRequestId,
+      to: input.toRequestId,
+      workerId: session.workerId,
+    });
+    return false;
+  }
+  if (plan.outcome === "NOOP") return false;
+
+  if (plan.existingForWorker) {
+    await ex
+      .update(requestAllocations)
+      .set({
+        status: "ENDED",
+        endedAt: new Date(),
+        endedBy: input.actor,
+        endReason: input.reason ?? "Tái phân bổ theo luồng Planning",
+        updatedAt: new Date(),
+      })
+      .where(eq(requestAllocations.id, plan.existingForWorker.id));
+  }
+  await ex
+    .insert(requestAllocations)
+    .values({
+      employmentSessionId: input.employmentSessionId,
+      workerId: session.workerId,
+      requestId: input.toRequestId,
+      status: "ACTIVE",
+      allocatedBy: input.actor,
+    })
+    .onConflictDoNothing({
+      target: requestAllocations.workerId,
+      where: sql`status = 'ACTIVE'`,
+    });
+  await ex.insert(requestAllocationHistory).values({
+    requestId: input.toRequestId,
+    workerId: session.workerId,
+    employmentSessionId: input.employmentSessionId,
+    fromRequestId: plan.existingForWorker?.requestId ?? input.fromRequestId,
+    toRequestId: input.toRequestId,
+    action: plan.existingForWorker ? "REALLOCATE" : "ALLOCATE",
+    reason: input.reason ?? "Đồng bộ từ luồng tái phân bổ Planning",
+    changedBy: input.actor,
   });
   return true;
 }

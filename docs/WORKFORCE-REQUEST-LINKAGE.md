@@ -131,9 +131,22 @@ Chạy: `npm test` (node:test). Toàn bộ suite: 271 pass / 1 fail pre-existing
 | `GET/POST /api/workforce-requests/[id]/comments` | Bình luận (Dept Manager comment) |
 | `GET /api/workforce-requests/unplanned` | Danh sách session ACTIVE cho phân bổ |
 
-## 14. Ghi chú kỹ thuật đáng biết
+## 14. Tích hợp với Planning vòng đời phân bổ (PR #39 — migration 2026-08-17)
+
+PR #39 đã nâng cấp `planning_allocations` thành lịch sử phân bổ **append-only**:
+`allocation_start_date / allocation_end_date / previous_allocation_id / reallocated_by / reallocated_at / recruitment_request_id`, kèm `planning_tasks` (Task Center tái phân bổ khi request hết hạn) và luồng `/api/planning/reallocate` (`reallocateDws`). PR này đồng bộ 2 chiều để KHÔNG có 2 nguồn số liệu lệch nhau:
+
+- **allocate vào request (luồng mới)** → mirror `planning_allocations` kèm `recruitment_request_id` + `allocation_start_date` → màn hình/Task của PR #39 nhìn thấy phân bổ đúng request.
+- **autoAllocateInternship (luồng cũ)** → `mirrorPlanningAllocationToRequest` tạo `request_allocations` (tôn trọng block vượt tổng) + gán `recruitment_request_id` vào dòng planning vừa tạo.
+- **reallocateDws (PR #39)** → `syncRequestAllocationOnPlanningMove`: kết thúc ACTIVE request allocation cũ + tạo mới cho request đích (history REALLOCATE). Nếu request đích đã đủ → bỏ qua + log (không tự override).
+- **Nghỉ việc xác nhận** → đóng cả `request_allocations` lẫn phân bổ planning đang mở của worker (`allocation_end_date`).
+
+`request_allocations` vẫn là source of truth cấp WORKER cho KPI Workforce Request (unique 1 ACTIVE/worker ở DB); `planning_allocations` giữ vai trò lịch sử cấp PERIOD/SESSION của Planning. Hai tầng được mirror đồng bộ ở mọi luồng ghi.
+
+## 15. Ghi chú kỹ thuật đáng biết
 
 - `request_allocations` dùng **tham chiếu mềm** (không FK) tới recruitment_requests/employment_sessions: request dùng soft-delete và lịch sử allocation phải sống sót để tính Quit/history (FK thật sẽ bị cascade khi xoá cứng ở Recycle Bin). FK thật vẫn nằm ở các cột liên kết (department_id, request_id, planning_period_id).
 - Drizzle khai báo `planning_periods.request_id` dạng soft reference để tránh vòng kiểu planningPeriods ↔ recruitmentRequests; FK thật nằm trong SQL migration.
-- Mirror 2 chiều: allocate vào request → upsert `planning_allocations` (nếu có period liên kết); autoAllocate planning (period có `request_id`) → `mirrorPlanningAllocationToRequest` (tôn trọng block vượt tổng, không tự override). Mirror chỉ THÊM, không xoá dữ liệu planning legacy.
+- `recruitment_requests.department_id` + index `recruitment_requests_department_id_idx` do migration 2026-08-17 tạo; migration của PR này không tạo index trùng.
+- Mirror chỉ THÊM, không xoá dữ liệu planning legacy.
 - Recruited của request cũ trước migration = 0 cho tới khi pipeline được liên kết (`daily_applications.request_id`) — allocate tự backfill khi session có daily_application_id.

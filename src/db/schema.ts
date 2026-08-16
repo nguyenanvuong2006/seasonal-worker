@@ -641,11 +641,93 @@ export const planningAllocations = pgTable(
     planningPeriodId: uuid("planning_period_id").notNull(),
     allocatedAt: timestamp("allocated_at", { withTimezone: true }).notNull().defaultNow(),
     allocatedBy: varchar("allocated_by", { length: 64 }).notNull(),
+
+    /* --- VÒNG ĐỜI PHÂN BỔ (migration 2026-08-17) ------------------------
+       Cho phép CHUYỂN phân bổ sang yêu cầu mới mà KHÔNG mất lịch sử.
+       LƯU Ý NGHIỆP VỤ: đóng phân bổ (allocation_end_date) KHÔNG đồng nghĩa
+       DW nghỉ việc. Chỉ workforce_movements RESIGNATION mới là nghỉ việc. */
+    allocationStartDate: date("allocation_start_date"),
+    allocationEndDate: date("allocation_end_date"),
+    previousAllocationId: uuid("previous_allocation_id"),
+    reallocatedBy: varchar("reallocated_by", { length: 64 }),
+    reallocatedAt: timestamp("reallocated_at", { withTimezone: true }),
+    recruitmentRequestId: uuid("recruitment_request_id"),
   },
   (t) => [
     index("planning_alloc_session_idx").on(t.employmentSessionId),
     index("planning_alloc_period_idx").on(t.planningPeriodId),
-    uniqueIndex("planning_alloc_session_period_uq").on(t.employmentSessionId, t.planningPeriodId),
+    // Unique CHỈ áp dụng cho phân bổ đang mở — lịch sử phân bổ đã đóng
+    // được giữ lại đầy đủ (append-only).
+    uniqueIndex("planning_alloc_active_uq")
+      .on(t.employmentSessionId, t.planningPeriodId)
+      .where(sql`allocation_end_date is null`),
+    index("planning_alloc_request_idx").on(t.recruitmentRequestId),
+  ],
+);
+
+/* ============================================================
+   PLANNING COLUMN CONFIG (Yêu cầu #2)
+   ---------------------------------------------------------------
+   Cấu hình cột bảng Planning theo VAI TRÒ + THIẾT BỊ, do Admin quản lý.
+   Danh mục cột gốc nằm ở src/lib/recruitment-request-columns.ts (thuần),
+   bảng này CHỈ lưu bật/tắt, thứ tự và ghim — không hardcode trong UI,
+   không chỉ lưu localStorage.
+   ============================================================ */
+export const planningColumnConfigs = pgTable(
+  "planning_column_configs",
+  {
+    id: uuid("id").defaultRandom().primaryKey(),
+    role: varchar("role", { length: 32 }).notNull(),
+    device: varchar("device", { length: 16 }).notNull().default("desktop"), // desktop | mobile
+    columnKey: varchar("column_key", { length: 64 }).notNull(),
+    visible: boolean("visible").notNull().default(true),
+    sticky: boolean("sticky").notNull().default(false),
+    sortOrder: integer("sort_order").notNull().default(0),
+    updatedBy: varchar("updated_by", { length: 64 }),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+    updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [
+    uniqueIndex("planning_column_configs_uq").on(t.role, t.device, t.columnKey),
+    index("planning_column_configs_role_idx").on(t.role, t.device),
+  ],
+);
+
+/* ============================================================
+   PLANNING TASKS (Yêu cầu #7 & #14)
+   ---------------------------------------------------------------
+   Task Center BỀN VỮNG cho Planning. Task Center cũ chỉ truy vấn trực
+   tiếp nên không thể auto-DONE hay chống trùng khi cron chạy lại.
+
+   PLANNING_REALLOCATION_REQUIRED: yêu cầu tuyển dụng đã hết hạn nhưng
+   vẫn còn DW đang được phân bổ → Recruiter phải chuyển phân bổ sang
+   yêu cầu mới. TUYỆT ĐỐI KHÔNG tự tạo nghỉ việc / ngày nghỉ / inactive.
+   ============================================================ */
+export const planningTasks = pgTable(
+  "planning_tasks",
+  {
+    id: uuid("id").defaultRandom().primaryKey(),
+    taskType: varchar("task_type", { length: 48 }).notNull(),
+    status: varchar("status", { length: 24 }).notNull().default("OPEN"), // OPEN | IN_PROGRESS | DONE | DISMISSED
+    recruitmentRequestId: uuid("recruitment_request_id"),
+    planningPeriodId: uuid("planning_period_id"),
+    departmentId: uuid("department_id"),
+    title: text("title").notNull(),
+    detail: jsonb("detail").$type<Record<string, unknown>>().notNull().default({}),
+    dueDate: date("due_date"),
+    resolvedAt: timestamp("resolved_at", { withTimezone: true }),
+    resolvedBy: varchar("resolved_by", { length: 64 }),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+    updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [
+    // CHỐNG TRÙNG: cron/retry chạy bao nhiêu lần cũng chỉ 1 task đang mở
+    // cho mỗi (task_type, recruitment_request_id).
+    uniqueIndex("planning_tasks_open_uq")
+      .on(t.taskType, t.recruitmentRequestId)
+      .where(sql`status in ('OPEN', 'IN_PROGRESS')`),
+    index("planning_tasks_status_idx").on(t.status, t.taskType),
+    index("planning_tasks_dept_idx").on(t.departmentId),
   ],
 );
 
@@ -881,9 +963,6 @@ export const recruitmentRequests = pgTable(
   {
     id: uuid("id").defaultRandom().primaryKey(),
     planningPeriodId: uuid("planning_period_id").references(() => planningPeriods.id, { onDelete: "set null" }),
-    // WORKFORCE REQUEST LINKAGE — FK cấu trúc tới Department (thay match bằng text).
-    // Data Scope lọc theo cột này; cột text `department` chỉ giữ lại làm fallback/back-compat.
-    departmentId: uuid("department_id").references(() => departments.id, { onDelete: "set null" }),
     requestCode: varchar("request_code", { length: 80 }).notNull(),
     requester: varchar("requester", { length: 160 }).notNull().default(""),
     position: varchar("position", { length: 160 }),
@@ -909,11 +988,28 @@ export const recruitmentRequests = pgTable(
     maleBalance: integer("male_balance").notNull().default(0),
     femaleBalance: integer("female_balance").notNull().default(0),
     totalBalance: integer("total_balance").notNull().default(0),
+    // PENDING | PROCESSING | COMPLETED | CANCELLED | EXPIRED
+    // EXPIRED TÁCH BIỆT với CANCELLED: quá End Date KHÔNG BAO GIỜ tự thành CANCELLED.
     status: varchar("status", { length: 24 }).notNull().default("PENDING"),
+
+    /* --- SÁU TRƯỜNG NGÀY TÁCH BIỆT (Yêu cầu #6) ------------------------
+       requestedDate  Ngày yêu cầu
+       expectedDate   Ngày cần nhân lực   ← mốc SẮP XẾP MẶC ĐỊNH
+       startingDate   Ngày nhận việc
+       endDate        Ngày kết thúc yêu cầu (hết hạn ≠ DW nghỉ việc)
+       offeredDate    Ngày đề nghị
+       completedDate  Ngày tuyển đủ                                     */
     requestedDate: date("requested_date"),
     expectedDate: date("expected_date"),
+    startingDate: date("starting_date"),
+    endDate: date("end_date"),
     offeredDate: date("offered_date"),
     completedDate: date("completed_date"),
+    /** DERIVED: offeredDate − requestedDate (số ngày). */
+    offeredVsRequested: integer("offered_vs_requested"),
+    /** DERIVED: completedDate − requestedDate (số ngày). */
+    completedVsRequested: integer("completed_vs_requested"),
+
     month: varchar("month", { length: 10 }),
     cost: integer("cost").notNull().default(0),
     remarks: text("remarks"),
@@ -927,6 +1023,16 @@ export const recruitmentRequests = pgTable(
     recruit: integer("recruit").notNull().default(0),
     departmentText: varchar("department_text", { length: 255 }),
     monthReport: varchar("month_report", { length: 10 }),
+
+    /** FK thật tới departments.id — khoá lọc Data Scope phía server.
+     *  Cột text `department` chỉ dùng để hiển thị/import từ Excel. */
+    departmentId: uuid("department_id").references(() => departments.id, { onDelete: "set null" }),
+
+    /* --- CHUỖI LỊCH SỬ APPEND-ONLY (Yêu cầu #4) ------------------------
+       Không bao giờ ghi đè/xoá yêu cầu cũ; yêu cầu mới nối vào chuỗi. */
+    previousRequestId: uuid("previous_request_id"),
+    supersedesRequestId: uuid("supersedes_request_id"),
+
     createdBy: varchar("created_by", { length: 64 }).notNull(),
     deletedAt: timestamp("deleted_at", { withTimezone: true }),
     deletedBy: varchar("deleted_by", { length: 64 }),
@@ -936,7 +1042,6 @@ export const recruitmentRequests = pgTable(
   (t) => [
     uniqueIndex("recruitment_requests_code_uq").on(t.requestCode).where(sql`deleted_at is null`),
     index("recruitment_requests_period_idx").on(t.planningPeriodId),
-    index("recruitment_requests_dept_id_idx").on(t.departmentId),
     index("recruitment_requests_status_idx").on(t.status),
     index("recruitment_requests_month_idx").on(t.month),
     index("recruitment_requests_location_idx").on(t.location),
@@ -945,8 +1050,21 @@ export const recruitmentRequests = pgTable(
     index("recruitment_requests_section_idx").on(t.section),
     index("recruitment_requests_group_idx").on(t.groupName),
     index("recruitment_requests_requester_idx").on(t.requester),
+    index("recruitment_requests_department_id_idx").on(t.departmentId),
+    index("recruitment_requests_previous_idx").on(t.previousRequestId),
+    index("recruitment_requests_supersedes_idx").on(t.supersedesRequestId),
+    index("recruitment_requests_expected_date_idx")
+      .on(t.expectedDate)
+      .where(sql`deleted_at is null`),
+    index("recruitment_requests_end_date_idx")
+      .on(t.endDate)
+      .where(sql`deleted_at is null`),
   ],
 );
+
+export type PlanningColumnConfig = typeof planningColumnConfigs.$inferSelect;
+export type PlanningTask = typeof planningTasks.$inferSelect;
+export type NewPlanningTask = typeof planningTasks.$inferInsert;
 
 export type RecruitmentRequest = typeof recruitmentRequests.$inferSelect;
 export type NewRecruitmentRequest = typeof recruitmentRequests.$inferInsert;

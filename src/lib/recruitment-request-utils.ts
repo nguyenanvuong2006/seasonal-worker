@@ -34,10 +34,17 @@ const HEADER_ALIASES: Record<string, string[]> = {
   "Female Balance": ["female_balance", "female balance"],
   "Total Balance": ["total_balance", "total balance"],
   Status: ["status", "trang thai", "trạng thái"],
+  // SÁU TRƯỜNG NGÀY TÁCH BIỆT (Yêu cầu #6) — không dùng chung một cột.
   "Requested Date": ["requested_date", "requested date", "ngay yeu cau", "ngày yêu cầu"],
-  "Expected Date": ["expected_date", "expected date", "ngay du kien", "ngày dự kiến"],
-  "Offered Date": ["offered_date", "offered date", "ngay de nghi", "ngày đề nghị"],
-  "Completed Date": ["completed_date", "completed date", "ngay hoan thanh", "ngày hoàn thành"],
+  "Expected Date": ["expected_date", "expected date", "ngay du kien", "ngày dự kiến", "ngay can nhan luc", "ngày cần nhân lực"],
+  "Starting Date": ["starting_date", "starting date", "start date", "ngay nhan viec", "ngày nhận việc", "ngay bat dau", "ngày bắt đầu"],
+  "End Date": ["end_date", "end date", "ngay ket thuc", "ngày kết thúc", "ngay ket thuc yeu cau", "ngày kết thúc yêu cầu", "ngay het han", "ngày hết hạn"],
+  // Chấp nhận cả cách viết sai chính tả "Offerred" trong file Excel cũ, nhưng
+  // tên chuẩn trong DB chỉ có MỘT: "Offered Date".
+  "Offered Date": ["offered_date", "offered date", "offerred_date", "offerred date", "ngay de nghi", "ngày đề nghị"],
+  "Completed Date": ["completed_date", "completed date", "ngay hoan thanh", "ngày hoàn thành", "ngay tuyen du", "ngày tuyển đủ"],
+  "Offered vs Requested": ["offered_vs_requested", "offered vs requested", "offerred vs requested"],
+  "Completed vs Requested": ["completed_vs_requested", "completed vs requested"],
   Month: ["month", "thang", "tháng"],
   Cost: ["cost", "chi phi", "chi phí"],
   Remarks: ["remarks", "ghi chu", "ghi chú"],
@@ -137,7 +144,14 @@ export function validateRow(row: Record<string, string>): ValidationResult {
   }
 
   // Validate dates
-  const dateFields = ["Requested Date", "Expected Date", "Offered Date", "Completed Date"];
+  const dateFields = [
+    "Requested Date",
+    "Expected Date",
+    "Starting Date",
+    "End Date",
+    "Offered Date",
+    "Completed Date",
+  ];
   for (const field of dateFields) {
     if (row[field]?.trim()) {
       const d = parseDate(row[field]);
@@ -150,7 +164,8 @@ export function validateRow(row: Record<string, string>): ValidationResult {
   // Validate status
   if (row["Status"]?.trim()) {
     const s = row["Status"].trim().toUpperCase();
-    const validStatuses = ["PENDING", "PROCESSING", "COMPLETED", "CANCELLED"];
+    // EXPIRED là trạng thái hợp lệ và TÁCH BIỆT với CANCELLED (Yêu cầu #13).
+    const validStatuses = ["PENDING", "PROCESSING", "COMPLETED", "CANCELLED", "EXPIRED"];
     if (!validStatuses.includes(s)) {
       warnings.push({ field: "Status", message: `"${row["Status"]}" không phải status chuẩn, sẽ chuyển thành PENDING` });
     }
@@ -209,11 +224,14 @@ export function computeBalanceFromCanonical(canonical: Record<string, string>) {
 export function normalizeStatus(s: string | undefined): string | null {
   if (!s?.trim()) return null;
   const upper = s.trim().toUpperCase();
-  const valid = ["PENDING", "PROCESSING", "COMPLETED", "CANCELLED"];
+  const valid = ["PENDING", "PROCESSING", "COMPLETED", "CANCELLED", "EXPIRED"];
   if (valid.includes(upper)) return upper;
   if (upper.includes("PEND")) return "PENDING";
   if (upper.includes("PROCESS") || upper.includes("PROGRESS")) return "PROCESSING";
   if (upper.includes("COMPLETE") || upper.includes("DONE")) return "COMPLETED";
+  // "Hết hạn" phải ra EXPIRED — KHÔNG BAO GIỜ suy ra CANCELLED (Yêu cầu #13).
+  // Kiểm tra EXPIRED TRƯỚC CANCEL để không nuốt nhầm các biến thể.
+  if (upper.includes("EXPIRE") || upper.includes("HET HAN") || upper.includes("HẾT HẠN")) return "EXPIRED";
   if (upper.includes("CANCEL")) return "CANCELLED";
   return null;
 }

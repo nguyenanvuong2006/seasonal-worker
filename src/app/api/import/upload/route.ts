@@ -4,9 +4,9 @@ import { eq } from "drizzle-orm";
 import { db } from "@/db";
 import { importJobs } from "@/db/schema";
 import { requireRoleAndPermission, writeAudit } from "@/lib/auth";
-import { createJob, stageRows, triggerWorker } from "@/lib/import-jobs";
+import { createJob, isImportEngineJobType, stageRows, triggerWorker } from "@/lib/import-jobs";
 import { parseImportFile } from "@/lib/file-parser";
-import { getFieldDefinitions, normalizeHeader, type Group } from "@/lib/metadata";
+import { getFieldDefinitions, normalizeHeader } from "@/lib/metadata";
 import { getAcceptedColumnNames } from "@/lib/import-engine";
 
 export const runtime = "nodejs";
@@ -28,12 +28,12 @@ export async function POST(req: Request) {
 
   const form = await req.formData();
   const file = form.get("file") as File | null;
-  const jobType = form.get("jobType") as "department" | "dw_data" | "daily_application" | null;
+  const jobType = form.get("jobType");
   const mappingRaw = form.get("mapping") as string | null;
   const mapping = mappingRaw ? (JSON.parse(mappingRaw) as Record<string, string>) : null;
 
   if (!file) return NextResponse.json({ error: "Chưa chọn file." }, { status: 400 });
-  if (!jobType || !["department", "dw_data", "daily_application"].includes(jobType)) {
+  if (!isImportEngineJobType(jobType)) {
     return NextResponse.json({ error: "jobType không hợp lệ." }, { status: 400 });
   }
 

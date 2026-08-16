@@ -22,8 +22,8 @@
 ALTER TABLE recruitment_requests
   ADD COLUMN IF NOT EXISTS department_id uuid REFERENCES departments(id) ON DELETE SET NULL;
 
-CREATE INDEX IF NOT EXISTS recruitment_requests_dept_id_idx
-  ON recruitment_requests (department_id);
+-- (index recruitment_requests_department_id_idx do migration 2026-08-17 tạo;
+--  không tạo index trùng ở đây)
 
 -- 1b. Planning Period → Workforce Request (FK ngược của recruitment_requests.planning_period_id).
 --     Migration 2026-08-16-recruitment-requests.sql đã thêm planning_periods.request_code (text)

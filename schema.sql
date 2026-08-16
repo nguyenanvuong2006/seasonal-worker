@@ -863,7 +863,7 @@ ON CONFLICT (role, permission_key) DO NOTHING;
 
 -- Liên kết ID (mục 8) — không match bằng text Department/Date.
 ALTER TABLE recruitment_requests ADD COLUMN IF NOT EXISTS department_id uuid REFERENCES departments(id) ON DELETE SET NULL;
-CREATE INDEX IF NOT EXISTS recruitment_requests_dept_id_idx ON recruitment_requests (department_id);
+-- (index recruitment_requests_department_id_idx do migration 2026-08-17 tạo; không tạo index trùng ở đây)
 
 ALTER TABLE planning_periods ADD COLUMN IF NOT EXISTS request_id uuid REFERENCES recruitment_requests(id) ON DELETE SET NULL;
 CREATE INDEX IF NOT EXISTS planning_request_idx ON planning_periods (request_id);
