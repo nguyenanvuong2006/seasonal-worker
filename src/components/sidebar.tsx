@@ -27,6 +27,7 @@ import {
   Files,
   Trash2,
   FileText,
+  FileSpreadsheet,
   Menu,
   X,
   ChevronsLeft,
@@ -67,7 +68,10 @@ const NAV_GROUPS: NavGroup[] = [
   },
   {
     group: "Kế hoạch nhu cầu",
-    items: [{ href: "/admin/planning", label: "Planning (Nhu cầu)", icon: CalendarRange, roles: ["ADMIN", "HR_RECRUITER", "DEPT_MANAGER"], permission: "planning.view" }],
+    items: [
+      { href: "/admin/planning", label: "Planning (Nhu cầu)", icon: CalendarRange, roles: ["ADMIN", "HR_RECRUITER", "DEPT_MANAGER"], permission: "planning.view" },
+      { href: "/admin/recruitment-requests", label: "Yêu cầu tuyển dụng", icon: FileSpreadsheet, roles: ["ADMIN", "HR_RECRUITER", "DEPT_MANAGER"], permission: "planning.view" },
+    ],
   },
   {
     group: "Cấu hình nghiệp vụ",

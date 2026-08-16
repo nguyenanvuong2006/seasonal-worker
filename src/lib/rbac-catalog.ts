@@ -73,6 +73,7 @@ export const PERMISSION_CATALOG: readonly CatalogPermission[] = [
   { key: "planning.request", name: "Tạo yêu cầu Planning (DRAFT)", group: "planning" },
   { key: "planning.edit", name: "Sửa Planning (revise)", group: "planning" },
   { key: "planning.activate", name: "Kích hoạt Planning", group: "planning" },
+  { key: "planning.import", name: "Import/Export Recruitment Requests", group: "planning" },
   // Nghỉ việc / Thuyên chuyển
   { key: "workforce_movements.view", name: "Xem yêu cầu Nghỉ việc / Thuyên chuyển", group: "nghi_viec_thuyen_chuyen" },
   { key: "workforce_movements.create", name: "Tạo yêu cầu Nghỉ việc / Thuyên chuyển", group: "nghi_viec_thuyen_chuyen" },
@@ -192,6 +193,7 @@ export const BASELINE_ROLE_PERMISSIONS: Readonly<Record<string, readonly string[
     "planning.request",
     "planning.edit",
     "planning.activate",
+    "planning.import",
     "workforce_movements.view",
     "workforce_movements.create",
     "workforce_movements.manage",
