@@ -3,7 +3,6 @@
 import { useEffect, useMemo, useState } from "react";
 import {
   AlertTriangle,
-  CheckCircle2,
   ExternalLink,
   FileText,
   Layers,
@@ -16,6 +15,7 @@ import {
   X,
 } from "lucide-react";
 import { documentKindLabel, extractGoogleDocId } from "@/lib/document-merge/template-routing";
+import { ResizableMappingTable } from "@/components/document-merge/resizable-mapping-table";
 
 type Template = {
   id: string;
@@ -343,7 +343,7 @@ export function TemplateLibrary({ onSelectForMerge }: { onSelectForMerge: (templ
 
       {(creating || editing) && (
         <div className="fixed inset-0 z-50 overflow-y-auto bg-slate-950/45 p-3 sm:p-6">
-          <div className="mx-auto w-full max-w-6xl rounded-2xl bg-white shadow-2xl">
+          <div className="mx-auto w-full max-w-[96vw] rounded-2xl bg-white shadow-2xl xl:max-w-[1600px]">
             <div className="sticky top-0 z-10 flex items-center justify-between rounded-t-2xl border-b border-slate-200 bg-white px-4 py-3 sm:px-6">
               <div>
                 <h3 className="text-base font-bold text-slate-900">{editing ? "Sửa Template" : "Tạo Template mới"}</h3>
@@ -395,7 +395,7 @@ export function TemplateLibrary({ onSelectForMerge }: { onSelectForMerge: (templ
                   <div className="flex flex-col gap-3 sm:flex-row sm:items-end sm:justify-between">
                     <div>
                       <h4 className="text-sm font-bold text-slate-900">Placeholder Mapping</h4>
-                      <p className="text-[11px] text-slate-500">Kiểm soát 1:1 giữa placeholder trong Google Docs và nguồn dữ liệu hệ thống.</p>
+                      <p className="text-[11px] text-slate-500">Kiểm soát 1:1 giữa placeholder trong Google Docs và nguồn dữ liệu hệ thống. Giữ cố định cột Placeholder; kéo mép phải tiêu đề các cột còn lại để thay đổi độ rộng.</p>
                     </div>
                     <div className="flex flex-wrap gap-2 text-[11px]">
                       <span className="rounded-full bg-slate-100 px-2.5 py-1">Tổng {mappingSummary.total}</span>
@@ -408,31 +408,12 @@ export function TemplateLibrary({ onSelectForMerge }: { onSelectForMerge: (templ
                   {mappingLoading ? (
                     <div className="mt-4 rounded-xl bg-slate-50 p-8 text-center text-xs text-slate-500">Đang tải mapping...</div>
                   ) : (
-                    <div className="mt-4 overflow-x-auto rounded-xl border border-slate-200">
-                      <table className="min-w-[1180px] w-full text-[11px]">
-                        <thead className="bg-slate-50 text-left text-slate-500">
-                          <tr><th className="p-2.5">Placeholder</th><th className="p-2.5">Source Type</th><th className="p-2.5">Entity</th><th className="p-2.5">Field</th><th className="p-2.5">Path</th><th className="p-2.5">Formatter</th><th className="p-2.5">Option</th><th className="p-2.5">Bắt buộc</th><th className="p-2.5">Trạng thái</th></tr>
-                        </thead>
-                        <tbody className="divide-y divide-slate-100">
-                          {mappings.map((row) => {
-                            const matched = Boolean(row.sourceField || row.sourcePath || row.fallbackValue);
-                            return (
-                              <tr key={row.id} className={row.isOrphaned ? "bg-red-50/50" : "bg-white"}>
-                                <td className="p-2.5 font-mono font-semibold text-emerald-800">{`<<${row.placeholder.replace(/^<<|>>$/g, "")}>>`}</td>
-                                <td className="p-2"><select value={row.sourceType} onChange={(e) => updateMapping(row.id, { sourceType: e.target.value })} className="w-36 rounded border border-slate-200 bg-white px-2 py-1.5">{SOURCE_TYPES.map((v) => <option key={v}>{v}</option>)}</select></td>
-                                <td className="p-2"><input value={row.sourceEntity || ""} onChange={(e) => updateMapping(row.id, { sourceEntity: e.target.value || null })} className="w-36 rounded border border-slate-200 px-2 py-1.5" /></td>
-                                <td className="p-2"><input value={row.sourceField || ""} onChange={(e) => updateMapping(row.id, { sourceField: e.target.value || null })} className="w-40 rounded border border-slate-200 px-2 py-1.5" /></td>
-                                <td className="p-2"><input value={row.sourcePath || ""} onChange={(e) => updateMapping(row.id, { sourcePath: e.target.value || null })} className="w-48 rounded border border-slate-200 px-2 py-1.5 font-mono" /></td>
-                                <td className="p-2"><select value={row.formatType || "RAW"} onChange={(e) => updateMapping(row.id, { formatType: e.target.value })} className="w-44 rounded border border-slate-200 bg-white px-2 py-1.5">{FORMAT_TYPES.map((v) => <option key={v}>{v}</option>)}</select></td>
-                                <td className="p-2"><input value={row.optionValue || ""} onChange={(e) => updateMapping(row.id, { optionValue: e.target.value || null })} className="w-28 rounded border border-slate-200 px-2 py-1.5" /></td>
-                                <td className="p-2 text-center"><input type="checkbox" checked={row.isRequired} onChange={(e) => updateMapping(row.id, { isRequired: e.target.checked })} /></td>
-                                <td className="p-2.5">{row.isOrphaned ? <span className="text-red-600">Orphaned</span> : matched ? <span className="inline-flex items-center gap-1 text-emerald-700"><CheckCircle2 className="h-3.5 w-3.5" /> Matched</span> : <span className="text-amber-700">Missing</span>}</td>
-                              </tr>
-                            );
-                          })}
-                        </tbody>
-                      </table>
-                    </div>
+                    <ResizableMappingTable
+                      mappings={mappings}
+                      sourceTypes={SOURCE_TYPES}
+                      formatTypes={FORMAT_TYPES}
+                      updateMapping={updateMapping}
+                    />
                   )}
 
                   <div className="mt-4 flex justify-end">
