@@ -51,6 +51,12 @@ export function makeTable(name: string): TableMarker & Record<string, ColMarker>
       if (typeof prop === "symbol") return undefined;
       return { __col: `${name}.${prop}`, __table: name, __prop: prop };
     },
+    // Bảng Drizzle thật phơi cột ra thành thuộc tính riêng, nên `"col" in table`
+    // là true. Proxy giả phải mô phỏng đúng điều đó, nếu không những đoạn mã
+    // tra cột động (ví dụ whitelist ORDER BY) sẽ im lặng thấy bảng rỗng.
+    has(_t, prop) {
+      return typeof prop === "string";
+    },
   });
 }
 

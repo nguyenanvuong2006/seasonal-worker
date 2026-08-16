@@ -2,7 +2,7 @@ import { NextResponse } from "next/server";
 import { and, eq } from "drizzle-orm";
 import { db } from "@/db";
 import { planningColumnConfigs } from "@/db/schema";
-import { getSession, requirePermission, writeAudit } from "@/lib/auth";
+import { getSession, hasPermission, requirePermission, writeAudit } from "@/lib/auth";
 import {
   ALL_COLUMN_KEYS,
   RECRUITMENT_REQUEST_COLUMNS,
@@ -63,9 +63,22 @@ export async function GET(req: Request) {
 
   const columns = resolveColumnsForRole(role, device, stored as StoredColumnConfigItem[]);
 
+  // Khả năng thao tác của CHÍNH người đang đăng nhập. UI dùng để ẩn/hiện nút,
+  // nhưng mọi API vẫn tự kiểm tra quyền lần nữa ở phía server (Yêu cầu #15).
+  const [canImport, canEdit, canReallocate, canManageColumns, canComment, canRequest] = await Promise.all([
+    hasPermission(session.role, "planning.import"),
+    hasPermission(session.role, "planning.edit"),
+    hasPermission(session.role, "planning.reallocate"),
+    hasPermission(session.role, "planning.columns.manage"),
+    hasPermission(session.role, "planning.comment"),
+    hasPermission(session.role, "planning.request"),
+  ]);
+
   return NextResponse.json({
     role,
     device,
+    sessionRole: session.role,
+    capabilities: { canImport, canEdit, canReallocate, canManageColumns, canComment, canRequest },
     /** true nếu đang dùng mặc định theo vai trò (chưa có bản ghi cấu hình nào). */
     usingDefaults: stored.length === 0,
     columns,

@@ -38,13 +38,9 @@ const schemaStub = {
 
 function load(db: FakeDb) {
   const utils = loadModule(new URL("./recruitment-request-utils.ts", import.meta.url), { stubs: {} });
+  const columns = loadModule(new URL("./recruitment-request-columns.ts", import.meta.url), { stubs: {} });
   const core = loadModule(new URL("./planning-recruitment-core.ts", import.meta.url), {
-    stubs: {
-      "./recruitment-request-columns.ts": loadModule(
-        new URL("./recruitment-request-columns.ts", import.meta.url),
-        { stubs: {} },
-      ),
-    },
+    stubs: { "./recruitment-request-columns.ts": columns },
   });
   return loadModule(new URL("./recruitment-request.ts", import.meta.url), {
     stubs: {
@@ -59,6 +55,8 @@ function load(db: FakeDb) {
       },
       "@/lib/planning-recruitment-core": core,
       "@/lib/recruitment-request-utils": utils,
+      "@/lib/recruitment-request-columns": columns,
+      "drizzle-orm/pg-core": {},
     },
     fallback(spec) {
       if (spec.includes("recruitment-request-utils")) return utils;
@@ -125,18 +123,34 @@ test("nhóm ưu tiên khớp đúng thứ tự: quá hạn-chưa đủ (0) → s
 });
 
 test("người dùng đổi được sắp xếp, mặc định chỉ là mặc định", async () => {
-  for (const [sortBy, expectCol] of [
-    ["requestCode", "requestCode"],
-    ["requestedDate", "requestedDate"],
-    ["totalBalance", "totalBalance"],
-  ] as const) {
+  // Mọi cột `sortable` trong catalog đều sắp xếp được — UI không hardcode
+  // danh sách này mà đọc thẳng từ /api/planning/column-config (Yêu cầu #2).
+  for (const sortBy of ["requestCode", "requestedDate", "totalBalance", "maleRq", "status"] as const) {
     const db = createFakeDb({ respond: () => [] });
     const mod = load(db);
     await (mod.listRecruitmentRequests as (f: unknown) => Promise<unknown>)({ sortBy, sortDir: "desc" });
 
-    const first = orderByArgs(listQuery(db))[0] as { op: string; inner: { __prop: string } };
-    assert.equal(first.op, "desc", `${sortBy} phải theo chiều giảm dần khi yêu cầu`);
-    assert.equal(first.inner.__prop, expectCol);
+    const args = orderByArgs(listQuery(db));
+    // Khoá 1 = đẩy ô trống xuống cuối; khoá 2 = chiều sắp xếp người dùng chọn.
+    assert.match((args[0] as { text: string }).text.toLowerCase(), /is null/, `${sortBy} phải NULLS LAST`);
+    const second = args[1] as { op: string; inner: { __prop: string } };
+    assert.equal(second.op, "desc", `${sortBy} phải theo chiều giảm dần khi yêu cầu`);
+    assert.equal(second.inner.__prop, sortBy);
+  }
+});
+
+test("cột sắp xếp không nằm trong whitelist bị bỏ qua, quay về thứ tự mặc định", async () => {
+  // Chống chèn SQL qua ORDER BY: chuỗi tuỳ ý không bao giờ tới được câu lệnh.
+  for (const sortBy of ["id; drop table recruitment_requests", "deletedAt", "notes"]) {
+    const db = createFakeDb({ respond: () => [] });
+    const mod = load(db);
+    await (mod.listRecruitmentRequests as (f: unknown) => Promise<unknown>)({ sortBy, sortDir: "desc" });
+
+    const texts = orderByArgs(listQuery(db))
+      .map((a) => (a as { text?: string }).text ?? "")
+      .join(" ");
+    assert.match(texts, /case/i, "phải rơi về biểu thức nhóm mặc định theo Ngày cần nhân lực");
+    assert.ok(!texts.includes("drop table"), "không được nhúng chuỗi người dùng vào ORDER BY");
   }
 });
 

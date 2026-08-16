@@ -1,5 +1,6 @@
 import "server-only";
 import { and, asc, count, desc, eq, gte, inArray, isNull, like, lte, ne, or, sql } from "drizzle-orm";
+import type { AnyPgColumn } from "drizzle-orm/pg-core";
 import { db } from "@/db";
 import {
   departments,
@@ -14,6 +15,7 @@ import {
   type NewRecruitmentRequest,
 } from "@/db/schema";
 import { isFemale, isMale } from "@/lib/helpers";
+import { SORTABLE_COLUMN_KEYS } from "@/lib/recruitment-request-columns";
 import {
   computeDateDeltas,
   computeRecruitedVsExpected,
@@ -298,8 +300,12 @@ export type RecruitmentRequestFilter = {
   expectedTo?: string;
   /** Tình trạng đáp ứng: còn thiếu người / đã đủ. */
   fulfillment?: "UNFILLED" | "FILLED";
-  /** Cột sắp xếp. Mặc định (bỏ trống) = theo Ngày cần nhân lực (Yêu cầu #5). */
-  sortBy?: "expectedDate" | "requestedDate" | "requestCode" | "createdAt" | "totalBalance";
+  /**
+   * Cột sắp xếp — khoá cột trong catalog (recruitment-request-columns) hoặc
+   * "createdAt". Bỏ trống = sắp xếp mặc định theo Ngày cần nhân lực (Yêu cầu #5).
+   * Khoá không nằm trong whitelist sẽ bị bỏ qua và quay về mặc định.
+   */
+  sortBy?: string;
   sortDir?: "asc" | "desc";
 };
 
@@ -374,25 +380,37 @@ export async function listRecruitmentRequests(
    Trong từng nhóm: expected_date GẦN NHẤT trước (NULLS LAST).
    Người dùng vẫn có thể đổi sang cột khác qua sortBy.
    ============================================================ */
+/**
+ * Whitelist cột sắp xếp — chỉ những cột `sortable` trong catalog mới được
+ * dùng, tra ngược về đúng cột Drizzle. Nhờ vậy UI đọc catalog từ
+ * /api/planning/column-config là có ngay danh sách cột sort hợp lệ, không cần
+ * hardcode, mà API vẫn không nhận chuỗi tuỳ ý (chống SQL injection qua ORDER BY).
+ */
+const SORTABLE_DB_COLUMNS: Record<string, AnyPgColumn> = Object.fromEntries(
+  SORTABLE_COLUMN_KEYS.filter((key) => key in recruitmentRequests).map((key) => [
+    key,
+    recruitmentRequests[key as keyof typeof recruitmentRequests] as AnyPgColumn,
+  ]),
+);
+
 function buildOrderBy(filter: RecruitmentRequestFilter) {
   const dir = filter.sortDir === "desc" ? desc : asc;
 
   switch (filter.sortBy) {
-    case "requestedDate":
-      return [dir(recruitmentRequests.requestedDate), asc(recruitmentRequests.requestCode)];
-    case "requestCode":
-      return [dir(recruitmentRequests.requestCode)];
     case "createdAt":
       return [dir(recruitmentRequests.createdAt)];
-    case "totalBalance":
-      return [dir(recruitmentRequests.totalBalance), asc(recruitmentRequests.expectedDate)];
     case "expectedDate":
       return [
         sql`${recruitmentRequests.expectedDate} is null`,
         dir(recruitmentRequests.expectedDate),
         asc(recruitmentRequests.requestCode),
       ];
-    default:
+    default: {
+      const col = filter.sortBy ? SORTABLE_DB_COLUMNS[filter.sortBy] : undefined;
+      if (col) {
+        // NULLS LAST cho mọi cột để dòng thiếu dữ liệu không chiếm đầu bảng.
+        return [sql`${col} is null`, dir(col), asc(recruitmentRequests.requestCode)];
+      }
       return [
         // Nhóm ưu tiên.
         sql`case
@@ -406,6 +424,7 @@ function buildOrderBy(filter: RecruitmentRequestFilter) {
         sql`${recruitmentRequests.expectedDate} asc nulls last`,
         asc(recruitmentRequests.requestCode),
       ];
+    }
   }
 }
 
