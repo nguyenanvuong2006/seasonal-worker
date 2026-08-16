@@ -1,9 +1,10 @@
 /**
  * Document Merge Engine — Google Docs / Drive service.
  *
- * Production merge copies the real Google Docs template and performs
- * replaceAllText on the copy, preserving the original document formatting.
- * Batch-print output uses real Docs insertPageBreak requests.
+ * Production merge MUST preserve the real Google Docs template formatting.
+ * A rendered single-record document is therefore created by copying the
+ * source template and replacing <<placeholders>> on the copy. We never
+ * rebuild a template from exported plain text in production.
  */
 
 import crypto from "node:crypto";
@@ -35,22 +36,46 @@ type TokenResponse = {
   error_description?: string;
 };
 
+type TemplateSnapshot = {
+  docId: string;
+  content: string;
+  capturedAt: number;
+};
+
 let cachedToken: { value: string; expiresAt: number } | null = null;
+
+// The merge route reads the source template before it creates the output.
+// Keep a short-lived in-process snapshot so createDocument() can identify
+// which real template produced the rendered text and copy that template.
+const templateSnapshots = new Map<string, TemplateSnapshot>();
+const FORMAT_PRESERVED_OUTPUTS = new Set<string>();
+const SNAPSHOT_TTL_MS = 5 * 60 * 1000;
+const MAX_TEMPLATE_SNAPSHOTS = 30;
 
 function base64Url(input: string | Buffer): string {
   return Buffer.from(input).toString("base64url");
 }
 
-async function exchangeServiceAccountToken(email: string, privateKey: string): Promise<TokenResponse> {
+async function exchangeServiceAccountToken(
+  email: string,
+  privateKey: string,
+  impersonateUser?: string,
+): Promise<TokenResponse> {
   const now = Math.floor(Date.now() / 1000);
   const header = base64Url(JSON.stringify({ alg: "RS256", typ: "JWT" }));
-  const payload = base64Url(JSON.stringify({
+  const jwtPayload: Record<string, string | number> = {
     iss: email,
     scope: "https://www.googleapis.com/auth/documents https://www.googleapis.com/auth/drive",
     aud: "https://oauth2.googleapis.com/token",
     iat: now,
     exp: now + 3600,
-  }));
+  };
+  // Optional Google Workspace domain-wide delegation. When configured by a
+  // Workspace admin, this lets the service account act as a real Drive user
+  // for My Drive write operations instead of trying to own files itself.
+  if (impersonateUser) jwtPayload.sub = impersonateUser;
+
+  const payload = base64Url(JSON.stringify(jwtPayload));
   const signingInput = `${header}.${payload}`;
   const normalizedKey = privateKey.replace(/\\n/g, "\n");
   const signature = crypto.sign("RSA-SHA256", Buffer.from(signingInput), normalizedKey);
@@ -89,7 +114,11 @@ async function resolveAccessToken(explicitToken?: string): Promise<string> {
   const serviceEmail = process.env.GOOGLE_SERVICE_ACCOUNT_EMAIL;
   const servicePrivateKey = process.env.GOOGLE_SERVICE_ACCOUNT_PRIVATE_KEY;
   if (serviceEmail && servicePrivateKey) {
-    result = await exchangeServiceAccountToken(serviceEmail, servicePrivateKey);
+    result = await exchangeServiceAccountToken(
+      serviceEmail,
+      servicePrivateKey,
+      process.env.GOOGLE_IMPERSONATE_USER_EMAIL?.trim() || undefined,
+    );
   } else {
     const clientId = process.env.GOOGLE_CLIENT_ID;
     const clientSecret = process.env.GOOGLE_CLIENT_SECRET;
@@ -111,6 +140,88 @@ async function resolveAccessToken(explicitToken?: string): Promise<string> {
     expiresAt: Date.now() + Math.max(300, result.expires_in ?? 3600) * 1000,
   };
   return cachedToken.value;
+}
+
+function rememberTemplateSnapshot(docId: string, content: string): void {
+  const now = Date.now();
+  for (const [key, snapshot] of templateSnapshots) {
+    if (now - snapshot.capturedAt > SNAPSHOT_TTL_MS) templateSnapshots.delete(key);
+  }
+  if (templateSnapshots.size >= MAX_TEMPLATE_SNAPSHOTS) {
+    const oldest = [...templateSnapshots.entries()].sort((a, b) => a[1].capturedAt - b[1].capturedAt)[0];
+    if (oldest) templateSnapshots.delete(oldest[0]);
+  }
+  templateSnapshots.set(docId, { docId, content, capturedAt: now });
+}
+
+function escapeRegex(value: string): string {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+function inferReplacements(templateContent: string, renderedContent: string): PlaceholderReplacement[] | null {
+  const matcher = /<<\s*([^<>]+?)\s*>>/g;
+  const placeholders: string[] = [];
+  const literalParts: string[] = [];
+  let cursor = 0;
+  let match: RegExpExecArray | null;
+
+  while ((match = matcher.exec(templateContent)) !== null) {
+    literalParts.push(templateContent.slice(cursor, match.index));
+    placeholders.push(match[1].trim());
+    cursor = match.index + match[0].length;
+  }
+  literalParts.push(templateContent.slice(cursor));
+
+  if (placeholders.length === 0) return templateContent === renderedContent ? [] : null;
+
+  let pattern = "^";
+  for (let index = 0; index < placeholders.length; index++) {
+    pattern += escapeRegex(literalParts[index]);
+    pattern += "([\\s\\S]*?)";
+  }
+  pattern += escapeRegex(literalParts[literalParts.length - 1]);
+  pattern += "$";
+
+  const result = new RegExp(pattern).exec(renderedContent);
+  if (!result) return null;
+
+  const values = new Map<string, string>();
+  for (let index = 0; index < placeholders.length; index++) {
+    const placeholder = placeholders[index];
+    const value = result[index + 1] ?? "";
+    const previous = values.get(placeholder);
+    if (previous !== undefined && previous !== value) return null;
+    values.set(placeholder, value);
+  }
+
+  return [...values.entries()].map(([placeholder, value]) => ({ placeholder, value }));
+}
+
+function findSourceTemplate(renderedContent: string): { snapshot: TemplateSnapshot; replacements: PlaceholderReplacement[] } | null {
+  const now = Date.now();
+  const candidates = [...templateSnapshots.values()]
+    .filter((snapshot) => now - snapshot.capturedAt <= SNAPSHOT_TTL_MS)
+    .sort((a, b) => b.capturedAt - a.capturedAt);
+
+  for (const snapshot of candidates) {
+    const replacements = inferReplacements(snapshot.content, renderedContent);
+    if (replacements) return { snapshot, replacements };
+  }
+  return null;
+}
+
+function explainWrite403(detail: string): string {
+  const lower = detail.toLowerCase();
+  if (lower.includes("storage quota") || lower.includes("service account")) {
+    return (
+      "Google Drive từ chối tạo bản sao vì Service Account không thể sở hữu file trong My Drive. " +
+      "Hãy dùng Shared Drive hoặc cấu hình GOOGLE_IMPERSONATE_USER_EMAIL với Domain-Wide Delegation/OAuth người dùng."
+    );
+  }
+  return (
+    "Google Drive từ chối thao tác ghi. Kiểm tra quyền Editor của template/output folder. " +
+    "Nếu đây là My Drive và backend dùng Service Account, hãy dùng Shared Drive hoặc Domain-Wide Delegation/OAuth người dùng."
+  );
 }
 
 export class MockGoogleDocsService implements GoogleDocsService {
@@ -188,6 +299,9 @@ export class RealGoogleDocsService implements GoogleDocsService {
     });
     if (!response.ok) {
       const detail = await response.text();
+      if (response.status === 403) {
+        throw new Error(`Google API 403: ${explainWrite403(detail)} Chi tiết: ${detail.slice(0, 500)}`);
+      }
       throw new Error(`Google API ${response.status}: ${detail.slice(0, 800)}`);
     }
     return response.json() as Promise<T>;
@@ -202,20 +316,22 @@ export class RealGoogleDocsService implements GoogleDocsService {
   }
 
   async getDocumentContent(docId: string): Promise<string> {
-    const url = `${this.driveUrl}/files/${encodeURIComponent(docId)}/export?mimeType=${encodeURIComponent("text/plain")}`;
+    const url = `${this.driveUrl}/files/${encodeURIComponent(docId)}/export?mimeType=${encodeURIComponent("text/plain")}&supportsAllDrives=true`;
     const response = await fetch(url, { headers: await this.authHeader() });
     if (!response.ok) {
       const detail = await response.text();
       throw new Error(`Không đọc được Google Docs (${response.status}): ${detail.slice(0, 500)}`);
     }
-    return response.text();
+    const content = await response.text();
+    rememberTemplateSnapshot(docId, content);
+    return content;
   }
 
   async copyDocument(docId: string, folderId?: string, title?: string): Promise<string> {
     const body: Record<string, unknown> = { name: title || `Merge_${Date.now()}` };
     if (folderId) body.parents = [folderId];
     const result = await this.requestJson<{ id: string }>(
-      `${this.driveUrl}/files/${encodeURIComponent(docId)}/copy?fields=id`,
+      `${this.driveUrl}/files/${encodeURIComponent(docId)}/copy?fields=id&supportsAllDrives=true`,
       { method: "POST", body: JSON.stringify(body) },
     );
     return result.id;
@@ -237,6 +353,15 @@ export class RealGoogleDocsService implements GoogleDocsService {
   }
 
   async updateDocumentContent(docId: string, content: string): Promise<void> {
+    // The current merge route calls updateDocumentContent immediately after
+    // createDocument. When createDocument already copied the real template and
+    // replaced placeholders, rewriting the body would destroy formatting.
+    // Treat that follow-up call as an intentional no-op.
+    if (FORMAT_PRESERVED_OUTPUTS.has(docId)) {
+      FORMAT_PRESERVED_OUTPUTS.delete(docId);
+      return;
+    }
+
     const document = await this.requestJson<{ body?: { content?: Array<{ endIndex?: number }> } }>(
       `${this.docsUrl}/documents/${encodeURIComponent(docId)}`,
     );
@@ -264,32 +389,31 @@ export class RealGoogleDocsService implements GoogleDocsService {
   }
 
   async createDocument(title: string, content: string, folderId?: string): Promise<string> {
-    const created = await this.requestJson<{ documentId: string }>(`${this.docsUrl}/documents`, {
-      method: "POST",
-      body: JSON.stringify({ title }),
-    });
-    const docId = created.documentId;
-
-    if (folderId) {
-      const meta = await this.requestJson<{ parents?: string[] }>(
-        `${this.driveUrl}/files/${encodeURIComponent(docId)}?fields=parents`,
+    // Never silently flatten a multi-record batch into plain text. That would
+    // destroy tables, fonts, images, headers/footers and page formatting.
+    if (content.includes(PAGE_BREAK_TEXT)) {
+      throw new Error(
+        "FORMAT_PRESERVING_BATCH_REQUIRED: Merge nhiều hồ sơ vào 1 Google Doc đang bị chặn để tránh làm mất format template. " +
+          "Hệ thống phải dùng bộ ghép cấu trúc tài liệu thay vì export/import plain text.",
       );
-      const removeParents = (meta.parents ?? []).join(",");
-      const params = new URLSearchParams({ addParents: folderId, fields: "id,parents" });
-      if (removeParents) params.set("removeParents", removeParents);
-      await this.requestJson(`${this.driveUrl}/files/${encodeURIComponent(docId)}?${params.toString()}`, {
-        method: "PATCH",
-        body: JSON.stringify({}),
-      });
     }
 
-    await this.updateDocumentContent(docId, content);
+    const source = findSourceTemplate(content);
+    if (!source) {
+      throw new Error(
+        "FORMAT_SOURCE_NOT_FOUND: Không xác định được Google Docs template nguồn của nội dung merge; hệ thống từ chối tạo file plain-text để bảo toàn format.",
+      );
+    }
+
+    const docId = await this.copyDocument(source.snapshot.docId, folderId, title);
+    await this.replacePlaceholders(docId, source.replacements);
+    FORMAT_PRESERVED_OUTPUTS.add(docId);
     return docId;
   }
 
   async documentExists(docId: string): Promise<boolean> {
     try {
-      await this.requestJson(`${this.driveUrl}/files/${encodeURIComponent(docId)}?fields=id,trashed`);
+      await this.requestJson(`${this.driveUrl}/files/${encodeURIComponent(docId)}?fields=id,trashed&supportsAllDrives=true`);
       return true;
     } catch {
       return false;
@@ -298,7 +422,7 @@ export class RealGoogleDocsService implements GoogleDocsService {
 
   async getDocumentPermissions(docId: string): Promise<string[]> {
     const result = await this.requestJson<{ permissions?: Array<{ type: string }> }>(
-      `${this.driveUrl}/files/${encodeURIComponent(docId)}/permissions?fields=permissions(type)`,
+      `${this.driveUrl}/files/${encodeURIComponent(docId)}/permissions?fields=permissions(type)&supportsAllDrives=true`,
     );
     return (result.permissions ?? []).map((item) => item.type);
   }
