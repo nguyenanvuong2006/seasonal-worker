@@ -74,6 +74,13 @@
   background: var(--merge-orange) !important;
 }
 
+/* Template editor is a viewport modal. Keep it above the application sidebar
+   and other fixed navigation so the sticky Placeholder column is never hidden. */
+.document-merge-parity .fixed.inset-0.z-50 {
+  z-index: 9999 !important;
+  isolation: isolate;
+}
+
 @media (max-width: 768px) {
   .document-merge-parity main {
     padding-left: 12px !important;
