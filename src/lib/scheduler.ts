@@ -5,6 +5,7 @@ import { scheduledJobs } from "@/db/schema";
 import { processNotificationQueue } from "@/lib/notifications";
 import { findStalledJobs, runNextStep } from "@/lib/import-jobs";
 import { cleanupTerminalStaging } from "@/lib/import-staging-cleanup";
+import { recomputeRequestKpiCache } from "@/lib/workforce-request";
 import { scanExpiredRequestsAndCreateTasks } from "@/lib/planning-reallocation";
 
 /**
@@ -76,6 +77,14 @@ const HANDLERS: Record<string, () => Promise<Record<string, unknown>>> = {
     // hiện có (Vercel Cron / cron ngoài gọi /api/cron/run) — không thêm dịch vụ mới.
     return cleanupTerminalStaging(100);
   },
+  RECOMPUTE_REQUEST_KPI_CACHE: async () => {
+    // WORKFORCE REQUEST LINKAGE (mục 9) — recompute job cho KPI cache: tính lại KPI
+    // của mọi Workforce Request chưa xoá và upsert vào request_kpi_cache (có timestamp).
+    // Cache KHÔNG phải source of truth — chỉ tăng tốc dashboard; mọi quyết định
+    // allocation đều tính live trong transaction.
+    const count = await recomputeRequestKpiCache();
+    return { recomputed: count };
+  },
 };
 
 export const DEFAULT_SCHEDULED_JOBS: { jobKey: string; label: string; schedule: string; handlerKey: string }[] = [
@@ -84,6 +93,7 @@ export const DEFAULT_SCHEDULED_JOBS: { jobKey: string; label: string; schedule: 
   { jobKey: "resume_stalled_import_jobs", label: "Watchdog: phục hồi Import Job bị treo", schedule: "daily", handlerKey: "RESUME_STALLED_IMPORT_JOBS" },
   { jobKey: "expire_recruitment_requests", label: "Yêu cầu tuyển dụng hết hạn → EXPIRED + Task tái phân bổ", schedule: "daily", handlerKey: "EXPIRE_RECRUITMENT_REQUESTS" },
   { jobKey: "cleanup_import_staging", label: "Dọn staging của Import Job đã hoàn tất/huỷ (>24h)", schedule: "daily", handlerKey: "CLEANUP_IMPORT_STAGING" },
+  { jobKey: "recompute_request_kpi_cache", label: "Recompute KPI cache của Workforce Request", schedule: "hourly", handlerKey: "RECOMPUTE_REQUEST_KPI_CACHE" },
 ];
 
 /** Chạy toàn bộ job đang Active — gọi từ /api/cron/run. */

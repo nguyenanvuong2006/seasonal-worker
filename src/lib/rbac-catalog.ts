@@ -75,6 +75,13 @@ export const PERMISSION_CATALOG: readonly CatalogPermission[] = [
   { key: "planning.edit", name: "Sửa Planning (revise)", group: "planning" },
   { key: "planning.activate", name: "Kích hoạt Planning", group: "planning" },
   { key: "planning.import", name: "Import/Export Recruitment Requests", group: "planning" },
+  // WORKFORCE REQUEST LINKAGE — quyền gắn liền kiến trúc Workforce Request.
+  // planning.overallocate MẶC ĐỊNH KHÔNG NẰM TRONG BASELINE (fail-closed): admin cấp
+  // tại /admin/permissions khi business cần cho phép vượt tổng nhu cầu (mục 6).
+  { key: "planning.overallocate", name: "Override phân bổ vượt tổng nhu cầu (Planning)", group: "planning" },
+  { key: "workforce_request.view", name: "Xem Workforce Request (Yêu cầu nhân lực)", group: "planning" },
+  { key: "workforce_request.allocate", name: "Phân bổ / tái phân bổ lao động vào Workforce Request", group: "planning" },
+  { key: "workforce_request.comment", name: "Bình luận trên Workforce Request", group: "planning" },
   // Nghỉ việc / Thuyên chuyển
   { key: "workforce_movements.view", name: "Xem yêu cầu Nghỉ việc / Thuyên chuyển", group: "nghi_viec_thuyen_chuyen" },
   { key: "workforce_movements.create", name: "Tạo yêu cầu Nghỉ việc / Thuyên chuyển", group: "nghi_viec_thuyen_chuyen" },
@@ -204,6 +211,9 @@ export const BASELINE_ROLE_PERMISSIONS: Readonly<Record<string, readonly string[
     "planning.edit",
     "planning.activate",
     "planning.import",
+    "workforce_request.view",
+    "workforce_request.allocate",
+    "workforce_request.comment",
     "workforce_movements.view",
     "workforce_movements.create",
     "workforce_movements.manage",
@@ -232,6 +242,8 @@ export const BASELINE_ROLE_PERMISSIONS: Readonly<Record<string, readonly string[
     "registrations.view",
     "planning.view",
     "planning.request",
+    "workforce_request.view",
+    "workforce_request.comment",
     "workforce_movements.view",
     "workforce_movements.create",
     // Employment Lifecycle — Manager: xem trạng thái + BÁO NGHỈ trong Data Scope của mình.
@@ -248,6 +260,8 @@ export const BASELINE_ROLE_PERMISSIONS: Readonly<Record<string, readonly string[
     "dw.view",
     "worker_profile.view",
     "planning.view",
+    "workforce_request.view",
+    "workforce_request.comment",
     "workforce_movements.view",
     "employment.view",
     "employment.history.view",

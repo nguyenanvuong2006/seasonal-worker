@@ -13,6 +13,7 @@ import {
   IdCard,
   ArrowLeftRight,
   CalendarRange,
+  UsersRound,
   FormInput,
   Layers,
   GitBranch,
@@ -71,6 +72,7 @@ const NAV_GROUPS: NavGroup[] = [
     group: "Kế hoạch nhu cầu",
     items: [
       { href: "/admin/planning", label: "Planning (Nhu cầu)", icon: CalendarRange, roles: ["ADMIN", "HR_RECRUITER", "DEPT_MANAGER"], permission: "planning.view" },
+      { href: "/admin/workforce-requests", label: "Workforce Request", icon: UsersRound, roles: ["ADMIN", "HR_RECRUITER", "DEPT_MANAGER", "HR_DIRECTOR"], permission: "workforce_request.view" },
       { href: "/admin/recruitment-requests", label: "Yêu cầu tuyển dụng", icon: FileSpreadsheet, roles: ["ADMIN", "HR_RECRUITER", "DEPT_MANAGER"], permission: "planning.view" },
     ],
   },

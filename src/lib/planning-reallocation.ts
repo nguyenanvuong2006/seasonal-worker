@@ -12,6 +12,7 @@ import {
 } from "@/db/schema";
 import { todayStr, isMale, isFemale } from "@/lib/helpers";
 import { scopeAllowsDepartment } from "@/lib/data-scope";
+import { syncRequestAllocationOnPlanningMove } from "@/lib/workforce-request";
 import {
   TASK_PLANNING_REALLOCATION_REQUIRED,
   buildReallocationTaskTitle,
@@ -347,6 +348,18 @@ export async function reallocateDws(input: ReallocateInput): Promise<ReallocateR
         .returning({ id: planningAllocations.id });
 
       if (created) newAllocationIds.push(created.id);
+
+      // WORKFORCE REQUEST LINKAGE — đồng bộ sang request_allocations để KPI của
+      // Workforce Request vẫn tính đúng từ source (chuyển request, không nghỉ việc).
+      // Tôn trọng block vượt tổng nhu cầu: nếu request đích đã đủ thì bỏ qua (log).
+      await syncRequestAllocationOnPlanningMove({
+        executor: tx,
+        employmentSessionId: a.employmentSessionId,
+        fromRequestId: fromReq.id,
+        toRequestId: toReq.id,
+        actor: input.actor,
+        reason: "Tái phân bổ theo luồng Planning (expired request / thuyên chuyển)",
+      });
 
       // BƯỚC 3 — KHÔNG làm gì với employment_sessions / workforce_movements.
       // DW vẫn đang làm việc bình thường. Đây là điểm mấu chốt của Yêu cầu #9.

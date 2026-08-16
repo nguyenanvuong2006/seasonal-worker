@@ -50,6 +50,11 @@ function load(db: FakeDb) {
         isFemale: (g: string | null) => String(g ?? "").toUpperCase().startsWith("F"),
       },
       "@/lib/person-name": { normalizePersonName: (v: string) => v },
+      // WORKFORCE REQUEST LINKAGE — planning.ts mirror sang request_allocations khi
+      // period có request_id. Fixture ở đây không set request_id nên mirror không
+      // chạy; stub no-op để sandbox không cần nạp toàn bộ module DB. Logic thuần
+      // của bộ máy phân bổ đã có test riêng ở workforce-request.test.ts.
+      "@/lib/workforce-request": { mirrorPlanningAllocationToRequest: async () => false },
     },
     fallback(spec) {
       throw new Error(`Unexpected require("${spec}")`);

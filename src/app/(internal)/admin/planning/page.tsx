@@ -67,13 +67,14 @@ type Period = {
   supplementIndex: number;
   parentPeriodId: string | null;
   supersededBy: string | null;
+  requestId: string | null;
   createdBy: string;
   createdAt: string;
   demandMale: number;
   demandFemale: number;
   targetCount: number;
   note: string | null;
-  metrics: PlanningMetrics;
+  metrics: PlanningMetrics & { metricsSource?: "linked_request" | "legacy" };
 };
 
 type Dept = {
@@ -647,6 +648,15 @@ export default function PlanningPage() {
                           <div className="font-medium text-fg">
                             {formatDate(p.startDate)} → {formatDate(p.endDate)}
                           </div>
+                          {p.metrics?.metricsSource === "linked_request" && (
+                            <a
+                              href={`/admin/workforce-requests?open=${p.requestId ?? ""}`}
+                              className="mt-1 inline-flex items-center gap-1 rounded-full bg-botanical-100 px-2 py-0.5 text-[10px] font-semibold text-botanical-800"
+                              title="Số liệu của kế hoạch này được tính TỪ Workforce Request (source of truth)"
+                            >
+                              Theo Workforce Request
+                            </a>
+                          )}
                           <div className="mt-1 flex items-center gap-1.5">
                             <Badge tone={isSupplement ? "purple" : "blue"}>
                               {reqLabel}

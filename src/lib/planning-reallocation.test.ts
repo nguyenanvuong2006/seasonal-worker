@@ -67,6 +67,11 @@ function load(db: FakeDb) {
         },
       },
       "@/lib/planning-recruitment-core": corePassthrough(),
+      // WORKFORCE REQUEST LINKAGE — reallocateDws đồng bộ sang request_allocations
+      // (worker-level source of truth). Stub no-op để sandbox không cần nạp toàn bộ
+      // module DB; logic thuần của bộ máy phân bổ đã có test riêng ở
+      // workforce-request.test.ts.
+      "@/lib/workforce-request": { syncRequestAllocationOnPlanningMove: async () => false },
     },
   });
 }

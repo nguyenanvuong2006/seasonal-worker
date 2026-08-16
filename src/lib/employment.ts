@@ -1,6 +1,7 @@
 import "server-only";
 import { and, desc, eq, inArray, isNull, ne, sql } from "drizzle-orm";
 import { db } from "@/db";
+import { endActiveRequestAllocationsForWorker } from "@/lib/workforce-request";
 import {
   dailyApplications,
   departments,
@@ -209,6 +210,16 @@ export async function confirmResignation(input: {
 
     // employment_end trên session ↔ movement liên kết 2 chiều để truy vết.
     await tx.update(employmentSessions).set({ endMovementId: movementId }).where(eq(employmentSessions.id, active.id));
+
+    // WORKFORCE REQUEST LINKAGE — nghỉ việc đã xác nhận → kết thúc mọi ACTIVE
+    // request allocation của worker (history action=END). KPI của Workforce
+    // Request tự cập nhật vì tính lại từ source (Current giảm, Quit tăng).
+    await endActiveRequestAllocationsForWorker(
+      input.workerId,
+      input.confirmedBy,
+      `Nghỉ việc được xác nhận (movement ${movementId!})`,
+      tx,
+    );
 
     return { sessionId: active.id, movementId: movementId! };
   };
