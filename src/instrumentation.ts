@@ -5,6 +5,9 @@ export async function register() {
   // The batch patch must be installed before the Document Merge route creates
   // its Google Docs service; otherwise createDocument() falls back to the
   // fail-safe FORMAT_PRESERVING_BATCH_REQUIRED path.
+  const { installGoogleDocsRateLimitGuard } = await import("@/lib/document-merge/docs-rate-limit-guard");
+  installGoogleDocsRateLimitGuard();
+
   const { installFormatPreservingBatchPatch } = await import("@/lib/document-merge/batch-format-preserver");
   installFormatPreservingBatchPatch();
 }
