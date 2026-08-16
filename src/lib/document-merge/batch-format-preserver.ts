@@ -1,3 +1,4 @@
+/* eslint-disable @typescript-eslint/no-explicit-any */
 import crypto from "node:crypto";
 import {
   PAGE_BREAK_TEXT,
@@ -56,7 +57,7 @@ async function exchangeServiceAccountToken(
     method: "POST",
     headers: { "Content-Type": "application/x-www-form-urlencoded" },
     body: new URLSearchParams({
-      grant_type: "urn:ietf:params:oauth2.0:token",
+      grant_type: "urn:ietf:params:oauth:grant-type:jwt-bearer",
       assertion,
     }),
   });
@@ -285,7 +286,8 @@ function assertParagraphSupported(paragraph: any, replacements: Map<string, stri
 function writableTextStyle(style: any): any {
   if (!style) return {};
   const copy = { ...style };
-  delete copy.link?.bookmarkId;
+  if (copy.link) copy.link = { ...copy.link };
+  if (copy.link) delete copy.link.bookmarkId;
   return copy;
 }
 
@@ -399,7 +401,6 @@ function tableHasNestedTable(table: any): boolean {
 
 async function populateTableCellParagraphs(
   destinationDocId: string,
-  sourceDocument: DocsDocument,
   sourceCell: any,
   destinationCell: any,
   replacements: Map<string, string>,
@@ -411,7 +412,6 @@ async function populateTableCellParagraphs(
   }
 
   let cellInsertIndex = Number(destinationCell?.content?.[0]?.startIndex ?? destinationCell?.startIndex ?? 1);
-  // Google inserts an empty paragraph in each new cell. Insert before its terminal newline.
   cellInsertIndex = Math.max(1, cellInsertIndex);
 
   for (let pIndex = sourceParagraphs.length - 1; pIndex >= 0; pIndex--) {
@@ -470,7 +470,6 @@ async function populateTableCellParagraphs(
 
 async function appendTable(
   destinationDocId: string,
-  sourceDocument: DocsDocument,
   sourceTable: any,
   replacements: Map<string, string>,
 ): Promise<void> {
@@ -502,7 +501,6 @@ async function appendTable(
   const inserted = tables[tables.length - 1]?.table;
   if (!inserted) throw new Error("FORMAT_TABLE_INSERT_FAILED: Không tìm thấy bảng vừa chèn trong Google Docs output.");
 
-  // Merge cells first so the target topology matches the template.
   const mergeRequests: Record<string, unknown>[] = [];
   for (let r = 0; r < rows; r++) {
     for (let c = 0; c < columns; c++) {
@@ -536,7 +534,6 @@ async function appendTable(
   const targetTable = destinationTables[destinationTables.length - 1]?.table;
   const targetTabId = getFirstDocumentTab(destination).tabId;
 
-  // Populate from bottom-right to top-left so earlier indexes stay stable.
   for (let r = rows - 1; r >= 0; r--) {
     for (let c = columns - 1; c >= 0; c--) {
       const sourceCell = sourceTable.tableRows?.[r]?.tableCells?.[c];
@@ -544,7 +541,6 @@ async function appendTable(
       if (!sourceCell || !targetCell) continue;
       await populateTableCellParagraphs(
         destinationDocId,
-        sourceDocument,
         sourceCell,
         targetCell,
         replacements,
@@ -553,7 +549,6 @@ async function appendTable(
     }
   }
 
-  // Apply cell styles after text insertion.
   const cellStyleRequests: Record<string, unknown>[] = [];
   for (let r = 0; r < rows; r++) {
     for (let c = 0; c < columns; c++) {
@@ -627,8 +622,6 @@ async function appendTemplateBody(
   const { body } = getFirstDocumentTab(sourceDocument);
   const content = (body?.content ?? []) as DocsStructuralElement[];
 
-  // Separate each record explicitly. Header/footer/page setup stay inherited from
-  // the copied source template because all records in a batch must use one source.
   const destination = await docsGet(destinationDocId);
   const end = endIndexOf(destination);
   await docsBatchUpdate(destinationDocId, [
@@ -636,13 +629,11 @@ async function appendTemplateBody(
   ]);
 
   for (const element of content) {
-    // The initial sectionBreak belongs to the document page setup already carried
-    // by the copied destination. Re-inserting it can mutate page/header settings.
     if (element.sectionBreak) continue;
     if (element.paragraph) {
       await appendParagraph(destinationDocId, sourceDocument, element.paragraph, replacementValues);
     } else if (element.table) {
-      await appendTable(destinationDocId, sourceDocument, element.table, replacementValues);
+      await appendTable(destinationDocId, element.table, replacementValues);
     } else if (element.tableOfContents) {
       throw new Error("FORMAT_TOC_UNSUPPORTED: Template có Table of Contents; batch engine từ chối để bảo toàn format.");
     }
@@ -714,9 +705,6 @@ export function installFormatPreservingBatchPatch(): void {
     docId: string,
     content: string,
   ) {
-    // route.ts calls updateDocumentContent immediately after createDocument().
-    // A format-preserving batch is already fully rendered; rewriting it would
-    // flatten every page back to plain text, so deliberately swallow that call.
     if (batchOutputs.has(docId)) {
       batchOutputs.delete(docId);
       return;
