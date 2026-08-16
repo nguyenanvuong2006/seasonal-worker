@@ -18,6 +18,7 @@ import {
   ChevronRight,
   LogOut,
   Repeat,
+  Shuffle,
   UserPlus,
   type LucideIcon,
 } from "lucide-react";
@@ -28,6 +29,19 @@ type TaskData = {
   resignations: Section<{ id: string; workerName: string | null; workerCccd: string | null; effectiveDate: string; requestedBy: string; createdAt: string }>;
   transfers: Section<{ id: string; workerName: string | null; workerCccd: string | null; status: string; effectiveDate: string; requestedBy: string; createdAt: string }>;
   expiringPlans: Section<{ id: string; deptName: string | null; section: string | null; endDate: string; targetCount: number | null }>;
+  reallocationTasks: Section<{
+    id: string;
+    requestCode: string | null;
+    departmentName: string | null;
+    section: string | null;
+    groupName: string | null;
+    endDate: string | null;
+    totalActiveAllocations: number;
+    maleCount: number;
+    femaleCount: number;
+    recruitmentRequestId: string | null;
+    dueDate: string | null;
+  }>;
   hiddenSections: string[];
   generatedAt: string;
 };
@@ -172,7 +186,12 @@ export default function TaskCenterPage() {
       }
       const json = (await res.json()) as TaskData;
       setData(json);
-      const total = json.newApplicants.total + json.resignations.total + json.transfers.total + json.expiringPlans.total;
+      const total =
+        json.newApplicants.total +
+        json.resignations.total +
+        json.transfers.total +
+        json.expiringPlans.total +
+        (json.reallocationTasks?.total ?? 0);
       setState(total === 0 ? "empty" : "success");
     } catch {
       // Phase 3.3 — KHÔNG nuốt lỗi im lặng: mất kết nối/lỗi mạng cũng phải hiện rõ + nút thử lại,
@@ -290,6 +309,30 @@ export default function TaskCenterPage() {
                   title={r.workerName}
                   meta={`${r.workerCccd} · ${r.status === "WAITING_DECISION" ? "Không đến — chờ quyết định" : "Chờ xác nhận"}`}
                   badge={priorityBadge(ageDays(r.createdAt))}
+                />
+              ))}
+            </TaskGroup>
+          )}
+
+          {/* Yêu cầu tuyển dụng hết hạn còn DW chờ chuyển phân bổ (Yêu cầu #7/#14).
+              Đặt ĐẦU danh sách vì đây là việc chặn: DW vẫn đang làm việc nhưng
+              không còn gắn với yêu cầu nào còn hiệu lực. */}
+          {!hidden.has("reallocationTasks") && data.reallocationTasks && (
+            <TaskGroup
+              icon={Shuffle}
+              title="Yêu cầu hết hạn — cần chuyển phân bổ DW"
+              total={data.reallocationTasks.total}
+              visibleCount={data.reallocationTasks.rows.length}
+              emptyLabel="Không có."
+              moreHref="/admin/recruitment-requests"
+            >
+              {data.reallocationTasks.rows.map((r) => (
+                <TaskRow
+                  key={r.id}
+                  href={`/admin/recruitment-requests?reallocateFrom=${r.recruitmentRequestId ?? ""}`}
+                  title={`${r.requestCode ?? "—"} · ${r.totalActiveAllocations} DW cần xác nhận`}
+                  meta={`${[r.departmentName, r.section, r.groupName].filter(Boolean).join(" / ") || "—"} · Nam ${r.maleCount} / Nữ ${r.femaleCount}`}
+                  badge={<Badge tone="red" dot>Hết hạn {r.endDate ?? "—"}</Badge>}
                 />
               ))}
             </TaskGroup>

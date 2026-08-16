@@ -1,7 +1,15 @@
 import { NextResponse } from "next/server";
 import { and, desc, eq, gte, ilike, inArray, isNull, lte, or, sql } from "drizzle-orm";
 import { db } from "@/db";
-import { dailyApplications, departments, planningPeriods, planningTargets, workerProfiles, workforceMovements } from "@/db/schema";
+import {
+  dailyApplications,
+  departments,
+  planningPeriods,
+  planningTargets,
+  planningTasks,
+  workerProfiles,
+  workforceMovements,
+} from "@/db/schema";
 import { getUserScope, hasPermission, requirePermission } from "@/lib/auth";
 import { todayStr } from "@/lib/helpers";
 import { normalizePersonName } from "@/lib/person-name";
@@ -176,11 +184,86 @@ export async function GET(req: Request) {
     hiddenSections.push("expiringPlans");
   }
 
+  // 5) Yêu cầu tuyển dụng hết hạn còn DW cần chuyển phân bổ (Yêu cầu #7 & #14).
+  //    Đây là mục DUY NHẤT đọc từ bảng `planning_tasks` — task được job
+  //    `expire_recruitment_requests` tạo sẵn, có unique index chống trùng, nên
+  //    không thể tổng hợp bằng live-query như bốn mục trên.
+  //
+  //    LƯU Ý NGHIỆP VỤ: task này CHỈ nói "yêu cầu đã hết hạn, cần xác nhận
+  //    chuyển DW sang yêu cầu mới". Nó KHÔNG có nghĩa là DW nghỉ việc.
+  let reallocationTasks: {
+    id: string;
+    requestCode: string | null;
+    departmentName: string | null;
+    section: string | null;
+    groupName: string | null;
+    endDate: string | null;
+    totalActiveAllocations: number;
+    maleCount: number;
+    femaleCount: number;
+    recruitmentRequestId: string | null;
+    dueDate: string | null;
+  }[] = [];
+  let reallocationTasksTotal = 0;
+  // Chỉ người thực sự chuyển được phân bổ mới thấy mục này — Dept Manager
+  // không có `planning.reallocate` nên không bị giao việc họ không làm được.
+  const canReallocate = await hasPermission(role, "planning.reallocate");
+  if (canReallocate) {
+    const filters = [
+      eq(planningTasks.taskType, "PLANNING_REALLOCATION_REQUIRED"),
+      inArray(planningTasks.status, ["OPEN", "IN_PROGRESS"]),
+    ];
+    if (scope) filters.push(inArray(planningTasks.departmentId, scope.length ? scope : ["__none__"]));
+    if (q) filters.push(ilike(planningTasks.title, `%${q}%`));
+    const where = and(...filters);
+
+    const rows = await db
+      .select({
+        id: planningTasks.id,
+        detail: planningTasks.detail,
+        dueDate: planningTasks.dueDate,
+        recruitmentRequestId: planningTasks.recruitmentRequestId,
+        departmentName: departments.deptName,
+      })
+      .from(planningTasks)
+      .leftJoin(departments, eq(planningTasks.departmentId, departments.id))
+      .where(where)
+      .orderBy(planningTasks.dueDate)
+      .limit(SECTION_LIMIT);
+
+    reallocationTasks = rows.map((r) => {
+      const d = (r.detail ?? {}) as Record<string, unknown>;
+      return {
+        id: r.id,
+        requestCode: (d.requestCode as string) ?? null,
+        departmentName: r.departmentName ?? ((d.department as string) || null),
+        section: (d.section as string) ?? null,
+        groupName: (d.groupName as string) ?? null,
+        endDate: (d.endDate as string) ?? null,
+        totalActiveAllocations: Number(d.totalActiveAllocations ?? 0),
+        maleCount: Number(d.maleCount ?? 0),
+        femaleCount: Number(d.femaleCount ?? 0),
+        recruitmentRequestId: r.recruitmentRequestId,
+        dueDate: r.dueDate,
+      };
+    });
+
+    const [cnt] = await db
+      .select({ c: sql<number>`count(*)::int` })
+      .from(planningTasks)
+      .leftJoin(departments, eq(planningTasks.departmentId, departments.id))
+      .where(where);
+    reallocationTasksTotal = cnt?.c ?? reallocationTasks.length;
+  } else {
+    hiddenSections.push("reallocationTasks");
+  }
+
   return NextResponse.json({
     newApplicants: { rows: newApplicants, total: newApplicantsTotal },
     resignations: { rows: resignations, total: resignationsTotal },
     transfers: { rows: transfers, total: transfersTotal },
     expiringPlans: { rows: expiringPlans, total: expiringPlansTotal },
+    reallocationTasks: { rows: reallocationTasks, total: reallocationTasksTotal },
     hiddenSections,
     generatedAt: new Date().toISOString(),
   });

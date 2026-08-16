@@ -10,6 +10,7 @@ const LABEL: Record<Group, string> = {
   department: "Department",
   dw_data: "DW-Data",
   daily_application: "Daily-Application",
+  recruitment_request: "Recruitment-Request",
 };
 
 /** Sinh file CSV mẫu từ cùng metadata đang dựng bảng dán trực tiếp. */
@@ -18,7 +19,7 @@ export async function GET(req: Request) {
   if (!guard.ok) return NextResponse.json({ error: guard.error }, { status: guard.status });
 
   const group = (new URL(req.url).searchParams.get("group") || "daily_application") as Group;
-  if (!["department", "dw_data", "daily_application"].includes(group)) {
+  if (!["department", "dw_data", "daily_application", "recruitment_request"].includes(group)) {
     return NextResponse.json({ error: "group không hợp lệ." }, { status: 400 });
   }
 
