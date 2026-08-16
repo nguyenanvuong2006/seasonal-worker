@@ -1,6 +1,6 @@
 /**
  * POST /api/document-merge/templates/[id]/scan
- * Quét placeholders <<...>> từ Google Docs và auto-map.
+ * Quét placeholders <<...>> từ Google Docs và đồng bộ mapping theo tài liệu hiện tại.
  */
 
 import { NextResponse } from "next/server";
@@ -130,9 +130,8 @@ export async function POST(request: Request, context: RouteContext) {
       );
     }
 
-    // Không truyền GOOGLE_ACCESS_TOKEN từ env vào constructor. Token tĩnh chỉ dành
-    // cho debug và có thể đã hết hạn; service sẽ tự ưu tiên credential bền vững
-    // (Service Account / OAuth Refresh Token) và tự refresh access token.
+    // Không dùng GOOGLE_ACCESS_TOKEN tĩnh cho production scan. Service tự lấy
+    // credential bền vững (Service Account / OAuth Refresh Token) và refresh token.
     const docsService = createGoogleDocsService();
     const content = await docsService.getDocumentContent(docId);
     const placeholders = extractUniquePlaceholders(content);
@@ -148,9 +147,13 @@ export async function POST(request: Request, context: RouteContext) {
     const suggestions = autoMapAllPlaceholders(placeholders, definitions, questions);
     const suggestionMap = new Map(suggestions.map((item) => [item.placeholder, item]));
 
-    const newPlaceholders = new Set(placeholders);
-    const orphanedFields = existingFields.filter((field) => !newPlaceholders.has(field.placeholder));
+    // Google Docs hiện tại là source-of-truth cho danh sách placeholder.
+    // Row cũ không còn trong tài liệu được giữ lại để audit/history nhưng đánh dấu
+    // orphaned và sẽ không được trả về trong GET fields mặc định.
+    const currentPlaceholderSet = new Set(placeholders);
+    const orphanedFields = existingFields.filter((field) => !currentPlaceholderSet.has(field.placeholder));
     for (const field of orphanedFields) {
+      if (field.isOrphaned) continue;
       await db
         .update(mergeTemplateFields)
         .set({ isOrphaned: true, updatedAt: new Date() })
@@ -158,8 +161,22 @@ export async function POST(request: Request, context: RouteContext) {
     }
 
     const newFields = [];
+    const reactivatedFields: string[] = [];
     for (const placeholder of placeholders) {
-      if (existingMap.has(placeholder)) continue;
+      const existing = existingMap.get(placeholder);
+      if (existing) {
+        // Nếu placeholder từng bị xoá rồi được đưa trở lại Google Docs, kích hoạt
+        // lại mapping cũ nhưng KHÔNG ghi đè cấu hình mapping thủ công của người dùng.
+        if (existing.isOrphaned) {
+          await db
+            .update(mergeTemplateFields)
+            .set({ isOrphaned: false, updatedAt: new Date() })
+            .where(eq(mergeTemplateFields.id, existing.id));
+          reactivatedFields.push(placeholder);
+        }
+        continue;
+      }
+
       const suggestion = suggestionMap.get(placeholder);
       const [created] = await db
         .insert(mergeTemplateFields)
@@ -179,20 +196,27 @@ export async function POST(request: Request, context: RouteContext) {
     }
 
     const allFields = await db.select().from(mergeTemplateFields).where(eq(mergeTemplateFields.templateId, id));
+    const activeFields = allFields.filter((field) => !field.isOrphaned);
 
     await writeAudit(guard.session, "SCAN_MERGE_TEMPLATE", "merge_templates", {
       templateId: id,
       googleDocId: docId,
       placeholderCount: placeholders.length,
+      newPlaceholderCount: newFields.length,
+      hiddenPlaceholderCount: orphanedFields.length,
+      reactivatedPlaceholderCount: reactivatedFields.length,
     });
 
     return NextResponse.json({
       placeholders,
       newFields,
-      orphanedFields: orphanedFields.map((field) => field.placeholder),
+      hiddenFields: orphanedFields.map((field) => field.placeholder),
+      reactivatedFields,
       suggestions: suggestions.filter((item) => item.confidence >= 0.7),
-      totalFields: allFields.length,
-      activeFields: allFields.filter((field) => !field.isOrphaned).length,
+      // totalFields/activeFields đều phản ánh tài liệu Google Docs hiện tại để UI
+      // không tiếp tục hiển thị các placeholder đã bị xoá khỏi mẫu merge.
+      totalFields: activeFields.length,
+      activeFields: activeFields.length,
     });
   } catch (error) {
     console.error("[document-merge/templates/scan] error:", error);
