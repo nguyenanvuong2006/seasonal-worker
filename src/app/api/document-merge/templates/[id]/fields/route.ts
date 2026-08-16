@@ -3,7 +3,7 @@
  *
  * CRUD cho field mappings của một template.
  * PUT /api/document-merge/templates/[id]/fields - Bulk update mappings
- * GET /api/document-merge/templates/[id]/fields - Read mappings
+ * GET /api/document-merge/templates/[id]/fields - Read active mappings only
  */
 
 import { NextResponse } from 'next/server';
@@ -124,7 +124,7 @@ export async function PUT(request: Request, context: RouteContext) {
       }),
     );
 
-    return NextResponse.json(updatedFields);
+    return NextResponse.json(updatedFields.filter((field) => !field.isOrphaned));
   } catch (error) {
     console.error('[document-merge/templates/[id]/fields] PUT error:', error);
     return NextResponse.json({ error: 'Failed to update field mappings' }, { status: 500 });
@@ -133,6 +133,12 @@ export async function PUT(request: Request, context: RouteContext) {
 
 /**
  * GET /api/document-merge/templates/[id]/fields
+ *
+ * Google Docs là source-of-truth cho danh sách placeholder đang dùng.
+ * Các mapping cũ đã bị scan đánh dấu isOrphaned=true vẫn được giữ trong DB
+ * để bảo toàn lịch sử/cấu hình nếu placeholder được thêm lại, nhưng KHÔNG trả
+ * về editor/merge workspace. Vì vậy UI chỉ hiển thị placeholder còn tồn tại
+ * trong tài liệu merge hiện tại.
  */
 export async function GET(_request: Request, context: RouteContext) {
   const guard = await requirePermission(['ADMIN', 'HR_RECRUITER', 'HR_DIRECTOR'], 'document_merge.view');
@@ -146,7 +152,12 @@ export async function GET(_request: Request, context: RouteContext) {
     const fields = await db
       .select()
       .from(mergeTemplateFields)
-      .where(eq(mergeTemplateFields.templateId, id))
+      .where(
+        and(
+          eq(mergeTemplateFields.templateId, id),
+          eq(mergeTemplateFields.isOrphaned, false),
+        ),
+      )
       .orderBy(mergeTemplateFields.placeholder);
 
     return NextResponse.json(fields);
