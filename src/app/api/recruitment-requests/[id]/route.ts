@@ -1,10 +1,11 @@
 import { NextResponse } from "next/server";
-import { eq } from "drizzle-orm";
+import { and, eq, inArray, isNull, or } from "drizzle-orm";
 import { db } from "@/db";
 import { recruitmentRequests } from "@/db/schema";
 import { getUserScope, requirePermission, writeAudit } from "@/lib/auth";
 import { scopeAllowsDepartment } from "@/lib/data-scope";
 import { getRecruitmentRequest, batchUpdateStatus, softDeleteRecruitmentRequests } from "@/lib/recruitment-request";
+import { listOpenAllocationsForRequest } from "@/lib/planning-reallocation";
 import {
   REQUEST_STATUSES,
   computeBalance,
@@ -16,6 +17,76 @@ import {
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
+
+/**
+ * GET /api/recruitment-requests/:id
+ * Trả yêu cầu kèm CHUỖI LỊCH SỬ (Yêu cầu #4): yêu cầu này nối tiếp/thay thế
+ * cái nào, và những yêu cầu nào nối tiếp/thay thế nó. Chỉ đọc, không sửa gì.
+ */
+export async function GET(_req: Request, ctx: { params: Promise<{ id: string }> }) {
+  const { id } = await ctx.params;
+  // DEPT_MANAGER được phép XEM trong Data Scope (Yêu cầu #3).
+  const guard = await requirePermission(["ADMIN", "HR_DIRECTOR", "HR_RECRUITER", "DEPT_MANAGER"], "planning.view");
+  if (!guard.ok) return NextResponse.json({ error: guard.error }, { status: guard.status });
+
+  const row = await getRecruitmentRequest(id);
+  if (!row) return NextResponse.json({ error: "Không tìm thấy yêu cầu tuyển dụng." }, { status: 404 });
+
+  // Data Scope server-side (Yêu cầu #15) — ngoài phạm vi trả 404, không phải 403,
+  // để không tiết lộ sự tồn tại của bản ghi.
+  const scope = await getUserScope(guard.session);
+  if (!scopeAllowsDepartment(scope, row.departmentId)) {
+    return NextResponse.json({ error: "Không tìm thấy yêu cầu trong Data Scope được cấp." }, { status: 404 });
+  }
+
+  const lineageSelect = {
+    id: recruitmentRequests.id,
+    requestCode: recruitmentRequests.requestCode,
+    status: recruitmentRequests.status,
+    expectedDate: recruitmentRequests.expectedDate,
+    endDate: recruitmentRequests.endDate,
+    totalRequest: recruitmentRequests.totalRequest,
+    createdAt: recruitmentRequests.createdAt,
+  };
+
+  const ancestorIds = [row.previousRequestId, row.supersedesRequestId].filter(
+    (v): v is string => typeof v === "string" && v.length > 0,
+  );
+
+  const [ancestors, successors] = await Promise.all([
+    ancestorIds.length > 0
+      ? db.select(lineageSelect).from(recruitmentRequests).where(inArray(recruitmentRequests.id, ancestorIds))
+      : Promise.resolve([]),
+    db
+      .select(lineageSelect)
+      .from(recruitmentRequests)
+      .where(
+        and(
+          or(
+            eq(recruitmentRequests.previousRequestId, id),
+            eq(recruitmentRequests.supersedesRequestId, id),
+          ),
+          isNull(recruitmentRequests.deletedAt),
+        ),
+      )
+      .orderBy(recruitmentRequests.createdAt),
+  ]);
+
+  // Phân bổ đang mở của yêu cầu này — cần cho panel chuyển phân bổ.
+  const allocations = await listOpenAllocationsForRequest(id);
+
+  return NextResponse.json({
+    row,
+    lineage: {
+      previousRequestId: row.previousRequestId,
+      supersedesRequestId: row.supersedesRequestId,
+      ancestors,
+      successors,
+    },
+    openAllocations: allocations,
+    canEdit: guard.session.role === "ADMIN" || guard.session.role === "HR_RECRUITER",
+  });
+}
 
 /**
  * PATCH /api/recruitment-requests/:id

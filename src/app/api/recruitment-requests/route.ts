@@ -1,5 +1,5 @@
 import { NextResponse } from "next/server";
-import { and, eq, isNull } from "drizzle-orm";
+import { and, eq, inArray, isNull } from "drizzle-orm";
 import { db } from "@/db";
 import { recruitmentRequests } from "@/db/schema";
 import { getUserScope, requirePermission, writeAudit } from "@/lib/auth";
@@ -93,6 +93,9 @@ export async function POST(req: Request) {
     departmentText?: string;
     monthReport?: string;
     planningPeriodId?: string | null;
+    // Yêu cầu #4 — chuỗi lịch sử: yêu cầu mới NỐI vào yêu cầu cũ thay vì sửa đè.
+    previousRequestId?: string | null;
+    supersedesRequestId?: string | null;
   };
 
   const requestCode = body.requestCode?.trim();
@@ -136,6 +139,36 @@ export async function POST(req: Request) {
       { error: "Phòng ban của yêu cầu nằm ngoài Data Scope được cấp cho tài khoản này." },
       { status: 403 },
     );
+  }
+
+  // Yêu cầu #4 — Planning là lịch sử chỉ-thêm. Một yêu cầu mới có thể khai báo
+  // nó nối tiếp (previous_request_id) hoặc thay thế (supersedes_request_id) một
+  // yêu cầu cũ. Cả hai chỉ là liên kết truy vết: bản ghi cũ KHÔNG bị sửa nội
+  // dung, KHÔNG bị xoá, và các phân bổ đang mở của nó vẫn nguyên vẹn.
+  const linkIds = [body.previousRequestId, body.supersedesRequestId].filter(
+    (v): v is string => typeof v === "string" && v.length > 0,
+  );
+  if (linkIds.length > 0) {
+    const linked = await db
+      .select({ id: recruitmentRequests.id, departmentId: recruitmentRequests.departmentId })
+      .from(recruitmentRequests)
+      .where(and(inArray(recruitmentRequests.id, linkIds), isNull(recruitmentRequests.deletedAt)));
+    const found = new Set(linked.map((r) => r.id));
+    const missing = linkIds.filter((id) => !found.has(id));
+    if (missing.length > 0) {
+      return NextResponse.json(
+        { error: `Không tìm thấy yêu cầu được tham chiếu: ${missing.join(", ")}` },
+        { status: 400 },
+      );
+    }
+    // Data Scope áp cả cho yêu cầu được tham chiếu (Yêu cầu #15).
+    const scope = await getUserScope(guard.session);
+    if (linked.some((r) => !scopeAllowsDepartment(scope, r.departmentId))) {
+      return NextResponse.json(
+        { error: "Yêu cầu được tham chiếu nằm ngoài Data Scope của tài khoản này." },
+        { status: 404 },
+      );
+    }
   }
 
   try {
@@ -183,6 +216,8 @@ export async function POST(req: Request) {
         departmentText: body.departmentText ?? body.department ?? null,
         monthReport: body.monthReport ?? null,
         planningPeriodId: body.planningPeriodId ?? null,
+        previousRequestId: body.previousRequestId || null,
+        supersedesRequestId: body.supersedesRequestId || null,
         createdBy: guard.session.username,
       })
       .returning();
@@ -193,6 +228,8 @@ export async function POST(req: Request) {
       status: row.status,
       maleRq,
       femaleRq,
+      previousRequestId: row.previousRequestId,
+      supersedesRequestId: row.supersedesRequestId,
       rejectedSystemOwnedFields: rejected,
     });
 
