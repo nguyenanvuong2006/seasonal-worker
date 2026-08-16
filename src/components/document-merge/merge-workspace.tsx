@@ -282,7 +282,7 @@ function MappingInspector({ template }: { template: MergeTemplate | undefined })
   if (!template) {
     return (
       <div className="rounded-xl border border-amber-200 bg-amber-50 p-4 text-xs text-amber-800">
-        Chưa xác định được template thực tế. Chọn một ứng viên hoặc chọn template thủ công để kiểm tra mapping.
+        Chưa xác định được template thực tế. Chọn một template thủ công hoặc bật Auto Route để kiểm tra mapping.
       </div>
     );
   }
@@ -477,7 +477,7 @@ export function MergeWorkspace({
 }) {
   const [templates, setTemplates] = useState<MergeTemplate[]>([]);
   const [templateId, setTemplateId] = useState(selectedTemplateId);
-  const [autoRoute, setAutoRoute] = useState(true);
+  const [autoRoute, setAutoRoute] = useState(false);
   const [batchPrint, setBatchPrint] = useState(true);
   const [records, setRecords] = useState<ApplicantRow[]>([]);
   const [loadingRecords, setLoadingRecords] = useState(false);
@@ -558,6 +558,7 @@ export function MergeWorkspace({
     ? templates.find((item) => item.isActive && item.documentKind === selectedKind)
     : undefined;
   const effectiveTemplate = autoRoute ? routedTemplate : selectedTemplate;
+  const templateReady = autoRoute || Boolean(selectedTemplate);
 
   const toggleAll = () => {
     if (selectedIds.size === filtered.length && filtered.length > 0) {
@@ -579,6 +580,10 @@ export function MergeWorkspace({
     const target = id || previewTargetId || Array.from(selectedIds)[0];
     if (!target) {
       setMergeError("Chọn ít nhất 1 ứng viên để xem trước.");
+      return;
+    }
+    if (!autoRoute && !templateId) {
+      setMergeError("Chọn template cố định trước khi Preview.");
       return;
     }
     setPreviewTargetId(target);
@@ -623,6 +628,10 @@ export function MergeWorkspace({
   const execute = async (dispatchToApplicant: boolean) => {
     if (selectedIds.size === 0) {
       setMergeError("Chọn danh sách ứng viên đã xếp việc trước khi merge.");
+      return;
+    }
+    if (!autoRoute && !templateId) {
+      setMergeError("Chọn template cố định trước khi merge.");
       return;
     }
     setIsMerging(true);
@@ -678,8 +687,7 @@ export function MergeWorkspace({
       <div className="rounded-xl border border-slate-200/80 bg-white p-5 shadow-xs">
         <h2 className="text-base font-bold text-slate-900">Xử lý Merge tài liệu Tập nghề</h2>
         <p className="mt-1 text-xs text-slate-500">
-          Chọn ứng viên đã xếp việc. Hệ thống tự áp dụng <b>Tài liệu A</b> (DW Cũ — Cam kết / Tái ký)
-          hoặc <b>Tài liệu B</b> (DW Mới — Hợp đồng đào tạo nghề).
+          Mặc định chọn một <b>template cố định</b> để trộn cho toàn bộ hồ sơ đã chọn. Chỉ khi bật <b>Auto Route</b>, hệ thống mới phân loại DW Cũ → Tài liệu A và DW Mới → Tài liệu B.
         </p>
       </div>
 
@@ -726,9 +734,17 @@ export function MergeWorkspace({
         <div className={`rounded-xl border p-4 text-xs ${effectiveTemplate ? "border-emerald-200 bg-emerald-50/60" : "border-amber-200 bg-amber-50"}`}>
           <p className="font-bold text-slate-900">Template thực tế sẽ được sử dụng</p>
           <p className="mt-1 text-slate-700">
-            {resolveDwClassification({ declaredType: selectedRecord.declaredType, dwMatch: selectedRecord.dwMatch }) === "OLD" ? "DW Cũ" : "DW Mới"}
-            {" → "}Tài liệu {selectedKind ?? "—"}{" → "}
-            <b>{effectiveTemplate?.name ?? `Chưa có Tài liệu ${selectedKind ?? "phù hợp"} đang hoạt động`}</b>
+            {autoRoute ? (
+              <>
+                {resolveDwClassification({ declaredType: selectedRecord.declaredType, dwMatch: selectedRecord.dwMatch }) === "OLD" ? "DW Cũ" : "DW Mới"}
+                {" → "}Tài liệu {selectedKind ?? "—"}{" → "}
+                <b>{effectiveTemplate?.name ?? `Chưa có Tài liệu ${selectedKind ?? "phù hợp"} đang hoạt động`}</b>
+              </>
+            ) : (
+              <>
+                Mẫu cố định → <b>{selectedTemplate?.name ?? "Chưa chọn template"}</b>
+              </>
+            )}
             {effectiveTemplate ? ` · Mapping ${effectiveTemplate.placeholderCount ?? 0} placeholder` : ""}
           </p>
         </div>
@@ -746,8 +762,8 @@ export function MergeWorkspace({
           <label className="flex items-start gap-2 rounded-lg border border-emerald-200 bg-emerald-50/60 p-3 text-xs">
             <input type="checkbox" checked={autoRoute} onChange={(e) => setAutoRoute(e.target.checked)} className="mt-0.5" />
             <span>
-              <b>Tự động áp dụng mẫu theo phân loại DW</b>
-              <span className="mt-0.5 block text-[11px] text-slate-500">DW Cũ → Tài liệu A. DW Mới → Tài liệu B.</span>
+              <b>Auto Route theo phân loại DW (tùy chọn)</b>
+              <span className="mt-0.5 block text-[11px] text-slate-500">Tắt mặc định: dùng đúng template bạn chọn. Bật: DW Cũ → Tài liệu A, DW Mới → Tài liệu B.</span>
             </span>
           </label>
 
@@ -760,9 +776,9 @@ export function MergeWorkspace({
               }}
               className="w-full rounded-lg border border-slate-200 bg-white px-3 py-2 text-xs"
             >
-              <option value="">-- Chọn template --</option>
-              {templates.map((item) => (
-                <option key={item.id} value={item.id}>{item.name} ({documentKindLabel(item.documentKind)})</option>
+              <option value="">-- Chọn template cố định --</option>
+              {templates.filter((item) => item.isActive).map((item) => (
+                <option key={item.id} value={item.id}>{item.name}</option>
               ))}
             </select>
           )}
@@ -776,7 +792,7 @@ export function MergeWorkspace({
             <button type="button" onClick={toggleAll} className="font-semibold text-emerald-800">
               {selectedIds.size === filtered.length && filtered.length > 0 ? "Bỏ chọn tất cả" : "Chọn tất cả"}
             </button>
-            {selectedTemplate && !autoRoute && <span className="text-slate-500">Mẫu: {selectedTemplate.name}</span>}
+            {selectedTemplate && !autoRoute && <span className="text-slate-500">Mẫu cố định: {selectedTemplate.name}</span>}
           </div>
 
           <div className="max-h-[460px] overflow-y-auto rounded-lg border border-slate-100">
@@ -787,14 +803,16 @@ export function MergeWorkspace({
             ) : (
               <table className="w-full text-left text-xs">
                 <thead className="sticky top-0 bg-slate-50 text-[10px] uppercase tracking-wider text-slate-500">
-                  <tr><th className="px-3 py-2"> </th><th className="px-3 py-2">Ứng viên</th><th className="px-3 py-2">DW / Mẫu</th><th className="px-3 py-2">Bộ phận</th></tr>
+                  <tr><th className="px-3 py-2"> </th><th className="px-3 py-2">Ứng viên</th><th className="px-3 py-2">{autoRoute ? "DW / Mẫu" : "Mẫu sử dụng"}</th><th className="px-3 py-2">Bộ phận</th></tr>
                 </thead>
                 <tbody className="divide-y divide-slate-100">
                   {filtered.map((row) => {
                     const kind = resolveDocumentKind({ declaredType: row.declaredType, dwMatch: row.dwMatch });
                     const dw = resolveDwClassification({ declaredType: row.declaredType, dwMatch: row.dwMatch });
                     const selected = selectedIds.has(row.id);
-                    const rowTemplate = templates.find((item) => item.isActive && item.documentKind === kind);
+                    const rowTemplate = autoRoute
+                      ? templates.find((item) => item.isActive && item.documentKind === kind)
+                      : selectedTemplate;
                     return (
                       <tr
                         key={row.id}
@@ -809,11 +827,19 @@ export function MergeWorkspace({
                           {row.documentSentAt && !row.signatureConfirmedAt && <div className="text-[10px] text-amber-700">Đã gửi, chờ ký</div>}
                         </td>
                         <td className="px-3 py-2">
-                          <span className={`inline-flex rounded-full px-2 py-0.5 text-[10px] font-bold ${dw === "OLD" ? "bg-sky-100 text-sky-800" : "bg-amber-100 text-amber-800"}`}>{dw === "OLD" ? "DW Cũ" : "DW Mới"}</span>
-                          <div className="mt-1 text-[10px] font-semibold text-slate-600">Tài liệu {kind}</div>
-                          <div className={`mt-0.5 max-w-[150px] truncate text-[9px] ${rowTemplate ? "text-emerald-700" : "text-red-600"}`} title={rowTemplate?.name}>
-                            {rowTemplate?.name ?? "Chưa cấu hình mẫu"}
-                          </div>
+                          {autoRoute ? (
+                            <>
+                              <span className={`inline-flex rounded-full px-2 py-0.5 text-[10px] font-bold ${dw === "OLD" ? "bg-sky-100 text-sky-800" : "bg-amber-100 text-amber-800"}`}>{dw === "OLD" ? "DW Cũ" : "DW Mới"}</span>
+                              <div className="mt-1 text-[10px] font-semibold text-slate-600">Tài liệu {kind}</div>
+                              <div className={`mt-0.5 max-w-[150px] truncate text-[9px] ${rowTemplate ? "text-emerald-700" : "text-red-600"}`} title={rowTemplate?.name}>
+                                {rowTemplate?.name ?? "Chưa cấu hình mẫu"}
+                              </div>
+                            </>
+                          ) : (
+                            <div className={`max-w-[180px] truncate text-[10px] font-semibold ${selectedTemplate ? "text-emerald-700" : "text-amber-700"}`} title={selectedTemplate?.name}>
+                              {selectedTemplate?.name ?? "Chưa chọn template"}
+                            </div>
+                          )}
                         </td>
                         <td className="px-3 py-2 text-slate-600">
                           {row.deptName || "—"}
@@ -831,7 +857,7 @@ export function MergeWorkspace({
         <section className="flex min-h-[520px] flex-col rounded-xl border border-slate-200/80 bg-white p-4 shadow-xs">
           <div className="flex items-center justify-between gap-2 border-b border-slate-100 pb-3">
             <h3 className="text-sm font-bold text-slate-900">Preview tài liệu</h3>
-            <button type="button" onClick={() => void loadPreview()} disabled={previewLoading} className="inline-flex items-center gap-1.5 rounded-lg border border-slate-200 px-3 py-1.5 text-xs font-semibold text-slate-700 hover:bg-slate-50 disabled:opacity-50">
+            <button type="button" onClick={() => void loadPreview()} disabled={previewLoading || !templateReady} className="inline-flex items-center gap-1.5 rounded-lg border border-slate-200 px-3 py-1.5 text-xs font-semibold text-slate-700 hover:bg-slate-50 disabled:opacity-50">
               <Eye className="h-3.5 w-3.5" /> {previewLoading ? "Đang tải..." : "Preview"}
             </button>
           </div>
@@ -844,8 +870,8 @@ export function MergeWorkspace({
                 <div className="rounded-lg bg-white p-3 shadow-xs">
                   <p className="font-bold text-slate-900">{preview.fullName}</p>
                   <p className="font-mono text-[11px] text-slate-500">{preview.cccd}</p>
-                  <p className="mt-1 text-[11px] text-emerald-800">{preview.dwClassification === "OLD" ? "DW Cũ" : "DW Mới"} → {preview.documentKindLabel}</p>
-                  <p className="text-[11px] text-slate-500">Mẫu: {preview.templateName}</p>
+                  {autoRoute && <p className="mt-1 text-[11px] text-emerald-800">{preview.dwClassification === "OLD" ? "DW Cũ" : "DW Mới"} → {preview.documentKindLabel}</p>}
+                  <p className="text-[11px] text-slate-500">{autoRoute ? "Mẫu được route" : "Mẫu cố định"}: {preview.templateName}</p>
                   {preview.mappingSummary && <p className="mt-1 text-[10px] text-slate-400">Mapping: {preview.mappingSummary.mapped}/{preview.mappingSummary.total} · Required: {preview.mappingSummary.required}</p>}
                 </div>
                 <pre className="whitespace-pre-wrap font-sans text-[12px] text-slate-800">{preview.content}</pre>
@@ -863,14 +889,14 @@ export function MergeWorkspace({
             </label>
 
             <div className="grid gap-2 sm:grid-cols-2">
-              <button type="button" onClick={() => void loadPreview()} disabled={previewLoading || selectedIds.size === 0} className="inline-flex items-center justify-center gap-1.5 rounded-lg border border-slate-200 bg-white py-2.5 text-xs font-semibold text-slate-700 disabled:opacity-50">
+              <button type="button" onClick={() => void loadPreview()} disabled={previewLoading || selectedIds.size === 0 || !templateReady} className="inline-flex items-center justify-center gap-1.5 rounded-lg border border-slate-200 bg-white py-2.5 text-xs font-semibold text-slate-700 disabled:opacity-50">
                 <FileCheck className="h-3.5 w-3.5" /> Preview
               </button>
-              <button type="button" onClick={() => void execute(true)} disabled={isMerging || selectedIds.size === 0} className="inline-flex items-center justify-center gap-1.5 rounded-lg bg-emerald-700 py-2.5 text-xs font-bold text-white shadow-sm hover:bg-emerald-800 disabled:opacity-50">
+              <button type="button" onClick={() => void execute(true)} disabled={isMerging || selectedIds.size === 0 || !templateReady} className="inline-flex items-center justify-center gap-1.5 rounded-lg bg-emerald-700 py-2.5 text-xs font-bold text-white shadow-sm hover:bg-emerald-800 disabled:opacity-50">
                 <Send className="h-3.5 w-3.5" /> {isMerging ? "Đang đẩy..." : "Đẩy tài liệu merge đến Người tìm việc"}
               </button>
             </div>
-            <button type="button" onClick={() => void execute(false)} disabled={isMerging || selectedIds.size === 0} className="inline-flex w-full items-center justify-center gap-1.5 rounded-lg border border-emerald-200 bg-emerald-50 py-2 text-xs font-semibold text-emerald-800 disabled:opacity-50">
+            <button type="button" onClick={() => void execute(false)} disabled={isMerging || selectedIds.size === 0 || !templateReady} className="inline-flex w-full items-center justify-center gap-1.5 rounded-lg border border-emerald-200 bg-emerald-50 py-2 text-xs font-semibold text-emerald-800 disabled:opacity-50">
               <Sparkles className="h-3.5 w-3.5" /> Chỉ xuất file (không gửi ứng viên)
             </button>
           </div>
