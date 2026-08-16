@@ -1343,12 +1343,25 @@ export const mergeJobs = pgTable(
     metadata: jsonb("metadata").$type<Record<string, unknown>>().default({}),
     createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
     updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
+    // --- ASYNC PDF ENGINE (migration 2026-08-20) -----------------------------
+    // engine = GOOGLE_DOCS (legacy fallback) | HTML_PDF (Playwright renderer).
+    // Neon chỉ lưu metadata/job/progress/URL — KHÔNG lưu PDF binary.
+    engine: varchar("engine", { length: 16 }).notNull().default("GOOGLE_DOCS"),
+    queuedCount: integer("queued_count").notNull().default(0),
+    processingCount: integer("processing_count").notNull().default(0),
+    completedCount: integer("completed_count").notNull().default(0),
+    failedCount: integer("failed_count").notNull().default(0),
+    progressPercent: integer("progress_percent").notNull().default(0),
+    outputPdfUrl: text("output_pdf_url"),
+    outputZipUrl: text("output_zip_url"),
+    errorSummary: text("error_summary"),
   },
   (t) => [
     index("merge_job_status_idx").on(t.status),
     index("merge_job_created_by_idx").on(t.createdBy),
     index("merge_job_template_idx").on(t.templateId),
     index("merge_job_created_at_idx").on(t.createdAt),
+    index("merge_job_status_updated_idx").on(t.status, t.updatedAt),
   ],
 );
 
@@ -1363,10 +1376,25 @@ export const mergeJobRecords = pgTable(
     status: varchar("status", { length: 24 }).notNull().default("PENDING"),
     error: text("error"),
     createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+    // --- ASYNC PDF ENGINE (migration 2026-08-20) -----------------------------
+    // Bảng này CHÍNH LÀ bảng "item" của async queue (không tạo bảng trùng).
+    // sort_order = sequence (thứ tự user chọn, source of truth khi gộp PDF).
+    attemptCount: integer("attempt_count").notNull().default(0),
+    leasedUntil: timestamp("leased_until", { withTimezone: true }),
+    retryAt: timestamp("retry_at", { withTimezone: true }),
+    pdfUrl: text("pdf_url"),
+    storageKey: text("storage_key"),
+    startedAt: timestamp("started_at", { withTimezone: true }),
+    completedAt: timestamp("completed_at", { withTimezone: true }),
+    errorCode: varchar("error_code", { length: 64 }),
+    errorMessage: text("error_message"),
   },
   (t) => [
     index("merge_job_record_job_idx").on(t.mergeJobId),
     index("merge_job_record_source_idx").on(t.sourceEntity, t.sourceRecordId),
+    index("merge_job_record_claim_idx")
+      .on(t.mergeJobId, t.status, t.sortOrder)
+      .where(sql`status IN ('QUEUED', 'RETRY')`),
   ],
 );
 
