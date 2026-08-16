@@ -51,7 +51,7 @@ export async function POST(req: Request) {
     if (typeof body.jobType !== "string" || !JOB_TYPES.has(body.jobType as Group)) {
       return errorJson("Loại dữ liệu không hợp lệ. Chỉ chấp nhận department, dw_data hoặc daily_application.", 400);
     }
-    const jobType = body.jobType as Group;
+    const jobType = body.jobType as "department" | "dw_data" | "daily_application";
 
     if (!Array.isArray(body.columnIds) || body.columnIds.length === 0) {
       return errorJson("Bảng chưa có cột để xử lý.", 400);

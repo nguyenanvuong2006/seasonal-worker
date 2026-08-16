@@ -874,7 +874,7 @@ function MergeTab({
                 <div className="py-4 text-center text-xs text-slate-400">Đang tải templates...</div>
               ) : templates.length === 0 ? (
                 <div className="rounded-lg border border-dashed border-slate-200 p-4 text-center text-xs text-slate-500">
-                  Chưa có template nào. Vui lòng tạo template ở tab "Templates".
+                  Chưa có template nào. Vui lòng tạo template ở tab &quot;Templates&quot;.
                 </div>
               ) : (
                 <>

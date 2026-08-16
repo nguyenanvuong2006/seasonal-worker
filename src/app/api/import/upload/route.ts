@@ -28,7 +28,7 @@ export async function POST(req: Request) {
 
   const form = await req.formData();
   const file = form.get("file") as File | null;
-  const jobType = form.get("jobType") as Group | null;
+  const jobType = form.get("jobType") as "department" | "dw_data" | "daily_application" | null;
   const mappingRaw = form.get("mapping") as string | null;
   const mapping = mappingRaw ? (JSON.parse(mappingRaw) as Record<string, string>) : null;
 

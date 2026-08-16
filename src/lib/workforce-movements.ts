@@ -4,6 +4,7 @@ import { db } from "@/db";
 import { dailyApplications, employmentSessions, workforceMovements } from "@/db/schema";
 import { queueNotification } from "@/lib/notifications";
 import { autoAllocateInternship } from "@/lib/planning";
+import { endActiveRequestAllocationsForWorker } from "@/lib/workforce-request";
 import type { Session } from "@/lib/auth";
 
 /**
@@ -86,6 +87,16 @@ export async function applyMovementAction(
         if (latestSession) {
           await tx.update(employmentSessions).set({ endDate: movement.effectiveDate }).where(eq(employmentSessions.id, latestSession.id));
         }
+        // WORKFORCE REQUEST LINKAGE (mục 4 + 9): nghỉ việc được xác nhận → kết thúc
+        // mọi ACTIVE request allocation của worker (ghi history action=END). KHÔNG
+        // xoá allocation history — Quit KPI đọc từ đây. KPI Request tự giảm Current
+        // Workforce vì Employment Session đã đóng (tính lại từ source, không lưu tay).
+        await endActiveRequestAllocationsForWorker(
+          movement.workerId,
+          session.username,
+          `Nghỉ việc được xác nhận (movement ${movementId})`,
+          tx,
+        );
         break;
       }
       case "REJECT":

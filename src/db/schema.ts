@@ -129,6 +129,10 @@ export const dailyApplications = pgTable(
 
     // HR xếp việc
     deptId: uuid("dept_id").references(() => departments.id, { onDelete: "set null" }),
+    // WORKFORCE REQUEST LINKAGE — pipeline Application/Screened/Interviewed/Recruited
+    // của request này đọc từ daily_applications theo cột này (source of truth), không
+    // dùng các cột số import tay (male_application...) trên recruitment_requests.
+    requestId: uuid("request_id").references(() => recruitmentRequests.id, { onDelete: "set null" }),
     status: varchar("status", { length: 24 }).notNull().default("PENDING"),
     startingDate: date("starting_date"),
     appointmentList: varchar("appointment_list", { length: 60 }),
@@ -599,6 +603,13 @@ export const planningPeriods = pgTable(
     supplementIndex: integer("supplement_index").notNull().default(0), // 0: Gốc, 1: Bổ sung 1, 2: Bổ sung 2...
     parentPeriodId: uuid("parent_period_id"), // trỏ tới kế hoạch gốc nếu là bổ sung
     supersededBy: uuid("superseded_by"), // trỏ tới bản ghi version mới hơn (tự tham chiếu khi revise)
+    // WORKFORCE REQUEST LINKAGE (mục 8) — liên kết ID rõ ràng tới Workforce Request;
+    // KHÔNG match bằng text Department/Date. Khi có liên kết, KPI của Planning được
+    // tính TỪ Workforce Request (source of truth), không tự tính riêng.
+    // Ghi chú kỹ thuật: khai báo soft reference ở Drizzle (FK thật nằm trong SQL
+    // migration planning_periods.request_id REFERENCES recruitment_requests) để tránh
+    // vòng tham chiếu kiểu giữa planningPeriods ↔ recruitmentRequests.
+    requestId: uuid("request_id"),
     createdBy: varchar("created_by", { length: 64 }).notNull(),
     createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
     updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
@@ -870,6 +881,9 @@ export const recruitmentRequests = pgTable(
   {
     id: uuid("id").defaultRandom().primaryKey(),
     planningPeriodId: uuid("planning_period_id").references(() => planningPeriods.id, { onDelete: "set null" }),
+    // WORKFORCE REQUEST LINKAGE — FK cấu trúc tới Department (thay match bằng text).
+    // Data Scope lọc theo cột này; cột text `department` chỉ giữ lại làm fallback/back-compat.
+    departmentId: uuid("department_id").references(() => departments.id, { onDelete: "set null" }),
     requestCode: varchar("request_code", { length: 80 }).notNull(),
     requester: varchar("requester", { length: 160 }).notNull().default(""),
     position: varchar("position", { length: 160 }),
@@ -922,6 +936,7 @@ export const recruitmentRequests = pgTable(
   (t) => [
     uniqueIndex("recruitment_requests_code_uq").on(t.requestCode).where(sql`deleted_at is null`),
     index("recruitment_requests_period_idx").on(t.planningPeriodId),
+    index("recruitment_requests_dept_id_idx").on(t.departmentId),
     index("recruitment_requests_status_idx").on(t.status),
     index("recruitment_requests_month_idx").on(t.month),
     index("recruitment_requests_location_idx").on(t.location),
@@ -935,6 +950,117 @@ export const recruitmentRequests = pgTable(
 
 export type RecruitmentRequest = typeof recruitmentRequests.$inferSelect;
 export type NewRecruitmentRequest = typeof recruitmentRequests.$inferInsert;
+
+/* ============================================================
+   WORKFORCE REQUEST LINKAGE (Phase 4)
+   ------------------------------------------------------------
+   Architecture: Workforce Request ↔ Planning ↔ Employment/Allocation.
+   Bảng dưới đây là LỚP ALLOCATION CỦA WORKFORCE REQUEST:
+     - request_allocations:        1 ACTIVE worker → 1 ACTIVE request
+                                   allocation (source of truth "worker đang
+                                   được tính vào request nào").
+     - request_allocation_history:  audit mọi thay đổi allocation (mục 15).
+     - request_allocation_overrides: log RIÊNG cho override vượt tổng
+                                   nhu cầu (mục 6 + 15).
+     - request_comments:            bình luận của Dept Manager (mục 11).
+     - request_kpi_cache:           cache KPI có timestamp + recompute job
+                                   (mục 9) — KHÔNG phải source of truth.
+   ============================================================ */
+export const requestAllocations = pgTable(
+  "request_allocations",
+  {
+    id: uuid("id").defaultRandom().primaryKey(),
+    employmentSessionId: uuid("employment_session_id").notNull(), // tham chiếu mềm tới employment_sessions
+    workerId: uuid("worker_id").notNull(), // denormalized — để chốt unique theo WORKER
+    requestId: uuid("request_id").notNull(), // tham chiếu mềm tới recruitment_requests
+    status: varchar("status", { length: 16 }).notNull().default("ACTIVE"), // ACTIVE | ENDED
+    startedAt: timestamp("started_at", { withTimezone: true }).notNull().defaultNow(),
+    endedAt: timestamp("ended_at", { withTimezone: true }),
+    allocatedBy: varchar("allocated_by", { length: 64 }).notNull(),
+    endedBy: varchar("ended_by", { length: 64 }),
+    endReason: text("end_reason"),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+    updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [
+    // CHỐT DB (mục 4): 1 worker tối đa 1 ACTIVE request allocation tại 1 thời điểm.
+    // Lớp cuối chống double-click/race sau khi transaction đã kiểm tra logic.
+    uniqueIndex("request_alloc_one_active_per_worker_uq").on(t.workerId).where(sql`status = 'ACTIVE'`),
+    index("request_alloc_request_status_idx").on(t.requestId, t.status),
+    index("request_alloc_session_idx").on(t.employmentSessionId),
+    index("request_alloc_worker_idx").on(t.workerId),
+  ],
+);
+
+export const requestAllocationHistory = pgTable(
+  "request_allocation_history",
+  {
+    id: uuid("id").defaultRandom().primaryKey(),
+    requestId: uuid("request_id").notNull(), // request liên quan (to trước, from nếu END)
+    workerId: uuid("worker_id").notNull(),
+    employmentSessionId: uuid("employment_session_id"),
+    fromRequestId: uuid("from_request_id"),
+    toRequestId: uuid("to_request_id"),
+    action: varchar("action", { length: 24 }).notNull(), // ALLOCATE | REALLOCATE | END | OVERRIDE
+    reason: text("reason"),
+    overrideConfirmed: boolean("override_confirmed").notNull().default(false),
+    changedBy: varchar("changed_by", { length: 64 }).notNull(),
+    changedAt: timestamp("changed_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [
+    index("request_alloc_history_request_idx").on(t.requestId, t.changedAt),
+    index("request_alloc_history_worker_idx").on(t.workerId, t.changedAt),
+    index("request_alloc_history_from_idx").on(t.fromRequestId),
+    index("request_alloc_history_to_idx").on(t.toRequestId),
+  ],
+);
+
+export const requestAllocationOverrides = pgTable(
+  "request_allocation_overrides",
+  {
+    id: uuid("id").defaultRandom().primaryKey(),
+    requestId: uuid("request_id").notNull(),
+    workerId: uuid("worker_id").notNull(),
+    changedBy: varchar("changed_by", { length: 64 }).notNull(),
+    reason: text("reason").notNull(),
+    confirmed: boolean("confirmed").notNull().default(true),
+    currentTotal: integer("current_total").notNull().default(0), // tổng hiện có tại thời điểm override
+    totalRequest: integer("total_request").notNull().default(0), // tổng nhu cầu
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [index("request_override_request_idx").on(t.requestId, t.createdAt)],
+);
+
+export const requestComments = pgTable(
+  "request_comments",
+  {
+    id: uuid("id").defaultRandom().primaryKey(),
+    requestId: uuid("request_id").notNull(),
+    userId: uuid("user_id"),
+    username: varchar("username", { length: 64 }).notNull(),
+    body: text("body").notNull(),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [index("request_comment_request_idx").on(t.requestId, t.createdAt)],
+);
+
+export const requestKpiCache = pgTable(
+  "request_kpi_cache",
+  {
+    requestId: uuid("request_id").primaryKey(),
+    asOfDate: date("as_of_date").notNull(),
+    payload: jsonb("payload").$type<Record<string, unknown>>().notNull(),
+    computedAt: timestamp("computed_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [index("request_kpi_cache_computed_idx").on(t.computedAt)],
+);
+
+export type RequestAllocation = typeof requestAllocations.$inferSelect;
+export type NewRequestAllocation = typeof requestAllocations.$inferInsert;
+export type RequestAllocationHistory = typeof requestAllocationHistory.$inferSelect;
+export type RequestAllocationOverride = typeof requestAllocationOverrides.$inferSelect;
+export type RequestComment = typeof requestComments.$inferSelect;
+export type RequestKpiCache = typeof requestKpiCache.$inferSelect;
 
 /* ============================================================
    DOCUMENT MERGE ENGINE

@@ -833,3 +833,114 @@ DO $$ BEGIN
 END $$;
 
 CREATE INDEX IF NOT EXISTS merge_template_kind_idx ON merge_templates (document_kind, is_active);
+
+-- ============================================================================
+-- WORKFORCE REQUEST LINKAGE (2026-08-16) — Workforce Request ↔ Planning ↔
+-- Employment/Allocation (xem migrations/2026-08-16-workforce-request-linkage.sql)
+-- Additive + idempotent — KHÔNG DROP / KHÔNG DELETE dữ liệu hiện có.
+-- ============================================================================
+
+-- Quyền mới (catalog) — idempotent.
+INSERT INTO permissions (key, name, group_name, is_system) VALUES
+  ('planning.overallocate', 'Override phân bổ vượt tổng nhu cầu (Planning)', 'planning', true),
+  ('workforce_request.view', 'Xem Workforce Request (Yêu cầu nhân lực)', 'planning', true),
+  ('workforce_request.allocate', 'Phân bổ / tái phân bổ lao động vào Workforce Request', 'planning', true),
+  ('workforce_request.comment', 'Bình luận trên Workforce Request', 'planning', true)
+ON CONFLICT (key) DO NOTHING;
+
+-- Baseline: view cho mọi vai trò nghiệp vụ; allocate cho HR_RECRUITER;
+-- comment cho HR_RECRUITER / DEPT_MANAGER / HR_DIRECTOR.
+-- planning.overallocate MẶC ĐỊNH KHÔNG CẤP CHO AI (fail-closed, trừ ADMIN bypass) —
+-- admin cấp thêm tại /admin/permissions khi business cần override.
+INSERT INTO role_permissions (role, permission_key, allowed) VALUES
+  ('ADMIN', 'workforce_request.view', true), ('ADMIN', 'workforce_request.allocate', true),
+  ('ADMIN', 'workforce_request.comment', true), ('ADMIN', 'planning.overallocate', true),
+  ('HR_RECRUITER', 'workforce_request.view', true), ('HR_RECRUITER', 'workforce_request.allocate', true),
+  ('HR_RECRUITER', 'workforce_request.comment', true),
+  ('DEPT_MANAGER', 'workforce_request.view', true), ('DEPT_MANAGER', 'workforce_request.comment', true),
+  ('HR_DIRECTOR', 'workforce_request.view', true), ('HR_DIRECTOR', 'workforce_request.comment', true)
+ON CONFLICT (role, permission_key) DO NOTHING;
+
+-- Liên kết ID (mục 8) — không match bằng text Department/Date.
+ALTER TABLE recruitment_requests ADD COLUMN IF NOT EXISTS department_id uuid REFERENCES departments(id) ON DELETE SET NULL;
+CREATE INDEX IF NOT EXISTS recruitment_requests_dept_id_idx ON recruitment_requests (department_id);
+
+ALTER TABLE planning_periods ADD COLUMN IF NOT EXISTS request_id uuid REFERENCES recruitment_requests(id) ON DELETE SET NULL;
+CREATE INDEX IF NOT EXISTS planning_request_idx ON planning_periods (request_id);
+
+ALTER TABLE daily_applications ADD COLUMN IF NOT EXISTS request_id uuid REFERENCES recruitment_requests(id) ON DELETE SET NULL;
+CREATE INDEX IF NOT EXISTS daily_app_request_idx ON daily_applications (request_id);
+
+-- Request allocation (mục 1 + 4).
+CREATE TABLE IF NOT EXISTS request_allocations (
+  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  employment_session_id uuid NOT NULL,
+  worker_id uuid NOT NULL,
+  request_id uuid NOT NULL,
+  status varchar(16) NOT NULL DEFAULT 'ACTIVE',
+  started_at timestamptz NOT NULL DEFAULT now(),
+  ended_at timestamptz,
+  allocated_by varchar(64) NOT NULL,
+  ended_by varchar(64),
+  end_reason text,
+  created_at timestamptz NOT NULL DEFAULT now(),
+  updated_at timestamptz NOT NULL DEFAULT now()
+);
+CREATE UNIQUE INDEX IF NOT EXISTS request_alloc_one_active_per_worker_uq
+  ON request_allocations (worker_id) WHERE status = 'ACTIVE';
+CREATE INDEX IF NOT EXISTS request_alloc_request_status_idx ON request_allocations (request_id, status);
+CREATE INDEX IF NOT EXISTS request_alloc_session_idx ON request_allocations (employment_session_id);
+CREATE INDEX IF NOT EXISTS request_alloc_worker_idx ON request_allocations (worker_id);
+
+-- Allocation history (mục 15).
+CREATE TABLE IF NOT EXISTS request_allocation_history (
+  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  request_id uuid NOT NULL,
+  worker_id uuid NOT NULL,
+  employment_session_id uuid,
+  from_request_id uuid,
+  to_request_id uuid,
+  action varchar(24) NOT NULL,
+  reason text,
+  override_confirmed boolean NOT NULL DEFAULT false,
+  changed_by varchar(64) NOT NULL,
+  changed_at timestamptz NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS request_alloc_history_request_idx ON request_allocation_history (request_id, changed_at);
+CREATE INDEX IF NOT EXISTS request_alloc_history_worker_idx ON request_allocation_history (worker_id, changed_at);
+CREATE INDEX IF NOT EXISTS request_alloc_history_from_idx ON request_allocation_history (from_request_id);
+CREATE INDEX IF NOT EXISTS request_alloc_history_to_idx ON request_allocation_history (to_request_id);
+
+-- Override log RIÊNG (mục 6 + 15).
+CREATE TABLE IF NOT EXISTS request_allocation_overrides (
+  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  request_id uuid NOT NULL,
+  worker_id uuid NOT NULL,
+  changed_by varchar(64) NOT NULL,
+  reason text NOT NULL,
+  confirmed boolean NOT NULL DEFAULT true,
+  current_total integer NOT NULL DEFAULT 0,
+  total_request integer NOT NULL DEFAULT 0,
+  created_at timestamptz NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS request_override_request_idx ON request_allocation_overrides (request_id, created_at);
+
+-- Comments (mục 11).
+CREATE TABLE IF NOT EXISTS request_comments (
+  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  request_id uuid NOT NULL,
+  user_id uuid,
+  username varchar(64) NOT NULL,
+  body text NOT NULL,
+  created_at timestamptz NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS request_comment_request_idx ON request_comments (request_id, created_at);
+
+-- KPI cache (mục 9) — có timestamp + recompute job; KHÔNG phải source of truth.
+CREATE TABLE IF NOT EXISTS request_kpi_cache (
+  request_id uuid PRIMARY KEY,
+  as_of_date date NOT NULL,
+  payload jsonb NOT NULL,
+  computed_at timestamptz NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS request_kpi_cache_computed_idx ON request_kpi_cache (computed_at);

@@ -12,6 +12,8 @@ import {
 } from "@/db/schema";
 import { isFemale, isMale, todayStr } from "@/lib/helpers";
 import { normalizePersonName } from "@/lib/person-name";
+import { mirrorPlanningAllocationToRequest } from "@/lib/workforce-request";
+import type { RequestKpi, WarningDetail } from "@/lib/workforce-request-kpi";
 
 type Executor = typeof db | Parameters<Parameters<typeof db.transaction>[0]>[0];
 
@@ -252,6 +254,7 @@ export async function autoAllocateInternship(
   const activePeriods = await executor
     .select({
       id: planningPeriods.id,
+      requestId: planningPeriods.requestId,
       startDate: planningPeriods.startDate,
       endDate: planningPeriods.endDate,
       requestType: planningPeriods.requestType,
@@ -361,6 +364,22 @@ export async function autoAllocateInternship(
       allocatedBy,
     })
     .onConflictDoNothing();
+
+  // WORKFORCE REQUEST LINKAGE (mục 8 + 9): nếu kế hoạch được chọn CÓ liên kết
+  // Workforce Request (planning_periods.request_id) → mirror sang request_allocations
+  // để Request vẫn là source of truth. Tôn trọng quy tắc chặn vượt tổng nhu cầu
+  // (không tự override) — nếu request đã đủ thì giữ nguyên allocation planning legacy.
+  const chosenPeriod = candidatePeriods.find((p) => p.id === chosenPeriodId);
+  if (chosenPeriod?.requestId && session?.workerId) {
+    await mirrorPlanningAllocationToRequest({
+      planningPeriodId: chosenPeriod.id,
+      employmentSessionId,
+      workerId: session.workerId,
+      allocatedBy,
+      reason: "Tự động phân bổ khi duyệt hồ sơ / chuyển bộ phận",
+      executor,
+    });
+  }
 
   return chosenPeriodId;
 }
@@ -544,4 +563,45 @@ export async function batchComputePlanningMetrics(periodIds: string[]): Promise<
   }
 
   return result;
+}
+
+/* ============================================================
+   WORKFORCE REQUEST LINKAGE (mục 8) — Planning THEO Workforce Request
+   ------------------------------------------------------------
+   Khi planning_periods.request_id có liên kết, KPI của Planning
+   ĐƯỢC TÍNH TỪ Workforce Request (source of truth) thay vì tự
+   tính riêng — tránh 2 nơi ra 2 con số khác nhau. Hàm này ánh xạ
+   RequestKpi (công thức chuẩn trong workforce-request-kpi.ts)
+   sang hình dạng PlanningMetrics mà UI Planning đang dùng.
+   ============================================================ */
+export type PlanningMetricsWithSource = PlanningMetrics & {
+  /** "linked_request" = số liệu lấy từ Workforce Request; "legacy" = tính theo luồng Planning cũ. */
+  metricsSource: "linked_request" | "legacy";
+  requestId: string | null;
+  warnings: WarningDetail[];
+};
+
+export function requestKpiToPlanningMetrics(kpi: RequestKpi, requestId: string): PlanningMetricsWithSource {
+  return {
+    demandMale: kpi.maleRequest,
+    demandFemale: kpi.femaleRequest,
+    demandTotal: kpi.totalRequest,
+    allocatedMale: kpi.maleCurrent,
+    allocatedFemale: kpi.femaleCurrent,
+    allocatedTotal: kpi.totalCurrent,
+    resignedMale: kpi.maleQuit,
+    resignedFemale: kpi.femaleQuit,
+    resignedTotal: kpi.totalQuit,
+    recruitmentNeededMale: kpi.maleBalance,
+    recruitmentNeededFemale: kpi.femaleBalance,
+    recruitmentNeededTotal: kpi.totalBalance,
+    fillRatePercent: kpi.fillRatePercent,
+    metricsSource: "linked_request",
+    requestId,
+    warnings: kpi.warnings,
+  };
+}
+
+export function legacyPlanningMetrics(metrics: PlanningMetrics, requestId: string | null): PlanningMetricsWithSource {
+  return { ...metrics, metricsSource: "legacy", requestId, warnings: [] };
 }
