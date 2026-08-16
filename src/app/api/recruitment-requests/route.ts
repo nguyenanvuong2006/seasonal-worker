@@ -38,7 +38,8 @@ export async function GET(req: Request) {
 
 /** Tạo yêu cầu tuyển dụng mới. */
 export async function POST(req: Request) {
-  const guard = await requirePermission(["ADMIN", "HR_RECRUITER", "DEPT_MANAGER"], "planning.request");
+  // DEPT_MANAGER CHỈ ĐỌC trong Data Scope (Yêu cầu #3): không được tạo yêu cầu.
+  const guard = await requirePermission(["ADMIN", "HR_RECRUITER"], "planning.request");
   if (!guard.ok) return NextResponse.json({ error: guard.error }, { status: guard.status });
 
   const body = (await req.json()) as {
