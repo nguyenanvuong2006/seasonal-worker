@@ -1,5 +1,5 @@
 -- ============================================================
--- 2026-08-20 — WORKFLOW TIẾP NHẬN: TÁCH VAI TRÒ + TÁCH "XẾP VIỆC" / "NHẬP DW DATA"
+-- 2026-08-17 — WORKFLOW TIẾP NHẬN: TÁCH VAI TRÒ + TÁCH "XẾP VIỆC" / "NHẬP DW DATA"
 -- ------------------------------------------------------------
 -- Mục tiêu (đề bài): workflow tiếp nhận lao động thời vụ/tập nghề phải phản
 -- ánh đúng luồng thực tế — Recruiter xếp việc RỒI MỚI nhập DW Data (hành động
@@ -91,13 +91,15 @@ ON CONFLICT (key) DO NOTHING;
 -- ------------------------------------------------------------
 -- PHẦN 4 — QUYỀN MỚI (mục X)
 -- ------------------------------------------------------------
+-- LƯU Ý: KHÔNG có key ".edit" riêng cho administration.daily_code / fingerprint —
+-- backend chỉ enforce ".submit" (route PATCH duy nhất ghi dữ liệu), một key
+-- ".edit" không gắn với bất kỳ endpoint nào sẽ tạo ảo giác "cấu hình được độc
+-- lập" cho Admin trong khi thực tế không có tác dụng gì (mục X, XV).
 INSERT INTO permissions (key, name, group_name, is_system) VALUES
   ('dw.import_from_registration', 'Nhập vào DW Data (từ Đăng ký)', 'dw_data', true),
   ('administration.daily_code.view', 'Xem hàng chờ Mã số công nhật', 'hanh_chinh', true),
-  ('administration.daily_code.edit', 'Sửa Mã số công nhật', 'hanh_chinh', true),
   ('administration.daily_code.submit', 'Submit Mã số công nhật hàng loạt', 'hanh_chinh', true),
   ('fingerprint.view', 'Xem hàng chờ IT Code / Vân tay', 'van_tay', true),
-  ('fingerprint.edit', 'Sửa IT Code / Vân tay', 'van_tay', true),
   ('fingerprint.submit', 'Submit IT Code hàng loạt', 'van_tay', true),
   ('meal.view', 'Xem danh sách Báo cơm', 'bao_com', true),
   ('meal.export', 'Xuất danh sách Báo cơm', 'bao_com', true)
@@ -118,14 +120,12 @@ INSERT INTO role_permissions (role, permission_key, allowed) VALUES
   ('HR_SUPPORT', 'global_search.use', true),
   -- ADMINISTRATION — chỉ Mã số công nhật + xem DW tối thiểu.
   ('ADMINISTRATION', 'administration.daily_code.view', true),
-  ('ADMINISTRATION', 'administration.daily_code.edit', true),
   ('ADMINISTRATION', 'administration.daily_code.submit', true),
   ('ADMINISTRATION', 'dw.view', true),
   ('ADMINISTRATION', 'dashboard.view', true),
   ('ADMINISTRATION', 'global_search.use', true),
   -- FINGERPRINT_STAFF — chỉ IT Code/Vân tay.
   ('FINGERPRINT_STAFF', 'fingerprint.view', true),
-  ('FINGERPRINT_STAFF', 'fingerprint.edit', true),
   ('FINGERPRINT_STAFF', 'fingerprint.submit', true),
   ('FINGERPRINT_STAFF', 'dashboard.view', true),
   ('FINGERPRINT_STAFF', 'global_search.use', true),
@@ -143,7 +143,7 @@ VALUES (
   'daily_applications',
   'SYSTEM',
   jsonb_build_object(
-    'migration', '2026-08-20-workflow-role-separation.sql',
+    'migration', '2026-08-17-workflow-role-separation.sql',
     'new_columns', jsonb_build_array(
       'daily_applications.dw_imported_at', 'daily_applications.dw_imported_by',
       'dw_data.daily_code_updated_at', 'dw_data.daily_code_updated_by',
@@ -152,8 +152,8 @@ VALUES (
     'new_roles', jsonb_build_array('HR_SUPPORT', 'ADMINISTRATION', 'FINGERPRINT_STAFF', 'MEAL_STAFF'),
     'new_permissions', jsonb_build_array(
       'dw.import_from_registration',
-      'administration.daily_code.view', 'administration.daily_code.edit', 'administration.daily_code.submit',
-      'fingerprint.view', 'fingerprint.edit', 'fingerprint.submit',
+      'administration.daily_code.view', 'administration.daily_code.submit',
+      'fingerprint.view', 'fingerprint.submit',
       'meal.view', 'meal.export'
     )
   )
@@ -175,8 +175,8 @@ COMMIT;
 --   DELETE FROM roles WHERE key IN ('HR_SUPPORT','ADMINISTRATION','FINGERPRINT_STAFF','MEAL_STAFF');
 --   DELETE FROM permissions WHERE key IN (
 --     'dw.import_from_registration',
---     'administration.daily_code.view','administration.daily_code.edit','administration.daily_code.submit',
---     'fingerprint.view','fingerprint.edit','fingerprint.submit','meal.view','meal.export'
+--     'administration.daily_code.view','administration.daily_code.submit',
+--     'fingerprint.view','fingerprint.submit','meal.view','meal.export'
 --   );
 --   -- Cột mới đều NULLable: GIỮ LẠI an toàn (khuyến nghị). Chỉ xoá nếu chắc chắn không cần:
 --   -- ALTER TABLE daily_applications DROP COLUMN IF EXISTS dw_imported_at, DROP COLUMN IF EXISTS dw_imported_by;

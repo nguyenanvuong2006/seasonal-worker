@@ -18,8 +18,9 @@ import {
 const allKeys = PERMISSION_CATALOG.map((p) => p.key);
 
 test("catalog: ~42-75 permissions, mỗi key duy nhất", () => {
-  // Mục X (Workflow tiếp nhận — tách vai trò) thêm 9 quyền mới: dw.import_from_registration
-  // + administration.daily_code.{view,edit,submit} + fingerprint.{view,edit,submit} + meal.{view,export}.
+  // Mục X (Workflow tiếp nhận — tách vai trò) thêm 7 quyền mới: dw.import_from_registration
+  // + administration.daily_code.{view,submit} + fingerprint.{view,submit} + meal.{view,export}.
+  // (KHÔNG có key ".edit" riêng — backend chỉ enforce ".submit", xem mục V blocker #5.)
   assert.ok(allKeys.length >= 40 && allKeys.length <= 75, `expected 40-75 permissions, got ${allKeys.length}`);
   assert.equal(new Set(allKeys).size, allKeys.length, "permission keys must be unique");
 });
@@ -112,8 +113,8 @@ test("ADMINISTRATION (mục II.3, XV): role nghiệp vụ hành chính — KHÁC
   assert.notEqual("ADMINISTRATION", "ADMIN");
   const a = new Set(BASELINE_ROLE_PERMISSIONS.ADMINISTRATION);
   assert.ok(a.has("administration.daily_code.view"));
-  assert.ok(a.has("administration.daily_code.edit"));
   assert.ok(a.has("administration.daily_code.submit"));
+  assert.ok(!a.has("administration.daily_code.edit"), "không có key .edit — backend chỉ enforce .submit");
   for (const k of SYSTEM_ADMIN_ONLY_KEYS) {
     assert.ok(!a.has(k), `ADMINISTRATION KHÔNG được có quyền quản trị hệ thống: ${k}`);
   }
@@ -126,7 +127,7 @@ test("HR_SUPPORT (mục II.2, XV): chỉ Document Merge — KHÔNG quyền Recru
   assert.ok(s.has("document_merge.view"));
   assert.ok(s.has("document_merge.execute"));
   assert.ok(s.has("document_merge.history.view"));
-  for (const k of ["registrations.edit", "registrations.approve", "employment.assign", "dw.edit", "dw.import_from_registration", "administration.daily_code.edit"]) {
+  for (const k of ["registrations.edit", "registrations.approve", "employment.assign", "dw.edit", "dw.import_from_registration", "administration.daily_code.submit"]) {
     assert.ok(!s.has(k), `HR_SUPPORT KHÔNG được có quyền Recruiter/Administration: ${k}`);
   }
 });
@@ -134,9 +135,9 @@ test("HR_SUPPORT (mục II.2, XV): chỉ Document Merge — KHÔNG quyền Recru
 test("FINGERPRINT_STAFF (mục II.4, XV): chỉ IT Code/Vân tay — không duyệt hồ sơ, không sửa DW toàn cục", () => {
   const f = new Set(BASELINE_ROLE_PERMISSIONS.FINGERPRINT_STAFF);
   assert.ok(f.has("fingerprint.view"));
-  assert.ok(f.has("fingerprint.edit"));
   assert.ok(f.has("fingerprint.submit"));
-  for (const k of ["registrations.approve", "dw.edit", "dw.delete", "administration.daily_code.edit"]) {
+  assert.ok(!f.has("fingerprint.edit"), "không có key .edit — backend chỉ enforce .submit");
+  for (const k of ["registrations.approve", "dw.edit", "dw.delete", "administration.daily_code.submit"]) {
     assert.ok(!f.has(k), `FINGERPRINT_STAFF KHÔNG được có quyền: ${k}`);
   }
 });
@@ -148,8 +149,8 @@ test("MEAL_STAFF (mục II.5, XV): chỉ xem/xuất báo cơm — không sửa h
   for (const k of [
     "registrations.edit",
     "registrations.approve",
-    "fingerprint.edit",
-    "administration.daily_code.edit",
+    "fingerprint.submit",
+    "administration.daily_code.submit",
     "dw.edit",
     "privacy.view_cccd",
     "privacy.view_phone",

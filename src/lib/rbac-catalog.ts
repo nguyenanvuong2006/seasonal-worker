@@ -143,11 +143,9 @@ export const PERMISSION_CATALOG: readonly CatalogPermission[] = [
   { key: "document_merge.history.delete", name: "Xoá Lịch sử Merge", group: "document_merge" },
   // Hành chính — Mã số công nhật (mục VI, X)
   { key: "administration.daily_code.view", name: "Xem hàng chờ Mã số công nhật", group: "hanh_chinh" },
-  { key: "administration.daily_code.edit", name: "Sửa Mã số công nhật", group: "hanh_chinh" },
   { key: "administration.daily_code.submit", name: "Submit Mã số công nhật hàng loạt", group: "hanh_chinh" },
   // Vân tay — IT Code (mục VIII, X)
   { key: "fingerprint.view", name: "Xem hàng chờ IT Code / Vân tay", group: "van_tay" },
-  { key: "fingerprint.edit", name: "Sửa IT Code / Vân tay", group: "van_tay" },
   { key: "fingerprint.submit", name: "Submit IT Code hàng loạt", group: "van_tay" },
   // Báo cơm (mục IX, X)
   { key: "meal.view", name: "Xem danh sách Báo cơm", group: "bao_com" },
@@ -343,7 +341,6 @@ export const BASELINE_ROLE_PERMISSIONS: Readonly<Record<string, readonly string[
   // KHÔNG users.manage/rbac.manage/data_scope.manage/backup/branding/system — KHÔNG PHẢI ADMIN.
   ADMINISTRATION: [
     "administration.daily_code.view",
-    "administration.daily_code.edit",
     "administration.daily_code.submit",
     "dw.view",
     "dashboard.view",
@@ -353,7 +350,6 @@ export const BASELINE_ROLE_PERMISSIONS: Readonly<Record<string, readonly string[
   // KHÔNG registrations.approve, KHÔNG dw.edit toàn hệ thống.
   FINGERPRINT_STAFF: [
     "fingerprint.view",
-    "fingerprint.edit",
     "fingerprint.submit",
     "dashboard.view",
     "global_search.use",

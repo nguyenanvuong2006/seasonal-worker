@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import ExcelJS from "exceljs";
 import { requirePermission, getUserScope, hasPermission, writeAudit } from "@/lib/auth";
+import { scopeAllowsDepartment } from "@/lib/data-scope";
 import { todayStr } from "@/lib/helpers";
 import { normalizePersonName } from "@/lib/person-name";
 import { getMealEligibleWorkers } from "@/lib/meal-list";
@@ -15,7 +16,9 @@ const LIGHT = "FFEFF6F0";
 /**
  * MEAL_STAFF — "Xuất danh sách báo cơm" (mục IX). Server enforce điều kiện
  * (DW imported AND Mã số công nhật not null) — KHÔNG export toàn bộ Daily
- * Application rồi để người dùng tự lọc. Audit mỗi lần export.
+ * Application rồi để người dùng tự lọc. Nhận CÙNG bộ filter (date/deptId/q)
+ * với GET /api/meal qua getMealEligibleWorkers dùng chung, để file xuất
+ * LUÔN khớp danh sách đang hiển thị trên màn hình. Audit mỗi lần export.
  */
 export async function GET(req: Request) {
   const guard = await requirePermission(["ADMIN", "MEAL_STAFF"], "meal.export");
@@ -23,10 +26,15 @@ export async function GET(req: Request) {
 
   const url = new URL(req.url);
   const date = url.searchParams.get("date") || todayStr();
+  const deptId = url.searchParams.get("deptId") || null;
+  const q = url.searchParams.get("q") || null;
   const scope = await getUserScope(guard.session);
+  if (deptId && !scopeAllowsDepartment(scope, deptId)) {
+    return NextResponse.json({ error: "Ngoài phạm vi dữ liệu được cấp." }, { status: 403 });
+  }
   const canViewCccd = await hasPermission(guard.session.role, "privacy.view_cccd");
 
-  const rows = await getMealEligibleWorkers(date, scope);
+  const rows = await getMealEligibleWorkers(date, scope, { deptId, q });
 
   const wb = new ExcelJS.Workbook();
   wb.creator = "Dalat Hasfarm Seasonal HR";
@@ -74,6 +82,8 @@ export async function GET(req: Request) {
 
   await writeAudit(guard.session, "EXPORT_MEAL_LIST", "daily_applications", {
     date,
+    deptId,
+    q,
     rows: rows.length,
     departmentScope: scope,
   }, "EXPORT");

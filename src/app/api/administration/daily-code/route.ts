@@ -2,10 +2,11 @@ import { NextResponse } from "next/server";
 import { and, desc, eq, inArray, isNotNull, isNull } from "drizzle-orm";
 import { db } from "@/db";
 import { dailyApplications, departments, dwData } from "@/db/schema";
-import { getUserScope, requirePermission, writeAudit } from "@/lib/auth";
+import { getUserScope, hasPermission, requirePermission, writeAudit } from "@/lib/auth";
 import { scopeAllowsDepartment } from "@/lib/data-scope";
 import { normalizePersonName } from "@/lib/person-name";
 import { todayStr } from "@/lib/helpers";
+import { maskCccd } from "@/lib/daily-intake-workflow";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -55,7 +56,15 @@ export async function GET(req: Request) {
     .where(and(...conditions))
     .orderBy(desc(dailyApplications.dwImportedAt));
 
-  const mapped = rows.map((r) => ({ ...r, fullName: normalizePersonName(r.fullName) }));
+  // BLOCKER #3 — ADMINISTRATION không có privacy.view_cccd theo baseline: KHÔNG
+  // được trả CCCD đầy đủ mặc định, phải áp dụng đúng permission hiện có
+  // (không tự phát minh cơ chế masking mới) — mục IX, X.
+  const canViewCccd = await hasPermission(guard.session.role, "privacy.view_cccd");
+  const mapped = rows.map((r) => ({
+    ...r,
+    fullName: normalizePersonName(r.fullName),
+    cccd: maskCccd(r.cccd, canViewCccd) ?? r.cccd,
+  }));
 
   return NextResponse.json({ rows: mapped, date });
 }
@@ -88,12 +97,21 @@ export async function PATCH(req: Request) {
     await db.transaction(async (tx) => {
       for (const item of items) {
         const app = appById.get(item.dailyApplicationId);
-        if (!app) {
+        if (!app || app.deletedAt) {
           results.push({ dailyApplicationId: item.dailyApplicationId, ok: false, reason: "Không tìm thấy hồ sơ." });
           continue;
         }
         if (!scopeAllowsDepartment(scope, app.deptId)) {
           results.push({ dailyApplicationId: item.dailyApplicationId, ok: false, reason: "Ngoài phạm vi dữ liệu được cấp." });
+          continue;
+        }
+        // BLOCKER #1 — KHÔNG được tin theo dwDataId do client gửi lên (hoặc theo
+        // việc GET đã lọc sẵn): PATCH phải tự kiểm tra lại "đã Nhập vào DW Data"
+        // ở SERVER, vì dwId có thể đã tồn tại từ lúc đăng ký (người DW cũ khớp
+        // CCCD) MÀ CHƯA từng qua hành động "Nhập vào DW Data" tường minh
+        // (dwImportedAt vẫn NULL) — mục IV, VI.
+        if (!app.dwImportedAt) {
+          results.push({ dailyApplicationId: item.dailyApplicationId, ok: false, reason: "Chưa được Recruiter nhập vào DW Data." });
           continue;
         }
         if (app.dwId !== item.dwDataId) {

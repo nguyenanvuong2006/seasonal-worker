@@ -2,11 +2,11 @@ import { NextResponse } from "next/server";
 import { and, desc, eq, inArray, isNotNull, isNull } from "drizzle-orm";
 import { db } from "@/db";
 import { dailyApplications, departments, dwData, workerProfiles } from "@/db/schema";
-import { getUserScope, requirePermission, writeAudit } from "@/lib/auth";
+import { getUserScope, hasPermission, requirePermission, writeAudit } from "@/lib/auth";
 import { scopeAllowsDepartment } from "@/lib/data-scope";
 import { normalizePersonName } from "@/lib/person-name";
 import { todayStr } from "@/lib/helpers";
-import { hasDailyCode, isEligibleForFingerprintQueue } from "@/lib/daily-intake-workflow";
+import { hasDailyCode, isEligibleForFingerprintQueue, maskCccd } from "@/lib/daily-intake-workflow";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -57,9 +57,12 @@ export async function GET(req: Request) {
     .where(and(...conditions))
     .orderBy(desc(dailyApplications.dwImportedAt));
 
+  // BLOCKER #3 — FINGERPRINT_STAFF không có privacy.view_cccd theo baseline:
+  // KHÔNG được trả CCCD đầy đủ mặc định — mục IX, X.
+  const canViewCccd = await hasPermission(guard.session.role, "privacy.view_cccd");
   const eligible = rows
     .filter((r) => isEligibleForFingerprintQueue({ status: "APPROVED", dwImportedAt: r.dwImportedAt }, { code: r.code }))
-    .map((r) => ({ ...r, fullName: normalizePersonName(r.fullName) }));
+    .map((r) => ({ ...r, fullName: normalizePersonName(r.fullName), cccd: maskCccd(r.cccd, canViewCccd) ?? r.cccd }));
 
   const finalRows =
     filter === "MISSING"
@@ -105,12 +108,20 @@ export async function PATCH(req: Request) {
     await db.transaction(async (tx) => {
       for (const item of items) {
         const app = appById.get(item.dailyApplicationId);
-        if (!app) {
+        if (!app || app.deletedAt) {
           results.push({ dailyApplicationId: item.dailyApplicationId, ok: false, reason: "Không tìm thấy hồ sơ." });
           continue;
         }
         if (!scopeAllowsDepartment(scope, app.deptId)) {
           results.push({ dailyApplicationId: item.dailyApplicationId, ok: false, reason: "Ngoài phạm vi dữ liệu được cấp." });
+          continue;
+        }
+        // BLOCKER #2 — dwId có thể đã tồn tại từ lúc đăng ký (khớp CCCD) MÀ CHƯA
+        // từng qua hành động "Nhập vào DW Data" tường minh (dwImportedAt vẫn
+        // NULL). PATCH phải tự kiểm tra lại ở SERVER, không tin theo GET đã lọc
+        // sẵn hay theo việc client gửi đúng dwDataId — mục IV, VIII.
+        if (!app.dwImportedAt) {
+          results.push({ dailyApplicationId: item.dailyApplicationId, ok: false, reason: "Chưa được Recruiter nhập vào DW Data." });
           continue;
         }
         if (app.dwId !== item.dwDataId) {

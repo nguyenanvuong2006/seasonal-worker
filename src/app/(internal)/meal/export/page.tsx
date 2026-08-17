@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { Badge, Button, Card, EmptyState, ErrorState, Input, MetricStrip, MetricStripItem, PageHeader, SkeletonTable } from "@/components/ui";
 import { formatDate, todayStr } from "@/lib/helpers";
 import { Calendar, Download, RefreshCw, Search, UtensilsCrossed } from "lucide-react";
@@ -17,18 +17,37 @@ type Row = {
   code: string | null;
 };
 
+type DeptOption = { id: string; deptName: string; groupName: string | null };
+
 export default function MealExportPage() {
   const [date, setDate] = useState(todayStr());
+  const [deptId, setDeptId] = useState("");
+  const [q, setQ] = useState("");
+  const [depts, setDepts] = useState<DeptOption[]>([]);
   const [rows, setRows] = useState<Row[] | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
-  const [q, setQ] = useState("");
 
-  const load = useCallback(async (d: string) => {
+  useEffect(() => {
+    void (async () => {
+      try {
+        const res = await fetch("/api/departments");
+        const data = await res.json();
+        if (res.ok) setDepts(data.rows ?? []);
+      } catch {
+        // Bộ lọc bộ phận là tiện ích phụ — lỗi tải không chặn danh sách báo cơm chính.
+      }
+    })();
+  }, []);
+
+  const load = useCallback(async (d: string, dept: string, query: string) => {
     setLoading(true);
     setError(null);
     try {
-      const res = await fetch(`/api/meal?date=${d}`);
+      const params = new URLSearchParams({ date: d });
+      if (dept) params.set("deptId", dept);
+      if (query.trim()) params.set("q", query.trim());
+      const res = await fetch(`/api/meal?${params.toString()}`);
       const data = await res.json();
       if (!res.ok) {
         setError(data.error ?? "Không tải được danh sách.");
@@ -45,17 +64,23 @@ export default function MealExportPage() {
   }, []);
 
   useEffect(() => {
-    void load(date);
-  }, [date, load]);
+    void load(date, deptId, q);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [date, deptId]);
 
-  const filteredRows = useMemo(() => {
-    if (!rows) return [];
-    const query = q.trim().toLowerCase();
-    if (!query) return rows;
-    return rows.filter(
-      (r) => r.fullName.toLowerCase().includes(query) || r.cccd.includes(query) || (r.code ?? "").toLowerCase().includes(query),
-    );
-  }, [rows, q]);
+  // Tìm nhanh: debounce để không gọi API theo từng ký tự gõ.
+  useEffect(() => {
+    const timer = setTimeout(() => void load(date, deptId, q), 350);
+    return () => clearTimeout(timer);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [q]);
+
+  const exportHref = (() => {
+    const params = new URLSearchParams({ date });
+    if (deptId) params.set("deptId", deptId);
+    if (q.trim()) params.set("q", q.trim());
+    return `/api/meal/export?${params.toString()}`;
+  })();
 
   return (
     <div className="space-y-4">
@@ -76,10 +101,26 @@ export default function MealExportPage() {
             <p className="mb-1 text-[11px] font-semibold text-fg-muted">Ngày</p>
             <Input type="date" value={date} onChange={(e) => setDate(e.target.value)} className="h-10 w-40" />
           </div>
+          <div>
+            <p className="mb-1 text-[11px] font-semibold text-fg-muted">Bộ phận</p>
+            <select
+              value={deptId}
+              onChange={(e) => setDeptId(e.target.value)}
+              className="h-10 rounded-[10px] border border-border-strong bg-surface px-3 text-[13px] font-medium text-fg outline-none focus:border-primary focus:ring-2 focus:ring-primary/15"
+            >
+              <option value="">Tất cả bộ phận</option>
+              {depts.map((d) => (
+                <option key={d.id} value={d.id}>
+                  {d.deptName}
+                  {d.groupName ? ` — ${d.groupName}` : ""}
+                </option>
+              ))}
+            </select>
+          </div>
           <Button variant="outline" className="h-10" onClick={() => setDate(todayStr())}>
             <Calendar className="h-4 w-4" /> Về hôm nay
           </Button>
-          <Button variant="outline" className="h-10" onClick={() => void load(date)}>
+          <Button variant="outline" className="h-10" onClick={() => void load(date, deptId, q)}>
             <RefreshCw className={loading ? "h-4 w-4 animate-spin" : "h-4 w-4"} /> Tải lại
           </Button>
           <div className="min-w-[180px] flex-1">
@@ -90,7 +131,7 @@ export default function MealExportPage() {
             </div>
           </div>
           <a
-            href={`/api/meal/export?date=${date}`}
+            href={exportHref}
             className="inline-flex h-10 items-center gap-1.5 rounded-[10px] bg-primary px-4 text-[13px] font-semibold text-white shadow-sm transition-colors hover:bg-primary-hover"
           >
             <Download className="h-4 w-4" /> Xuất danh sách báo cơm
@@ -104,7 +145,7 @@ export default function MealExportPage() {
             <SkeletonTable rows={6} cols={6} />
           </div>
         ) : error ? (
-          <ErrorState description={error} onRetry={() => void load(date)} />
+          <ErrorState description={error} onRetry={() => void load(date, deptId, q)} />
         ) : !rows || rows.length === 0 ? (
           <EmptyState
             title="Chưa có lao động nào đủ điều kiện báo cơm"
@@ -124,7 +165,7 @@ export default function MealExportPage() {
                 </tr>
               </thead>
               <tbody>
-                {filteredRows.map((r, idx) => (
+                {rows.map((r, idx) => (
                   <tr key={r.dailyApplicationId} className="border-b border-border/70 bg-surface hover:bg-botanical-50">
                     <td className="px-3 py-1.5 text-fg-muted">{idx + 1}</td>
                     <td className="px-3 py-1.5">
