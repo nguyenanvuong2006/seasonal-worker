@@ -253,3 +253,43 @@ c051373  Phase 11 — Merge Job Progress UI
 3. Worker hardcode retentionYears=null ("không tự xoá") → giờ lấy từ snapshot (fallback 3 năm).
 4. `schema.sql` dòng 946 thiếu `--` → fix.
 5. Print CSS: break-inside avoid (hết orphan dòng ở Tờ khai thuế).
+
+---
+
+# PHỤ LỤC B — MIGRATION ORDER FIX + FRESH-DB TEST + STAGING-THẬT PREP (2026-08-17)
+
+## Migration order fix (commit 3cd650d)
+
+- Phát hiện: `2026-08-17-dang-ky-tap-nghe-html-draft.sql` sort TRƯỚC
+  `2026-08-17-document-merge-async-phase2.sql` (dang < docu) → fresh DB chạy
+  draft trước khi `merge_template_versions` tồn tại → lỗi.
+- Fix: **rename → `2026-08-21-dang-ky-tap-nghe-html-draft.sql`** (chạy sau
+  `2026-08-20-document-merge-async-pdf.sql`) — cơ chế sort filename chuẩn,
+  không phụ thuộc người vận hành nhớ thứ tự. Không destructive.
+- Cập nhật tham chiếu: schema.sql + implementation report.
+
+## Fresh-DB migration test (PG 18 local, DB mới hoàn toàn)
+
+- schema core + **22/22 migrations theo sort: PASS**
+- Verify: merge_templates=1 (seed 08-16, 08-15 bị 08-16 WHERE NOT EXISTS chặn),
+  merge_template_fields=51, merge_template_versions v1 **DRAFT** (không auto publish),
+  merge_jobs/merge_job_records/document_history/archive_runs tồn tại,
+  cột engine/current_published_version/retention_until tồn tại.
+
+## Staging thật — scripts chuẩn bị sẵn (BLOCKER: cần credentials/network)
+
+- `worker/deploy-staging.sh` — gcloud run deploy service staging riêng
+  (2 vCPU/4GB/min-0, PDF_RENDER_CONCURRENCY=4, env từ biến môi trường).
+- `scripts/staging-e2e.mjs` — E2E trên hạ tầng thật: seed N hồ sơ TEST vào
+  Neon staging → POST /jobs → trigger worker → poll → verify item/document_history
+  (+3 năm retention, sha256, template_version) → verify Drive metadata → HEAD
+  PDF tổng + ZIP. Chạy: `node --import tsx scripts/staging-e2e.mjs --records 1|10`.
+- Cảnh báo trong script: KHÔNG dùng production DATABASE_URL / Drive root.
+
+## BLOCKER hạ tầng thật (sandbox)
+
+- Không gcloud/GCP credentials · không Neon credentials · không Google OAuth
+  credentials · network tới googleapis.com/vercel.app bị chặn · GitHub Actions
+  secrets không truy cập được (403).
+→ Cần user cấp credentials (hoặc chạy scripts trên máy có network) để hoàn tất
+  Cloud Run staging + Neon staging + Drive OAuth E2E + visual diff với reference.
