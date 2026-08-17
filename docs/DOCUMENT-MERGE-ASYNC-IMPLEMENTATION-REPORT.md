@@ -179,7 +179,7 @@ Reuse (không tạo mới): `GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_SECRET`, `GOOGLE_
 
 ## 21. PR URL
 
-(PR sẽ được mở từ branch `arena/01a00d24-seasonal-worker` → `main` sau khi báo cáo này hoàn tất — xem phần cuối.)
+**https://github.com/nguyenanvuong2006/seasonal-worker/pull/61** — `arena/01a00d24-seasonal-worker` → `main`.
 
 ## 22. Commit SHAs
 
