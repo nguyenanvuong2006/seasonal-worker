@@ -16,7 +16,7 @@
 
 import { and, eq, inArray, isNull } from "drizzle-orm";
 import { db } from "@/db";
-import { dailyApplications, mergeJobRecords, mergeJobs, mergeTemplateFields, mergeTemplates } from "@/db/schema";
+import { dailyApplications, mergeJobRecords, mergeJobs, mergeTemplateFields, mergeTemplates, mergeTemplateVersions } from "@/db/schema";
 import { getDocumentMergeEngine, type DocumentMergeEngine } from "./engine-config.ts";
 import { selectTemplateForApplicant, documentKindLabel } from "./template-routing.ts";
 import { ITEM_STATUS, JOB_STATUS } from "./queue-types.ts";
@@ -184,6 +184,23 @@ export async function createAsyncMergeJob(input: CreateAsyncJobInput): Promise<C
     fieldsByTemplate.set(f.templateId, list);
   }
 
+  // Snapshot version + retention từ merge_template_versions (PUBLISHED) — spec E/Q:
+  // PDF snapshot template_version + retention policy lúc tạo.
+  const publishedVersions = await db
+    .select({
+      templateId: mergeTemplateVersions.templateId,
+      version: mergeTemplateVersions.version,
+      retentionYears: mergeTemplateVersions.retentionYears,
+    })
+    .from(mergeTemplateVersions)
+    .where(
+      and(
+        inArray(mergeTemplateVersions.templateId, templateIds),
+        eq(mergeTemplateVersions.status, "PUBLISHED"),
+      ),
+    );
+  const versionByTemplate = new Map(publishedVersions.map((v) => [v.templateId, v]));
+
   const primaryTemplate = allTemplates.find((t) => t.id === planned[0].templateId) ?? null;
 
   // 5+6. Tạo job + items trong 1 khối (job QUEUED, items QUEUED theo sequence)
@@ -220,6 +237,10 @@ export async function createAsyncMergeJob(input: CreateAsyncJobInput): Promise<C
                 name: t?.name ?? "",
                 documentKind: t?.documentKind ?? "GENERIC",
                 googleDocId: t?.googleDocId ?? "",
+                // Snapshot template version lúc tạo job — PDF cũ không regenerate
+                // bằng template mới (spec E: mỗi PDF snapshot template_version).
+                version: versionByTemplate.get(tid)?.version ?? t?.currentPublishedVersion ?? null,
+                retentionYears: versionByTemplate.get(tid)?.retentionYears ?? null,
                 fields: fieldsByTemplate.get(tid) ?? [],
               },
             ];

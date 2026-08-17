@@ -57,7 +57,10 @@ let browser: Browser | null = null;
 async function getBrowser(): Promise<Browser> {
   if (!browser) {
     browser = await chromium.launch({
-      args: ["--no-sandbox", "--disable-dev-shm-usage", "--disable-gpu"],
+      // Cho phép dùng custom Chromium (staging/CI/image nhẹ) — Cloud Run mặc
+      // định dùng browser của playwright image; env này chỉ override khi cần.
+      executablePath: process.env.CHROMIUM_EXECUTABLE_PATH?.trim() || undefined,
+      args: ["--no-sandbox", "--disable-dev-shm-usage", "--disable-gpu", "--single-process"],
     });
   }
   return browser;
@@ -131,6 +134,8 @@ interface TemplateSnapshot {
   name?: string;
   documentKind?: string;
   googleDocId?: string;
+  version?: number | null;
+  retentionYears?: number | null;
   fields?: FieldSnapshotRow[];
 }
 
@@ -196,6 +201,8 @@ async function processItem(item: QueueItem, jobCtx: JobContext): Promise<void> {
   const fullName = String(recordData.fullName ?? "ung-vien");
   const applicationId = String(recordData.id ?? item.sourceRecordId ?? "ung-vien");
   const documentType = snap.documentKind === "B" ? "Dang-ky-tap-nghe" : "Tai-lieu-merge";
+  const templateVersion = snap.version ?? null;
+  const retentionYears = snap.retentionYears ?? undefined;
   const now = new Date();
   const filename = buildIndividualPdfFilename(now, fullName, documentType, applicationId);
   const storageKey = buildIndividualStorageKey(now, filename);
@@ -211,13 +218,14 @@ async function processItem(item: QueueItem, jobCtx: JobContext): Promise<void> {
     mergeJobId: item.mergeJobId,
     mergeJobRecordId: item.id,
     templateId: item.templateId ?? undefined,
+    templateVersion,
     documentType,
     filename,
     storageProvider: storage.name,
     storageFileId: stored.key,
     fileSize: bytes.byteLength,
     sha256,
-    retentionYears: null, // → fallback default (3 năm) qua retention.ts
+    retentionYears,
     createdBy: jobCtx.createdBy,
   });
   await linkRecordToHistory(item.id, history.id);
@@ -289,6 +297,8 @@ async function runJob(jobId: string): Promise<{ processed: number; failed: numbe
       try {
         const finalize = await finalizeBatchOutputs(jobId, { documentType: "Dang-ky-tap-nghe" });
         await finalizeJob(jobId, "COMPLETED", {
+          outputPdfUrl: finalize.pdfUrl,
+          outputZipUrl: finalize.zipUrl,
           errorSummary: progress.failed > 0 ? `${progress.failed} item FAILED (đã retry tối đa)` : null,
         });
         console.log(

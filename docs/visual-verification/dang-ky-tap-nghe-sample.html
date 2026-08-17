@@ -65,6 +65,13 @@ th { font-weight: 700; text-align: center; }
 }
 .sig-line { display: inline-block; width: 160pt; border-bottom: 1px solid #000; }
 .logo { max-height: 22mm; max-width: 100%; }
+/* Không tách khối ký / bảng giữa trang — nếu tràn thì tràn cả khối (tránh orphan dòng). */
+.page .right,
+.page table,
+.sig-block {
+  page-break-inside: avoid;
+  break-inside: avoid;
+}
 
 
 .page p { text-align: justify; }

@@ -943,7 +943,8 @@ CREATE TABLE IF NOT EXISTS request_kpi_cache (
   computed_at timestamptz NOT NULL DEFAULT now()
 );
 CREATE INDEX IF NOT EXISTS request_kpi_cache_computed_idx ON request_kpi_cache (computed_at);
-=======
+
+-- =====
 -- ============================================================
 -- CẬP NHẬT 2026-08-16 — EMPLOYMENT LIFECYCLE (Vòng đời làm việc)
 -- ------------------------------------------------------------

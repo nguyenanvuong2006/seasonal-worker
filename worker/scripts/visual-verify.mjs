@@ -26,6 +26,7 @@ import { mkdirSync, writeFileSync, readFileSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { chromium } from "playwright";
+import { PDFDocument } from "pdf-lib";
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), "..", "..");
 
@@ -41,7 +42,8 @@ const html = readFileSync(htmlPath, "utf8");
 mkdirSync(outDir, { recursive: true });
 
 const browser = await chromium.launch({
-  args: ["--no-sandbox", "--disable-dev-shm-usage", "--disable-gpu"],
+  executablePath: process.env.CHROMIUM_EXECUTABLE_PATH || undefined,
+  args: ["--no-sandbox", "--disable-dev-shm-usage", "--disable-gpu", "--single-process"],
 });
 const context = await browser.newContext({ viewport: { width: 900, height: 1200 } });
 const page = await context.newPage();
@@ -78,6 +80,19 @@ try {
   const pdfBytes = await page.pdf({ format: "A4", printBackground: true, preferCSSPageSize: true });
   writeFileSync(join(outDir, "rendered.pdf"), pdfBytes);
 
+  // Đếm trang PDF THẬT (không dựa vào .page div) qua pdf-lib.
+  const pdfDoc = await PDFDocument.load(pdfBytes);
+  const realPageCount = pdfDoc.getPageCount();
+
+  // Xác nhận font render được tiếng Việt (DejaVu Sans có sẵn trong sandbox/Cloud Run image).
+  const fontChecks = await page.evaluate(() => {
+    const probe = "Nguyễn Văn An — Đà Lạt, ngày 17 tháng 08 năm 2026";
+    return {
+      dejavu: document.fonts.check('12pt "DejaVu Sans"', probe),
+      serif: document.fonts.check('12pt "DejaVu Serif"', probe),
+    };
+  });
+
   // Screenshot từng .page
   const pageBoxes = await page.evaluate(() =>
     Array.from(document.querySelectorAll(".page")).map((div) => {
@@ -99,16 +114,18 @@ try {
       path: join(outDir, "rendered.pdf"),
     },
     checks: {
-      pageCount: checks.pageCount,
-      expectedPageCount: 5, // 5 phần tài liệu (template reference ≈ 6 trang)
+      pageDivCount: checks.pageCount,
+      realPdfPageCount: realPageCount,
+      expectedPageCount: 5, // 5 phần tài liệu (template reference ≈ 6 trang — CHƯA đạt)
       blankPages: checks.blankPages,
       horizontalOverflowPx: checks.overflow,
       checkboxCount: checks.checkboxes,
       unreplacedPlaceholders: checks.unreplaced,
       fontsReady: true,
+      fontChecks,
     },
     pass:
-      checks.pageCount >= 4 &&
+      realPageCount >= 4 &&
       checks.blankPages.length === 0 &&
       checks.overflow <= 1 &&
       checks.unreplaced.length === 0,

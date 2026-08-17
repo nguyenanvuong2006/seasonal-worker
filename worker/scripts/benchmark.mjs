@@ -40,24 +40,35 @@ const { html } = renderApplicantHtmlFromParts(
   SAMPLE_FIELD_VALUES,
 );
 
-const browser = await chromium.launch({ args: ["--no-sandbox", "--disable-dev-shm-usage", "--disable-gpu"] });
+const browser = await chromium.launch({
+  executablePath: process.env.CHROMIUM_EXECUTABLE_PATH || undefined,
+  args: ["--no-sandbox", "--disable-dev-shm-usage", "--disable-gpu", "--single-process"],
+});
 
-async function renderOne(htmlString) {
+// Page pool: headless-shell (single-process) tự thoát khi đóng page cuối —
+// worker/benchmark reuse page thay vì mở/đóng mỗi lần (đúng pattern production).
+const pool = [];
+async function getPage() {
+  if (pool.length > 0) return pool.pop();
   const context = await browser.newContext();
+  const page = await context.newPage();
+  await page.route("**/*", (route) => {
+    const url = route.request().url();
+    if (url.startsWith("data:")) route.continue();
+    else route.abort("blockedbyclient");
+  });
+  return page;
+}
+async function renderOne(htmlString) {
+  const page = await getPage();
   try {
-    const page = await context.newPage();
-    await page.route("**/*", (route) => {
-      const url = route.request().url();
-      if (url.startsWith("data:")) route.continue();
-      else route.abort("blockedbyclient");
-    });
     const start = Date.now();
     await page.setContent(htmlString, { waitUntil: "load" });
     await page.evaluate(async () => document.fonts.ready);
     const bytes = await page.pdf({ format: "A4", printBackground: true, preferCSSPageSize: true });
     return { ms: Date.now() - start, bytes };
   } finally {
-    await context.close();
+    pool.push(page); // reuse — không đóng
   }
 }
 
