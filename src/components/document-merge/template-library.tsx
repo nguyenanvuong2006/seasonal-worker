@@ -1,10 +1,11 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import {
   AlertTriangle,
   ExternalLink,
   FileText,
+  FileUp,
   Layers,
   Pencil,
   Plus,
@@ -29,6 +30,24 @@ type Template = {
   dataSources: string[];
   isActive: boolean;
   placeholderCount?: number;
+  currentPublishedVersion?: number | null;
+  retentionYears?: number | null;
+};
+
+type TemplateVersion = {
+  id: string;
+  templateId: string;
+  version: number;
+  status: "DRAFT" | "PUBLISHED" | "ARCHIVED";
+  htmlBody: string | null;
+  printCss: string | null;
+  sourceDocxName: string | null;
+  retentionYears: number | null;
+  mappingSnapshot: Record<string, unknown>[];
+  createdBy: string;
+  publishedAt: string | null;
+  archivedAt: string | null;
+  createdAt: string;
 };
 
 type Mapping = {
@@ -102,6 +121,14 @@ export function TemplateLibrary({ onSelectForMerge }: { onSelectForMerge: (templ
   const [saving, setSaving] = useState(false);
   const [mappingSaving, setMappingSaving] = useState(false);
   const [scanLoading, setScanLoading] = useState(false);
+  // --- Template versioning (Phase 3) ---
+  const [versions, setVersions] = useState<TemplateVersion[]>([]);
+  const [versionsLoading, setVersionsLoading] = useState(false);
+  const [versionAction, setVersionAction] = useState<string | null>(null);
+  const [draftHtml, setDraftHtml] = useState("");
+  const [draftCss, setDraftCss] = useState("");
+  const [draftRetention, setDraftRetention] = useState<string>("3");
+  const [draftSaving, setDraftSaving] = useState(false);
 
   const loadTemplates = async () => {
     setLoading(true);
@@ -139,6 +166,21 @@ export function TemplateLibrary({ onSelectForMerge }: { onSelectForMerge: (templ
     setMappings([]);
   };
 
+  const loadVersions = async (templateId: string) => {
+    setVersionsLoading(true);
+    try {
+      const res = await fetch(`/api/document-merge/templates/${templateId}/versions`, { cache: "no-store" });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || "Không tải được phiên bản.");
+      setVersions(Array.isArray(data) ? data : []);
+    } catch (err) {
+      alert(err instanceof Error ? err.message : "Không tải được phiên bản.");
+      setVersions([]);
+    } finally {
+      setVersionsLoading(false);
+    }
+  };
+
   const openEdit = async (template: Template) => {
     setCreating(false);
     setEditing(template);
@@ -163,13 +205,99 @@ export function TemplateLibrary({ onSelectForMerge }: { onSelectForMerge: (templ
     } finally {
       setMappingLoading(false);
     }
+    setDraftHtml("");
+    setDraftCss("");
+    await loadVersions(template.id);
   };
 
   const closeEditor = () => {
     setCreating(false);
     setEditing(null);
     setMappings([]);
+    setVersions([]);
     setForm(EMPTY_FORM);
+  };
+
+  const runVersionAction = async (version: TemplateVersion, action: "publish" | "archive" | "rollback") => {
+    if (!editing) return;
+    const label = action === "publish" ? "Publish" : action === "archive" ? "Archive" : "Rollback";
+    if (!window.confirm(`${label} version ${version.version} của "${editing.name}"?`)) return;
+    setVersionAction(`${action}:${version.id}`);
+    try {
+      const res = await fetch(
+        `/api/document-merge/templates/${editing.id}/versions/${version.id}/${action}`,
+        { method: "POST" },
+      );
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || `Không ${label.toLowerCase()} được version.`);
+      await loadVersions(editing.id);
+      await loadTemplates();
+    } catch (err) {
+      alert(err instanceof Error ? err.message : `Không ${label.toLowerCase()} được version.`);
+    } finally {
+      setVersionAction(null);
+    }
+  };
+
+  const [docxImporting, setDocxImporting] = useState(false);
+  const docxInputRef = useRef<HTMLInputElement>(null);
+
+  const importDocx = async (file: File) => {
+    if (!editing) return;
+    setDocxImporting(true);
+    try {
+      const form = new FormData();
+      form.append("file", file);
+      const res = await fetch(`/api/document-merge/templates/${editing.id}/import-docx`, {
+        method: "POST",
+        body: form,
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || "Không import được DOCX.");
+      await loadVersions(editing.id);
+      await loadTemplates();
+      const warningNote = data.hasWarnings ? "\n\nCó cảnh báo layout — hãy kiểm tra Preview kỹ trước khi Publish." : "";
+      alert(
+        `Đã tạo version ${data.version.version} (DRAFT) từ "${file.name}": ${data.placeholderCount} placeholder.` +
+          warningNote,
+      );
+    } catch (err) {
+      alert(err instanceof Error ? err.message : "Không import được DOCX.");
+    } finally {
+      setDocxImporting(false);
+      if (docxInputRef.current) docxInputRef.current.value = "";
+    }
+  };
+
+  const createDraftVersion = async () => {
+    if (!editing) return;
+    if (!draftHtml.trim()) {
+      alert("Dán nội dung HTML (template in A4) cho version DRAFT.");
+      return;
+    }
+    setDraftSaving(true);
+    try {
+      const res = await fetch(`/api/document-merge/templates/${editing.id}/versions`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          htmlBody: draftHtml,
+          printCss: draftCss || null,
+          retentionYears: draftRetention === "none" ? null : Number(draftRetention),
+        }),
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || "Không tạo được version DRAFT.");
+      await loadVersions(editing.id);
+      setDraftHtml("");
+      setDraftCss("");
+      setDraftRetention("3");
+      alert(`Đã tạo version ${data.version} (DRAFT). Quét placeholder và Preview trước khi Publish.`);
+    } catch (err) {
+      alert(err instanceof Error ? err.message : "Không tạo được version DRAFT.");
+    } finally {
+      setDraftSaving(false);
+    }
   };
 
   const saveTemplate = async () => {
@@ -418,6 +546,183 @@ export function TemplateLibrary({ onSelectForMerge }: { onSelectForMerge: (templ
 
                   <div className="mt-4 flex justify-end">
                     <button onClick={saveMappings} disabled={mappingSaving} className="inline-flex items-center gap-2 rounded-lg bg-emerald-700 px-4 py-2 text-xs font-bold text-white hover:bg-emerald-800 disabled:opacity-50"><Save className="h-4 w-4" /> {mappingSaving ? "Đang lưu mapping..." : "Lưu Mapping"}</button>
+                  </div>
+                </section>
+              )}
+
+              {editing && (
+                <section className="rounded-2xl border border-slate-200 bg-slate-50/60 p-4">
+                  <div className="flex items-center justify-between gap-3">
+                    <div>
+                      <h4 className="text-sm font-bold text-slate-900">Phiên bản Template (HTML/PDF Engine)</h4>
+                      <p className="text-[11px] text-slate-500">
+                        Mỗi version: DRAFT → PUBLISHED → ARCHIVED. PDF snapshot template_version lúc tạo;
+                        chỉ version PUBLISHED được dùng cho batch HTML/PDF.{" "}
+                        {editing.currentPublishedVersion
+                          ? `Đang publish: v${editing.currentPublishedVersion}`
+                          : "Chưa có version HTML được publish (batch vẫn dùng Google Docs)."}
+                      </p>
+                    </div>
+                  </div>
+
+                  {versionsLoading ? (
+                    <div className="mt-3 rounded-xl bg-white p-6 text-center text-xs text-slate-500">Đang tải phiên bản...</div>
+                  ) : (
+                    <div className="mt-3 space-y-2">
+                      {versions.length === 0 && (
+                        <div className="rounded-xl border border-dashed border-slate-300 bg-white p-4 text-center text-xs text-slate-500">
+                          Chưa có version nào. Tạo version DRAFT đầu tiên bên dưới.
+                        </div>
+                      )}
+                      {versions.map((version) => (
+                        <div key={version.id} className="flex flex-col gap-2 rounded-xl border border-slate-200 bg-white p-3 sm:flex-row sm:items-center">
+                          <div className="min-w-0 flex-1">
+                            <div className="flex flex-wrap items-center gap-2">
+                              <span className="text-xs font-bold text-slate-800">v{version.version}</span>
+                              <span className={`rounded-full px-2 py-0.5 text-[10px] font-bold ${
+                                version.status === "PUBLISHED"
+                                  ? "bg-emerald-100 text-emerald-700"
+                                  : version.status === "DRAFT"
+                                    ? "bg-amber-100 text-amber-700"
+                                    : "bg-slate-100 text-slate-500"
+                              }`}>
+                                {version.status}
+                              </span>
+                              {version.retentionYears !== null && version.retentionYears !== undefined && (
+                                <span className="rounded-full bg-slate-100 px-2 py-0.5 text-[10px] text-slate-600">
+                                  Retention {version.retentionYears} năm
+                                </span>
+                              )}
+                              {version.retentionYears === null && (
+                                <span className="rounded-full bg-slate-100 px-2 py-0.5 text-[10px] text-slate-600">
+                                  Không tự xoá
+                                </span>
+                              )}
+                              <span className="text-[10px] text-slate-400">
+                                {version.mappingSnapshot?.length ?? 0} placeholder snapshot
+                              </span>
+                            </div>
+                            <p className="mt-1 line-clamp-1 font-mono text-[10px] text-slate-400">
+                              {version.sourceDocxName || `Tạo bởi ${version.createdBy}`}
+                              {version.publishedAt ? ` · Publish ${new Date(version.publishedAt).toLocaleString("vi-VN")}` : ""}
+                            </p>
+                          </div>
+                          <div className="flex shrink-0 flex-wrap gap-1.5">
+                            {version.status !== "PUBLISHED" && (
+                              <button
+                                disabled={versionAction !== null}
+                                onClick={() => runVersionAction(version, "publish")}
+                                className="rounded-lg bg-emerald-700 px-2.5 py-1.5 text-[10px] font-bold text-white hover:bg-emerald-800 disabled:opacity-50"
+                              >
+                                Publish
+                              </button>
+                            )}
+                            {version.status === "PUBLISHED" && (
+                              <button
+                                disabled={versionAction !== null}
+                                onClick={() => runVersionAction(version, "rollback")}
+                                className="rounded-lg border border-emerald-200 bg-emerald-50 px-2.5 py-1.5 text-[10px] font-bold text-emerald-700 hover:bg-emerald-100 disabled:opacity-50"
+                              >
+                                Re-publish
+                              </button>
+                            )}
+                            {version.status !== "PUBLISHED" && version.status !== "ARCHIVED" && (
+                              <button
+                                disabled={versionAction !== null}
+                                onClick={() => runVersionAction(version, "archive")}
+                                className="rounded-lg border border-slate-200 px-2.5 py-1.5 text-[10px] font-semibold text-slate-500 hover:bg-slate-50 disabled:opacity-50"
+                              >
+                                Archive
+                              </button>
+                            )}
+                            {version.status === "ARCHIVED" && (
+                              <button
+                                disabled={versionAction !== null}
+                                onClick={() => runVersionAction(version, "rollback")}
+                                className="rounded-lg border border-slate-200 px-2.5 py-1.5 text-[10px] font-semibold text-slate-600 hover:bg-slate-50 disabled:opacity-50"
+                              >
+                                Rollback
+                              </button>
+                            )}
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+
+                  <div className="mt-4 rounded-xl border border-slate-200 bg-white p-3">
+                    <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
+                      <p className="text-xs font-bold text-slate-800">Tạo version DRAFT mới</p>
+                      <div className="flex items-center gap-2">
+                        <input
+                          ref={docxInputRef}
+                          type="file"
+                          accept=".docx"
+                          className="hidden"
+                          onChange={(e) => {
+                            const file = e.target.files?.[0];
+                            if (file) importDocx(file);
+                          }}
+                        />
+                        <button
+                          onClick={() => docxInputRef.current?.click()}
+                          disabled={docxImporting}
+                          className="inline-flex items-center gap-1.5 rounded-lg border border-slate-300 px-3 py-1.5 text-[11px] font-semibold text-slate-700 hover:bg-slate-50 disabled:opacity-50"
+                        >
+                          <FileUp className="h-3.5 w-3.5" /> {docxImporting ? "Đang import DOCX..." : "Upload DOCX"}
+                        </button>
+                      </div>
+                    </div>
+                    <p className="mt-1 text-[11px] text-amber-700">
+                      Import DOCX tạo version DRAFT — conversion không giữ layout 100%, hãy Preview và kiểm tra trước khi Publish.
+                    </p>
+                    <div className="mt-2 grid gap-3">
+                      <label className="text-[11px] font-semibold text-slate-600">
+                        {"HTML body (print template A4, chứa placeholder <<...>>) *"}
+                        <textarea
+                          value={draftHtml}
+                          onChange={(e) => setDraftHtml(e.target.value)}
+                          rows={10}
+                          spellCheck={false}
+                          placeholder={'<div class="page">\n  <p>Họ tên: <<Ho_ten>></p>\n</div>'}
+                          className="mt-1 w-full rounded-lg border border-slate-300 px-3 py-2 font-mono text-[11px] outline-none focus:border-emerald-600"
+                        />
+                      </label>
+                      <label className="text-[11px] font-semibold text-slate-600">
+                        Print CSS (tuỳ chọn — CSS A4 chung được tự thêm)
+                        <textarea
+                          value={draftCss}
+                          onChange={(e) => setDraftCss(e.target.value)}
+                          rows={4}
+                          spellCheck={false}
+                          className="mt-1 w-full rounded-lg border border-slate-300 px-3 py-2 font-mono text-[11px] outline-none focus:border-emerald-600"
+                        />
+                      </label>
+                      <label className="text-[11px] font-semibold text-slate-600">
+                        Retention (snapshot vào từng PDF khi tạo)
+                        <select
+                          value={draftRetention}
+                          onChange={(e) => setDraftRetention(e.target.value)}
+                          className="mt-1 w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-[11px] outline-none focus:border-emerald-600 sm:w-56"
+                        >
+                          <option value="1">1 năm</option>
+                          <option value="2">2 năm</option>
+                          <option value="3">3 năm (mặc định)</option>
+                          <option value="5">5 năm</option>
+                          <option value="10">10 năm</option>
+                          <option value="none">Không tự động xóa</option>
+                        </select>
+                      </label>
+                      <div className="flex justify-end">
+                        <button
+                          onClick={createDraftVersion}
+                          disabled={draftSaving}
+                          className="inline-flex items-center gap-2 rounded-lg border border-emerald-200 bg-emerald-50 px-4 py-2 text-xs font-bold text-emerald-700 hover:bg-emerald-100 disabled:opacity-50"
+                        >
+                          <Plus className="h-3.5 w-3.5" /> {draftSaving ? "Đang tạo..." : "Tạo version DRAFT"}
+                        </button>
+                      </div>
+                    </div>
                   </div>
                 </section>
               )}

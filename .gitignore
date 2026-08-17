@@ -1,5 +1,6 @@
 # dependencies
 /node_modules
+/worker/node_modules
 
 # next.js
 /.next/
@@ -25,3 +26,6 @@ yarn-error.log*
 # editor / OS
 .DS_Store
 *.pem
+
+# local object-storage (dev/test) — production dùng GCS/S3
+.storage/

@@ -1,0 +1,25 @@
+{
+  "name": "seasonal-worker-pdf-worker",
+  "private": true,
+  "version": "1.0.0",
+  "description": "Document Merge PDF worker (Playwright/Chromium) for Google Cloud Run",
+  "type": "module",
+  "scripts": {
+    "start": "node --import tsx src/index.ts",
+    "typecheck": "tsc --noEmit -p tsconfig.json",
+    "generate:sample": "node scripts/generate-template-sample.mjs",
+    "verify:visual": "node scripts/visual-verify.mjs",
+    "benchmark": "node scripts/benchmark.mjs"
+  },
+  "dependencies": {
+    "drizzle-orm": "0.45.2",
+    "pg": "8.20.0",
+    "playwright": "^1.49.0",
+    "tsx": "^4.19.2"
+  },
+  "devDependencies": {
+    "@types/node": "^22.20.1",
+    "@types/pg": "8.18.0",
+    "typescript": "^5.9.3"
+  }
+}

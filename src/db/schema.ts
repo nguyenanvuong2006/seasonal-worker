@@ -11,6 +11,7 @@ import {
   index,
   uniqueIndex,
   check,
+  bigint,
 } from "drizzle-orm/pg-core";
 import { sql } from "drizzle-orm";
 
@@ -1369,6 +1370,13 @@ export const mergeTemplates = pgTable(
     // A = Cam kết / Tái ký (DW Cũ); B = Hợp đồng đào tạo nghề (DW Mới); GENERIC = dùng chung
     documentKind: varchar("document_kind", { length: 16 }).notNull().default("GENERIC"),
     isActive: boolean("is_active").notNull().default(true),
+    // --- TEMPLATE VERSIONING (Phase 2/3) -----------------------------------
+    // Version PUBLISHED hiện tại (điểm vào render; NULL = chưa có version HTML).
+    currentPublishedVersion: integer("current_published_version"),
+    // Retention mặc định khi tạo PDF từ template này (1/2/3/5/10/NULL = không tự xoá).
+    retentionYears: integer("retention_years"),
+    // Template có bản HTML (html_body) cho engine HTML_PDF hay chỉ Google Docs.
+    htmlEnabled: boolean("html_enabled").notNull().default(false),
     createdBy: varchar("created_by", { length: 64 }).notNull(),
     updatedBy: varchar("updated_by", { length: 64 }),
     createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
@@ -1423,12 +1431,28 @@ export const mergeJobs = pgTable(
     metadata: jsonb("metadata").$type<Record<string, unknown>>().default({}),
     createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
     updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
+    // --- ASYNC PDF ENGINE (migration 2026-08-20) -----------------------------
+    // engine = GOOGLE_DOCS (legacy fallback) | HTML_PDF (Playwright renderer).
+    // Neon chỉ lưu metadata/job/progress/URL — KHÔNG lưu PDF binary.
+    engine: varchar("engine", { length: 16 }).notNull().default("GOOGLE_DOCS"),
+    queuedCount: integer("queued_count").notNull().default(0),
+    processingCount: integer("processing_count").notNull().default(0),
+    completedCount: integer("completed_count").notNull().default(0),
+    failedCount: integer("failed_count").notNull().default(0),
+    progressPercent: integer("progress_percent").notNull().default(0),
+    outputPdfUrl: text("output_pdf_url"),
+    outputZipUrl: text("output_zip_url"),
+    outputPdfFileId: varchar("output_pdf_file_id", { length: 255 }),
+    outputZipFileId: varchar("output_zip_file_id", { length: 255 }),
+    batchExpiresAt: timestamp("batch_expires_at", { withTimezone: true }),
+    errorSummary: text("error_summary"),
   },
   (t) => [
     index("merge_job_status_idx").on(t.status),
     index("merge_job_created_by_idx").on(t.createdBy),
     index("merge_job_template_idx").on(t.templateId),
     index("merge_job_created_at_idx").on(t.createdAt),
+    index("merge_job_status_updated_idx").on(t.status, t.updatedAt),
   ],
 );
 
@@ -1443,10 +1467,31 @@ export const mergeJobRecords = pgTable(
     status: varchar("status", { length: 24 }).notNull().default("PENDING"),
     error: text("error"),
     createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+    // --- ASYNC PDF ENGINE (migration 2026-08-20) -----------------------------
+    // Bảng này CHÍNH LÀ bảng "item" của async queue (không tạo bảng trùng).
+    // sort_order = sequence (thứ tự user chọn, source of truth khi gộp PDF).
+    // template_id = template áp dụng cho record này (auto-route A/B có thể khác nhau/record).
+    templateId: uuid("template_id"),
+    attemptCount: integer("attempt_count").notNull().default(0),
+    leasedUntil: timestamp("leased_until", { withTimezone: true }),
+    retryAt: timestamp("retry_at", { withTimezone: true }),
+    pdfUrl: text("pdf_url"),
+    storageKey: text("storage_key"),
+    filename: varchar("filename", { length: 255 }),
+    fileSize: bigint("file_size", { mode: "number" }),
+    sha256: varchar("sha256", { length: 64 }),
+    startedAt: timestamp("started_at", { withTimezone: true }),
+    completedAt: timestamp("completed_at", { withTimezone: true }),
+    errorCode: varchar("error_code", { length: 64 }),
+    errorMessage: text("error_message"),
+    documentHistoryId: uuid("document_history_id"),
   },
   (t) => [
     index("merge_job_record_job_idx").on(t.mergeJobId),
     index("merge_job_record_source_idx").on(t.sourceEntity, t.sourceRecordId),
+    index("merge_job_record_claim_idx")
+      .on(t.mergeJobId, t.status, t.sortOrder)
+      .where(sql`status IN ('QUEUED', 'RETRY')`),
   ],
 );
 
@@ -1455,3 +1500,110 @@ export type MergeTemplate = typeof mergeTemplates.$inferSelect;
 export type MergeTemplateField = typeof mergeTemplateFields.$inferSelect;
 export type MergeJob = typeof mergeJobs.$inferSelect;
 export type MergeJobRecord = typeof mergeJobRecords.$inferSelect;
+
+/* ============================================================
+   DOCUMENT MERGE — TEMPLATE VERSIONING (Phase 2)
+   Mỗi template có nhiều version: DRAFT → PUBLISHED → ARCHIVED.
+   Chỉ 1 version PUBLISHED/template (partial unique index).
+   PDF snapshot template_version lúc tạo; đổi template sau này
+   KHÔNG regenerate PDF cũ.
+   ============================================================ */
+export const mergeTemplateVersions = pgTable(
+  "merge_template_versions",
+  {
+    id: uuid("id").defaultRandom().primaryKey(),
+    templateId: uuid("template_id").notNull(),
+    version: integer("version").notNull(),
+    status: varchar("status", { length: 16 }).notNull().default("DRAFT"),
+    htmlBody: text("html_body"),
+    printCss: text("print_css"),
+    sourceDocxName: varchar("source_docx_name", { length: 255 }),
+    retentionYears: integer("retention_years"),
+    mappingSnapshot: jsonb("mapping_snapshot").$type<Record<string, unknown>[]>().default([]),
+    createdBy: varchar("created_by", { length: 64 }).notNull(),
+    publishedAt: timestamp("published_at", { withTimezone: true }),
+    archivedAt: timestamp("archived_at", { withTimezone: true }),
+    supersededBy: integer("superseded_by"),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+    updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [
+    uniqueIndex("merge_template_version_uq").on(t.templateId, t.version),
+    index("merge_template_version_status_idx").on(t.templateId, t.status),
+    uniqueIndex("merge_template_version_published_uq")
+      .on(t.templateId)
+      .where(sql`status = 'PUBLISHED'`),
+  ],
+);
+
+/* ============================================================
+   DOCUMENT HISTORY (Phase 2)
+   Mỗi lần 1 PDF được tạo → 1 record RIÊNG (không overwrite).
+   - retention_until = generated_at + retention_years (snapshot lúc tạo)
+   - archive_status: ONLINE → ARCHIVED → VERIFIED → ONLINE_EXPIRED
+   - CHỈ xoá file online khi retention_until <= now() AND archive_status='VERIFIED'
+   ============================================================ */
+export const documentHistory = pgTable(
+  "document_history",
+  {
+    id: uuid("id").defaultRandom().primaryKey(),
+    candidateId: uuid("candidate_id"),
+    applicationId: uuid("application_id"),
+    mergeJobId: uuid("merge_job_id"),
+    mergeJobRecordId: uuid("merge_job_record_id"),
+    templateId: uuid("template_id"),
+    templateVersion: integer("template_version"),
+    documentType: varchar("document_type", { length: 64 }),
+    generatedAt: timestamp("generated_at", { withTimezone: true }).notNull().defaultNow(),
+    filename: varchar("filename", { length: 255 }).notNull(),
+    storageProvider: varchar("storage_provider", { length: 32 }).notNull().default("google_drive"),
+    storageFileId: varchar("storage_file_id", { length: 255 }),
+    fileSize: bigint("file_size", { mode: "number" }),
+    sha256: varchar("sha256", { length: 64 }),
+    retentionUntil: timestamp("retention_until", { withTimezone: true }),
+    retentionPolicySnapshot: jsonb("retention_policy_snapshot").$type<Record<string, unknown>>().default({}),
+    archiveStatus: varchar("archive_status", { length: 24 }).notNull().default("ONLINE"),
+    archivedAt: timestamp("archived_at", { withTimezone: true }),
+    archiveVerifiedAt: timestamp("archive_verified_at", { withTimezone: true }),
+    archivePath: text("archive_path"),
+    archiveSha256: varchar("archive_sha256", { length: 64 }),
+    onlineDeletedAt: timestamp("online_deleted_at", { withTimezone: true }),
+    deletionReason: varchar("deletion_reason", { length: 64 }),
+    createdBy: varchar("created_by", { length: 64 }),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+    updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [
+    index("document_history_archive_idx").on(t.archiveStatus, t.retentionUntil),
+    index("document_history_candidate_idx").on(t.candidateId),
+    index("document_history_application_idx").on(t.applicationId),
+    index("document_history_job_idx").on(t.mergeJobId),
+  ],
+);
+
+/* ============================================================
+   ARCHIVE RUNS (Phase 2)
+   Tiến trình chạy của Archive Agent (daily/weekly/manual).
+   Resume = query document_history chưa VERIFIED; không tải lại file đã verify.
+   ============================================================ */
+export const archiveRuns = pgTable(
+  "archive_runs",
+  {
+    id: uuid("id").defaultRandom().primaryKey(),
+    runType: varchar("run_type", { length: 16 }).notNull().default("MANUAL"),
+    startedAt: timestamp("started_at", { withTimezone: true }).notNull().defaultNow(),
+    completedAt: timestamp("completed_at", { withTimezone: true }),
+    status: varchar("status", { length: 24 }).notNull().default("RUNNING"),
+    manifestPath: text("manifest_path"),
+    downloadedCount: integer("downloaded_count").notNull().default(0),
+    verifiedCount: integer("verified_count").notNull().default(0),
+    failedCount: integer("failed_count").notNull().default(0),
+    errorSummary: text("error_summary"),
+  },
+  (t) => [index("archive_runs_started_idx").on(t.startedAt)],
+);
+
+// Type exports — Phase 2
+export type MergeTemplateVersion = typeof mergeTemplateVersions.$inferSelect;
+export type DocumentHistory = typeof documentHistory.$inferSelect;
+export type ArchiveRun = typeof archiveRuns.$inferSelect;
