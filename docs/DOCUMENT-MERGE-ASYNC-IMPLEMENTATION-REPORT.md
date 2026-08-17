@@ -201,3 +201,55 @@ c051373  Phase 11 — Merge Job Progress UI
 - `npm run typecheck` ✅ · `worker: tsc` ✅ · `npm test` **459/459** ✅ · `npm run lint` **0 error** (43 warnings có sẵn) ✅ · `next build` ✅.
 - **Visual verification: PENDING** — bắt buộc chạy `worker/scripts/visual-verify.mjs` ở môi trường có Chromium + so sánh với reference Google Docs export trước khi đổi `DOCUMENT_MERGE_ENGINE=HTML_PDF`.
 - **Benchmark: PENDING** — không fake; chạy `worker/scripts/benchmark.mjs` (1/10/50/100) khi có infrastructure.
+
+---
+
+# PHỤ LỤC — STAGING VERIFICATION (2026-08-17, sandbox)
+
+## Môi trường staging (sandbox — KHÔNG phải production)
+
+| Thành phần | Trạng thái |
+| --- | --- |
+| PostgreSQL 18.4 | ✅ Embedded local (tương đương Neon) — schema core + toàn bộ migrations + seed |
+| Chromium 149 | ✅ @sparticuz/chromium (qua npm, LD_LIBRARY_PATH=al2023 libs) — render PDF THẬT |
+| Worker | ✅ Code production (`worker/src/index.ts`), storage local, concurrency 2 |
+| Google Cloud Run | ⛔ KHÔNG deploy được — sandbox không có gcloud/credentials; cấu hình + Dockerfile sẵn sàng |
+| Neon staging thật | ⛔ Không có credentials trong sandbox — dùng PG 18 local tương đương |
+| Google Drive OAuth | ⛔ googleapis.com bị chặn network + không credentials — dùng LocalStorageProvider (cùng StorageProvider interface) |
+| Production engine | ✅ VẪN GOOGLE_DOCS (không đổi) |
+
+## Smoke test E2E (1 hồ sơ test — queue → claim → render → PDF → SHA-256 → storage → history → COMPLETED)
+
+- Job: `f2d9f9a4-9f8d-4568-98bd-c59e0aeb2b18` — **COMPLETED**, progress 100%, engine HTML_PDF (chỉ staging)
+- Item: COMPLETED, attempt 1, filename `20260817_Nguyen-Van-An-(STAGING)_Dang-ky-tap-nghe_<appId>.pdf`
+- PDF cá nhân: **6 trang**, 39,621 bytes, **SHA-256 khớp DB** (66b521c8…)
+- PDF tổng + ZIP: đã tạo tại `Batch Outputs/2026/08/<jobId>/`, **batch_expires_at = +14 ngày**
+- Document History: 1 record — `document_type=Dang-ky-tap-nghe`, `template_version=1`, `retention_until=2029-08-17` (+3 năm), `archive_status=ONLINE`
+- 0 retry, 0 failed
+
+## Visual verification (Chromium 149 THẬT)
+
+- `pageDivCount=5` (5 phần tài liệu) nhưng **`realPdfPageCount=6`** (Giấy đăng ký dài → 2 trang; Tờ khai thuế tràn 2pt → khối ký giữ nguyên nhờ break-inside:avoid)
+- **6 trang PDF = reference kỳ vọng ~6 trang → KHỚP SỐ TRANG**
+- 0 blank page · 0 horizontal overflow · 22 checkbox · 0 placeholder sót · font DejaVu check tiếng Việt = true
+- **LƯU Ý**: reference là "kỳ vọng ~6 trang" (không truy cập được Google Docs export thật từ sandbox) — cần đối chiếu pixel với bản export gốc khi có Drive access trước khi bật production HTML_PDF
+
+## Benchmark (render thuần, concurrency 2, Chromium thật)
+
+| Records | duration_ms | avg_render_ms | p95_render_ms | failed |
+| --- | --- | --- | --- | --- |
+| 1 | 71 | 29 | 29 | 0 |
+| 10 | 217 | 33 | 41 | 0 |
+| 50 | 935 | 32 | 40 | 0 |
+| 100 | 2,123 | 36 | 49 | 0 |
+
+- Ước lượng 500 records (render-only, concurrency 2): ~10–11s; Cloud Run concurrency 4 sẽ nhanh hơn. Target 3–7 phút — dư sức.
+- zip_ms/upload_ms = 0 (chưa có network/storage thật trong benchmark) — đo ở Cloud Run khi deploy.
+
+## Bugs tìm & fix qua smoke (commit 244679d)
+
+1. `finalizeJob` ghi đè output urls bằng null → worker truyền output từ finalizeBatchOutputs.
+2. Job metadata thiếu template version → history template_version=NULL → snapshot version + retentionYears từ published version.
+3. Worker hardcode retentionYears=null ("không tự xoá") → giờ lấy từ snapshot (fallback 3 năm).
+4. `schema.sql` dòng 946 thiếu `--` → fix.
+5. Print CSS: break-inside avoid (hết orphan dòng ở Tờ khai thuế).
