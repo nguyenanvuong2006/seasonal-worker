@@ -39,7 +39,10 @@ const SECTION_LIMIT = 50;
  *       frontend biết còn dữ liệu ngoài 50 dòng đầu hay không (không còn fetch-rồi-lọc-client).
  */
 export async function GET(req: Request) {
-  const guard = await requirePermission(["ADMIN", "HR_RECRUITER", "DEPT_MANAGER", "HR_DIRECTOR"], "dashboard.view");
+  const guard = await requirePermission(
+    ["ADMIN", "HR_RECRUITER", "DEPT_MANAGER", "HR_DIRECTOR", "HR_SUPPORT", "ADMINISTRATION", "FINGERPRINT_STAFF", "MEAL_STAFF"],
+    "dashboard.view",
+  );
   if (!guard.ok) return NextResponse.json({ error: guard.error }, { status: guard.status });
 
   const url = new URL(req.url);

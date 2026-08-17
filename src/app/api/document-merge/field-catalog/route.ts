@@ -12,7 +12,7 @@ import { fieldDefinitions, formQuestions } from '@/db/schema';
 import { buildFieldCatalogFromDefinitions } from '@/lib/document-merge/field-catalog';
 
 export async function GET() {
-  const guard = await requirePermission(['ADMIN', 'HR_RECRUITER', 'HR_DIRECTOR'], 'document_merge.view');
+  const guard = await requirePermission(['ADMIN', 'HR_RECRUITER', 'HR_DIRECTOR', 'HR_SUPPORT'], 'document_merge.view');
   if (!guard.ok) {
     return NextResponse.json({ error: guard.error }, { status: guard.status });
   }

@@ -141,7 +141,7 @@ export async function PUT(request: Request, context: RouteContext) {
  * trong tài liệu merge hiện tại.
  */
 export async function GET(_request: Request, context: RouteContext) {
-  const guard = await requirePermission(['ADMIN', 'HR_RECRUITER', 'HR_DIRECTOR'], 'document_merge.view');
+  const guard = await requirePermission(['ADMIN', 'HR_RECRUITER', 'HR_DIRECTOR', 'HR_SUPPORT'], 'document_merge.view');
   if (!guard.ok) {
     return NextResponse.json({ error: guard.error }, { status: guard.status });
   }

@@ -11,7 +11,7 @@ import { db } from '@/db';
 import { mergeJobs, mergeJobRecords } from '@/db/schema';
 
 export async function GET() {
-  const guard = await requirePermission(['ADMIN', 'HR_RECRUITER', 'HR_DIRECTOR'], 'document_merge.history.view');
+  const guard = await requirePermission(['ADMIN', 'HR_RECRUITER', 'HR_DIRECTOR', 'HR_SUPPORT'], 'document_merge.history.view');
   if (!guard.ok) {
     return NextResponse.json({ error: guard.error }, { status: guard.status });
   }

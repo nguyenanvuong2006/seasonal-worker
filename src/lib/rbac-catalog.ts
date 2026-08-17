@@ -49,6 +49,11 @@ export const PERMISSION_GROUPS: readonly CatalogGroup[] = [
   { key: "tong_quan", label: "Dashboard & Tìm kiếm" },
   { key: "quyen_rieng_tu", label: "Quyền riêng tư (PII)" },
   { key: "document_merge", label: "Document Merge" },
+  // WORKFLOW TIẾP NHẬN — TÁCH VAI TRÒ — 3 nhóm quyền nghiệp vụ mới, tách biệt
+  // khỏi tuyển dụng: Hành chính (mã công nhật), Vân tay (IT Code), Báo cơm.
+  { key: "hanh_chinh", label: "Hành chính — Mã số công nhật" },
+  { key: "van_tay", label: "Vân tay — IT Code" },
+  { key: "bao_com", label: "Báo cơm" },
 ];
 
 /** ~42 quyền — danh mục đầy đủ. Key phải trùng với key mà ROUTE thật sự kiểm tra. */
@@ -64,6 +69,9 @@ export const PERMISSION_CATALOG: readonly CatalogPermission[] = [
   { key: "dw.view", name: "Xem DW Data", group: "dw_data" },
   { key: "dw.edit", name: "Sửa DW Data", group: "dw_data" },
   { key: "dw.delete", name: "Xoá DW Data", group: "dw_data" },
+  // WORKFLOW TIẾP NHẬN — tách bạch "xếp việc" (employment.assign) và "Nhập vào DW Data" (mục IV):
+  // hành động RIÊNG, rõ ràng, không suy diễn từ status Daily Application.
+  { key: "dw.import_from_registration", name: "Nhập vào DW Data (từ Đăng ký)", group: "dw_data" },
   // Hồ sơ Tập nghề
   { key: "worker_profile.view", name: "Xem Hồ sơ Tập nghề", group: "ho_so_tap_nghe" },
   { key: "worker_profile.edit", name: "Sửa Hồ sơ Tập nghề", group: "ho_so_tap_nghe" },
@@ -133,6 +141,15 @@ export const PERMISSION_CATALOG: readonly CatalogPermission[] = [
   { key: "document_merge.execute", name: "Thực hiện Merge", group: "document_merge" },
   { key: "document_merge.history.view", name: "Xem Lịch sử Merge", group: "document_merge" },
   { key: "document_merge.history.delete", name: "Xoá Lịch sử Merge", group: "document_merge" },
+  // Hành chính — Mã số công nhật (mục VI, X)
+  { key: "administration.daily_code.view", name: "Xem hàng chờ Mã số công nhật", group: "hanh_chinh" },
+  { key: "administration.daily_code.submit", name: "Submit Mã số công nhật hàng loạt", group: "hanh_chinh" },
+  // Vân tay — IT Code (mục VIII, X)
+  { key: "fingerprint.view", name: "Xem hàng chờ IT Code / Vân tay", group: "van_tay" },
+  { key: "fingerprint.submit", name: "Submit IT Code hàng loạt", group: "van_tay" },
+  // Báo cơm (mục IX, X)
+  { key: "meal.view", name: "Xem danh sách Báo cơm", group: "bao_com" },
+  { key: "meal.export", name: "Xuất danh sách Báo cơm", group: "bao_com" },
 ];
 
 /** 4 vai trò hệ thống + nền tảng cho vai trò tuỳ chỉnh. */
@@ -164,6 +181,39 @@ export const SYSTEM_ROLES: readonly CatalogRole[] = [
     description: "Quyền nghiệp vụ cấp cao: xem hồ sơ/Planning/Nghỉ việc/Xuất Excel/Nhật ký — KHÔNG quản lý users/RBAC/Data Scope/Backup/Branding/Health.",
     isSystem: false,
     sortOrder: 4,
+  },
+  // WORKFLOW TIẾP NHẬN — TÁCH VAI TRÒ (mục II): 4 vai trò nghiệp vụ mới, mỗi vai trò
+  // chỉ có quyền đúng trách nhiệm của mình — KHÔNG vai trò nào mặc định có quyền
+  // của HR_RECRUITER hay ADMIN. ADMINISTRATION ("Nhân viên hành chính") KHÔNG PHẢI
+  // ADMIN ("Quản trị viên hệ thống") — hai vai trò hoàn toàn tách biệt, không được
+  // đại diện lẫn nhau bằng role === "ADMIN" ở bất kỳ đâu trong code.
+  {
+    key: "HR_SUPPORT",
+    name: "Nhân viên hỗ trợ",
+    description: "Dùng Document Merge cho hồ sơ đủ điều kiện: preview, merge, tạo PDF, gửi tài liệu. KHÔNG có quyền Recruiter mặc định, không sửa mã công nhật, không quản trị hệ thống.",
+    isSystem: false,
+    sortOrder: 5,
+  },
+  {
+    key: "ADMINISTRATION",
+    name: "Nhân viên hành chính",
+    description: "Vai trò nghiệp vụ hành chính (KHÔNG PHẢI Quản trị viên hệ thống): xem danh sách đã nhập DW, nhập/cập nhật Mã số công nhật, submit hàng loạt. Không quản lý user/RBAC/Data Scope/System.",
+    isSystem: false,
+    sortOrder: 6,
+  },
+  {
+    key: "FINGERPRINT_STAFF",
+    name: "Nhân viên phụ trách vân tay",
+    description: "Xem lao động đã có Mã số công nhật, nhập/cập nhật IT CODE, submit. Không sửa dữ liệu HR khác nếu không được cấp permission riêng.",
+    isSystem: false,
+    sortOrder: 7,
+  },
+  {
+    key: "MEAL_STAFF",
+    name: "Nhân viên báo cơm",
+    description: "Xem danh sách đủ điều kiện báo cơm, xuất danh sách hôm nay. Không chỉnh sửa hồ sơ, không nhập IT CODE, không chỉnh Mã số công nhật.",
+    isSystem: false,
+    sortOrder: 8,
   },
 ];
 
@@ -204,6 +254,7 @@ export const BASELINE_ROLE_PERMISSIONS: Readonly<Record<string, readonly string[
     "questions.manage",
     "dw.view",
     "dw.edit",
+    "dw.import_from_registration",
     "worker_profile.view",
     "departments.manage",
     "planning.view",
@@ -274,6 +325,41 @@ export const BASELINE_ROLE_PERMISSIONS: Readonly<Record<string, readonly string[
     "privacy.view_address",
     "document_merge.view",
     "document_merge.history.view",
+  ],
+  // Mục X trong đề bài — baseline HR_SUPPORT: chỉ Document Merge + xem tối thiểu
+  // Daily Application để chọn hồ sơ. KHÔNG registrations.edit/.approve, KHÔNG dw.edit
+  // toàn cục, KHÔNG employment.assign — không phải Recruiter.
+  HR_SUPPORT: [
+    "registrations.view",
+    "document_merge.view",
+    "document_merge.execute",
+    "document_merge.history.view",
+    "dashboard.view",
+    "global_search.use",
+  ],
+  // Mục X — baseline ADMINISTRATION: chỉ Mã số công nhật + xem tối thiểu để chọn dòng.
+  // KHÔNG users.manage/rbac.manage/data_scope.manage/backup/branding/system — KHÔNG PHẢI ADMIN.
+  ADMINISTRATION: [
+    "administration.daily_code.view",
+    "administration.daily_code.submit",
+    "dw.view",
+    "dashboard.view",
+    "global_search.use",
+  ],
+  // Mục X — baseline FINGERPRINT_STAFF: chỉ IT Code/Vân tay + xem danh tính tối thiểu.
+  // KHÔNG registrations.approve, KHÔNG dw.edit toàn hệ thống.
+  FINGERPRINT_STAFF: [
+    "fingerprint.view",
+    "fingerprint.submit",
+    "dashboard.view",
+    "global_search.use",
+  ],
+  // Mục X — baseline MEAL_STAFF: chỉ Báo cơm, KHÔNG sửa hồ sơ, KHÔNG PII mặc định
+  // (privacy.view_cccd/phone/address KHÔNG nằm trong baseline — Admin cấp riêng nếu cần).
+  MEAL_STAFF: [
+    "meal.view",
+    "meal.export",
+    "dashboard.view",
   ],
 };
 

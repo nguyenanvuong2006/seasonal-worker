@@ -14,7 +14,7 @@ import { mergeTemplates, mergeTemplateFields } from '@/db/schema';
 import { extractGoogleDocId } from '@/lib/document-merge/template-routing';
 
 export async function GET() {
-  const guard = await requirePermission(['ADMIN', 'HR_RECRUITER', 'HR_DIRECTOR'], 'document_merge.view');
+  const guard = await requirePermission(['ADMIN', 'HR_RECRUITER', 'HR_DIRECTOR', 'HR_SUPPORT'], 'document_merge.view');
   if (!guard.ok) {
     return NextResponse.json({ error: guard.error }, { status: guard.status });
   }

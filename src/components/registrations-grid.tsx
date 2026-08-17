@@ -278,8 +278,6 @@ export default function RegistrationsGrid({
   const [newModalOpen, setNewModalOpen] = React.useState(false);
   const [newSel, setNewSel] = React.useState<Record<string, boolean>>({});
   const [newDept, setNewDept] = React.useState("");
-  // Xác nhận đồng bộ IT CODE sang DW Data trước khi ghi (chỉ áp dụng cho lao động ĐÃ có DW Data).
-  const [itCodeConfirm, setItCodeConfirm] = React.useState<{ id: string; value: string; workerName: string } | null>(null);
   // EMPLOYMENT LIFECYCLE (#7-9, #23) — modal chặn "xếp việc âm thầm" khi ứng viên còn ACTIVE session.
   const [employmentGuard, setEmploymentGuard] = React.useState<{ row: AppRow; pendingPatch: Partial<AppRow> } | null>(null);
   // EMPLOYMENT LIFECYCLE (#11) — modal yêu cầu điều chỉnh ngày nhận việc (không backdate trực tiếp).
@@ -516,27 +514,12 @@ export default function RegistrationsGrid({
         },
       }),
       ch.accessor("itCode", {
+        // WORKFLOW TIẾP NHẬN — TÁCH VAI TRÒ (mục VIII): IT CODE không còn do Recruiter
+        // nhập tại Daily Application — nguồn thao tác chính là FINGERPRINT_STAFF tại
+        // "IT Code / Vân tay" (dw_data.it_code). Cột này CHỈ TRA CỨU (read-only) —
+        // enforce lại ở server (registrations/[id] route đã bỏ "itCode" khỏi EDITABLE).
         header: "IT CODE",
-        cell: (i) => {
-          const val = i.getValue() ?? "";
-          if (!canEdit) return <span className="px-2 font-mono text-[12px]">{val || "—"}</span>;
-          return (
-            <EditableCell
-              value={val}
-              placeholder="Nhập IT CODE"
-              className="font-mono text-[12px]"
-              onCommit={(v) => {
-                const itCode = v.trim();
-                if (i.row.original.dwMatch === "MATCHED") {
-                  // Lao động CŨ đã có DW Data -> cảnh báo đồng bộ trước khi ghi.
-                  setItCodeConfirm({ id: i.row.original.id, value: itCode, workerName: i.row.original.fullName });
-                } else {
-                  void patchRow(i.row.original.id, { itCode: itCode || null });
-                }
-              }}
-            />
-          );
-        },
+        cell: (i) => <span className="px-2 font-mono text-[12px] text-fg-muted" title="Chỉ tra cứu — nhập tại IT Code / Vân tay">{i.getValue() || "—"}</span>,
       }),
       ch.accessor("phone", {
         header: "SĐT",
@@ -687,21 +670,23 @@ export default function RegistrationsGrid({
   const newInSel = selRows.filter((r) => r.dwMatch === "NEW").length;
   const newApplicants = React.useMemo(() => rows.filter((r) => r.dwMatch === "NEW"), [rows]);
   const newSelIds = Object.keys(newSel).filter((k) => newSel[k]);
+  type RowOutcome = { id: string; cccd: string | null; fullName: string | null; ok: boolean; reason: string };
   const [bulkResult, setBulkResult] = React.useState<{
-    imported: number;
-    newToDw: number;
-    skipped: number;
-    results: { id: string; cccd: string | null; fullName: string | null; ok: boolean; reason: string }[];
+    title: string;
+    stats: { label: string; value: number; tone: "success" | "primary" | "danger" }[];
+    results: RowOutcome[];
   } | null>(null);
 
-  const runBulk = async (ids: string[], status: "APPROVED" | "REJECTED", deptId?: string) => {
+  // BƯỚC A — "Sắp xếp công việc/bộ phận" (Duyệt/Từ chối). KHÔNG đụng DW Data
+  // (mục IV trong đề bài — xếp việc và Nhập DW Data là hai hành động tách bạch).
+  const runApprove = async (ids: string[], status: "APPROVED" | "REJECTED", deptId?: string) => {
     if (ids.length === 0) {
       toast({ title: "Chưa chọn hồ sơ nào", variant: "destructive" });
-      return;
+      return null;
     }
     if (ids.length > MAX_BULK) {
       toast({ title: `Vượt quá ${MAX_BULK} hồ sơ/lần!`, variant: "destructive" });
-      return;
+      return null;
     }
     setBusy(true);
     try {
@@ -713,22 +698,116 @@ export default function RegistrationsGrid({
       const d = await res.json();
       if (!res.ok) {
         toast({ title: d.error ?? "Thất bại", variant: "destructive" });
-        return;
+        return null;
       }
       toast({
         title:
           status === "APPROVED"
-            ? `✅ Đã duyệt ${d.imported} • Thêm mới ${d.newToDw} vào DW Data${d.skipped ? ` • Không thành công ${d.skipped}` : ""}`
+            ? `✅ Đã duyệt / xếp việc ${d.imported}${d.skipped ? ` • Không thành công ${d.skipped}` : ""}`
             : `Đã từ chối ${d.imported} hồ sơ${d.skipped ? ` • Không thành công ${d.skipped}` : ""}`,
       });
-      setBulkResult(d); // luôn hiển thị breakdown chi tiết (kể cả khi skipped=0) để người dùng luôn thấy rõ kết quả
-      setNewModalOpen(false);
-      setNewSel({});
-      setNewDept("");
-      await load();
+      return d as { imported: number; skipped: number; results: RowOutcome[] };
     } finally {
       setBusy(false);
     }
+  };
+
+  // BƯỚC B — "Nhập vào DW Data" (mục IV). Hành động RIÊNG, chỉ áp dụng cho hồ sơ
+  // đã APPROVED. Idempotent — bấm lại không tạo bản ghi DW Data trùng.
+  const runDwImport = async (ids: string[]) => {
+    if (ids.length === 0) {
+      toast({ title: "Chưa chọn hồ sơ nào", variant: "destructive" });
+      return null;
+    }
+    setBusy(true);
+    try {
+      const res = await fetch("/api/bulk-import/dw", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ ids }),
+      });
+      const d = await res.json();
+      if (!res.ok) {
+        toast({ title: d.error ?? "Thất bại", variant: "destructive" });
+        return null;
+      }
+      toast({
+        title: `✅ Nhập DW Data: mới ${d.inserted} • liên kết ${d.linked}${d.skipped ? ` • bỏ qua ${d.skipped}` : ""}`,
+      });
+      return d as { inserted: number; linked: number; skipped: number; results: RowOutcome[] };
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const handleApprove = async (ids: string[], deptId?: string) => {
+    const d = await runApprove(ids, "APPROVED", deptId);
+    if (!d) return;
+    setBulkResult({
+      title: "Kết quả Duyệt / Xếp việc",
+      stats: [
+        { label: "Đã duyệt / xếp việc", value: d.imported, tone: "success" },
+        { label: "Không thành công", value: d.skipped, tone: "danger" },
+      ],
+      results: d.results,
+    });
+    setRowSelection({});
+    await load();
+  };
+
+  const handleReject = async (ids: string[]) => {
+    const d = await runApprove(ids, "REJECTED");
+    if (!d) return;
+    setBulkResult({
+      title: "Kết quả Từ chối",
+      stats: [
+        { label: "Đã từ chối", value: d.imported, tone: "success" },
+        { label: "Không thành công", value: d.skipped, tone: "danger" },
+      ],
+      results: d.results,
+    });
+    setRowSelection({});
+    await load();
+  };
+
+  const handleDwImport = async (ids: string[]) => {
+    const d = await runDwImport(ids);
+    if (!d) return;
+    setBulkResult({
+      title: "Kết quả Nhập vào DW Data",
+      stats: [
+        { label: "Thêm mới vào DW Data", value: d.inserted, tone: "primary" },
+        { label: "Liên kết DW đã có", value: d.linked, tone: "success" },
+        { label: "Bỏ qua / không thành công", value: d.skipped, tone: "danger" },
+      ],
+      results: d.results,
+    });
+    setRowSelection({});
+    await load();
+  };
+
+  /** Luồng tiện lợi cho người MỚI: duyệt/xếp việc RỒI nhập DW Data — 2 lệnh gọi API
+   *  tách biệt, nối tiếp nhau (không phải 1 hành động gộp ở tầng server). */
+  const handleApproveThenImport = async (ids: string[], deptId?: string) => {
+    const approveRes = await runApprove(ids, "APPROVED", deptId);
+    if (!approveRes) return;
+    const approvedIds = approveRes.results.filter((r) => r.ok).map((r) => r.id);
+    const dwRes = approvedIds.length > 0 ? await runDwImport(approvedIds) : null;
+    setBulkResult({
+      title: "Kết quả Duyệt & Nhập vào DW Data",
+      stats: [
+        { label: "Đã duyệt / xếp việc", value: approveRes.imported, tone: "success" },
+        { label: "Thêm mới vào DW Data", value: dwRes?.inserted ?? 0, tone: "primary" },
+        { label: "Liên kết DW đã có", value: dwRes?.linked ?? 0, tone: "success" },
+        { label: "Không thành công", value: approveRes.skipped + (dwRes?.skipped ?? 0), tone: "danger" },
+      ],
+      results: [...approveRes.results, ...(dwRes?.results ?? [])],
+    });
+    setNewModalOpen(false);
+    setNewSel({});
+    setNewDept("");
+    setRowSelection({});
+    await load();
   };
 
   const stats = React.useMemo(
@@ -882,10 +961,15 @@ export default function RegistrationsGrid({
           <span className="text-[13px] font-semibold text-white/90">
             Đã chọn {selIds.length} (mới: {newInSel}, cũ: {selIds.length - newInSel})
           </span>
-          <Button variant="primary" onClick={() => runBulk(selIds, "APPROVED")} disabled={busy} loading={busy} size="sm">
-            Duyệt &amp; Nhập DW Data
+          {/* BƯỚC A và BƯỚC B — hai hành động RIÊNG BIỆT (mục IV): "Duyệt / Xếp việc"
+              KHÔNG đụng DW Data; "Nhập vào DW Data" chỉ áp dụng cho hồ sơ đã duyệt. */}
+          <Button variant="primary" onClick={() => handleApprove(selIds)} disabled={busy} loading={busy} size="sm">
+            Duyệt / Xếp việc
           </Button>
-          <Button variant="destructive" onClick={() => runBulk(selIds, "REJECTED")} disabled={busy} size="sm">
+          <Button variant="outline" onClick={() => handleDwImport(selIds)} disabled={busy} loading={busy} size="sm" className="border-white/40 bg-white/10 text-white hover:bg-white/20">
+            Nhập vào DW Data
+          </Button>
+          <Button variant="destructive" onClick={() => handleReject(selIds)} disabled={busy} size="sm">
             <X className="h-3.5 w-3.5" /> Từ chối
           </Button>
           <Button variant="ghost" onClick={() => setRowSelection({})} size="sm" className="text-white/80 hover:bg-white/10 hover:text-white">
@@ -1061,10 +1145,13 @@ export default function RegistrationsGrid({
             className="w-full"
             disabled={busy || newSelIds.length === 0}
             loading={busy}
-            onClick={() => runBulk(newSelIds, "APPROVED", newDept)}
+            onClick={() => handleApproveThenImport(newSelIds, newDept)}
           >
-            Xác nhận Import ({newSelIds.length} người) vào DW Data
+            Duyệt & Nhập vào DW Data ({newSelIds.length} người)
           </Button>
+          <p className="text-center text-[11px] text-fg-muted">
+            Thực hiện lần lượt hai bước: Duyệt / Xếp việc, sau đó Nhập vào DW Data — hai hành động độc lập, có thể chạy lại an toàn.
+          </p>
         </div>
       </Modal>
 
@@ -1215,35 +1302,6 @@ export default function RegistrationsGrid({
         </Modal>
       )}
 
-      {itCodeConfirm && (
-        <Modal open onClose={() => setItCodeConfirm(null)} title="Cập nhật IT CODE đồng bộ DW Data" width="max-w-md">
-          <div className="space-y-4">
-            <div className="rounded-[12px] border border-warning/30 bg-warning-tint p-3 text-[13px] leading-6 text-fg-secondary">
-              Lao động <b className="text-fg">{itCodeConfirm.workerName}</b> đã có hồ sơ trong DW Data.
-              Giá trị <b className="text-fg">IT CODE</b> sẽ được cập nhật <b className="text-fg">đồng thời</b> vào:
-              <ul className="mt-2 list-disc space-y-1 pl-5">
-                <li>Daily Application (<span className="font-mono text-[11px]">daily_applications.it_code</span>)</li>
-                <li>Hồ sơ Tập nghề — mã vân tay (<span className="font-mono text-[11px]">worker_profiles.fingerprint_code</span>)</li>
-                <li>DW Data (<span className="font-mono text-[11px]">dw_data.it_code</span>)</li>
-              </ul>
-            </div>
-            <div className="flex justify-end gap-2">
-              <Button variant="ghost" onClick={() => setItCodeConfirm(null)}>Hủy</Button>
-              <Button
-                variant="primary"
-                onClick={() => {
-                  const { id, value } = itCodeConfirm;
-                  setItCodeConfirm(null);
-                  void patchRow(id, { itCode: value || null });
-                }}
-              >
-                Xác nhận & cập nhật
-              </Button>
-            </div>
-          </div>
-        </Modal>
-      )}
-
       {historyRow && (
         <HistoryPanel
           row={historyRow}
@@ -1266,35 +1324,31 @@ export default function RegistrationsGrid({
       )}
 
       {bulkResult && (
-        <Modal open onClose={() => setBulkResult(null)} title="Kết quả xử lý" width="max-w-xl">
+        <Modal open onClose={() => setBulkResult(null)} title={bulkResult.title} width="max-w-xl">
           <div className="space-y-4">
-            <div className="grid grid-cols-3 gap-2 text-center">
-              <div className="rounded-[10px] bg-success-tint p-3">
-                <p className="text-2xl font-bold text-success">{bulkResult.imported}</p>
-                <p className="text-[11px] font-semibold uppercase text-success">Đã duyệt</p>
-              </div>
-              <div className="rounded-[10px] bg-primary-tint p-3">
-                <p className="text-2xl font-bold text-primary">{bulkResult.newToDw}</p>
-                <p className="text-[11px] font-semibold uppercase text-primary">Đã thêm (DW Data)</p>
-              </div>
-              <div className={cn("rounded-[10px] p-3", bulkResult.skipped > 0 ? "bg-danger-tint" : "bg-surface-hover")}>
-                <p className={cn("text-2xl font-bold", bulkResult.skipped > 0 ? "text-danger" : "text-fg-muted")}>
-                  {bulkResult.skipped}
-                </p>
-                <p className={cn("text-[11px] font-semibold uppercase", bulkResult.skipped > 0 ? "text-danger" : "text-fg-muted")}>
-                  Không thành công
-                </p>
-              </div>
+            <div className={cn("grid gap-2 text-center", bulkResult.stats.length === 2 ? "grid-cols-2" : bulkResult.stats.length === 3 ? "grid-cols-3" : "grid-cols-4")}>
+              {bulkResult.stats.map((s) => {
+                const isDanger = s.tone === "danger";
+                const zero = s.value === 0;
+                const bg = isDanger ? (zero ? "bg-surface-hover" : "bg-danger-tint") : s.tone === "primary" ? "bg-primary-tint" : "bg-success-tint";
+                const text = isDanger ? (zero ? "text-fg-muted" : "text-danger") : s.tone === "primary" ? "text-primary" : "text-success";
+                return (
+                  <div key={s.label} className={cn("rounded-[10px] p-3", bg)}>
+                    <p className={cn("text-2xl font-bold", text)}>{s.value}</p>
+                    <p className={cn("text-[11px] font-semibold uppercase", text)}>{s.label}</p>
+                  </div>
+                );
+              })}
             </div>
 
-            {bulkResult.skipped > 0 && (
+            {bulkResult.results.some((r) => !r.ok) && (
               <div>
                 <p className="mb-1 text-[11px] font-semibold uppercase tracking-wide text-fg-muted">Nguyên nhân</p>
                 <ul className="max-h-64 space-y-1 overflow-y-auto rounded-[10px] border border-border p-2">
                   {bulkResult.results
                     .filter((r) => !r.ok)
-                    .map((r) => (
-                      <li key={r.id} className="rounded-[8px] bg-danger-tint px-2 py-1.5 text-xs text-danger">
+                    .map((r, idx) => (
+                      <li key={`${r.id}-${idx}`} className="rounded-[8px] bg-danger-tint px-2 py-1.5 text-xs text-danger">
                         <span className="font-semibold">{r.fullName ?? r.cccd ?? r.id}</span>
                         {r.cccd ? ` (${r.cccd})` : ""} — {r.reason}
                       </li>

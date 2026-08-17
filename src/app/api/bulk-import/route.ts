@@ -1,7 +1,7 @@
 import { NextResponse } from "next/server";
-import { and, eq, inArray, isNull, sql } from "drizzle-orm";
+import { and, eq, inArray, sql } from "drizzle-orm";
 import { db } from "@/db";
-import { dailyApplications, dwData, employmentSessions, workerProfiles } from "@/db/schema";
+import { dailyApplications, employmentSessions } from "@/db/schema";
 import { getUserScope, requireRoleAndPermission, writeAudit } from "@/lib/auth";
 import { scopeAllowsDepartment } from "@/lib/data-scope";
 import { todayStr } from "@/lib/helpers";
@@ -18,7 +18,13 @@ export const MAX_BULK = 500;
 
 type RowResult = { id: string; cccd: string | null; fullName: string | null; ok: boolean; reason: string };
 
-/** Duyệt hàng loạt & Import người mới vào sheet "DW Data". */
+/**
+ * BƯỚC A — "Sắp xếp công việc/bộ phận" (Duyệt hàng loạt): APPROVE + xếp việc
+ * (employment_sessions APPROVED + Planning allocation). KHÔNG đụng DW Data —
+ * đó là BƯỚC B, hành động riêng biệt tại POST /api/bulk-import/dw (mục IV
+ * trong đề bài: "xếp việc" và "Nhập vào DW Data" là hai hành động tách bạch,
+ * không được gộp vào cùng một nút/API).
+ */
 export async function POST(req: Request) {
   const guard = await requireRoleAndPermission(["ADMIN", "HR_RECRUITER"], "registrations.approve");
   if (!guard.ok) return NextResponse.json({ error: guard.error }, { status: guard.status });
@@ -120,62 +126,12 @@ export async function POST(req: Request) {
       }
 
       if (targets.length === 0) {
-        return { updated: 0, newImported: 0, results, processedIds: [] as string[] };
+        return { updated: 0, results, processedIds: [] as string[] };
       }
 
-      let newImported = 0;
-      const dwInsertedCccd = new Set<string>();
-
-      if (finalStatus === "APPROVED") {
-        // Chỉ tạo hồ sơ DW mới cho người CHƯA có trong DW Data
-        const freshOnes = targets.filter((t) => t.dwMatch === "NEW");
-        if (freshOnes.length > 0) {
-          const inserted = await tx
-            .insert(dwData)
-            .values(
-              freshOnes.map((t) => ({
-                fullName: normalizePersonName(t.fullName),
-                // IT CODE / Mã vân tay (#18) — chuyển IT CODE đã nhập ở Daily Application sang DW Data.
-                itCode: t.itCode ?? null,
-                gender: t.gender,
-                bod: t.dob,
-                cccd: t.cccd,
-                phone: t.phone,
-                permanentAddress: t.permanentAddress,
-                residentialAddress: t.residentialAddress,
-                source: "Đăng ký thời vụ (Portal)",
-                profile: "Tự đăng ký online",
-              })),
-            )
-            .onConflictDoUpdate({
-              target: dwData.cccd,
-              targetWhere: sql`deleted_at is null`,
-              set: {
-                fullName: sql`excluded.full_name`,
-                itCode: sql`coalesce(excluded.it_code, ${dwData.itCode})`,
-                phone: sql`coalesce(excluded.phone, ${dwData.phone})`,
-                residentialAddress: sql`coalesce(excluded.residential_address, ${dwData.residentialAddress})`,
-              },
-            })
-            .returning({ id: dwData.id, cccd: dwData.cccd });
-          newImported = inserted.length;
-
-          // Gắn liên kết DW cho các đơn vừa import + cập nhật worker_profiles.dw_id
-          // để các lần sửa IT CODE sau này đồng bộ đúng sang dw_data.it_code.
-          for (const ins of inserted) {
-            if (!ins.cccd) continue;
-            dwInsertedCccd.add(ins.cccd);
-            await tx
-              .update(dailyApplications)
-              .set({ dwId: ins.id, dwMatch: "MATCHED" })
-              .where(eq(dailyApplications.cccd, ins.cccd));
-            await tx
-              .update(workerProfiles)
-              .set({ dwId: ins.id })
-              .where(and(eq(workerProfiles.cccd, ins.cccd), isNull(workerProfiles.deletedAt)));
-          }
-        }
-      }
+      // KHÔNG đụng dw_data ở đây (mục IV) — "Nhập vào DW Data" là hành động RIÊNG,
+      // rõ ràng, do Recruiter chủ động thực hiện SAU khi xếp việc xong, tại
+      // POST /api/bulk-import/dw (xem src/lib/daily-intake-workflow.ts).
 
       const updated = await tx
         .update(dailyApplications)
@@ -214,16 +170,14 @@ export async function POST(req: Request) {
       for (const t of targets) {
         const reason =
           finalStatus === "APPROVED"
-            ? dwInsertedCccd.has(t.cccd)
-              ? "Đã duyệt và thêm mới vào DW Data"
-              : "Đã duyệt"
+            ? "Đã duyệt và xếp việc — dùng “Nhập vào DW Data” để hoàn tất bước tiếp theo"
             : finalStatus === "REJECTED"
               ? "Đã từ chối"
               : "Đã chuyển vào danh sách dự phòng (Waitlist)";
         results.push({ id: t.id, cccd: t.cccd, fullName: normalizePersonName(t.fullName), ok: true, reason });
       }
 
-      return { updated: updated.length, newImported, results, processedIds: targets.map((t) => t.id) };
+      return { updated: updated.length, results, processedIds: targets.map((t) => t.id) };
     });
 
     // RULE ENGINE (#6, trigger ON_APPROVE) — chỉ áp dụng hành động "Thêm ghi chú cảnh báo",
@@ -261,9 +215,8 @@ export async function POST(req: Request) {
       }
     }
 
-    await writeAudit(guard.session, "BULK_IMPORT_" + finalStatus, "dw_data", {
+    await writeAudit(guard.session, "BULK_IMPORT_" + finalStatus, "daily_applications", {
       updated: result.updated,
-      newImported: result.newImported,
       skipped: result.results.filter((r) => !r.ok).length,
       departmentId: deptId,
     });
@@ -271,7 +224,6 @@ export async function POST(req: Request) {
     return NextResponse.json({
       success: true,
       imported: result.updated,
-      newToDw: result.newImported,
       skipped: result.results.filter((r) => !r.ok).length,
       results: result.results,
     });

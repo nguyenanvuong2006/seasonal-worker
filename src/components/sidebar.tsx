@@ -25,10 +25,12 @@ import {
   Gauge,
   ScrollText,
   UploadCloud,
-  Files,
   Trash2,
   FileText,
   FileSpreadsheet,
+  BadgeCheck,
+  ScanFace,
+  UtensilsCrossed,
   Menu,
   X,
   ChevronsLeft,
@@ -48,16 +50,35 @@ const NAV_GROUPS: NavGroup[] = [
     group: "Tổng quan",
     items: [
       { href: "/admin/dashboard", label: "Dashboard", icon: LayoutDashboard, roles: ["ADMIN", "HR_RECRUITER", "DEPT_MANAGER"], permission: "dashboard.view" },
-      { href: "/task-center", label: "Task Center", icon: ListChecks, roles: ["ADMIN", "HR_RECRUITER", "DEPT_MANAGER"], permission: "dashboard.view" },
+      { href: "/task-center", label: "Task Center", icon: ListChecks, roles: ["ADMIN", "HR_RECRUITER", "DEPT_MANAGER", "HR_DIRECTOR"], permission: "dashboard.view" },
     ],
   },
   {
-    group: "Tuyển & Tiếp nhận Tập nghề",
+    // Mục XIV — "Tuyển & tiếp nhận"
+    group: "Tuyển & tiếp nhận",
     items: [
       { href: "/hr/registrations", label: "Daily Application", icon: ClipboardList, roles: ["ADMIN", "HR_RECRUITER"], permission: "registrations.view" },
       { href: "/hr/workers", label: "DW Data (Đối chiếu)", icon: Database, roles: ["ADMIN", "HR_RECRUITER"], permission: "dw.view" },
       { href: "/admin/departments", label: "Cơ cấu tổ chức", icon: Building2, roles: ["ADMIN", "HR_RECRUITER"], permission: "departments.manage" },
       { href: "/department", label: "Bộ phận của tôi", icon: Factory, roles: ["DEPT_MANAGER", "ADMIN", "HR_RECRUITER"] },
+    ],
+  },
+  {
+    // Mục XIV — "Hồ sơ & tài liệu": Document Merge KHÔNG yêu cầu role Recruiter
+    // (HR_SUPPORT dùng riêng — mục V, X).
+    group: "Hồ sơ & tài liệu",
+    items: [
+      { href: "/admin/document-merge", label: "Trộn tài liệu", icon: FileText, roles: ["ADMIN", "HR_RECRUITER", "HR_SUPPORT", "HR_DIRECTOR"], permission: "document_merge.view" },
+    ],
+  },
+  {
+    // Mục XIV, VI, VIII, IX — "Vận hành trong ngày": 3 vai trò mới, KHÔNG đặt dưới
+    // "Quản trị hệ thống" (ADMINISTRATION KHÔNG PHẢI ADMIN — mục II, XV).
+    group: "Vận hành trong ngày",
+    items: [
+      { href: "/administration/daily-code", label: "Nhập mã công nhật", icon: BadgeCheck, roles: ["ADMIN", "ADMINISTRATION"], permission: "administration.daily_code.view" },
+      { href: "/fingerprint/it-code", label: "IT Code / Vân tay", icon: ScanFace, roles: ["ADMIN", "FINGERPRINT_STAFF"], permission: "fingerprint.view" },
+      { href: "/meal/export", label: "Báo cơm", icon: UtensilsCrossed, roles: ["ADMIN", "MEAL_STAFF"], permission: "meal.view" },
     ],
   },
   {
@@ -87,16 +108,16 @@ const NAV_GROUPS: NavGroup[] = [
     ],
   },
   {
-    group: "Quản trị",
+    // Mục XIV, XV — CHỈ ADMIN và người có permission tương ứng. ADMINISTRATION
+    // (Nhân viên hành chính) KHÔNG được đặt ở nhóm này — xem nhóm "Vận hành trong ngày".
+    group: "Quản trị hệ thống",
     items: [
-      { href: "/admin/document-merge", label: "Document Merge Center", icon: FileText, roles: ["ADMIN", "HR_RECRUITER"], permission: "document_merge.view" },
       { href: "/admin/users", label: "Quản lý thành viên", icon: Users, roles: ["ADMIN"], permission: "users.manage" },
       { href: "/admin/permissions", label: "Phân quyền chi tiết", icon: ShieldCheck, roles: ["ADMIN"], permission: "rbac.manage" },
       { href: "/admin/data-scopes", label: "Data Scope", icon: MapIcon, roles: ["ADMIN"], permission: "data_scope.manage" },
       { href: "/admin/system", label: "Control Center", icon: Gauge, roles: ["ADMIN"], permission: "system.view" },
       { href: "/admin/audit", label: "Nhật ký hệ thống", icon: ScrollText, roles: ["ADMIN"], permission: "audit.view" },
       { href: "/admin/import-data", label: "Nhập dữ liệu ban đầu", icon: UploadCloud, roles: ["ADMIN"], permission: "import.run" },
-      { href: "/admin/document-merge", label: "Document Merge Center", icon: Files, roles: ["ADMIN"] },
       { href: "/admin/recycle-bin", label: "Thùng rác", icon: Trash2, roles: ["ADMIN"], permission: "recycle_bin.manage" },
     ],
   },
