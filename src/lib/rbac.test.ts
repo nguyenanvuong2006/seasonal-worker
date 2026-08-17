@@ -17,15 +17,18 @@ import {
 
 const allKeys = PERMISSION_CATALOG.map((p) => p.key);
 
-test("catalog: ~42-60 permissions, mỗi key duy nhất", () => {
-  assert.ok(allKeys.length >= 40 && allKeys.length <= 65, `expected 40-65 permissions, got ${allKeys.length}`);
+test("catalog: ~42-75 permissions, mỗi key duy nhất", () => {
+  // Mục X (Workflow tiếp nhận — tách vai trò) thêm 9 quyền mới: dw.import_from_registration
+  // + administration.daily_code.{view,edit,submit} + fingerprint.{view,edit,submit} + meal.{view,export}.
+  assert.ok(allKeys.length >= 40 && allKeys.length <= 75, `expected 40-75 permissions, got ${allKeys.length}`);
   assert.equal(new Set(allKeys).size, allKeys.length, "permission keys must be unique");
 });
 
 test("catalog: mỗi permission thuộc đúng 1 nhóm đã khai báo", () => {
   const groupKeys = new Set(PERMISSION_GROUPS.map((g) => g.key));
   assert.equal(groupKeys.size, PERMISSION_GROUPS.length, "group keys must be unique");
-  assert.equal(PERMISSION_GROUPS.length, 17, "17 nhóm quyền mặc định (bao gồm document_merge + employment)");
+  // 17 nhóm gốc + 3 nhóm mới (mục X): hanh_chinh, van_tay, bao_com.
+  assert.equal(PERMISSION_GROUPS.length, 20, "20 nhóm quyền mặc định (bao gồm document_merge + employment + workflow tiếp nhận)");
   for (const p of PERMISSION_CATALOG) {
     assert.ok(groupKeys.has(p.group), `permission ${p.key} has unknown group ${p.group}`);
   }
@@ -86,6 +89,74 @@ test("HR_RECRUITER: giữ đủ quyền vận hành hiện có", () => {
     assert.ok(h.has(k), `HR_RECRUITER must have ${k}`);
   }
   assert.ok(!h.has("users.manage") && !h.has("rbac.manage") && !h.has("backup.manage"), "HR không quản trị hệ thống");
+});
+
+/* ============================================================
+   WORKFLOW TIẾP NHẬN — TÁCH VAI TRÒ (mục II, III, X, XV)
+   ------------------------------------------------------------
+   Separation of duties: mỗi vai trò mới CHỈ có đúng quyền trách
+   nhiệm của mình — không mặc định thừa hưởng quyền của vai trò khác.
+   ============================================================ */
+
+const SYSTEM_ADMIN_ONLY_KEYS = [
+  "users.manage",
+  "rbac.manage",
+  "data_scope.manage",
+  "backup.manage",
+  "branding.manage",
+  "system.view",
+  "workflow.manage",
+] as const;
+
+test("ADMINISTRATION (mục II.3, XV): role nghiệp vụ hành chính — KHÁC ADMIN, không quản trị hệ thống", () => {
+  assert.notEqual("ADMINISTRATION", "ADMIN");
+  const a = new Set(BASELINE_ROLE_PERMISSIONS.ADMINISTRATION);
+  assert.ok(a.has("administration.daily_code.view"));
+  assert.ok(a.has("administration.daily_code.edit"));
+  assert.ok(a.has("administration.daily_code.submit"));
+  for (const k of SYSTEM_ADMIN_ONLY_KEYS) {
+    assert.ok(!a.has(k), `ADMINISTRATION KHÔNG được có quyền quản trị hệ thống: ${k}`);
+  }
+  assert.ok(!a.has("users.view"), "ADMINISTRATION không mặc định quản lý user");
+  assert.ok(!a.has("registrations.approve"), "ADMINISTRATION không xếp việc/duyệt hồ sơ");
+});
+
+test("HR_SUPPORT (mục II.2, XV): chỉ Document Merge — KHÔNG quyền Recruiter mặc định, không sửa mã công nhật", () => {
+  const s = new Set(BASELINE_ROLE_PERMISSIONS.HR_SUPPORT);
+  assert.ok(s.has("document_merge.view"));
+  assert.ok(s.has("document_merge.execute"));
+  assert.ok(s.has("document_merge.history.view"));
+  for (const k of ["registrations.edit", "registrations.approve", "employment.assign", "dw.edit", "dw.import_from_registration", "administration.daily_code.edit"]) {
+    assert.ok(!s.has(k), `HR_SUPPORT KHÔNG được có quyền Recruiter/Administration: ${k}`);
+  }
+});
+
+test("FINGERPRINT_STAFF (mục II.4, XV): chỉ IT Code/Vân tay — không duyệt hồ sơ, không sửa DW toàn cục", () => {
+  const f = new Set(BASELINE_ROLE_PERMISSIONS.FINGERPRINT_STAFF);
+  assert.ok(f.has("fingerprint.view"));
+  assert.ok(f.has("fingerprint.edit"));
+  assert.ok(f.has("fingerprint.submit"));
+  for (const k of ["registrations.approve", "dw.edit", "dw.delete", "administration.daily_code.edit"]) {
+    assert.ok(!f.has(k), `FINGERPRINT_STAFF KHÔNG được có quyền: ${k}`);
+  }
+});
+
+test("MEAL_STAFF (mục II.5, XV): chỉ xem/xuất báo cơm — không sửa hồ sơ, không IT Code, không mã công nhật, không PII mặc định", () => {
+  const m = new Set(BASELINE_ROLE_PERMISSIONS.MEAL_STAFF);
+  assert.ok(m.has("meal.view"));
+  assert.ok(m.has("meal.export"));
+  for (const k of [
+    "registrations.edit",
+    "registrations.approve",
+    "fingerprint.edit",
+    "administration.daily_code.edit",
+    "dw.edit",
+    "privacy.view_cccd",
+    "privacy.view_phone",
+    "privacy.view_address",
+  ]) {
+    assert.ok(!m.has(k), `MEAL_STAFF KHÔNG được có quyền: ${k}`);
+  }
 });
 
 test("helpers: label lookup có fallback an toàn", () => {

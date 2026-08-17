@@ -1,7 +1,7 @@
 import { NextResponse } from "next/server";
 import { and, eq, isNull, ne } from "drizzle-orm";
 import { db } from "@/db";
-import { dailyApplications, dwData, employmentSessions, workerProfiles } from "@/db/schema";
+import { dailyApplications, employmentSessions, workerProfiles } from "@/db/schema";
 import { getUserScope, hasPermission, requireRoleAndPermission, writeAudit } from "@/lib/auth";
 import { scopeAllowsDepartment } from "@/lib/data-scope";
 import { getWorkflowStages } from "@/lib/workflow";
@@ -33,8 +33,10 @@ const EDITABLE = [
   "workDuration",
   "referralChannel",
   "declaredType",
-  "itCode",
 ] as const;
+// WORKFLOW TIẾP NHẬN — TÁCH VAI TRÒ (mục VIII): IT CODE KHÔNG còn nhập được qua
+// PATCH này (Recruiter). Nguồn thao tác chính chuyển sang FINGERPRINT_STAFF tại
+// "IT Code / Vân tay" (POST /api/fingerprint/it-code), source of truth dw_data.it_code.
 
 // P1-4 (Production Hardening Audit) — field định danh cần đồng bộ sang worker_profiles (nguồn
 // "hồ sơ điện tử duy nhất/người" — xem schema.ts) khi HR sửa trên daily_applications. `ethnicity`
@@ -67,9 +69,8 @@ export async function PATCH(req: Request, ctx: { params: Promise<{ id: string }>
         patch[key] = v === "" || v === "ALL" ? null : v;
       }
     }
-    // Chuẩn hoá họ tên & IT CODE trước khi lưu (mọi điểm ghi mới đều lưu giá trị chuẩn hoá).
+    // Chuẩn hoá họ tên trước khi lưu (mọi điểm ghi mới đều lưu giá trị chuẩn hoá).
     if (typeof patch.fullName === "string") patch.fullName = normalizePersonName(patch.fullName);
-    if (typeof patch.itCode === "string") patch.itCode = patch.itCode.trim() || null;
     if (Object.keys(patch).length === 1) {
       return NextResponse.json({ error: "Không có dữ liệu cập nhật." }, { status: 400 });
     }
@@ -246,33 +247,6 @@ export async function PATCH(req: Request, ctx: { params: Promise<{ id: string }>
         if (Object.keys(profilePatch).length > 0) {
           profilePatch.updatedAt = new Date();
           await tx.update(workerProfiles).set(profilePatch).where(eq(workerProfiles.id, linkedSession.workerId));
-        }
-      }
-
-      // IT CODE / Mã vân tay (#18) — sửa IT CODE tại Daily Application đồng bộ 3 nơi:
-      //   daily_applications.it_code (đã cập nhật ở trên),
-      //   worker_profiles.fingerprint_code (theo workerId liên kết, fallback theo CCCD),
-      //   dw_data.it_code (chỉ khi lao động ĐÃ có hồ sơ DW — theo dwId hoặc khớp CCCD).
-      if ("itCode" in patch) {
-        const itCode = (patch.itCode as string | null) ?? null;
-        if (linkedSession) {
-          await tx
-            .update(workerProfiles)
-            .set({ fingerprintCode: itCode, fingerprintStatus: itCode ? "DA_CAP" : "CHUA_CAP", updatedAt: new Date() })
-            .where(eq(workerProfiles.id, linkedSession.workerId));
-        } else {
-          await tx
-            .update(workerProfiles)
-            .set({ fingerprintCode: itCode, fingerprintStatus: itCode ? "DA_CAP" : "CHUA_CAP", updatedAt: new Date() })
-            .where(and(eq(workerProfiles.cccd, existing.cccd), isNull(workerProfiles.deletedAt)));
-        }
-        if (existing.dwId) {
-          await tx.update(dwData).set({ itCode }).where(eq(dwData.id, existing.dwId));
-        } else {
-          await tx
-            .update(dwData)
-            .set({ itCode })
-            .where(and(eq(dwData.cccd, existing.cccd), isNull(dwData.deletedAt)));
         }
       }
 

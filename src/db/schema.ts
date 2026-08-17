@@ -71,6 +71,14 @@ export const dwData = pgTable(
     note: text("note"),
     source: varchar("source", { length: 120 }),
     sortCode: integer("sort_code"),
+    // WORKFLOW TIẾP NHẬN — TÁCH VAI TRÒ (mục VI, VIII, XII) — tracking cho 2 sự kiện
+    // nghiệp vụ mới, mỗi sự kiện 1 nguồn sự thật riêng (không suy diễn từ status):
+    //   code            = Mã số công nhật (ADMINISTRATION cấp/cập nhật)
+    //   itCode          = IT CODE (FINGERPRINT_STAFF cấp/cập nhật)
+    dailyCodeUpdatedAt: timestamp("daily_code_updated_at", { withTimezone: true }),
+    dailyCodeUpdatedBy: varchar("daily_code_updated_by", { length: 64 }),
+    itCodeUpdatedAt: timestamp("it_code_updated_at", { withTimezone: true }),
+    itCodeUpdatedBy: varchar("it_code_updated_by", { length: 64 }),
     // @deprecated (Phase 2, Step 7) — hệ thống này KHÔNG phải chấm công, "Ngày công" đã bị loại
     // bỏ khỏi mọi UI/API theo yêu cầu nghiệp vụ. KHÔNG xoá cột (giữ dữ liệu lịch sử cũ) — chỉ
     // không còn đọc/ghi ở code mới (xem HUONG_DAN_HE_THONG.md, Refactor Plan Step 7).
@@ -165,6 +173,12 @@ export const dailyApplications = pgTable(
     confirmedAnswers: jsonb("confirmed_answers").$type<Record<string, string>>().default({}),
 
     isImported: boolean("is_imported").notNull().default(false),
+    // WORKFLOW TIẾP NHẬN — TÁCH VAI TRÒ (mục IV, XII) — source of truth RÕ NGHĨA cho
+    // "đã nhập vào DW Data", tách biệt hoàn toàn khỏi status/isImported (vốn chỉ phản
+    // ánh đã APPROVED, KHÔNG phải đã có bản ghi DW Data — xem lib/daily-intake-workflow.ts).
+    // NULL = chưa từng qua hành động "Nhập vào DW Data" rõ ràng.
+    dwImportedAt: timestamp("dw_imported_at", { withTimezone: true }),
+    dwImportedBy: varchar("dw_imported_by", { length: 64 }),
     deletedAt: timestamp("deleted_at", { withTimezone: true }),
     deletedBy: varchar("deleted_by", { length: 64 }),
     createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
@@ -175,6 +189,9 @@ export const dailyApplications = pgTable(
     check("daily_applications_cccd_exact_12_chk", sql`${t.cccd} ~ '^[0-9]{12}$'`),
     index("daily_app_date_status_idx").on(t.regDate, t.status),
     index("daily_app_name_idx").on(t.fullName),
+    // Vận hành trong ngày (mục XIII, XVI) — Administration/Fingerprint/Meal đều lọc
+    // theo "đã nhập DW chưa" trong ngày; index riêng tránh full scan trên bảng lớn.
+    index("daily_app_dw_imported_idx").on(t.regDate, t.dwImportedAt),
   ],
 );
 

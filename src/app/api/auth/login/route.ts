@@ -114,12 +114,17 @@ export async function POST(req: Request) {
       { id: user.id },
     );
 
-    const redirect =
-      user.role === "DEPT_MANAGER"
-        ? "/department"
-        : user.role === "HR_DIRECTOR"
-          ? "/admin/dashboard"
-          : "/task-center";
+    // WORKFLOW TIẾP NHẬN — TÁCH VAI TRÒ (mục XIV): mỗi vai trò nghiệp vụ mới landing
+    // thẳng vào màn việc chính của mình thay vì Task Center chung chung.
+    const ROLE_HOME: Record<string, string> = {
+      DEPT_MANAGER: "/department",
+      HR_DIRECTOR: "/admin/dashboard",
+      HR_SUPPORT: "/admin/document-merge",
+      ADMINISTRATION: "/administration/daily-code",
+      FINGERPRINT_STAFF: "/fingerprint/it-code",
+      MEAL_STAFF: "/meal/export",
+    };
+    const redirect = ROLE_HOME[user.role] ?? "/task-center";
 
     return NextResponse.json({ success: true, role: user.role, redirect });
   } catch (error) {

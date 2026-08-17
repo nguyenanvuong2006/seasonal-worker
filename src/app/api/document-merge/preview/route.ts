@@ -91,7 +91,7 @@ function diagnosePreviewError(error: unknown): Diagnostic {
 }
 
 export async function POST(request: Request) {
-  const guard = await requirePermission(["ADMIN", "HR_RECRUITER"], "document_merge.execute");
+  const guard = await requirePermission(["ADMIN", "HR_RECRUITER", "HR_SUPPORT"], "document_merge.execute");
   if (!guard.ok) {
     return NextResponse.json({ error: guard.error }, { status: guard.status });
   }

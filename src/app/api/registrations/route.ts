@@ -230,7 +230,7 @@ export async function POST(req: Request) {
 
 /** Nội bộ — danh sách. Mặc định CHỈ HÔM NAY; hỗ trợ khoảng ngày để tham khảo. */
 export async function GET(req: Request) {
-  const guard = await requirePermission(["ADMIN", "HR_RECRUITER", "DEPT_MANAGER", "HR_DIRECTOR"], "registrations.view");
+  const guard = await requirePermission(["ADMIN", "HR_RECRUITER", "DEPT_MANAGER", "HR_DIRECTOR", "HR_SUPPORT"], "registrations.view");
   if (!guard.ok) return NextResponse.json({ error: guard.error }, { status: guard.status });
   const session = guard.session;
 
