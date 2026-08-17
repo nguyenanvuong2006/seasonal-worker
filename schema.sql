@@ -1111,5 +1111,5 @@ ALTER TABLE merge_templates ADD COLUMN IF NOT EXISTS current_published_version i
 
 -- ============================================================
 -- DOCUMENT MERGE — SEED: Dang_ky_Tap_nghe HTML version v1 (DRAFT)
--- (khớp migrations/2026-08-17-dang-ky-tap-nghe-html-draft.sql)
+-- (khớp migrations/2026-08-21-dang-ky-tap-nghe-html-draft.sql)
 -- ============================================================
