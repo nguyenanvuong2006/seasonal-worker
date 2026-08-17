@@ -101,7 +101,47 @@ WHERE NOT EXISTS (
 );
 
 -- ------------------------------------------------------------
--- PHẦN 4 — AUDIT LOG
+-- PHẦN 4 — CHỐNG CIRCULAR PARENT — LƯỚI CUỐI CẤP DB (final review PR #62)
+-- ------------------------------------------------------------
+-- Lớp CHÍNH đã có: wouldCreateCycle() ở src/lib/organization-tree.ts, được
+-- gọi TRƯỚC mọi UPDATE trong moveOrganizationUnit() (src/lib/organization-units.ts)
+-- — có 13 test thuần + test route xác nhận (CASE 5/6, kể cả tự làm cha chính
+-- mình). Trigger dưới đây là LƯỚI CHỐT cấp DB, ĐÚNG pattern đã dùng cho các
+-- invariant khác trong repo này (employment_session_one_active_uq,
+-- workforce_movement_spawn_resignation_uq): nếu tầng ứng dụng ở 1 PR sau có
+-- bug/bị bypass, DB vẫn từ chối thẳng thay vì âm thầm tạo ra 1 cây hỏng
+-- (path không còn phản ánh đúng quan hệ cha-con thật).
+--
+-- Đã verify trực tiếp trên Postgres 16 thật:
+--   * Move hợp lệ (khác nhánh) -> qua bình thường.
+--   * Move node vào làm con của chính descendant của nó -> REJECT rõ ràng.
+--   * Tự làm cha chính mình -> REJECT rõ ràng.
+--   * UPDATE hàng loạt cả subtree (đúng hình dạng câu lệnh thật trong
+--     moveOrganizationUnit) -> trigger CHỈ kiểm tra đúng dòng node được move
+--     (WHEN parent_id thay đổi), KHÔNG kiểm tra nhầm các dòng con cháu chỉ đổi
+--     path mà giữ nguyên parent_id — không có false positive.
+CREATE OR REPLACE FUNCTION organization_units_prevent_cycle() RETURNS trigger AS $$
+DECLARE
+  new_parent_path ltree;
+BEGIN
+  SELECT path INTO new_parent_path FROM organization_units WHERE id = NEW.parent_id;
+  IF new_parent_path IS NOT NULL AND new_parent_path <@ OLD.path THEN
+    RAISE EXCEPTION 'organization_units: circular parent — % không thể trở thành con của chính nó hoặc của một đơn vị con cháu của nó', NEW.id
+      USING ERRCODE = '23514';
+  END IF;
+  RETURN NEW;
+END;
+$$ LANGUAGE plpgsql;
+
+DROP TRIGGER IF EXISTS organization_units_no_cycle ON organization_units;
+CREATE TRIGGER organization_units_no_cycle
+  BEFORE UPDATE ON organization_units
+  FOR EACH ROW
+  WHEN (NEW.parent_id IS DISTINCT FROM OLD.parent_id)
+  EXECUTE FUNCTION organization_units_prevent_cycle();
+
+-- ------------------------------------------------------------
+-- PHẦN 5 — AUDIT LOG
 -- ------------------------------------------------------------
 INSERT INTO audit_logs (user_id, username, action, target_type, category, details)
 SELECT
@@ -114,7 +154,8 @@ SELECT
     'migration', '2026-08-17-organization-units.sql',
     'new_tables', jsonb_build_array('organization_units'),
     'root_units', 1,
-    'legacy_departments_mapped', (SELECT count(*) FROM organization_units WHERE legacy_department_id IS NOT NULL)
+    'legacy_departments_mapped', (SELECT count(*) FROM organization_units WHERE legacy_department_id IS NOT NULL),
+    'circular_parent_db_trigger', 'organization_units_no_cycle'
   )
 WHERE NOT EXISTS (
   SELECT 1 FROM audit_logs WHERE action = 'MIGRATION_ORGANIZATION_UNITS'
@@ -126,6 +167,7 @@ COMMIT;
 -- SELECT count(*) FROM organization_units;  -- 1 (root) + count(departments) kể cả soft-deleted
 -- SELECT ou.name, d.dept_name, d.group_name FROM organization_units ou JOIN departments d ON d.id = ou.legacy_department_id LIMIT 20;
 -- EXPLAIN SELECT * FROM organization_units WHERE path <@ (SELECT path FROM organization_units WHERE code='root' AND parent_id IS NULL);  -- phải dùng org_units_path_gist_idx
+-- UPDATE organization_units SET parent_id = id WHERE id = (SELECT id FROM organization_units LIMIT 1);  -- PHẢI báo lỗi 23514 (circular parent) — xác nhận trigger hoạt động
 
 -- ============================================================
 -- ROLLBACK (chạy thủ công nếu cần quay lui — bảng này CHƯA được route nào
@@ -133,6 +175,8 @@ COMMIT;
 -- ------------------------------------------------------------
 -- BEGIN;
 --   DELETE FROM audit_logs WHERE action = 'MIGRATION_ORGANIZATION_UNITS';
+--   DROP TRIGGER IF EXISTS organization_units_no_cycle ON organization_units;
+--   DROP FUNCTION IF EXISTS organization_units_prevent_cycle();
 --   DROP TABLE IF EXISTS organization_units;
 --   -- KHÔNG DROP EXTENSION ltree nếu PR sau (worker_assignments) đã dùng tới.
 -- COMMIT;

@@ -256,7 +256,21 @@ export async function moveOrganizationUnit(input: { id: string; newParentId: str
     throw new OrgTreeError("Một đơn vị không thể tự làm cha của chính nó.", "SELF_PARENT");
   }
 
-  return db.transaction(async (tx) => {
+  return db.transaction(runMove).catch((e) => {
+    // Lưới cuối cấp DB (trigger organization_units_no_cycle, xem migration) — lớp CHÍNH là
+    // wouldCreateCycle() bên dưới, trigger chỉ nên bắt được trường hợp app-layer có bug ở PR
+    // sau. Dịch lỗi thô của Postgres thành thông báo nghiệp vụ rõ ràng thay vì rơi ra 500 lạ.
+    const err = e as { code?: string };
+    if (err.code === "23514") {
+      throw new OrgTreeError(
+        "Không thể di chuyển một đơn vị vào làm con của chính nó hoặc của một đơn vị con cháu của nó (sẽ tạo vòng lặp).",
+        "CIRCULAR_PARENT",
+      );
+    }
+    throw e;
+  });
+
+  async function runMove(tx: Parameters<Parameters<typeof db.transaction>[0]>[0]) {
     const [node] = await tx.select().from(organizationUnits).where(eq(organizationUnits.id, input.id)).for("update");
     if (!node) throw new OrgTreeError("Không tìm thấy đơn vị cần di chuyển.", "NOT_FOUND");
 
@@ -289,7 +303,7 @@ export async function moveOrganizationUnit(input: { id: string; newParentId: str
 
     const [moved] = await tx.select().from(organizationUnits).where(eq(organizationUnits.id, node.id)).limit(1);
     return mapRow(moved);
-  });
+  }
 }
 
 /**
