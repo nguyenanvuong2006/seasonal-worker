@@ -68,7 +68,7 @@ export function JobProgressPanel({ jobId, onClosed }: { jobId: string; onClosed?
   const [busy, setBusy] = useState<string | null>(null); // action đang chạy
   const [showOutputs, setShowOutputs] = useState(false);
   const [showErrors, setShowErrors] = useState(false);
-  const [now, setNow] = useState(Date.now());
+  const [now, setNow] = useState(() => Date.now());
   const intervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const isAdmin = data?.viewerRole === "ADMIN";
 
