@@ -21,6 +21,7 @@ import {
   resolveDocumentKind,
   resolveDwClassification,
 } from "@/lib/document-merge/template-routing";
+import { JobProgressPanel } from "@/components/document-merge/job-progress-panel";
 
 type MergeTemplate = {
   id: string;
@@ -495,6 +496,18 @@ export function MergeWorkspace({
     printUrl?: string | null;
     dispatchedCount: number;
   } | null>(null);
+  // --- Async engine (HTML_PDF) — Phase 11 ---
+  const [engine, setEngine] = useState<"GOOGLE_DOCS" | "HTML_PDF">("GOOGLE_DOCS");
+  const [activeJobId, setActiveJobId] = useState<string | null>(null);
+
+  useEffect(() => {
+    fetch("/api/document-merge/engine", { cache: "no-store" })
+      .then((res) => res.json())
+      .then((data) => {
+        if (data.engine === "HTML_PDF") setEngine("HTML_PDF");
+      })
+      .catch(() => setEngine("GOOGLE_DOCS"));
+  }, []);
 
   useEffect(() => {
     if (selectedTemplateId) setTemplateId(selectedTemplateId);
@@ -638,7 +651,38 @@ export function MergeWorkspace({
     setMergeError(null);
     setDiagnostic(null);
     setMergeSuccess(null);
+    setActiveJobId(null);
     try {
+      // Engine HTML_PDF → async job: trả jobId ngay, Progress UI poll 4s.
+      // Engine GOOGLE_DOCS (default) → legacy synchronous (giữ nguyên hành vi cũ).
+      if (engine === "HTML_PDF") {
+        const res = await fetch("/api/document-merge/jobs", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            templateId: autoRoute ? undefined : templateId,
+            autoRoute,
+            mergeMode: batchPrint ? "ONE_DOCUMENT" : "INDIVIDUAL_DOCUMENTS",
+            dispatchToApplicant,
+            records: {
+              entityType: "daily_applications",
+              recordIds: Array.from(selectedIds),
+            },
+          }),
+        });
+        const data = await res.json();
+        if (!res.ok) {
+          setDiagnostic({
+            code: data.code || `JOB_HTTP_${res.status}`,
+            error: data.error || "Không tạo được merge job",
+            action: "Kiểm tra template đang hoạt động và mapping trước khi chạy lại.",
+          });
+          return;
+        }
+        setActiveJobId(data.jobId);
+        return;
+      }
+
       const res = await fetch("/api/document-merge/merge/execute", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -690,6 +734,13 @@ export function MergeWorkspace({
           Mặc định chọn một <b>template cố định</b> để trộn cho toàn bộ hồ sơ đã chọn. Chỉ khi bật <b>Auto Route</b>, hệ thống mới phân loại DW Cũ → Tài liệu A và DW Mới → Tài liệu B.
         </p>
       </div>
+
+      {activeJobId && (
+        <JobProgressPanel
+          jobId={activeJobId}
+          onClosed={() => setActiveJobId(null)}
+        />
+      )}
 
       {mergeSuccess && (
         <div className="rounded-2xl border border-emerald-300 bg-emerald-50/80 p-5">
