@@ -17,8 +17,8 @@
 
 import { sql } from "drizzle-orm";
 import { and, eq, inArray } from "drizzle-orm";
-import { db, pool } from "@/db";
-import { mergeJobRecords, mergeJobs } from "@/db/schema";
+import { db, pool } from "../../db";
+import { mergeJobRecords, mergeJobs } from "../../db/schema";
 import {
   DEFAULT_MAX_ATTEMPTS,
   ITEM_STATUS,

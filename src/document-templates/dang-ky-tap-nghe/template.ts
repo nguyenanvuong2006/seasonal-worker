@@ -12,7 +12,7 @@
  * renderer tự escape giá trị trước khi fill (chống XSS).
  */
 
-import type { HtmlTemplate } from "@/lib/document-merge/html-renderer.ts";
+import type { HtmlTemplate } from "../../lib/document-merge/html-renderer.ts";
 import { GOOGLE_DOC_ID } from "./schema.ts";
 
 const html = `

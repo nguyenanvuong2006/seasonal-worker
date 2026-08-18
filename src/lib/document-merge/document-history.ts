@@ -13,8 +13,8 @@
  */
 
 import { and, desc, eq, inArray, isNull, lt, or } from "drizzle-orm";
-import { db } from "@/db";
-import { documentHistory, mergeJobRecords, type DocumentHistory } from "@/db/schema";
+import { db } from "../../db";
+import { documentHistory, mergeJobRecords, type DocumentHistory } from "../../db/schema";
 import { computeRetentionUntil, type RetentionPolicy } from "./retention.ts";
 
 export const ARCHIVE_STATUS = {

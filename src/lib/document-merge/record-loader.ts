@@ -10,8 +10,8 @@
  */
 
 import { and, eq, inArray, isNull } from "drizzle-orm";
-import { db } from "@/db";
-import { dailyApplications, departments, dwData, workerProfiles } from "@/db/schema";
+import { db } from "../../db";
+import { dailyApplications, departments, dwData, workerProfiles } from "../../db/schema";
 import { buildApplicantMergeRecord } from "./applicant-record.ts";
 
 export async function loadDailyApplicationRecords(recordIds: string[]): Promise<Map<string, Record<string, unknown>>> {

@@ -18,9 +18,12 @@
  * budget thời gian, rồi instance scale về 0.
  */
 
+// LƯU Ý: worker chạy độc lập trong container (không qua Next.js bundler) nên
+// MỌI import phải là relative — KHÔNG dùng alias "@/*" (tsx không resolve được
+// trong layout container: /app/tsconfig.json baseUrl ".." trỏ ra ngoài /app).
 import http from "node:http";
 import { chromium, type Browser, type Page } from "playwright";
-import type { MergeTemplateField } from "@/db/schema";
+import type { MergeTemplateField } from "../../src/db/schema";
 import {
   claimItems,
   completeItem,
@@ -30,18 +33,18 @@ import {
   markJobProcessing,
   recomputeJobProgress,
   type QueueItem,
-} from "@/lib/document-merge/queue.ts";
-import { renderApplicantDocument } from "@/lib/document-merge/html-pipeline.ts";
-import { getStorageProvider } from "@/lib/storage/index.ts";
+} from "../../src/lib/document-merge/queue.ts";
+import { renderApplicantDocument } from "../../src/lib/document-merge/html-pipeline.ts";
+import { getStorageProvider } from "../../src/lib/storage/index.ts";
 import {
   buildIndividualPdfFilename,
   buildIndividualStorageKey,
-} from "@/lib/document-merge/filename.ts";
-import { createDocumentHistory, linkRecordToHistory } from "@/lib/document-merge/document-history.ts";
-import { finalizeBatchOutputs } from "@/lib/document-merge/batch-finalize.ts";
-import { loadDailyApplicationRecords } from "@/lib/document-merge/record-loader.ts";
-import { db } from "@/db";
-import { mergeJobs, mergeTemplateVersions } from "@/db/schema";
+} from "../../src/lib/document-merge/filename.ts";
+import { createDocumentHistory, linkRecordToHistory } from "../../src/lib/document-merge/document-history.ts";
+import { finalizeBatchOutputs } from "../../src/lib/document-merge/batch-finalize.ts";
+import { loadDailyApplicationRecords } from "../../src/lib/document-merge/record-loader.ts";
+import { db } from "../../src/db";
+import { mergeJobs, mergeTemplateVersions } from "../../src/db/schema";
 import { eq } from "drizzle-orm";
 
 const PORT = Number(process.env.PORT ?? 8080);
@@ -432,7 +435,7 @@ const server = http.createServer(async (req, res) => {
       }
 
       const { renderApplicantHtmlFromParts } = await import(
-        "@/lib/document-merge/html-renderer.ts"
+        "../../src/lib/document-merge/html-renderer.ts"
       );
       const { SAMPLE_FIELD_VALUES, comparePdfs } = await import("./verification.ts");
       const rendered = renderApplicantHtmlFromParts(tpl[0].htmlBody, tpl[0].printCss, SAMPLE_FIELD_VALUES);
@@ -464,7 +467,7 @@ const server = http.createServer(async (req, res) => {
       }
 
       const { renderApplicantHtmlFromParts } = await import(
-        "@/lib/document-merge/html-renderer.ts"
+        "../../src/lib/document-merge/html-renderer.ts"
       );
       const { SAMPLE_FIELD_VALUES } = await import("./verification.ts");
       const tpl = await db

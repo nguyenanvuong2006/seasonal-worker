@@ -5,7 +5,7 @@
  * Khi thêm mẫu mới: tạo thư mục + module template rồi đăng ký ở đây.
  */
 
-import type { HtmlTemplate } from "@/lib/document-merge/html-renderer.ts";
+import type { HtmlTemplate } from "../lib/document-merge/html-renderer.ts";
 import { dangKyTapNgheTemplate } from "./dang-ky-tap-nghe/template.ts";
 
 export const HTML_TEMPLATES: HtmlTemplate[] = [dangKyTapNgheTemplate];

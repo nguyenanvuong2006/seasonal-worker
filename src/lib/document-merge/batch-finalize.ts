@@ -12,11 +12,11 @@
  */
 
 import { and, eq } from "drizzle-orm";
-import { db } from "@/db";
-import { mergeJobRecords, mergeJobs } from "@/db/schema";
+import { db } from "../../db";
+import { mergeJobRecords, mergeJobs } from "../../db/schema";
 import { mergePdfBuffers } from "./batch-pdf.ts";
 import { buildBatchPdfFilename, buildBatchStorageKey, buildBatchZipFilename } from "./filename.ts";
-import { getStorageProvider } from "@/lib/storage/index.ts";
+import { getStorageProvider } from "../storage/index.ts";
 import { ITEM_STATUS } from "./queue-types.ts";
 import * as yazl from "yazl";
 

@@ -7,11 +7,11 @@
  *   - Reuse `resolveAllFields` + `applyFallbackPlaceholders` (KHÔNG mapping mới).
  */
 
-import type { MergeTemplateField } from "@/db/schema";
+import type { MergeTemplateField } from "../../db/schema";
 import { resolveAllFields, validateRequiredFields, type MergeContext, type RecordData } from "./data-resolver.ts";
 import { applyFallbackPlaceholders } from "./preview-merge.ts";
 import { renderApplicantHtml, renderApplicantHtmlFromParts } from "./html-renderer.ts";
-import { getHtmlTemplateByGoogleDocId } from "@/document-templates/registry.ts";
+import { getHtmlTemplateByGoogleDocId } from "../../document-templates/registry.ts";
 
 export function resolveHtmlFieldValues(
   fields: MergeTemplateField[],

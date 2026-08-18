@@ -42,8 +42,8 @@ async function load(db: FakeDb): Promise<BatchFinalizeModule> {
   const mod = await loadModule(new URL("./batch-finalize.ts", import.meta.url), {
     stubs: {
       "drizzle-orm": drizzleStub,
-      "@/db": { db },
-      "@/db/schema": schemaStub,
+      "../../db": { db },
+      "../../db/schema": schemaStub,
       "./batch-pdf.ts": {
         mergePdfBuffers: async (buffers: Uint8Array[]) => {
           const output = await PDFDocument.create();
@@ -61,7 +61,7 @@ async function load(db: FakeDb): Promise<BatchFinalizeModule> {
         buildBatchStorageKey: (_d: Date, jobId: string, filename: string) => `Batch Outputs/2026/08/${jobId}/${filename}`,
       },
       "./queue-types.ts": { ITEM_STATUS: { COMPLETED: "COMPLETED" } },
-      "@/lib/storage/index.ts": {
+      "../storage/index.ts": {
         getStorageProvider: () => ({
           name: "local",
           get: async (key: string) => {
