@@ -36,6 +36,7 @@ jobs:
         uses: actions/checkout@v4
 
       - name: Authenticate to Google Cloud
+        id: gcp-auth
         uses: google-github-actions/auth@v2
         with:
           # GitHub Actions -> Google Cloud qua Workload Identity Federation.
@@ -50,7 +51,11 @@ jobs:
 
       - name: Configure Docker for Artifact Registry
         run: |
-          gcloud auth configure-docker "${REGION}-docker.pkg.dev" --quiet
+          set -euo pipefail
+
+          gcloud auth configure-docker \
+            "${REGION}-docker.pkg.dev" \
+            --quiet
 
       - name: Build & push image
         run: |
@@ -59,12 +64,14 @@ jobs:
           IMAGE="${REGION}-docker.pkg.dev/${PROJECT_ID}/document-merge/worker-staging:${{ github.sha }}"
 
           echo "Building worker image..."
+
           docker build \
             -t "${IMAGE}" \
             -f worker/Dockerfile \
             .
 
           echo "Pushing worker image..."
+
           docker push "${IMAGE}"
 
           echo "IMAGE=${IMAGE}" >> "${GITHUB_ENV}"
@@ -95,6 +102,7 @@ jobs:
             --set-secrets "DATABASE_URL=STAGING_DATABASE_URL:latest,GOOGLE_CLIENT_ID=STAGING_GOOGLE_CLIENT_ID:latest,GOOGLE_CLIENT_SECRET=STAGING_GOOGLE_CLIENT_SECRET:latest,GOOGLE_REFRESH_TOKEN=STAGING_GOOGLE_REFRESH_TOKEN:latest,MERGE_WORKER_SECRET=STAGING_MERGE_WORKER_SECRET:latest,GOOGLE_DRIVE_ROOT_FOLDER_ID=STAGING_GOOGLE_DRIVE_ROOT_FOLDER_ID:latest"
 
       - name: Show service URL
+        id: service-url
         run: |
           set -euo pipefail
 
@@ -112,23 +120,36 @@ jobs:
           echo "POST ${URL}/run (protected)"
           echo "GET  ${URL}/health (protected)"
 
-          echo "SERVICE_URL=${URL}" >> "${GITHUB_ENV}"
+          echo "url=${URL}" >> "${GITHUB_OUTPUT}"
+
+      - name: Authenticate for Cloud Run smoke test
+        id: smoke-auth
+        uses: google-github-actions/auth@v2
+        with:
+          workload_identity_provider: ${{ secrets.GCP_WORKLOAD_IDENTITY_PROVIDER }}
+          service_account: ${{ secrets.GCP_SERVICE_ACCOUNT }}
+          token_format: id_token
+          id_token_audience: ${{ steps.service-url.outputs.url }}
+          id_token_include_email: true
 
       - name: Smoke test health
         run: |
           set -euo pipefail
 
-          echo "Generating Google Cloud identity token..."
+          URL="${{ steps.service-url.outputs.url }}"
+          TOKEN="${{ steps.smoke-auth.outputs.id_token }}"
 
-          TOKEN=$(gcloud auth print-identity-token \
-            --audiences="${SERVICE_URL}")
-
-          if [ -z "${TOKEN}" ]; then
-            echo "ERROR: Could not generate identity token."
+          if [ -z "${URL}" ]; then
+            echo "ERROR: Cloud Run service URL is empty."
             exit 1
           fi
 
-          echo "Testing protected endpoint: ${SERVICE_URL}/health"
+          if [ -z "${TOKEN}" ]; then
+            echo "ERROR: Cloud Run ID token is empty."
+            exit 1
+          fi
+
+          echo "Testing protected endpoint: ${URL}/health"
 
           RESPONSE=$(curl \
             --fail \
@@ -138,7 +159,7 @@ jobs:
             --retry-delay 3 \
             --retry-all-errors \
             -H "Authorization: Bearer ${TOKEN}" \
-            "${SERVICE_URL}/health")
+            "${URL}/health")
 
           echo "Health response: ${RESPONSE}"
 
