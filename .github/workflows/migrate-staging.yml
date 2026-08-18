@@ -1,0 +1,64 @@
+name: Migrate Document Merge DB — STAGING
+
+on:
+  workflow_dispatch:
+    inputs:
+      target:
+        description: 'Môi trường đích (chỉ STAGING — production bị chặn)'
+        required: true
+        default: 'staging'
+        type: choice
+        options:
+          - staging
+
+permissions:
+  contents: read
+
+concurrency:
+  group: migrate-staging
+  cancel-in-progress: false
+
+jobs:
+  migrate:
+    runs-on: ubuntu-latest
+    # Environment protection: chỉ ai có quyền truy cập environment 'staging'
+    # mới chạy được; DATABASE_URL đọc từ GitHub Environment secret.
+    environment: staging
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci --no-audit --no-fund
+
+      - name: Run migrations (STAGING only)
+        env:
+          # Secret được khai báo ở GitHub → Settings → Environments → staging.
+          # KHÔNG nhận DATABASE_URL từ input UI (không cho nhập arbitrary).
+          DATABASE_URL: ${{ secrets.STAGING_DATABASE_URL }}
+        run: node scripts/run-migrations.mjs
+
+      - name: Verify merge tables
+        env:
+          DATABASE_URL: ${{ secrets.STAGING_DATABASE_URL }}
+        run: |
+          node --input-type=module <<'EOF'
+          import pg from "pg";
+          const c = new pg.Client({ connectionString: process.env.DATABASE_URL, ssl: { rejectUnauthorized: false } });
+          await c.connect();
+          const r = await c.query(`
+            SELECT
+              (SELECT count(*) FROM merge_templates) AS templates,
+              (SELECT count(*) FROM merge_template_fields WHERE is_orphaned = false) AS fields,
+              (SELECT count(*) FROM merge_template_versions) AS versions,
+              (SELECT count(*) FROM document_history) AS history
+          `);
+          console.log("VERIFY:", JSON.stringify(r.rows[0]));
+          await c.end();
+          EOF

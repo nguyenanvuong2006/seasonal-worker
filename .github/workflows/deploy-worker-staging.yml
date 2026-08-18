@@ -1,0 +1,85 @@
+name: Deploy Document Merge Worker — STAGING
+
+on:
+  workflow_dispatch:
+    inputs:
+      concurrency:
+        description: 'PDF_RENDER_CONCURRENCY'
+        required: false
+        default: '4'
+        type: choice
+        options:
+          - '2'
+          - '4'
+          - '6'
+
+permissions:
+  contents: read
+  id-token: write
+
+concurrency:
+  group: deploy-worker-staging
+  cancel-in-progress: false
+
+env:
+  REGION: ${{ vars.GCP_REGION || 'asia-southeast1' }}
+  PROJECT_ID: ${{ vars.GCP_PROJECT_ID }}
+  SERVICE: ${{ vars.GCP_RUN_SERVICE || 'seasonal-worker-pdf-staging' }}
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    environment: staging
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Authenticate to Google Cloud
+        uses: google-github-actions/auth@v2
+        with:
+          # Workload Identity Federation — tạo theo docs/STAGING-VERIFICATION-RUNBOOK.md
+          workload_identity_provider: ${{ secrets.GCP_WORKLOAD_IDENTITY_PROVIDER }}
+          service_account: ${{ secrets.GCP_SERVICE_ACCOUNT }}
+
+      - name: Setup gcloud
+        uses: google-github-actions/setup-gcloud@v2
+        with:
+          project_id: ${{ env.PROJECT_ID }}
+
+      - name: Configure Docker for Artifact Registry
+        run: |
+          gcloud auth configure-docker ${REGION}-docker.pkg.dev --quiet
+
+      - name: Build & push image
+        run: |
+          IMAGE="${REGION}-docker.pkg.dev/${PROJECT_ID}/document-merge/worker-staging:${{ github.sha }}"
+          docker build -t "${IMAGE}" -f worker/Dockerfile .
+          docker push "${IMAGE}"
+          echo "IMAGE=${IMAGE}" >> "${GITHUB_ENV}"
+
+      - name: Deploy to Cloud Run (STAGING)
+        run: |
+          # Secrets lấy từ GitHub Environment 'staging' (không hardcode).
+          # Nếu đã tạo secret trong Google Secret Manager, dùng --set-secrets
+          # thay cho --set-env-vars (xem runbook mục 3).
+          gcloud run deploy "${SERVICE}" \
+            --image "${IMAGE}" \
+            --region "${REGION}" \
+            --project "${PROJECT_ID}" \
+            --service-account "seasonal-worker-merge@seasonal-worker-505710.iam.gserviceaccount.com" \
+            --cpu 2 \
+            --memory 4Gi \
+            --min-instances 0 \
+            --max-instances 2 \
+            --timeout 3600 \
+            --concurrency 80 \
+            --no-allow-unauthenticated \
+            --set-env-vars "STORAGE_PROVIDER=google_drive,PDF_RENDER_CONCURRENCY=${{ github.event.inputs.concurrency }},MERGE_JOB_BATCH_TTL_DAYS=${{ vars.MERGE_JOB_BATCH_TTL_DAYS || '14' }},MERGE_DEFAULT_RETENTION_YEARS=${{ vars.MERGE_DEFAULT_RETENTION_YEARS || '3' }}" \
+            --set-secrets "DATABASE_URL=STAGING_DATABASE_URL:latest,GOOGLE_CLIENT_ID=STAGING_GOOGLE_CLIENT_ID:latest,GOOGLE_CLIENT_SECRET=STAGING_GOOGLE_CLIENT_SECRET:latest,GOOGLE_REFRESH_TOKEN=STAGING_GOOGLE_REFRESH_TOKEN:latest,MERGE_WORKER_SECRET=STAGING_MERGE_WORKER_SECRET:latest,GOOGLE_DRIVE_ROOT_FOLDER_ID=STAGING_GOOGLE_DRIVE_ROOT_FOLDER_ID:latest"
+
+      - name: Show service URL
+        run: |
+          URL=$(gcloud run services describe "${SERVICE}" --region "${REGION}" --project "${PROJECT_ID}" --format 'value(status.url)')
+          echo "✅ Worker staging: ${URL}"
+          echo "POST ${URL}/run (Authorization: Bearer <MERGE_WORKER_SECRET>)"
+          echo "GET  ${URL}/health"
