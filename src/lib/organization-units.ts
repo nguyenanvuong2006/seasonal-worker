@@ -180,6 +180,15 @@ export async function createOrganizationUnit(input: {
 
     // Đảm bảo code + path label duy nhất — thử baseLabel, rồi baseLabel_2, _3... (va chạm hiếm
     // vì code đã bao gồm tên, nhưng vẫn phải xử lý an toàn thay vì để lỗi unique index rơi ra ngoài).
+    //
+    // GOVERNANCE (PR1 mục XI/XIII): kiểm tra trùng code trên TOÀN BỘ dòng (active lẫn
+    // inactive) — KHÔNG chỉ dòng active. `code` sẽ trở thành cross-system business key
+    // (mục XI đề bài); nếu chỉ chặn trùng với dòng active thì 1 unit mới có thể vô tình
+    // "thừa kế" đúng code của 1 unit đã deactivate trước đó (retired-code reuse), làm
+    // external system resolve nhầm sang unit khác theo thời gian dù cùng 1 mã — vi phạm
+    // thẳng yêu cầu "STABLE". Unique index `org_units_code_uq` ở DB (migration SQL) vẫn
+    // cố ý chỉ áp cho active — đó là lưới chốt cho race giữa 2 unit ACTIVE cùng lúc, khác
+    // mục đích với kiểm tra này (tránh cấp phát trùng NGAY TỪ ĐẦU, kể cả với dòng inactive).
     let code = baseCode;
     let label = baseLabel;
     let attempt = 1;
@@ -188,7 +197,7 @@ export async function createOrganizationUnit(input: {
       const [codeClash] = await tx
         .select({ id: organizationUnits.id })
         .from(organizationUnits)
-        .where(and(eq(organizationUnits.code, code), eq(organizationUnits.isActive, true)))
+        .where(eq(organizationUnits.code, code))
         .limit(1);
       const [pathClash] = await tx.execute<{ id: string }>(sql`SELECT id FROM organization_units WHERE path = ${candidatePath}::ltree LIMIT 1`).then((r) => r.rows);
       if (!codeClash && !pathClash) break;
@@ -330,4 +339,104 @@ export async function reactivateOrganizationUnit(input: { id: string; actor: Act
     .returning();
   if (!updated) throw new OrgTreeError("Không tìm thấy đơn vị.", "NOT_FOUND");
   return mapRow(updated);
+}
+
+/* ============================================================
+   CODE GOVERNANCE (PR1 — Organization Canonicalization Foundation)
+   ------------------------------------------------------------
+   `organization_units.code` là ứng viên duy nhất cho future cross-system
+   business key (approval-system sẽ tham chiếu ngược vào code này ở PR2+).
+   Bất biến đang được ĐẢM BẢO Ở TẦNG ỨNG DỤNG (Option A — "application-enforced
+   immutable", chọn theo đúng mục XIII đề bài vì repo CHƯA có nhu cầu nghiệp vụ
+   nào cần đổi code sau khi tạo):
+
+     1. IMMUTABLE SAU CREATE — updateOrganizationUnit() ở trên chỉ nhận
+        name/unitType/sortOrder, KHÔNG có tham số `code`. Không route/hàm nào
+        khác trong repo ghi vào organization_units (verify bằng grep toàn repo —
+        xem docs/ORGANIZATION_MAPPING_AUDIT.md mục "Code governance"). Muốn đổi
+        code phải sửa trực tiếp DB (Option B — "Controlled rename" với
+        reason/changed_by/changed_at — CHƯA cần thiết, không implement ở PR1).
+     2. UNIQUE TRÊN TOÀN BỘ DÒNG khi cấp phát mới (xem createOrganizationUnit())
+        — không chỉ so với dòng active — để 1 code đã "nghỉ hưu" (unit bị
+        deactivate) không bao giờ bị cấp lại cho 1 unit khác.
+     3. STABLE — code KHÔNG tự sinh lại theo tên khi rename (updateOrganizationUnit
+        đổi `name` không đụng `code`) — đã verify bằng test
+        "rename KHÔNG mutate code" trong organization-units-lookup.test.ts.
+
+   Các hàm dưới đây là ĐIỂM TRUY VẤN DUY NHẤT cho code/legacy bridge — PR sau
+   (approval-system integration, PR2+) PHẢI dùng lại, KHÔNG tự viết query mapping
+   riêng (mục XVI đề bài). Quy tắc chung cho cả 3 hàm: EXACT MATCH, KHÔNG fallback
+   sang tên, KHÔNG fuzzy match, KHÔNG đoán khi dữ liệu mơ hồ (ném OrgTreeError thay
+   vì âm thầm chọn 1 trong nhiều kết quả).
+   ============================================================ */
+
+/**
+ * Resolve `code` -> đơn vị tổ chức, EXACT MATCH — dùng cho external system
+ * integration ở PR sau (mục XV đề bài). Trả về unit kèm `isActive` rõ ràng
+ * (caller tự quyết định coi unit inactive là hợp lệ hay không) — KHÔNG bao giờ
+ * fallback sang tìm theo tên.
+ *
+ * Vì `org_units_code_uq` chỉ unique trên dòng active (mục XI: mỗi thời điểm chỉ
+ * 1 unit active giữ 1 code, nhưng code có thể từng thuộc 1 unit khác đã bị
+ * deactivate trước khi governance mục XI được siết ở PR1 — dữ liệu lịch sử có
+ * thể vẫn còn), hàm này ưu tiên trả unit ACTIVE nếu có; nếu không có unit active
+ * nào nhưng có ĐÚNG 1 unit inactive khớp code, trả về unit đó. Nếu mơ hồ (nhiều
+ * unit active cùng code — vi phạm bất biến DB, hoặc nhiều unit inactive cùng code
+ * — retired code từng bị dùng lại trước PR1) → ném OrgTreeError, KHÔNG đoán.
+ */
+export async function findOrganizationUnitByCode(code: string): Promise<OrganizationUnitRow | null> {
+  const trimmed = code.trim();
+  if (!trimmed) return null;
+
+  const rows = await db.select().from(organizationUnits).where(eq(organizationUnits.code, trimmed));
+  if (rows.length === 0) return null;
+
+  const active = rows.filter((r) => r.isActive);
+  if (active.length > 1) {
+    throw new OrgTreeError(
+      `Dữ liệu vi phạm bất biến: có ${active.length} đơn vị đang ACTIVE cùng dùng mã "${trimmed}" (org_units_code_uq lẽ ra phải chặn) — cần đối soát thủ công, không tự chọn.`,
+      "CODE_AMBIGUOUS_ACTIVE",
+    );
+  }
+  if (active.length === 1) return mapRow(active[0]);
+
+  if (rows.length === 1) return mapRow(rows[0]);
+
+  throw new OrgTreeError(
+    `Mã "${trimmed}" từng được dùng bởi ${rows.length} đơn vị đã inactive (retired code reuse trước khi governance mục XI được siết) — không thể resolve duy nhất, cần đối soát thủ công.`,
+    "CODE_AMBIGUOUS_INACTIVE",
+  );
+}
+
+/**
+ * Resolve `departments.id` (legacy) -> đơn vị tổ chức tương ứng, EXACT MATCH.
+ * Đây là ĐIỂM DUY NHẤT nên dùng cho bridge legacy_department_id -> organization
+ * unit (mục XVI đề bài) — PR sau KHÔNG tự viết `eq(organizationUnits.legacyDepartmentId, ...)`
+ * rải rác. `org_units_legacy_dept_uq` (unique index, WHERE legacy_department_id
+ * IS NOT NULL — xem migrations/2026-08-17-organization-units.sql) đảm bảo tối đa
+ * 1 kết quả trong điều kiện DB khoẻ mạnh; nếu vi phạm (constraint bị bypass hoặc
+ * chưa áp dụng đúng ở DB đang chạy) hàm ném lỗi thay vì âm thầm trả 1 trong nhiều.
+ */
+export async function findOrganizationUnitByLegacyDepartmentId(legacyDepartmentId: string): Promise<OrganizationUnitRow | null> {
+  const rows = await db.select().from(organizationUnits).where(eq(organizationUnits.legacyDepartmentId, legacyDepartmentId));
+  if (rows.length === 0) return null;
+  if (rows.length > 1) {
+    throw new OrgTreeError(
+      `Dữ liệu vi phạm bất biến: có ${rows.length} đơn vị cùng trỏ legacy_department_id="${legacyDepartmentId}" (org_units_legacy_dept_uq lẽ ra phải chặn) — cần đối soát thủ công.`,
+      "LEGACY_MAPPING_DUPLICATE",
+    );
+  }
+  return mapRow(rows[0]);
+}
+
+/**
+ * Chiều ngược lại: `organization_unit.id` -> `departments.id` (legacy), nếu có.
+ * Trả `null` khi unit không tồn tại HOẶC tồn tại nhưng chưa gắn legacy bridge
+ * (node thuần trên cây, tạo mới qua createOrganizationUnit — KHÔNG BAO GIỜ có
+ * legacyDepartmentId, xem createOrganizationUnit() ở trên) — mục XVII đề bài:
+ * "không fail hoặc đoán", cả 2 trường hợp đều hợp lệ để trả null, không phải lỗi.
+ */
+export async function getLegacyDepartmentIdForUnit(organizationUnitId: string): Promise<string | null> {
+  const unit = await getUnit(organizationUnitId);
+  return unit?.legacyDepartmentId ?? null;
 }

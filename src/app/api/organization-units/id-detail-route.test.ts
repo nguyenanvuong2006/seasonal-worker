@@ -184,6 +184,18 @@ test("PATCH không có action -> sửa metadata qua updateOrganizationUnit", asy
   assert.equal((updateCall!.args[0] as Record<string, unknown>).name, "Tên mới");
 });
 
+test("PR1 — CODE GOVERNANCE: PATCH gửi kèm `code` trong body vẫn KHÔNG được forward xuống updateOrganizationUnit (immutable sau create, mục XI/XIII)", async () => {
+  const { mod, calls } = loadRoute({});
+  const PATCH = mod.PATCH as (req: Request, ctx: unknown) => Promise<{ status: number; body: Record<string, unknown> }>;
+  const res = await PATCH(makeReq({ name: "Tên mới", code: "attacker-supplied-code" }), makeCtx("node-1"));
+
+  assert.equal(res.status, 200);
+  const updateCall = calls.find((c) => c.fn === "updateOrganizationUnit");
+  assert.ok(updateCall);
+  assert.equal((updateCall!.args[0] as Record<string, unknown>).name, "Tên mới");
+  assert.equal("code" in (updateCall!.args[0] as Record<string, unknown>), false);
+});
+
 test("Không có route DELETE nào được export — xoá cứng bị chặn hoàn toàn ở tầng route", async () => {
   const { mod } = loadRoute({});
   assert.equal(mod.DELETE, undefined);

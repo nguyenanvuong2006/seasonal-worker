@@ -34,7 +34,7 @@ export const ORG_UNIT_TYPES = [
 export type OrgUnitType = (typeof ORG_UNIT_TYPES)[number];
 
 export const PATH_SEPARATOR = ".";
-const CODE_MAX_LENGTH = 64;
+export const CODE_MAX_LENGTH = 64;
 const PATH_LABEL_MAX_LENGTH = 256; // giới hạn thật của ltree label
 
 /** Bỏ dấu tiếng Việt — dùng chung cho slugifyCode/slugifyPathLabel. */
@@ -118,6 +118,25 @@ export function rebasePath(rowPath: string, oldNodePath: string, newParentPath: 
  */
 export function wouldCreateCycle(nodePath: string, newParentPath: string): boolean {
   return isDescendantPath(newParentPath, nodePath);
+}
+
+/**
+ * FORMAT của `code` như dữ liệu THẬT đang có, không phải định nghĩa mới áp lên
+ * dữ liệu cũ (PR1 mục XIV — "audit dữ liệu hiện có trước", "không tạo migration
+ * khiến dữ liệu hợp lệ hiện tại bị fail mà không có report"). Khớp CHÍNH XÁC 2
+ * nguồn sinh `code` hiện có:
+ *   1. slugifyCode() ở trên — chữ thường, số, gạch ngang, không rỗng, ≤64 ký tự.
+ *   2. Cầu nối cơ học "legacy-<uuid>" từ migrations/2026-08-17-organization-units.sql
+ *      (backfill 1-1 từ departments) — cũng chỉ [a-z0-9-].
+ *   3. Root duy nhất: "root".
+ * Dùng để AUDIT (scripts/audit-organization-mapping.mjs) — KHÔNG dùng để chặn
+ * code hiện có tại runtime (không có migration nào retrofit format lên dữ liệu cũ).
+ */
+export const ORG_UNIT_CODE_PATTERN = /^[a-z0-9]+(-[a-z0-9]+)*$/;
+
+/** true nếu `code` khớp format hiện hành (xem ORG_UNIT_CODE_PATTERN) và trong giới hạn cột varchar(64). */
+export function isValidOrgUnitCode(code: string): boolean {
+  return code.length > 0 && code.length <= CODE_MAX_LENGTH && ORG_UNIT_CODE_PATTERN.test(code);
 }
 
 export type BreadcrumbNode = { id: string; name: string };

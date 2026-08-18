@@ -11,6 +11,8 @@ import {
   rebasePath,
   wouldCreateCycle,
   formatBreadcrumb,
+  isValidOrgUnitCode,
+  CODE_MAX_LENGTH,
 } from "./organization-tree.ts";
 
 /* ============================================================
@@ -29,6 +31,47 @@ test("slugifyPathLabel: bỏ dấu, khoảng trắng, gạch ngang -> chỉ [a-z
 test("slugifyCode: cho phép gạch ngang, khác slugifyPathLabel", () => {
   assert.equal(slugifyCode("Cut Flowers"), "cut-flowers");
   assert.equal(slugifyCode("Đà Lạt"), "da-lat");
+});
+
+/* ============================================================
+   PR1 — CODE GOVERNANCE: isValidOrgUnitCode() phải khớp CHÍNH XÁC
+   3 nguồn sinh code thật đang có trong DB (mục XIV đề bài: audit
+   dữ liệu hiện có, không tạo format mới rồi fail hàng loạt dữ liệu
+   hợp lệ đang có).
+   ============================================================ */
+
+test("isValidOrgUnitCode: chấp nhận output thật của slugifyCode()", () => {
+  assert.equal(isValidOrgUnitCode(slugifyCode("Cut Flowers")), true);
+  assert.equal(isValidOrgUnitCode(slugifyCode("Đà Lạt")), true);
+  assert.equal(isValidOrgUnitCode(slugifyCode("Cắt hoa - Cúc")), true);
+});
+
+test("isValidOrgUnitCode: chấp nhận cầu nối cơ học 'legacy-<uuid>' từ migration 2026-08-17", () => {
+  assert.equal(isValidOrgUnitCode("legacy-3b241101-e2bb-4255-8caf-4136c566a962"), true);
+});
+
+test("isValidOrgUnitCode: chấp nhận root code 'root'", () => {
+  assert.equal(isValidOrgUnitCode("root"), true);
+});
+
+test("isValidOrgUnitCode: chấp nhận suffix va chạm '-2', '-3' do createOrganizationUnit sinh khi trùng", () => {
+  assert.equal(isValidOrgUnitCode("cut-flowers-2"), true);
+});
+
+test("isValidOrgUnitCode: từ chối rỗng, khoảng trắng, hoa, dấu, gạch ngang liên tiếp/đầu/cuối", () => {
+  assert.equal(isValidOrgUnitCode(""), false);
+  assert.equal(isValidOrgUnitCode("Cut Flowers"), false); // hoa + khoảng trắng — chưa qua slugifyCode
+  assert.equal(isValidOrgUnitCode("cut_flowers"), false); // gạch dưới là path label, không phải code
+  assert.equal(isValidOrgUnitCode("-cut-flowers"), false);
+  assert.equal(isValidOrgUnitCode("cut-flowers-"), false);
+  assert.equal(isValidOrgUnitCode("cut--flowers"), false);
+  assert.equal(isValidOrgUnitCode("đà-lạt"), false); // còn dấu tiếng Việt (chưa qua stripDiacritics)
+});
+
+test("isValidOrgUnitCode: từ chối vượt CODE_MAX_LENGTH (khớp varchar(64) của cột)", () => {
+  const tooLong = "a".repeat(CODE_MAX_LENGTH + 1);
+  assert.equal(isValidOrgUnitCode(tooLong), false);
+  assert.equal(isValidOrgUnitCode("a".repeat(CODE_MAX_LENGTH)), true);
 });
 
 test("CASE 1 — Section KHÔNG có Group vẫn là node hợp lệ (leaf ở tầng bất kỳ)", () => {

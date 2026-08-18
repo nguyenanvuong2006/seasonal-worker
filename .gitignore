@@ -25,3 +25,6 @@ yarn-error.log*
 # editor / OS
 .DS_Store
 *.pem
+
+# local audit script output (may contain production department/org data — never commit)
+/artifacts/
