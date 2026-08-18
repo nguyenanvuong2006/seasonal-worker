@@ -12,14 +12,18 @@
     "benchmark": "node scripts/benchmark.mjs"
   },
   "dependencies": {
+    "@napi-rs/canvas": "^1.0.6",
     "drizzle-orm": "0.45.2",
+    "pdfjs-dist": "^6.2.108",
     "pg": "8.20.0",
+    "pixelmatch": "^7.2.0",
     "playwright": "^1.49.0",
     "tsx": "^4.19.2"
   },
   "devDependencies": {
     "@types/node": "^22.20.1",
     "@types/pg": "8.18.0",
+    "@types/pixelmatch": "^5.2.6",
     "typescript": "^5.9.3"
   }
 }

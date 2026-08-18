@@ -41,7 +41,7 @@ import { createDocumentHistory, linkRecordToHistory } from "@/lib/document-merge
 import { finalizeBatchOutputs } from "@/lib/document-merge/batch-finalize.ts";
 import { loadDailyApplicationRecords } from "@/lib/document-merge/record-loader.ts";
 import { db } from "@/db";
-import { mergeJobs } from "@/db/schema";
+import { mergeJobs, mergeTemplateVersions } from "@/db/schema";
 import { eq } from "drizzle-orm";
 
 const PORT = Number(process.env.PORT ?? 8080);
@@ -56,62 +56,77 @@ let browser: Browser | null = null;
 
 async function getBrowser(): Promise<Browser> {
   if (!browser) {
+    const args = ["--no-sandbox", "--disable-dev-shm-usage", "--disable-gpu"];
+    // Headless-shell trong sandbox/local cần single-process; Cloud Run image
+    // (playwright noble) KHÔNG cần — bật qua env khi cần.
+    if (process.env.CHROMIUM_SINGLE_PROCESS === "1") args.push("--single-process");
     browser = await chromium.launch({
       // Cho phép dùng custom Chromium (staging/CI/image nhẹ) — Cloud Run mặc
       // định dùng browser của playwright image; env này chỉ override khi cần.
       executablePath: process.env.CHROMIUM_EXECUTABLE_PATH?.trim() || undefined,
-      args: ["--no-sandbox", "--disable-dev-shm-usage", "--disable-gpu", "--single-process"],
+      args,
     });
   }
   return browser;
 }
 
 async function closeBrowser(): Promise<void> {
+  if (poolContext) {
+    await poolContext.close().catch(() => undefined);
+    poolContext = null;
+  }
+  pagePool.length = 0;
   if (browser) {
-    await browser.close();
+    await browser.close().catch(() => undefined);
     browser = null;
   }
 }
 
+// ---------------------------------------------------------------
+// Page pool — launch Chromium 1 lần, reuse context/page (spec L).
+// KHÔNG đóng context giữa các render (headless-shell single-process sẽ
+// thoát khi đóng page/context cuối); page chỉ đóng khi worker shutdown.
+// ---------------------------------------------------------------
+let poolContext: import("playwright").BrowserContext | null = null;
+const pagePool: Page[] = [];
+
+async function getRenderPage(): Promise<Page> {
+  const existing = pagePool.pop();
+  if (existing) return existing;
+  if (!poolContext) {
+    const b = await getBrowser();
+    poolContext = await b.newContext();
+  }
+  const page = await poolContext.newPage();
+  // SSRF guard (Phase 15): chặn mọi request mạng từ trang render. Worker CHỈ
+  // render published template + validated data — không tải tài nguyên ngoài
+  // (chỉ cho data: ảnh nhúng từ DOCX import).
+  await page.route("**/*", async (route) => {
+    const url = route.request().url();
+    if (url.startsWith("data:")) {
+      await route.continue();
+    } else {
+      await route.abort("blockedbyclient");
+    }
+  });
+  return page;
+}
+
 /**
  * Render 1 candidate HTML → PDF bytes (A4, theo @page CSS).
- *
- * SSRF guard (Phase 15): chặn mọi request mạng từ trang (img/font/iframe...).
- * Worker CHỈ render published template version + validated data — không cần
- * tải tài nguyên ngoài. Cấm cả data: ngoại trừ ảnh nhúng của DOCX import.
+ * Reuse page từ pool — KHÔNG launch/đóng Chromium mỗi candidate.
  */
 async function renderPdfBytes(html: string): Promise<Uint8Array> {
-  const b = await getBrowser();
-  const context = await b.newContext();
+  const page = await getRenderPage();
   try {
-    const page: Page = await context.newPage();
-
-    // Chặn SSRF: không cho phép bất kỳ request HTTP/WS nào từ HTML render.
-    await page.route("**/*", async (route) => {
-      const url = route.request().url();
-      if (url.startsWith("data:")) {
-        await route.continue();
-      } else {
-        await route.abort("blockedbyclient");
-      }
+    await page.setContent(html, { waitUntil: "load" });
+    // Chờ font (nếu có) trước khi xuất PDF.
+    await page.evaluate(async () => {
+      await (document as Document & { fonts: FontFaceSet }).fonts.ready;
     });
-    // Cấm script (template không cần JS — chỉ CSS print + font ready).
-    await context.addInitScript(() => {
-      // no-op placeholder cho tương lai nếu cần CSP
-    });
-
-    try {
-      await page.setContent(html, { waitUntil: "load" });
-      // Chờ font (nếu có) trước khi xuất PDF.
-      await page.evaluate(async () => {
-        await (document as Document & { fonts: FontFaceSet }).fonts.ready;
-      });
-      return await page.pdf({ format: "A4", printBackground: true, preferCSSPageSize: true });
-    } finally {
-      await page.close();
-    }
+    return await page.pdf({ format: "A4", printBackground: true, preferCSSPageSize: true });
   } finally {
-    await context.close();
+    pagePool.push(page); // reuse — không đóng
   }
 }
 
@@ -381,6 +396,126 @@ const server = http.createServer(async (req, res) => {
       }
       const result = await runJob(jobId);
       return json(res, 200, result);
+    }
+
+    // ---------------------------------------------------------------
+    // POST /verify-visual — cloud visual verification (Admin website).
+    // Body: { referencePdfBase64 } — so sánh reference Google Docs export với
+    // HTML engine render (published template + dữ liệu mẫu). KHÔNG nhận HTML
+    // arbitrary từ client (chỉ nhận reference PDF để so sánh).
+    // ---------------------------------------------------------------
+    if (url.pathname === "/verify-visual" && req.method === "POST") {
+      if (WORKER_SECRET && req.headers.authorization !== `Bearer ${WORKER_SECRET}`) {
+        return json(res, 401, { error: "unauthorized" });
+      }
+      const body = await readBody(req);
+      const referenceB64 = String(body.referencePdfBase64 ?? "").trim();
+      if (!referenceB64) {
+        return json(res, 400, { error: "Thiếu referencePdfBase64 (PDF export từ Google Docs)." });
+      }
+      const referencePdf = new Uint8Array(Buffer.from(referenceB64, "base64"));
+      if (referencePdf.byteLength > 25 * 1024 * 1024) {
+        return json(res, 400, { error: "Reference PDF quá lớn (>25MB)." });
+      }
+
+      // Lấy published template (html_body + print_css) từ DB — không nhận từ client.
+      const tpl = await db
+        .select({
+          htmlBody: mergeTemplateVersions.htmlBody,
+          printCss: mergeTemplateVersions.printCss,
+        })
+        .from(mergeTemplateVersions)
+        .where(eq(mergeTemplateVersions.status, "PUBLISHED"))
+        .limit(1);
+      if (!tpl[0]?.htmlBody) {
+        return json(res, 409, { error: "Chưa có template version PUBLISHED (HTML engine)." });
+      }
+
+      const { renderApplicantHtmlFromParts } = await import(
+        "@/lib/document-merge/html-renderer.ts"
+      );
+      const { SAMPLE_FIELD_VALUES, comparePdfs } = await import("./verification.ts");
+      const rendered = renderApplicantHtmlFromParts(tpl[0].htmlBody, tpl[0].printCss, SAMPLE_FIELD_VALUES);
+      const renderedPdf = await renderPdfBytes(rendered.html);
+
+      const report = await comparePdfs(new Uint8Array(referencePdf), renderedPdf);
+      return json(res, 200, {
+        report,
+        renderedPdfBase64: Buffer.from(renderedPdf).toString("base64"),
+        referencePdfBase64: referenceB64,
+        pass: report.pass,
+      });
+    }
+
+    // ---------------------------------------------------------------
+    // POST /benchmark — cloud benchmark (Admin website).
+    // Body: { counts?: number[] } — chỉ nhận [1,10,50,100] (fixed, không arbitrary).
+    // ---------------------------------------------------------------
+    if (url.pathname === "/benchmark" && req.method === "POST") {
+      if (WORKER_SECRET && req.headers.authorization !== `Bearer ${WORKER_SECRET}`) {
+        return json(res, 401, { error: "unauthorized" });
+      }
+      const body = await readBody(req);
+      const allowed = [1, 10, 50, 100];
+      const countsRaw = Array.isArray(body.counts) ? body.counts.map(Number) : allowed;
+      const counts = countsRaw.filter((c) => allowed.includes(c));
+      if (counts.length === 0) {
+        return json(res, 400, { error: "counts không hợp lệ — chỉ hỗ trợ 1,10,50,100." });
+      }
+
+      const { renderApplicantHtmlFromParts } = await import(
+        "@/lib/document-merge/html-renderer.ts"
+      );
+      const { SAMPLE_FIELD_VALUES } = await import("./verification.ts");
+      const tpl = await db
+        .select({ htmlBody: mergeTemplateVersions.htmlBody, printCss: mergeTemplateVersions.printCss })
+        .from(mergeTemplateVersions)
+        .where(eq(mergeTemplateVersions.status, "PUBLISHED"))
+        .limit(1);
+      if (!tpl[0]?.htmlBody) {
+        return json(res, 409, { error: "Chưa có template version PUBLISHED (HTML engine)." });
+      }
+      const { html } = renderApplicantHtmlFromParts(tpl[0].htmlBody, tpl[0].printCss, SAMPLE_FIELD_VALUES);
+
+      const runs: Record<string, unknown>[] = [];
+      for (const count of counts) {
+        const t0 = Date.now();
+        let failed = 0;
+        const renders: { ms: number; bytes: Uint8Array }[] = [];
+        const queue = [...Array(count).keys()];
+        while (queue.length > 0) {
+          const batch = queue.splice(0, CONCURRENCY);
+          const results = await Promise.all(
+            batch.map(async () => {
+              try {
+                const s = Date.now();
+                const bytes = await renderPdfBytes(html);
+                return { ms: Date.now() - s, bytes };
+              } catch (e) {
+                failed += 1;
+                console.error(JSON.stringify({ event: "benchmark_render_failed", error: e instanceof Error ? e.message.slice(0, 300) : String(e) }));
+                return { ms: 0, bytes: new Uint8Array(0) };
+              }
+            }),
+          );
+          renders.push(...results);
+        }
+        const durationMs = Date.now() - t0;
+        const sorted = renders.map((r) => r.ms).filter((m) => m > 0).sort((a, b) => a - b);
+        const p95 = sorted.length
+          ? sorted[Math.min(sorted.length - 1, Math.ceil(sorted.length * 0.95) - 1)]
+          : 0;
+        runs.push({
+          records: count,
+          duration_ms: durationMs,
+          avg_render_ms: sorted.length ? Math.round(sorted.reduce((a, b) => a + b, 0) / sorted.length) : 0,
+          p95_render_ms: Math.round(p95),
+          failed,
+          retry_count: 0,
+          concurrency: CONCURRENCY,
+        });
+      }
+      return json(res, 200, { runs, concurrency: CONCURRENCY });
     }
 
     return json(res, 404, { error: "not found" });

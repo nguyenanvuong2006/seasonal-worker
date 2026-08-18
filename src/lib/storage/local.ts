@@ -57,4 +57,13 @@ export class LocalFilesystemStorageProvider implements StorageProvider {
     // Local provider: URL tương đối (được dev server phục vụ). Production dùng signed URL thật.
     return `/api/document-merge/files?key=${encodeURIComponent(key)}`;
   }
+
+  async getMetadata(key: string): Promise<{ size: number; sha256?: string } | null> {
+    try {
+      const s = await stat(this.resolve(key));
+      return { size: s.size };
+    } catch {
+      return null;
+    }
+  }
 }

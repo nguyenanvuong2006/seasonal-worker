@@ -33,4 +33,7 @@ export interface StorageProvider {
 
   /** Signed URL (có hạn) hoặc public URL tuỳ provider. */
   getSignedUrl(key: string, expiresInSeconds?: number): Promise<string>;
+
+  /** Metadata của object (size, sha256 nếu provider hỗ trợ). */
+  getMetadata(key: string): Promise<{ size: number; sha256?: string } | null>;
 }
