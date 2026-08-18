@@ -1,124 +1,119 @@
-# RUNBOOK — Staging Verification trên hạ tầng THẬT (Cloud Run + Neon + Google Drive)
+# RUNBOOK — PHASE 16: STAGING REAL E2E VERIFICATION (Cloud Run + Neon staging + Drive staging)
 
-> Dành cho người vận hành chạy trên máy có network tới Google (không phải sandbox).
-> Mục tiêu: verify E2E **1 hồ sơ** rồi **10 hồ sơ** TRƯỚC khi merge PR #61.
-> Production KHÔNG bị ảnh hưởng: dùng Neon **staging** + Drive folder **staging** + service Cloud Run **staging** riêng.
+> Máy user YẾU → **KHÔNG clone/npm ci/chạy CLI trên máy user**. Mọi bước dưới đây
+> chỉ dùng **trình duyệt** (GitHub Actions + Vercel Preview). Script `scripts/staging-e2e.mjs`
+> là công cụ dành cho CI/cloud runner (xem mục 7 — tuỳ chọn), không bắt buộc chạy tay.
+>
+> Production không bị đụng: Neon **staging**, Drive folder **staging**, Cloud Run **staging**,
+> Preview env riêng. `DOCUMENT_MERGE_ENGINE` production vẫn **GOOGLE_DOCS**.
 
 ---
 
-## 0. Prerequisites
+## 0. Trạng thái hiện tại (đã xong — checkpoint)
 
-- Node.js ≥ 20 (có `npm`), `git`, `gcloud` CLI đã auth (`gcloud auth login`), project GCP đã chọn.
-- **Neon**: tạo project/branch **STAGING** (mới, không phải production) → lấy `DATABASE_URL`.
-- **Google Drive**: tạo folder staging `Seasonal Worker Documents STAGING` → lấy `GOOGLE_DRIVE_ROOT_FOLDER_ID`; dùng OAuth user **có quyền** với folder đó.
-- **Vercel**: project đã link repo; chuẩn bị set env cho **Preview environment** (xem bước 3).
+| Hạng mục | Trạng thái |
+|---|---|
+| PR #61 | OPEN — branch `arena/01a00d24-seasonal-worker` |
+| Neon STAGING migration (workflow `Migrate Document Merge DB — STAGING`) | ✅ PASS |
+| Cloud Run STAGING deploy (workflow `Deploy Document Merge Worker — STAGING`) | ✅ PASS (kèm smoke `/health`) |
+| Service | `seasonal-worker-pdf-staging` @ `asia-southeast1` (private, auth required) |
 
-## 1. Clone branch + cài deps
-
-```bash
-git clone -b arena/01a00d24-seasonal-worker https://github.com/nguyenanvuong2006/seasonal-worker.git
-cd seasonal-worker
-npm ci
-cd worker && npm ci && cd ..
-```
-
-## 2. Migrations trên Neon STAGING
-
-```bash
-export DATABASE_URL=postgresql://USER:PASS@HOST/neondb   # ⚠️ STAGING — KHÔNG dùng production
-node scripts/run-migrations.mjs
-# Kỳ vọng: 22/22 PASS (gồm 2026-08-21-dang-ky-tap-nghe-html-draft.sql — seed version DRAFT v1)
-```
-
-> Lưu ý: version v1 là **DRAFT** (không auto-publish — spec D/H). Để E2E dùng HTML engine,
-> publish thủ công qua UI Template Builder (Publish v1) **hoặc** chạy SQL staging:
-> ```sql
-> UPDATE merge_template_versions SET status='PUBLISHED', published_at=now()
-> WHERE template_id=(SELECT id FROM merge_templates WHERE google_doc_id='10D0tG71CbllIZe7DaosYNW3vK7QnP76Yq4UC9FMEiUE') AND version=1;
-> UPDATE merge_templates SET current_published_version=1 WHERE google_doc_id='10D0tG71CbllIZe7DaosYNW3vK7QnP76Yq4UC9FMEiUE';
-> ```
-
-## 3. Deploy Cloud Run staging worker
-
-```bash
-export DATABASE_URL=...            # Neon STAGING
-export GOOGLE_CLIENT_ID=... GOOGLE_CLIENT_SECRET=... GOOGLE_REFRESH_TOKEN=...
-export GOOGLE_DRIVE_ROOT_FOLDER_ID=...   # folder STAGING
-export MERGE_WORKER_SECRET=$(openssl rand -hex 32)   # giữ giá trị này
-export GCP_PROJECT=...
-./worker/deploy-staging.sh
-# Output: URL service (vd https://seasonal-worker-pdf-staging-xxxx-uc.a.run.app) + MERGE_WORKER_SECRET
-```
-
-## 4. Cấu hình Vercel **Preview** (chỉ Preview — không đụng Production env)
+## 1. Chuẩn bị Vercel **Preview** env (chỉ Preview — không đụng Production env)
 
 Project → Settings → Environment Variables → scope **Preview**:
 
 ```
 DATABASE_URL=<Neon staging>
-GOOGLE_CLIENT_ID / GOOGLE_CLIENT_SECRET / GOOGLE_REFRESH_TOKEN=<OAuth user>
+GOOGLE_CLIENT_ID / GOOGLE_CLIENT_SECRET / GOOGLE_REFRESH_TOKEN=<OAuth user sở hữu Drive staging>
 GOOGLE_DRIVE_ROOT_FOLDER_ID=<folder staging>
 DOCUMENT_MERGE_ENGINE=HTML_PDF          # CHỈ Preview — Production vẫn GOOGLE_DOCS
-PDF_MERGE_WORKER_URL=<URL Cloud Run staging từ bước 3>
-MERGE_WORKER_SECRET=<giá trị ở bước 3>
+PDF_MERGE_WORKER_URL=https://<cloud-run-staging>.run.app   # lấy ở mục 2
+MERGE_WORKER_SECRET=<secret worker staging>
+VERIFICATION_ENABLED=true               # bật tab Verification (chỉ non-production)
 ```
 
-Deploy lại preview (push commit rỗng hoặc redeploy) → lấy **Preview URL** (vd `https://seasonal-worker-xxxx.vercel.app`).
+> ⚠️ Kiểm tra: Production env KHÔNG có `DOCUMENT_MERGE_ENGINE=HTML_PDF`, không có `VERIFICATION_ENABLED`.
+> Nếu Preview cũ đã build: push 1 commit rỗng (hoặc Redeploy) để env mới có hiệu lực.
 
-> ⚠️ Kiểm tra: Production env KHÔNG có `DOCUMENT_MERGE_ENGINE=HTML_PDF`.
+## 2. Lấy Cloud Run URL (browser-only)
 
-## 5. E2E smoke — 1 hồ sơ TEST
+GitHub → Actions → run **Deploy Document Merge Worker — STAGING** mới nhất → bước **"Show service URL"**:
+copy URL dạng `https://seasonal-worker-pdf-staging-xxxx-uc.a.run.app` → dán vào `PDF_MERGE_WORKER_URL` ở mục 1.
+
+## 3. E2E qua Website (browser-only — path chính)
+
+Mở **Vercel Preview URL** → đăng nhập admin → **Document Merge → tab Verification**:
+
+| # | Nút | Mục tiêu (gate) | Kỳ vọng |
+|---|---|---|---|
+| 1 | **Check Database** | DATABASE | `pass:true`, counts + danh sách template/version (name, status, retention, html_len) |
+| 2 | **Check Worker** | CLOUD_RUN | `pass:true`, workerStatus ok |
+| 3 | **Check Google Drive** | GOOGLE_DRIVE | probe file create → metadata → delete, `pass:true` |
+| 4 | **Run 1-record Test** | 1_RECORD | `pass:true`, stages: seed/job/workerTrigger/poll/items/history/finalize |
+| 5 | **Run 10-record Test** | 10_RECORD | `pass:true`, completed=10 failed=0, history=10, retentionOk |
+| 6 | **Run Visual Verification** | VISUAL | upload reference PDF (mục 4) → report (pageCountMatch, diff%, warnings, pass) |
+| 7 | **Run Benchmark** | BENCHMARK | runs 1/10/50/100, failed=0, avg/p95 render ms |
+
+**Template v1 DRAFT?** Check Database sẽ hiện `versions: [{version:1, status:"DRAFT"}]`.
+Trước khi Run 1-record: vào **Templates tab → version 1 → Preview → Publish** (chỉ staging;
+không ảnh hưởng production). Sau đó Check Database lại → `published_versions ≥ 1`.
+
+**Đọc kết quả:** mỗi nút trả JSON — copy nguyên văn gửi lại cho tôi (hoặc ghi vào comment PR #61).
+Banner PRODUCTION READY chỉ sáng khi **tất cả 7 gate PASS** — chưa đổi production engine.
+
+## 4. Chuẩn bị reference PDF cho Visual Verification
+
+1. Mở Google Docs template `Dang_ky_Tap_nghe` (Drive staging) → **File → Download → PDF** → `reference.pdf`.
+   - Nếu doc còn `<<placeholder>>` chưa fill, reference vẫn dùng được cho các check **cấu trúc**
+     (số trang 6 vs 6, page break, overflow, font, table, checkbox, tiếng Việt); diff % sẽ cao
+     (dự kiến) → visual gate chưa PASS là kết quả HONEST của phase này.
+   - Muốn diff sát hơn: fill các giá trị mẫu vào doc (xem `SAMPLE_FIELD_VALUES` trong
+     `worker/src/verification.ts`) rồi export lại.
+2. Upload `reference.pdf` vào nút **Run Visual Verification** (≤25MB, PDF).
+3. Xem report: `referencePages`, `renderedPages`, `pageCountMatch` (6 vs 5 = FAIL),
+   `diff[]` theo trang, `warnings[]`, `pass`. Tải `rendered.pdf` để so cạnh nhau.
+
+## 5. Negative / resilience (qua UI + Actions)
+
+- **UI**: tạo job bằng nút Merge thường trên Preview → bấm **Cancel** (job đang QUEUED/PROCESSING)
+  → xác nhận CANCELLED; bấm **Retry** item FAILED (nếu có).
+- **Worker-level** (nếu chạy mục 7): invalid jobId → `500 {"error":"job not found"}`; không token → `401`;
+  duplicate `/run` → không duplicate history; re-run khi queue rỗng → `{processed:0}`.
+
+## 6. Khi có kết quả — gửi lại cho tôi
+
+- JSON 7 nút ở mục 3 (hoặc ảnh chụp + text), Cloud Run URL, Preview URL, deployment status.
+- `reference.pdf` + `rendered.pdf` (hoặc nêu khác biệt quan sát được).
+- Tôi sẽ tổng hợp → báo **recommendation** (MERGE / DO NOT MERGE / MERGE CODE KEEP GOOGLE_DOCS)
+  → chờ approval. **KHÔNG merge PR, KHÔNG đổi production engine** trước khi có approval.
+
+## 7. (Tuỳ chọn) Script E2E CLI cho CI/cloud runner — `scripts/staging-e2e.mjs`
+
+Không bắt buộc (mục 3 đã đủ). Dành cho runner có network tới Google + secrets:
 
 ```bash
-export STAGING_API_URL=https://<preview-url>.vercel.app
-export MERGE_WORKER_URL=https://<cloud-run-staging>.run.app
-export MERGE_WORKER_SECRET=<giá trị bước 3>
-export DATABASE_URL=<Neon staging>
-export GOOGLE_CLIENT_ID=... GOOGLE_CLIENT_SECRET=... GOOGLE_REFRESH_TOKEN=...
-export GOOGLE_DRIVE_ROOT_FOLDER_ID=...
-node --import tsx scripts/staging-e2e.mjs --records 1
+export STAGING_E2E_CONFIRM=1
+export DATABASE_URL=<Neon staging> MERGE_WORKER_URL=<run.app> MERGE_WORKER_SECRET=<...>
+export STORAGE_PROVIDER=google_drive
+export GOOGLE_CLIENT_ID=... GOOGLE_CLIENT_SECRET=... GOOGLE_REFRESH_TOKEN=... GOOGLE_DRIVE_ROOT_FOLDER_ID=...
+node --import tsx scripts/staging-e2e.mjs --records 1      # 1 record
+node --import tsx scripts/staging-e2e.mjs --records 10 --negative   # 10 + negatives
+node --import tsx scripts/staging-e2e.mjs --dry-run        # audit template/worker/storage, không ghi gì
+node --import tsx scripts/staging-e2e.mjs --cleanup        # soft-delete hồ sơ [STAGING-E2E] + liệt kê job/history
 ```
 
-Kỳ vọng output:
-```
-✅ Seeded 1 hồ sơ TEST
-✅ Job created: <uuid> (QUEUED, total=1)
-✅ Worker triggered: 200
-   poll N: COMPLETED — completed=1/1 failed=0
-✅ ITEMS: COMPLETED | 2026MMDD_<Ten>_Dang-ky-tap-nghe_<appId>.pdf | sha256=… | size=…
-   history: template_version=1 retention_until=<+3 năm> (✅) archive=ONLINE provider=google_drive sha256=✅
-✅ Drive <filename>: exists=true size=… sha256Checksum=…
-✅ PDF tổng: 200 <bytes> · ZIP: 200 <bytes>
-🎉 STAGING E2E PASS
-```
+Script: seed prefix `[STAGING-E2E]` → tạo job in-process (HTML_PDF) → trigger worker → poll DB →
+verify item/history (sha256, retention +3y, không duplicate) → Drive metadata (individual + batch PDF/ZIP)
+→ negatives (invalid jobId / 401 / duplicate / idle) → in evidence (ids). Yêu cầu template version PUBLISHED.
 
-## 6. E2E — 10 hồ sơ
+## 8. Cleanup sau khi thu thập evidence
 
-```bash
-node --import tsx scripts/staging-e2e.mjs --records 10
-```
+- Records test: `--cleanup` hoặc UI tự soft-delete (`deleted_by='verification-cleanup'` / `'staging-e2e-cleanup'`).
+- Drive files test: xoá thủ công trong folder Verification/ + Batch Outputs/ (chỉ staging root).
+- `merge_jobs` + `document_history`: **giữ nguyên** (snapshot/audit semantics) — chỉ xoá thủ công nếu cần và đã lưu evidence.
 
-## 7. Visual diff với reference Google Docs
+## 9. Stop conditions (dừng ngay nếu)
 
-1. Export reference thật: mở Google Docs `Dang_ky_Tap_nghe` → File → Download → PDF → `reference.pdf`.
-2. Render HTML sample bằng đúng engine (trên máy có Chromium):
-   ```bash
-   cd worker && npm run generate:sample
-   npx playwright install chromium   # nếu chưa có
-   CHROMIUM_EXECUTABLE_PATH=... node scripts/visual-verify.mjs   # bỏ CHROMIUM_EXECUTABLE_PATH nếu dùng playwright mặc định
-   ```
-3. So sánh `docs/visual-verification/out/rendered.pdf` với `reference.pdf`:
-   - **Số trang** (pdf-lib/`pdfinfo`): kỳ vọng 6 = 6.
-   - Mở cả 2 cạnh nhau: page breaks, tables, borders, font, font size, line/paragraph spacing, checkbox ☐☒, signatures, alignment, margins, logo, tiếng Việt, orphan/widow, overflow.
-   - Gửi lại cho tôi: 2 file PDF + `report.json` + mô tả khác biệt.
-4. Nếu khác biệt ảnh hưởng nội dung/bố cục/pagination → báo tôi để sửa template/CSS.
-
-## 8. Gửi lại kết quả
-
-Gửi tôi (paste vào chat hoặc note trong PR #61):
-- Output bước 5 (1 record) và bước 6 (10 records)
-- `docs/visual-verification/out/report.json` + `reference.pdf` + `rendered.pdf`
-- Benchmark có network/upload (tuỳ chọn — `cd worker && npm run benchmark`)
-- Cloud Run URL + Vercel Preview URL + deployment status
-
-Tôi sẽ tổng hợp → báo **recommendation MERGE / DO NOT MERGE** → chờ approval cuối cùng.
+Production DB/Drive bị trỏ tới · template sai bị publish · job chạm data production thật ·
+worker crash · history sai (sha256/retention/duplicate) · batch PDF/ZIP thiếu · duplicate processing ·
+visual khác biệt lớn · cleanup đụng data không-test.

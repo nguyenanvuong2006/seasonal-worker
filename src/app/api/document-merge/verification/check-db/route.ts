@@ -33,13 +33,29 @@ export async function POST() {
         (SELECT count(*) FROM merge_jobs) AS jobs,
         (SELECT count(*) FROM document_history) AS history
     `);
+    const templatesResult = await db.execute(sql`
+      SELECT t.id, t.name, t.is_active, t.google_doc_id,
+        (SELECT count(*) FROM merge_template_fields f
+          WHERE f.template_id = t.id AND f.is_orphaned = false) AS fields,
+        COALESCE((
+          SELECT json_agg(json_build_object(
+            'version', v.version, 'status', v.status,
+            'retention_years', v.retention_years,
+            'html_len', length(v.html_body),
+            'updated_at', v.updated_at) ORDER BY v.version)
+          FROM merge_template_versions v WHERE v.template_id = t.id
+        ), '[]'::json) AS versions
+      FROM merge_templates t ORDER BY t.created_at
+    `);
     const ping = pingResult.rows?.[0];
     const counts = countsResult.rows?.[0];
+    const templates = templatesResult.rows ?? [];
     return NextResponse.json({
       pass: true,
       stage: "DATABASE",
       ping: Boolean(ping && (ping as Record<string, unknown>).ok),
       counts,
+      templates,
       durationMs: Date.now() - startedAt,
     });
   } catch (error) {

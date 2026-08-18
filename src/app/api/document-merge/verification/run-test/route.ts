@@ -58,13 +58,13 @@ export async function POST(request: Request) {
     }
 
     // 2. Seed N hồ sơ TEST (prefix VERIFY — không đụng data production)
-    const tag = `VERIFY-${Date.now().toString(36)}`;
+    const tag = `[STAGING-E2E] ${Date.now().toString(36)}`;
     const seeded: string[] = [];
     for (let i = 0; i < records; i++) {
       const [app] = await db
         .insert(dailyApplications)
         .values({
-          cccd: `0722${String(100000000 + Math.floor(Math.random() * 899999999))}`,
+          cccd: `0722${String(10000000 + Math.floor(Math.random() * 89999999))}`,
           fullName: `${tag} Ứng viên ${i + 1}`,
           gender: "Nam",
           dob: "2001-03-15",
@@ -147,9 +147,15 @@ export async function POST(request: Request) {
       .from(documentHistory)
       .where(eq(documentHistory.mergeJobId, jobId));
 
+    const retentionOk = historyRows.every((h) => {
+      if (!h.retentionUntil) return false;
+      const years = (h.retentionUntil.getTime() - (h.generatedAt ?? new Date()).getTime()) / 31557600000;
+      return years >= 2 && years <= 4; // snapshot retention mặc định 3 năm
+    });
     const historyOk =
-      historyRows.length === completed.length &&
-      historyRows.every((h) => Boolean(h.sha256 && h.storageFileId && h.templateVersion != null && h.retentionUntil));
+      historyRows.length === completed.length && // không duplicate history khi worker chạy lại
+      historyRows.every((h) => Boolean(h.sha256 && h.storageFileId && h.templateVersion != null && h.retentionUntil)) &&
+      retentionOk;
 
     const renderDurationMs =
       completed.length > 0
@@ -170,7 +176,12 @@ export async function POST(request: Request) {
       count: historyRows.length,
       templateVersion: historyRows[0]?.templateVersion ?? null,
       retentionUntil: historyRows[0]?.retentionUntil ?? null,
+      retentionOk,
       archiveStatus: historyRows[0]?.archiveStatus ?? null,
+      storageProvider: historyRows[0]?.storageProvider ?? null,
+      storageFileId: historyRows[0]?.storageFileId ?? null,
+      fileSize: historyRows[0]?.fileSize ?? null,
+      createdBy: historyRows[0]?.createdBy ?? null,
     };
     stages.finalize = {
       pass: Boolean(jobState?.outputPdfUrl && jobState?.outputZipUrl),
