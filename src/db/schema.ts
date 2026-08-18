@@ -44,6 +44,69 @@ export const departments = pgTable(
 );
 
 /* ============================================================
+   ORGANIZATION UNITS (Org Tree — Phase Org-Tree Step 1)
+   ---------------------------------------------------------------
+   Cây tổ chức ĐỘ SÂU TUỲ Ý thay cho giả định "Location > Division >
+   Department > Section > Group" cố định 5 tầng của `departments`
+   (xem cột location/division/section ở bảng trên — free text, không
+   phải cấu trúc cây). KHÔNG xoá/đổi `departments` — mỗi dòng
+   departments được migrate 1-1 thành đúng 1 organization_units qua
+   `legacyDepartmentId` (cầu nối tương thích ngược), xem
+   migrations/2026-08-17-organization-units.sql.
+
+   `unitType` CHỈ là metadata mô tả (icon/nhãn) — KHÔNG được dùng để
+   ép số tầng. Một node bất kỳ có thể là leaf hoặc tiếp tục có con.
+
+   `path` là cột Postgres kiểu `ltree` (materialized path) — Drizzle
+   không có kiểu ltree sẵn nên khai báo `text()` ở tầng ORM; MỌI thao
+   tác ghi/so sánh đụng tới cột này đi qua raw SQL (`db.execute(sql...)`)
+   ở src/lib/organization-units.ts, luôn cast rõ ràng `${value}::ltree`
+   cho dễ đọc/an toàn — dù đã verify thực tế bằng chính package `pg`
+   (driver Drizzle dùng ở đây) là tham số truyền qua `$1` KHÔNG mang
+   kiểu cố định (Postgres tự suy kiểu từ ngữ cảnh cột/operator), nên
+   insert/so sánh trực tiếp KHÔNG cast vẫn chạy đúng; cast tường minh
+   chỉ để code rõ ràng, không phải vì bắt buộc.
+
+   `parentId` khai báo PLAIN uuid (không `.references()`) — giống hệt
+   cách planningPeriods.parentPeriodId/supersededBy đã làm cho self-
+   reference: FK thật nằm trong migration SQL, tránh vòng khai báo.
+   `ON DELETE RESTRICT` ở FK thật (không phải ở đây) đảm bảo KHÔNG bao
+   giờ xoá được 1 node còn con — hard delete một node đã dùng luôn bị
+   chặn ở tầng DB, không chỉ tầng ứng dụng (mục 4, 23 đề bài).
+   ============================================================ */
+export const organizationUnits = pgTable(
+  "organization_units",
+  {
+    id: uuid("id").defaultRandom().primaryKey(),
+    code: varchar("code", { length: 64 }).notNull(),
+    name: varchar("name", { length: 160 }).notNull(),
+    unitType: varchar("unit_type", { length: 24 }).notNull().default("OTHER"),
+    parentId: uuid("parent_id"), // self-reference — FK thật trong migration SQL (xem chú thích trên)
+    path: text("path").notNull(), // Postgres: ltree — xem chú thích trên
+    depth: integer("depth").notNull().default(0),
+    sortOrder: integer("sort_order").notNull().default(0),
+    isActive: boolean("is_active").notNull().default(true),
+    legacyDepartmentId: uuid("legacy_department_id").references(() => departments.id),
+    validFrom: date("valid_from"),
+    validTo: date("valid_to"),
+    metadata: jsonb("metadata").$type<Record<string, unknown>>().notNull().default({}),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+    updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
+    createdBy: varchar("created_by", { length: 64 }),
+    updatedBy: varchar("updated_by", { length: 64 }),
+  },
+  (t) => [
+    uniqueIndex("org_units_code_uq").on(t.code).where(sql`is_active`),
+    index("org_units_parent_idx").on(t.parentId),
+    uniqueIndex("org_units_legacy_dept_uq").on(t.legacyDepartmentId).where(sql`legacy_department_id is not null`),
+    // GiST index trên path (kiểu ltree) tạo trong migration SQL — drizzle pg-core không có
+    // index builder cho GIST/ltree.
+  ],
+);
+export type OrganizationUnit = typeof organizationUnits.$inferSelect;
+export type NewOrganizationUnit = typeof organizationUnits.$inferInsert;
+
+/* ============================================================
    SHEET "DW Data" — Kho hồ sơ lao động chính thức (~20.7k dòng)
    Dùng để ĐỐI CHIẾU người cũ / người mới.
    Không có trong bảng này = LAO ĐỘNG MỚI

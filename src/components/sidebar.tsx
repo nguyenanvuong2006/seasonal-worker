@@ -9,6 +9,7 @@ import {
   ClipboardList,
   Database,
   Building2,
+  FolderTree,
   Factory,
   IdCard,
   ArrowLeftRight,
@@ -59,7 +60,8 @@ const NAV_GROUPS: NavGroup[] = [
     items: [
       { href: "/hr/registrations", label: "Daily Application", icon: ClipboardList, roles: ["ADMIN", "HR_RECRUITER"], permission: "registrations.view" },
       { href: "/hr/workers", label: "DW Data (Đối chiếu)", icon: Database, roles: ["ADMIN", "HR_RECRUITER"], permission: "dw.view" },
-      { href: "/admin/departments", label: "Cơ cấu tổ chức", icon: Building2, roles: ["ADMIN", "HR_RECRUITER"], permission: "departments.manage" },
+      { href: "/admin/organization", label: "Cây tổ chức", icon: FolderTree, roles: ["ADMIN", "HR_RECRUITER"], permission: "departments.manage" },
+      { href: "/admin/departments", label: "Bộ phận (danh sách phẳng)", icon: Building2, roles: ["ADMIN", "HR_RECRUITER"], permission: "departments.manage" },
       { href: "/department", label: "Bộ phận của tôi", icon: Factory, roles: ["DEPT_MANAGER", "ADMIN", "HR_RECRUITER"] },
     ],
   },
