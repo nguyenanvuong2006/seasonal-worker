@@ -22,24 +22,35 @@ export function getWorkerConfig(): { url: string; secret: string } {
   };
 }
 
+export type WorkerEndpoint = "/health" | "/run" | "/verify-visual" | "/benchmark";
+
+const WORKER_METHODS: Record<WorkerEndpoint, "GET" | "POST"> = {
+  "/health": "GET",
+  "/run": "POST",
+  "/verify-visual": "POST",
+  "/benchmark": "POST",
+};
+
 /** Gọi worker endpoint (server-side). */
 export async function callWorker<T>(
-  path: "/health" | "/run" | "/verify-visual" | "/benchmark",
+  path: WorkerEndpoint,
   body?: unknown,
   timeoutMs = 120_000,
 ): Promise<{ ok: boolean; status: number; data: T | { error?: string } }> {
   const { url, secret } = getWorkerConfig();
   if (!url) return { ok: false, status: 503, data: { error: "PDF_MERGE_WORKER_URL chưa cấu hình." } };
+
+  const method = WORKER_METHODS[path];
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), timeoutMs);
   try {
     const res = await fetch(`${url}${path}`, {
-      method: "POST",
+      method,
       headers: {
         "Content-Type": "application/json",
         ...(secret ? { Authorization: `Bearer ${secret}` } : {}),
       },
-      body: body === undefined ? undefined : JSON.stringify(body),
+      body: method === "GET" ? undefined : body === undefined ? undefined : JSON.stringify(body),
       signal: controller.signal,
     });
     const data = (await res.json().catch(() => ({}))) as T;
