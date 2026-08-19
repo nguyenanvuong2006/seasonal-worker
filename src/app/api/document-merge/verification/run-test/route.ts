@@ -8,12 +8,13 @@
  */
 
 import { NextResponse } from "next/server";
-import { and, eq, inArray, isNull, sql } from "drizzle-orm";
+import { and, eq, inArray, isNull } from "drizzle-orm";
 import { requirePermission } from "@/lib/auth";
 import { db } from "@/db";
 import { dailyApplications, documentHistory, mergeJobRecords, mergeJobs } from "@/db/schema";
 import { isVerificationEnabled, callWorker } from "@/lib/verification/helpers";
 import { createAsyncMergeJob } from "@/lib/document-merge/async-job";
+import { findHtmlPublishableTemplateId } from "@/lib/document-merge/template-versions";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -42,17 +43,15 @@ export async function POST(request: Request) {
 
   try {
     // 1. Template active + có version PUBLISHED (HTML engine cần)
-    const templateRows = await db.execute(sql`
-      SELECT t.id FROM merge_templates t
-      WHERE t.is_active = true
-        AND EXISTS (SELECT 1 FROM merge_template_versions v
-                    WHERE v.template_id = t.id AND v.status = 'PUBLISHED')
-      ORDER BY t.created_at LIMIT 1
-    `);
-    const templateId = (templateRows as unknown as { rows?: { id: string }[] }).rows?.[0]?.id;
+    const templateId = await findHtmlPublishableTemplateId();
     if (!templateId) {
       return NextResponse.json(
-        { pass: false, error: "Chưa có template active + version PUBLISHED (HTML engine)." },
+        {
+          pass: false,
+          error: "Chưa có template active + version PUBLISHED (HTML engine).",
+          action:
+            'Vào Document Merge Center → Quản lý Templates → chọn template active → Upload DOCX hoặc dán HTML để tạo version DRAFT → bấm "Xuất bản phiên bản".',
+        },
         { status: 409 },
       );
     }

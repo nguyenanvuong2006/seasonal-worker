@@ -220,7 +220,7 @@ export function TemplateLibrary({ onSelectForMerge }: { onSelectForMerge: (templ
 
   const runVersionAction = async (version: TemplateVersion, action: "publish" | "archive" | "rollback") => {
     if (!editing) return;
-    const label = action === "publish" ? "Publish" : action === "archive" ? "Archive" : "Rollback";
+    const label = action === "publish" ? "Xuất bản" : action === "archive" ? "Lưu trữ" : "Khôi phục";
     if (!window.confirm(`${label} version ${version.version} của "${editing.name}"?`)) return;
     setVersionAction(`${action}:${version.id}`);
     try {
@@ -556,11 +556,18 @@ export function TemplateLibrary({ onSelectForMerge }: { onSelectForMerge: (templ
                     <div>
                       <h4 className="text-sm font-bold text-slate-900">Phiên bản Template (HTML/PDF Engine)</h4>
                       <p className="text-[11px] text-slate-500">
+                        Quy trình: Upload DOCX hoặc dán HTML → tạo version DRAFT → Preview → Xuất bản phiên bản.
                         Mỗi version: DRAFT → PUBLISHED → ARCHIVED. PDF snapshot template_version lúc tạo;
                         chỉ version PUBLISHED được dùng cho batch HTML/PDF.{" "}
                         {editing.currentPublishedVersion
                           ? `Đang publish: v${editing.currentPublishedVersion}`
                           : "Chưa có version HTML được publish (batch vẫn dùng Google Docs)."}
+                      </p>
+                      <p className="mt-1 text-[11px] text-slate-400">
+                        Xuất bản sẽ bị chặn nếu có placeholder chưa từng mapping, hoặc placeholder đang bật
+                        &quot;bắt buộc&quot; mà chưa có nguồn dữ liệu/giá trị mặc định. Placeholder không bắt buộc
+                        luôn được phép để trống (không cần gán dữ liệu giả) — vào tab Mapping để đổi trạng thái
+                        &quot;bắt buộc&quot; của từng placeholder.
                       </p>
                     </div>
                   </div>
@@ -612,36 +619,40 @@ export function TemplateLibrary({ onSelectForMerge }: { onSelectForMerge: (templ
                               <button
                                 disabled={versionAction !== null}
                                 onClick={() => runVersionAction(version, "publish")}
+                                title="Publish — version PUBLISHED trở thành bản render cho batch HTML/PDF (chỉ 1 version PUBLISHED/template)."
                                 className="rounded-lg bg-emerald-700 px-2.5 py-1.5 text-[10px] font-bold text-white hover:bg-emerald-800 disabled:opacity-50"
                               >
-                                Publish
+                                Xuất bản phiên bản
                               </button>
                             )}
                             {version.status === "PUBLISHED" && (
                               <button
                                 disabled={versionAction !== null}
                                 onClick={() => runVersionAction(version, "rollback")}
+                                title="Publish lại version này (no-op nếu đã PUBLISHED)."
                                 className="rounded-lg border border-emerald-200 bg-emerald-50 px-2.5 py-1.5 text-[10px] font-bold text-emerald-700 hover:bg-emerald-100 disabled:opacity-50"
                               >
-                                Re-publish
+                                Xuất bản lại
                               </button>
                             )}
                             {version.status !== "PUBLISHED" && version.status !== "ARCHIVED" && (
                               <button
                                 disabled={versionAction !== null}
                                 onClick={() => runVersionAction(version, "archive")}
+                                title="Lưu trữ version này (không được archive version đang PUBLISHED)."
                                 className="rounded-lg border border-slate-200 px-2.5 py-1.5 text-[10px] font-semibold text-slate-500 hover:bg-slate-50 disabled:opacity-50"
                               >
-                                Archive
+                                Lưu trữ
                               </button>
                             )}
                             {version.status === "ARCHIVED" && (
                               <button
                                 disabled={versionAction !== null}
                                 onClick={() => runVersionAction(version, "rollback")}
+                                title="Khôi phục: publish lại version ARCHIVED này làm bản hiện hành."
                                 className="rounded-lg border border-slate-200 px-2.5 py-1.5 text-[10px] font-semibold text-slate-600 hover:bg-slate-50 disabled:opacity-50"
                               >
-                                Rollback
+                                Khôi phục
                               </button>
                             )}
                           </div>

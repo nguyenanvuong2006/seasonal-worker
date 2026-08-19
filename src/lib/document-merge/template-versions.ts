@@ -110,6 +110,94 @@ export async function getPublishedTemplateVersion(templateId: string): Promise<M
 }
 
 /**
+ * Chọn template dùng cho merge/verify bằng engine HTML_PDF: active + đã có
+ * version PUBLISHED (tạo sớm nhất trước). Trả null nếu chưa có template nào
+ * sẵn sàng — nghĩa là cần Import DOCX/tạo DRAFT rồi Publish trước, KHÔNG phải
+ * lỗi truy vấn.
+ */
+export async function findHtmlPublishableTemplateId(): Promise<string | null> {
+  const templates = await db
+    .select({ id: mergeTemplates.id })
+    .from(mergeTemplates)
+    .where(eq(mergeTemplates.isActive, true))
+    .orderBy(mergeTemplates.createdAt);
+
+  for (const template of templates) {
+    const published = await getPublishedTemplateVersion(template.id);
+    if (published) return template.id;
+  }
+  return null;
+}
+
+type FieldCoverageInput = {
+  placeholder: string;
+  sourceField: string | null;
+  sourcePath: string | null;
+  fallbackValue: string | null;
+  isRequired: boolean;
+};
+
+export type PlaceholderCoverageReason = "UNMAPPED" | "REQUIRED_UNRESOLVABLE";
+export interface PlaceholderCoverageIssue {
+  placeholder: string;
+  reason: PlaceholderCoverageReason;
+}
+
+/**
+ * Kiểm tra placeholder coverage trước khi publish — phân biệt RÕ 2 trường hợp:
+ *
+ * - UNMAPPED: placeholder xuất hiện trong HTML nhưng CHƯA từng có row mapping
+ *   (chưa quét/lưu) → luôn chặn publish, vì PDF sẽ hiện nguyên "<<...>>".
+ * - REQUIRED_UNRESOLVABLE: đã có mapping, `isRequired=true`, nhưng không có
+ *   sourceField/sourcePath/fallbackValue nào → chắc chắn luôn rỗng dù bị đánh
+ *   dấu bắt buộc → đây là lỗi cấu hình, chặn publish.
+ *
+ * Placeholder có mapping với `isRequired=false` (mặc định khi quét) LUÔN được
+ * phép publish dù chưa gắn nguồn dữ liệu — đây là "để trống có chủ đích"
+ * (business requirement), KHÔNG phải lỗi. Không tự ý gán fallback/dữ liệu giả
+ * cho các placeholder này.
+ */
+export function validatePlaceholderCoverage(
+  htmlBody: string,
+  fields: FieldCoverageInput[],
+): PlaceholderCoverageIssue[] {
+  const placeholders = scanPlaceholdersInVersionHtml(htmlBody);
+  const fieldMap = new Map(fields.map((f) => [f.placeholder, f]));
+  const issues: PlaceholderCoverageIssue[] = [];
+
+  for (const placeholder of placeholders) {
+    const field = fieldMap.get(placeholder);
+    if (!field) {
+      issues.push({ placeholder, reason: "UNMAPPED" });
+      continue;
+    }
+    if (field.isRequired && !field.sourceField && !field.sourcePath && !field.fallbackValue) {
+      issues.push({ placeholder, reason: "REQUIRED_UNRESOLVABLE" });
+    }
+  }
+  return issues;
+}
+
+function formatCoverageError(issues: PlaceholderCoverageIssue[]): string {
+  const unmapped = issues.filter((i) => i.reason === "UNMAPPED").map((i) => i.placeholder);
+  const unresolvable = issues.filter((i) => i.reason === "REQUIRED_UNRESOLVABLE").map((i) => i.placeholder);
+  const parts: string[] = [];
+  if (unmapped.length > 0) {
+    parts.push(`${unmapped.length} placeholder chưa được quét/mapping: ${unmapped.join(", ")}`);
+  }
+  if (unresolvable.length > 0) {
+    parts.push(
+      `${unresolvable.length} placeholder bắt buộc (required) nhưng chưa có nguồn dữ liệu/fallback: ${unresolvable.join(", ")}`,
+    );
+  }
+  return (
+    `Không thể publish — ${parts.join("; ")}. ` +
+    `Placeholder không bắt buộc (isRequired=false) luôn được phép để trống — nếu placeholder này để trống có chủ đích, ` +
+    `KHÔNG bật "bắt buộc" cho nó trong Mapping.`
+  );
+}
+
+/**
  * Publish một version.
  * - Version phải tồn tại và thuộc template.
  * - Nếu version đã PUBLISHED (rollback cùng version) → no-op trả về version.
@@ -144,6 +232,11 @@ export async function publishTemplateVersion(
       .select()
       .from(mergeTemplateFields)
       .where(and(eq(mergeTemplateFields.templateId, templateId), eq(mergeTemplateFields.isOrphaned, false)));
+
+    const coverageIssues = validatePlaceholderCoverage(target.htmlBody, fields);
+    if (coverageIssues.length > 0) {
+      throw new TemplateVersionError(formatCoverageError(coverageIssues), 400);
+    }
 
     const mappingSnapshot = fields.map((field) => ({
       placeholder: field.placeholder,
