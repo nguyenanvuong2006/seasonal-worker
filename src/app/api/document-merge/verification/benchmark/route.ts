@@ -33,6 +33,7 @@ export async function POST(request: Request) {
     "/benchmark",
     { counts },
     300_000,
+    { request },
   );
   const data = result.data as { runs?: Record<string, unknown>[]; concurrency?: number; error?: string };
 

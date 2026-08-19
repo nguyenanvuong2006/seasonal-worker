@@ -17,7 +17,7 @@ export const dynamic = "force-dynamic";
 
 type RouteContext = { params: Promise<{ id: string }> };
 
-export async function POST(_request: Request, context: RouteContext) {
+export async function POST(request: Request, context: RouteContext) {
   const guard = await requirePermission(["ADMIN", "HR_RECRUITER"], "document_merge.execute");
   if (!guard.ok) {
     return NextResponse.json({ error: guard.error }, { status: guard.status });
@@ -31,7 +31,7 @@ export async function POST(_request: Request, context: RouteContext) {
     }
 
     const count = await requeueFailedItems(id);
-    if (count > 0) triggerPdfWorker(id); // không chờ — worker claim lại
+    if (count > 0) triggerPdfWorker(id, request); // không chờ — worker claim lại
 
     await writeAudit(guard.session, "RETRY_MERGE_JOB", "merge_jobs", { jobId: id, retriedItems: count });
 

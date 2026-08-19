@@ -10,7 +10,7 @@ import { isVerificationEnabled, callWorker } from "@/lib/verification/helpers";
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
-export async function POST() {
+export async function POST(request: Request) {
   const guard = await requirePermission(["ADMIN"], "document_merge.history.view");
   if (!guard.ok) {
     return NextResponse.json({ error: guard.error }, { status: guard.status });
@@ -20,7 +20,7 @@ export async function POST() {
   }
 
   const startedAt = Date.now();
-  const result = await callWorker<{ ok?: boolean; error?: string }>("/health", undefined, 15_000);
+  const result = await callWorker<{ ok?: boolean; error?: string }>("/health", undefined, 15_000, { request });
   const data = result.data as { ok?: boolean; error?: string };
   return NextResponse.json({
     pass: result.ok,

@@ -47,6 +47,19 @@ import { db } from "../../src/db";
 import { mergeJobs, mergeTemplateVersions } from "../../src/db/schema";
 import { eq } from "drizzle-orm";
 
+/**
+ * App-level auth: chấp nhận secret qua `Authorization: Bearer <secret>` (CLI/operator)
+ * hoặc header `X-Merge-Worker-Secret: <secret>` (Vercel Preview — Authorization bị
+ * chiếm bởi Google ID token cho Cloud Run IAM). KHÔNG weaken: secret vẫn bắt buộc
+ * khi MERGE_WORKER_SECRET được set; lớp IAM (Cloud Run) xác thực Google token trước.
+ */
+function isAuthorized(req: import("node:http").IncomingMessage): boolean {
+  if (!WORKER_SECRET) return true;
+  if (req.headers.authorization === `Bearer ${WORKER_SECRET}`) return true;
+  const alt = req.headers["x-merge-worker-secret"];
+  return typeof alt === "string" && alt === WORKER_SECRET;
+}
+
 const PORT = Number(process.env.PORT ?? 8080);
 const CONCURRENCY = Math.max(1, Number(process.env.PDF_RENDER_CONCURRENCY ?? 4));
 const WORKER_SECRET = process.env.MERGE_WORKER_SECRET ?? "";
@@ -376,12 +389,12 @@ async function readBody(req: http.IncomingMessage): Promise<Record<string, unkno
 const server = http.createServer(async (req, res) => {
   const url = new URL(req.url ?? "/", `http://${req.headers.host ?? "localhost"}`);
   try {
-    if (url.pathname === "/health") {
+    if (url.pathname === "/health" && req.method === "GET") {
       return json(res, 200, { ok: true });
     }
 
     if (url.pathname === "/run" && req.method === "POST") {
-      if (WORKER_SECRET && req.headers.authorization !== `Bearer ${WORKER_SECRET}`) {
+      if (!isAuthorized(req)) {
         return json(res, 401, { error: "unauthorized" });
       }
       const body = await readBody(req);
@@ -408,7 +421,7 @@ const server = http.createServer(async (req, res) => {
     // arbitrary từ client (chỉ nhận reference PDF để so sánh).
     // ---------------------------------------------------------------
     if (url.pathname === "/verify-visual" && req.method === "POST") {
-      if (WORKER_SECRET && req.headers.authorization !== `Bearer ${WORKER_SECRET}`) {
+      if (!isAuthorized(req)) {
         return json(res, 401, { error: "unauthorized" });
       }
       const body = await readBody(req);
@@ -455,7 +468,7 @@ const server = http.createServer(async (req, res) => {
     // Body: { counts?: number[] } — chỉ nhận [1,10,50,100] (fixed, không arbitrary).
     // ---------------------------------------------------------------
     if (url.pathname === "/benchmark" && req.method === "POST") {
-      if (WORKER_SECRET && req.headers.authorization !== `Bearer ${WORKER_SECRET}`) {
+      if (!isAuthorized(req)) {
         return json(res, 401, { error: "unauthorized" });
       }
       const body = await readBody(req);

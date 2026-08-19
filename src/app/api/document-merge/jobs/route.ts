@@ -63,7 +63,7 @@ export async function POST(request: Request) {
 
     // Enqueue: trigger Cloud Run worker (nếu engine HTML_PDF). Không chờ kết quả.
     if (result.engine === "HTML_PDF") {
-      triggerPdfWorker(result.jobId);
+      triggerPdfWorker(result.jobId, request);
     }
 
     return NextResponse.json(result, { status: 202 });

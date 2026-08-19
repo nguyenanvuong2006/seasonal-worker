@@ -113,7 +113,7 @@ export async function POST(request: Request) {
     stages.job = { pass: true, jobId, total: job.total, status: job.status };
 
     // 4. Trigger worker
-    const triggered = await callWorker<{ processed?: number; failed?: number }>("/run", { jobId }, 30_000);
+    const triggered = await callWorker<{ processed?: number; failed?: number }>("/run", { jobId }, 30_000, { request });
     stages.workerTrigger = { pass: triggered.ok, status: triggered.status, error: triggered.ok ? null : (triggered.data as { error?: string })?.error };
 
     // 5. Poll tới terminal (max 120s)

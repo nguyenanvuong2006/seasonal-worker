@@ -30,10 +30,91 @@ DOCUMENT_MERGE_ENGINE=HTML_PDF          # CHỈ Preview — Production vẫn GOO
 PDF_MERGE_WORKER_URL=https://<cloud-run-staging>.run.app   # lấy ở mục 2
 MERGE_WORKER_SECRET=<secret worker staging>
 VERIFICATION_ENABLED=true               # bật tab Verification (chỉ non-production)
+
+# Vercel OIDC → Google WIF (xem mục 1b — BẮT BUỘC để qua Cloud Run IAM):
+GOOGLE_WIF_PROJECT_NUMBER=68054464426
+GOOGLE_WIF_POOL_ID=vercel-staging
+GOOGLE_WIF_PROVIDER_ID=vercel-preview
+GOOGLE_WIF_SERVICE_ACCOUNT=seasonal-worker-merge@seasonal-worker-505710.iam.gserviceaccount.com
+# VERCEL_OIDC_TOKEN: do Vercel tự inject (bật OIDC Federation trong project settings) —
+# KHÔNG set thủ công.
 ```
 
 > ⚠️ Kiểm tra: Production env KHÔNG có `DOCUMENT_MERGE_ENGINE=HTML_PDF`, không có `VERIFICATION_ENABLED`.
 > Nếu Preview cũ đã build: push 1 commit rỗng (hoặc Redeploy) để env mới có hiệu lực.
+
+## 1b. GCP IAM — Workload Identity Federation (BẮT BUỘC, chạy 1 lần)
+
+> Làm trên máy có `gcloud` (operator). Chỉ tác động STAGING — không đụng production.
+> PROJECT_ID = `seasonal-worker-505710`, PROJECT_NUMBER = `68054464426`, REGION = `asia-southeast1`.
+
+1. **Kiểm tra provider pool đã tồn tại + xem attribute mapping** (không đoán mapping):
+
+```bash
+gcloud iam workload-identity-pools describe vercel-staging \
+  --location=global --project=seasonal-worker-505710
+gcloud iam workload-identity-pools providers describe vercel-preview \
+  --workload-identity-pool=vercel-staging --location=global \
+  --project=seasonal-worker-505710 --format="yaml(attributeMapping,attributeCondition)"
+```
+
+   Bắt buộc có `google.subject=assertion.sub`. Nếu chưa có provider, tạo:
+
+```bash
+gcloud iam workload-identity-pools providers create-oidc vercel-preview \
+  --workload-identity-pool=vercel-staging --location=global \
+  --project=seasonal-worker-505710 \
+  --issuer-uri="https://oidc.vercel.com/hrstaffing" \
+  --allowed-audiences="https://vercel.com/hrstaffing" \
+  --attribute-mapping="google.subject=assertion.sub,attribute.environment=assertion.environment,attribute.project=assertion.project,attribute.owner=assertion.owner"
+```
+
+2. **Lấy PROJECT_NAME thật của Vercel project** (claim `sub` = `owner:hrstaffing:project:<PROJECT_NAME>:environment:preview`):
+   - Cách nhanh: Vercel Dashboard → project → Settings → General → "Project Name".
+   - Cách chính xác (decode token thật từ 1 preview deployment — chạy trong GH Actions hoặc
+     `vercel logs` trên máy operator): giải mã payload JWT (`VERCEL_OIDC_TOKEN` hoặc header
+     `x-vercel-oidc-token`) → đọc `sub` và `environment`.
+
+3. **Grant principal → impersonate service account** (roles/iam.serviceAccountTokenCreator).
+   Dùng ĐÚNG 1 trong 2 dạng sau (tuỳ mapping provider ở bước 1):
+
+   a) Nếu provider có `attribute.environment` (khuyến nghị — không cần biết project name):
+
+```bash
+gcloud iam service-accounts add-iam-policy-binding \
+  seasonal-worker-merge@seasonal-worker-505710.iam.gserviceaccount.com \
+  --project=seasonal-worker-505710 \
+  --role=roles/iam.serviceAccountTokenCreator \
+  --member="principalSet://iam.googleapis.com/projects/68054464426/locations/global/workloadIdentityPools/vercel-staging/attribute.environment/preview"
+```
+
+   b) Nếu chỉ có `google.subject` (dùng principal theo `sub` claim — thay `<PROJECT_NAME>`):
+
+```bash
+gcloud iam service-accounts add-iam-policy-binding \
+  seasonal-worker-merge@seasonal-worker-505710.iam.gserviceaccount.com \
+  --project=seasonal-worker-505710 \
+  --role=roles/iam.serviceAccountTokenCreator \
+  --member="principal://iam.googleapis.com/projects/68054464426/locations/global/workloadIdentityPools/vercel-staging/subject/owner:hrstaffing:project:<PROJECT_NAME>:environment:preview"
+```
+
+4. **Grant service account → invoke Cloud Run** (service-level IAM, roles/run.invoker):
+
+```bash
+gcloud run services add-iam-policy-binding seasonal-worker-pdf-staging \
+  --region=asia-southeast1 --project=seasonal-worker-505710 \
+  --role=roles/run.invoker \
+  --member="serviceAccount:seasonal-worker-merge@seasonal-worker-505710.iam.gserviceaccount.com"
+```
+
+5. **Verify binding** (không in secret):
+
+```bash
+gcloud iam service-accounts get-iam-policy seasonal-worker-merge@seasonal-worker-505710.iam.gserviceaccount.com \
+  --project=seasonal-worker-505710 --flatten="bindings[].members" --filter="bindings.role:roles/iam.serviceAccountTokenCreator"
+gcloud run services get-iam-policy seasonal-worker-pdf-staging \
+  --region=asia-southeast1 --project=seasonal-worker-505710 --flatten="bindings[].members" --filter="bindings.role:roles/run.invoker"
+```
 
 ## 2. Lấy Cloud Run URL (browser-only)
 

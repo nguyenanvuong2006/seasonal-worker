@@ -55,7 +55,7 @@ export async function POST(request: Request) {
       renderedPdfBase64?: string;
       pass?: boolean;
       error?: string;
-    }>("/verify-visual", { referencePdfBase64 }, 180_000);
+    }>("/verify-visual", { referencePdfBase64 }, 180_000, { request });
 
     const data = result.data as {
       report?: {
