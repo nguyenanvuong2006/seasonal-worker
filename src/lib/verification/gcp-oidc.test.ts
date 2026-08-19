@@ -179,6 +179,7 @@ test("getCloudRunIdToken returns error when WIF env missing", async () => {
   delete process.env.GOOGLE_WIF_PROJECT_NUMBER;
   const result = await getCloudRunIdToken("https://worker.run.app");
   assert.ok("error" in result);
+  assert.equal(result.stage, "CONFIG");
   assert.match(result.error, /GOOGLE_WIF_/);
 });
 
@@ -187,6 +188,7 @@ test("getCloudRunIdToken returns error when OIDC token missing", async () => {
   delete process.env.VERCEL_OIDC_TOKEN;
   const result = await getCloudRunIdToken("https://worker.run.app", new Request("https://example.com"));
   assert.ok("error" in result);
+  assert.equal(result.stage, "VERCEL_OIDC");
   assert.match(result.error, /x-vercel-oidc-token/);
 });
 
@@ -198,5 +200,24 @@ test("getCloudRunIdToken returns error when STS exchange fails", async () => {
   const req = new Request("https://example.com", { headers: { "x-vercel-oidc-token": "oidc-jwt" } });
   const result = await getCloudRunIdToken("https://worker.run.app", req);
   assert.ok("error" in result);
+  assert.equal(result.stage, "STS");
   assert.match(result.error, /STS token exchange failed \(HTTP 401\)/);
+});
+
+test("getCloudRunIdToken returns error when generateIdToken fails (audience = Cloud Run base URL)", async () => {
+  setWifEnv();
+  const calls: string[] = [];
+  mockFetch({
+    "https://sts.googleapis.com/": () => jsonResponse({ access_token: "fed-access-token", expires_in: 3600 }),
+    "https://iamcredentials.googleapis.com/": () => {
+      calls.push("iam");
+      return jsonResponse({ error: { message: "Permission denied" } }, 403);
+    },
+  });
+  const req = new Request("https://example.com", { headers: { "x-vercel-oidc-token": "oidc-jwt" } });
+  const result = await getCloudRunIdToken("https://worker.run.app", req);
+  assert.ok("error" in result);
+  assert.equal(result.stage, "GENERATE_ID_TOKEN");
+  assert.match(result.error, /generateIdToken failed \(HTTP 403\)/);
+  assert.deepEqual(calls, ["iam"]);
 });

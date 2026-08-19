@@ -136,12 +136,17 @@ export function clearGcpTokenCache(): void {
   cached = null;
 }
 
-export type CloudRunTokenResult = { idToken: string } | { error: string };
+/** Giai đoạn thất bại trong flow Vercel OIDC → STS → generateIdToken (dùng để chẩn đoán). */
+export type CloudRunTokenStage = "CONFIG" | "VERCEL_OIDC" | "STS" | "GENERATE_ID_TOKEN";
+
+export type CloudRunTokenResult = { idToken: string } | { error: string; stage: CloudRunTokenStage };
 
 /**
  * Lấy Google ID token (aud = Cloud Run URL) cho Vercel Preview.
- * Trả {error} nếu thiếu config/token hoặc exchange thất bại — KHÔNG fallback
- * về app secret (Cloud Run IAM sẽ từ chối token không phải Google).
+ * Trả {error, stage} nếu thiếu config/token hoặc exchange thất bại — KHÔNG fallback
+ * về app secret (Cloud Run IAM sẽ từ chối token không phải Google). `stage` cho biết
+ * chính xác bước nào thất bại (CONFIG/VERCEL_OIDC/STS/GENERATE_ID_TOKEN) để verification
+ * UI hiển thị chẩn đoán rõ ràng — không đoán mò "IAM sai" khi thực ra là bước khác.
  */
 export async function getCloudRunIdToken(
   workerUrl: string,
@@ -151,23 +156,30 @@ export async function getCloudRunIdToken(
   if (!cfg) {
     return {
       error: "GOOGLE_WIF_* chưa cấu hình (GOOGLE_WIF_PROJECT_NUMBER/POOL_ID/PROVIDER_ID/SERVICE_ACCOUNT).",
+      stage: "CONFIG",
     };
   }
   const oidcToken = getOidcTokenFromRequest(request);
   if (!oidcToken) {
     return {
       error: "Thiếu Vercel OIDC token (header x-vercel-oidc-token). Bật OIDC Federation trong Vercel project settings.",
+      stage: "VERCEL_OIDC",
     };
   }
   if (cached && cached.audience === workerUrl && cached.expiresAt > Date.now()) {
     return { idToken: cached.idToken };
   }
+  let accessToken: string;
   try {
-    const { accessToken } = await exchangeFederatedAccessToken(oidcToken, cfg);
+    ({ accessToken } = await exchangeFederatedAccessToken(oidcToken, cfg));
+  } catch (error) {
+    return { error: error instanceof Error ? error.message : String(error), stage: "STS" };
+  }
+  try {
     const { idToken } = await generateCloudRunIdToken(accessToken, cfg.serviceAccount, workerUrl);
     cached = { audience: workerUrl, idToken, expiresAt: Date.now() + TOKEN_CACHE_TTL_MS };
     return { idToken };
   } catch (error) {
-    return { error: error instanceof Error ? error.message : String(error) };
+    return { error: error instanceof Error ? error.message : String(error), stage: "GENERATE_ID_TOKEN" };
   }
 }

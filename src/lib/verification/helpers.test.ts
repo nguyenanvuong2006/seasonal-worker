@@ -1,7 +1,13 @@
 import assert from "node:assert/strict";
 import { afterEach, test } from "node:test";
 
-import { callWorker } from "./helpers.ts";
+import {
+  callWorker,
+  isVerificationEnabled,
+  diagnoseWorkerUrl,
+  checkVerificationConfigPresence,
+  EXPECTED_STAGING_WORKER_HOSTNAME,
+} from "./helpers.ts";
 import { clearGcpTokenCache } from "./gcp-oidc.ts";
 
 const originalFetch = globalThis.fetch;
@@ -215,7 +221,32 @@ test("callWorker returns 502 with STS error when WIF exchange fails", async () =
 
   assert.equal(result.ok, false);
   assert.equal(result.status, 502);
+  assert.equal(result.stage, "STS");
   assert.match((result.data as { error?: string }).error ?? "", /STS token exchange failed/);
+});
+
+test("callWorker returns GENERATE_ID_TOKEN stage when iamcredentials.generateIdToken fails", async () => {
+  process.env.PDF_MERGE_WORKER_URL = "https://worker.example";
+  process.env.MERGE_WORKER_SECRET = "secret";
+  setWifEnv();
+  globalThis.fetch = (async (input: string | URL | Request) => {
+    const url = String(input);
+    if (url.startsWith("https://sts.googleapis.com/")) {
+      return new Response(JSON.stringify({ access_token: "fed", expires_in: 3600 }), { status: 200 });
+    }
+    if (url.startsWith("https://iamcredentials.googleapis.com/")) {
+      return new Response(JSON.stringify({ error: { message: "Permission denied" } }), { status: 403 });
+    }
+    throw new Error("Unexpected fetch");
+  }) as typeof fetch;
+
+  const req = new Request("https://app.example", { headers: { "x-vercel-oidc-token": "oidc-jwt" } });
+  const result = await callWorker("/health", undefined, 10_000, { request: req });
+
+  assert.equal(result.ok, false);
+  assert.equal(result.status, 502);
+  assert.equal(result.stage, "GENERATE_ID_TOKEN");
+  assert.match((result.data as { error?: string }).error ?? "", /generateIdToken failed/);
 });
 
 test("callWorker returns 503 without calling fetch when URL is missing", async () => {
@@ -231,4 +262,146 @@ test("callWorker returns 503 without calling fetch when URL is missing", async (
   assert.equal(called, false);
   assert.equal(result.ok, false);
   assert.equal(result.status, 503);
+  assert.equal(result.stage, "CONFIG");
+});
+
+// ---------------------------------------------------------------
+// isVerificationEnabled — regression tests for the "disappearing
+// Verification tab" bug class: Vercel Preview always runs with
+// NODE_ENV=production, so gating on NODE_ENV alone (or treating a missing
+// VERCEL_ENV as "assume production") would wrongly disable Verification on
+// Preview. VERCEL_ENV must be checked first/authoritatively.
+// ---------------------------------------------------------------
+
+test("isVerificationEnabled: enabled on Preview even though NODE_ENV=production (Vercel always builds with NODE_ENV=production)", () => {
+  assert.equal(
+    isVerificationEnabled({ VERIFICATION_ENABLED: "true", VERCEL_ENV: "preview", NODE_ENV: "production" }),
+    true,
+  );
+});
+
+test("isVerificationEnabled: disabled when VERCEL_ENV=production regardless of the flag", () => {
+  assert.equal(
+    isVerificationEnabled({ VERIFICATION_ENABLED: "true", VERCEL_ENV: "production" }),
+    false,
+  );
+});
+
+test("isVerificationEnabled: disabled when the flag itself is false", () => {
+  assert.equal(
+    isVerificationEnabled({ VERIFICATION_ENABLED: "false", VERCEL_ENV: "preview" }),
+    false,
+  );
+});
+
+test("isVerificationEnabled: fails closed outside Vercel (no VERCEL_ENV) when NODE_ENV=production", () => {
+  assert.equal(
+    isVerificationEnabled({ VERIFICATION_ENABLED: "true", NODE_ENV: "production" }),
+    false,
+  );
+});
+
+test("isVerificationEnabled: enabled locally (no VERCEL_ENV, NODE_ENV=development)", () => {
+  assert.equal(
+    isVerificationEnabled({ VERIFICATION_ENABLED: "true", NODE_ENV: "development" }),
+    true,
+  );
+});
+
+// ---------------------------------------------------------------
+// diagnoseWorkerUrl — Cloud Run base URL normalization/validation.
+// ---------------------------------------------------------------
+
+test("diagnoseWorkerUrl: reports not configured when PDF_MERGE_WORKER_URL is empty", () => {
+  const diag = diagnoseWorkerUrl("");
+  assert.equal(diag.configured, false);
+  assert.match(diag.error ?? "", /chưa cấu hình/);
+});
+
+test("diagnoseWorkerUrl: accepts the expected staging base URL with no path", () => {
+  const diag = diagnoseWorkerUrl(`https://${EXPECTED_STAGING_WORKER_HOSTNAME}`);
+  assert.equal(diag.workerHost, EXPECTED_STAGING_WORKER_HOSTNAME);
+  assert.equal(diag.workerPath, "");
+  assert.equal(diag.hostnameMatchesExpectedStaging, true);
+  assert.equal(diag.error, null);
+});
+
+test("diagnoseWorkerUrl: strips only a trailing slash — bare root is not treated as an extra path", () => {
+  const diag = diagnoseWorkerUrl(`https://${EXPECTED_STAGING_WORKER_HOSTNAME}/`);
+  assert.equal(diag.workerPath, "");
+  assert.equal(diag.error, null);
+});
+
+test("diagnoseWorkerUrl: flags CONFIG error when /health was mistakenly appended to the env var", () => {
+  const diag = diagnoseWorkerUrl(`https://${EXPECTED_STAGING_WORKER_HOSTNAME}/health`);
+  assert.equal(diag.workerPath, "/health");
+  assert.match(diag.error ?? "", /base URL/);
+});
+
+test("diagnoseWorkerUrl: flags CONFIG error when hostname does not match the expected staging service", () => {
+  const diag = diagnoseWorkerUrl("https://some-other-service-12345.asia-southeast1.run.app");
+  assert.equal(diag.hostnameMatchesExpectedStaging, false);
+  assert.equal(diag.error, "PDF_MERGE_WORKER_URL does not point to the expected staging Cloud Run service");
+});
+
+test("checkVerificationConfigPresence: reports booleans only, never values", () => {
+  const presence = checkVerificationConfigPresence({
+    PDF_MERGE_WORKER_URL: "https://worker.example",
+    MERGE_WORKER_SECRET: "super-secret-value",
+    VERIFICATION_ENABLED: "true",
+  });
+  assert.equal(presence.PDF_MERGE_WORKER_URL, true);
+  assert.equal(presence.MERGE_WORKER_SECRET, true);
+  assert.equal(presence.GOOGLE_WIF_PROJECT_NUMBER, false);
+  assert.equal(JSON.stringify(presence).includes("super-secret-value"), false);
+});
+
+// ---------------------------------------------------------------
+// callWorker — stage classification for Cloud Run responses.
+// ---------------------------------------------------------------
+
+test("callWorker: HTTP 404 from Cloud Run is reported as stage CLOUD_RUN with safe diagnostics", async () => {
+  process.env.PDF_MERGE_WORKER_URL = "https://worker.example";
+  globalThis.fetch = (async () => new Response(JSON.stringify({}), { status: 404 })) as typeof fetch;
+
+  const result = await callWorker("/health");
+
+  assert.equal(result.ok, false);
+  assert.equal(result.status, 404);
+  assert.equal(result.stage, "CLOUD_RUN");
+});
+
+test("callWorker: HTTP 403 from Cloud Run IAM is reported as stage WORKER_AUTH", async () => {
+  process.env.PDF_MERGE_WORKER_URL = "https://worker.example";
+  globalThis.fetch = (async () => new Response(JSON.stringify({}), { status: 403 })) as typeof fetch;
+
+  const result = await callWorker("/health");
+
+  assert.equal(result.ok, false);
+  assert.equal(result.status, 403);
+  assert.equal(result.stage, "WORKER_AUTH");
+});
+
+test("callWorker: worker-level 500 is reported as stage WORKER_RESPONSE (not CLOUD_RUN)", async () => {
+  process.env.PDF_MERGE_WORKER_URL = "https://worker.example";
+  globalThis.fetch = (async () => new Response(JSON.stringify({ error: "render failed" }), { status: 500 })) as typeof fetch;
+
+  const result = await callWorker("/health");
+
+  assert.equal(result.ok, false);
+  assert.equal(result.stage, "WORKER_RESPONSE");
+});
+
+test("callWorker: rejects a URL with a path baked in as CONFIG (never sends the malformed request)", async () => {
+  process.env.PDF_MERGE_WORKER_URL = `https://${EXPECTED_STAGING_WORKER_HOSTNAME}/health`;
+  let called = false;
+  globalThis.fetch = (async () => {
+    called = true;
+    return new Response();
+  }) as typeof fetch;
+
+  const result = await callWorker("/health");
+
+  assert.equal(called, false);
+  assert.equal(result.stage, "CONFIG");
 });
