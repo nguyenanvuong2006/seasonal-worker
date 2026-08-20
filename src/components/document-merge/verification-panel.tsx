@@ -19,6 +19,7 @@ import {
   Database,
   FileUp,
   Gauge,
+  ListChecks,
   Loader2,
   Play,
   Server,
@@ -130,10 +131,15 @@ export function VerificationPanel() {
     }
   };
 
-  const requiredGates = ["DATABASE", "CLOUD_RUN", "GOOGLE_DRIVE", "1_RECORD", "10_RECORD", "VISUAL", "BENCHMARK"];
+  const requiredGates = ["DATABASE", "CLOUD_RUN", "GOOGLE_DRIVE", "QUEUE", "1_RECORD", "10_RECORD", "VISUAL", "BENCHMARK"];
   const productionReady =
     gates.length >= requiredGates.length &&
     requiredGates.every((k) => gates.find((g) => g.key === k)?.status === "pass");
+  // 1-record E2E chỉ mở khoá sau khi Queue gate PASS — Queue gate chứng minh
+  // (không đoán) job/item seed ở Vercel THẬT SỰ claim được ở Cloud Run worker
+  // (cùng database + claimItems() thật) TRƯỚC KHI chạy job thật (tránh lặp
+  // lại CLAIM_STALLED vô nghĩa nếu hạ tầng chưa sẵn sàng).
+  const queuePassed = gates.find((g) => g.key === "QUEUE")?.status === "pass";
 
   if (enabled === false) {
     return (
@@ -148,10 +154,18 @@ export function VerificationPanel() {
     return <div className="rounded-2xl border border-slate-200 bg-white p-6 text-sm text-slate-500">Đang kiểm tra trạng thái verification...</div>;
   }
 
-  const btn = (key: string, label: string, icon: React.ReactNode, url: string, init?: RequestInit) => (
+  const btn = (
+    key: string,
+    label: string,
+    icon: React.ReactNode,
+    url: string,
+    init?: RequestInit,
+    extraDisabled?: { disabled: boolean; title: string },
+  ) => (
     <button
       key={key}
-      disabled={busy !== null}
+      disabled={busy !== null || Boolean(extraDisabled?.disabled)}
+      title={extraDisabled?.disabled ? extraDisabled.title : undefined}
       onClick={() => void runAction(key, label, url, init)}
       className="inline-flex items-center gap-2 rounded-lg border border-slate-200 bg-white px-3.5 py-2 text-xs font-semibold text-slate-700 shadow-sm hover:bg-slate-50 disabled:opacity-50"
     >
@@ -181,6 +195,7 @@ export function VerificationPanel() {
             ["DATABASE", "Database"],
             ["CLOUD_RUN", "Cloud Run"],
             ["GOOGLE_DRIVE", "Google Drive"],
+            ["QUEUE", "Queue"],
             ["1_RECORD", "1-record E2E"],
             ["10_RECORD", "10-record E2E"],
             ["VISUAL", "Visual"],
@@ -214,11 +229,19 @@ export function VerificationPanel() {
           {btn("DATABASE", "Check Database", <Database className="h-4 w-4" />, "/api/document-merge/verification/check-db")}
           {btn("CLOUD_RUN", "Check Worker", <Server className="h-4 w-4" />, "/api/document-merge/verification/check-worker")}
           {btn("GOOGLE_DRIVE", "Check Google Drive", <ShieldCheck className="h-4 w-4" />, "/api/document-merge/verification/check-drive")}
-          {btn("1_RECORD", "Run 1-record Test", <Play className="h-4 w-4" />, "/api/document-merge/verification/run-test", {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ records: 1 }),
-          })}
+          {btn("QUEUE", "Check Queue", <ListChecks className="h-4 w-4" />, "/api/document-merge/verification/check-queue")}
+          {btn(
+            "1_RECORD",
+            "Run 1-record Test",
+            <Play className="h-4 w-4" />,
+            "/api/document-merge/verification/run-test",
+            {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({ records: 1 }),
+            },
+            { disabled: !queuePassed, title: "Chạy Check Queue và đạt PASS trước." },
+          )}
           {btn("10_RECORD", "Run 10-record Test", <Play className="h-4 w-4" />, "/api/document-merge/verification/run-test", {
             method: "POST",
             headers: { "Content-Type": "application/json" },

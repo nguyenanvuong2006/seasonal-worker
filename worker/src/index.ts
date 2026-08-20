@@ -57,6 +57,8 @@ import { loadDailyApplicationRecords } from "../../src/lib/document-merge/record
 import { db } from "../../src/db";
 import { mergeJobs, mergeTemplateVersions } from "../../src/db/schema";
 import { eq } from "drizzle-orm";
+import { getDbIdentity } from "../../src/lib/document-merge/db-identity.ts";
+import { runClaimProbe } from "../../src/lib/document-merge/queue-diagnostics.ts";
 
 /**
  * App-level auth — LỚP RIÊNG, độc lập với Cloud Run IAM (IAM verify Google ID
@@ -519,6 +521,29 @@ const server = http.createServer(async (req, res) => {
   try {
     if (url.pathname === "/health" && req.method === "GET") {
       return json(res, 200, { ok: true });
+    }
+
+    // ---------------------------------------------------------------
+    // GET /diag/db-identity, POST /diag/claim-probe — STAGING-ONLY diagnostics
+    // (CLAIM_STALLED root-cause investigation). Yêu cầu app-level auth như
+    // /run — không public. Xem src/lib/document-merge/db-identity.ts +
+    // queue-diagnostics.ts để biết chi tiết an toàn (không expose secret) và
+    // cách phân biệt các ranh giới lỗi claim.
+    // ---------------------------------------------------------------
+    if (url.pathname === "/diag/db-identity" && req.method === "GET") {
+      if (!isAuthorized(req)) {
+        return json(res, 401, { error: "unauthorized" });
+      }
+      const identity = await getDbIdentity(db);
+      return json(res, 200, identity);
+    }
+
+    if (url.pathname === "/diag/claim-probe" && req.method === "POST") {
+      if (!isAuthorized(req)) {
+        return json(res, 401, { error: "unauthorized" });
+      }
+      const report = await runClaimProbe(db);
+      return json(res, 200, report);
     }
 
     if (url.pathname === "/run" && req.method === "POST") {

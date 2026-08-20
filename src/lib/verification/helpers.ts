@@ -118,14 +118,22 @@ export function checkVerificationConfigPresence(
   return result;
 }
 
-export type WorkerEndpoint = "/health" | "/run" | "/verify-visual" | "/benchmark";
+export type WorkerEndpoint =
+  | "/health"
+  | "/run"
+  | "/verify-visual"
+  | "/benchmark"
+  | "/diag/db-identity"
+  | "/diag/claim-probe";
 
-/** Contract endpoint → HTTP method (worker: GET /health, POST còn lại). */
+/** Contract endpoint → HTTP method (worker: GET /health + /diag/db-identity, POST còn lại). */
 const WORKER_METHODS: Record<WorkerEndpoint, "GET" | "POST"> = {
   "/health": "GET",
   "/run": "POST",
   "/verify-visual": "POST",
   "/benchmark": "POST",
+  "/diag/db-identity": "GET",
+  "/diag/claim-probe": "POST",
 };
 
 export interface CallWorkerOptions {
