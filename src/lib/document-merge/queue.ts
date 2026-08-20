@@ -4,20 +4,31 @@
  * Giai đoạn đầu KHÔNG cần Redis: dùng Neon làm durable queue state.
  *
  * Safe claim:
- *   SELECT … FOR UPDATE SKIP LOCKED trong 1 transaction → đảm bảo:
+ *   1 câu UPDATE...FROM (CTE SELECT ... FOR UPDATE SKIP LOCKED) duy nhất,
+ *   atomic ở phía Postgres → đảm bảo:
  *   - 2 worker KHÔNG render cùng 1 candidate;
  *   - không duplicate PDF;
  *   - không lost job (item có lease + watchdog reclaim khi worker crash).
+ *   Trước đây dùng client.query("BEGIN"/"COMMIT") thủ công qua `pool.connect()`
+ *   riêng — multi-statement explicit transaction trên 1 connection checked-out
+ *   từ pool phía app KHÔNG đảm bảo an toàn nếu DATABASE_URL trỏ vào endpoint
+ *   pooled (PgBouncer transaction-pooling) của Neon: statement sau có thể bị
+ *   route sang backend session khác, phá vỡ lock/visibility của FOR UPDATE
+ *   ngay giữa transaction — biểu hiện đúng như quan sát thực tế: SELECT ...
+ *   FOR UPDATE SKIP LOCKED không claim được 1 row QUEUED hợp lệ, lặp lại dù
+ *   retry. 1 câu SQL duy nhất không có vấn đề này (đúng 1 implicit transaction,
+ *   PgBouncer transaction-mode hỗ trợ hoàn toàn) — dùng `db.execute()` chung
+ *   (drizzle) thay vì tự quản lý connection/transaction thủ công.
  *
  * Retry: attempt_count + max attempts (mặc định 3) + exponential backoff.
  *
- * LƯU Ý: module này chỉ import @/db (pool) + @/db/schema + queue-types — KHÔNG
+ * LƯU Ý: module này chỉ import @/db + @/db/schema + queue-types — KHÔNG
  * import server-only / auth — để Cloud Run worker (plain Node) import được.
  */
 
 import { sql } from "drizzle-orm";
 import { and, eq, inArray } from "drizzle-orm";
-import { db, pool } from "../../db";
+import { db } from "../../db";
 import { mergeJobRecords, mergeJobs } from "../../db/schema";
 import {
   DEFAULT_MAX_ATTEMPTS,
@@ -71,47 +82,33 @@ function toQueueItem(row: RawItemRow): QueueItem {
 /**
  * Claim tối đa `limit` items của 1 job theo đúng sequence (sort_order).
  * Chỉ claim item QUEUED/RETRY đã hết hạn lease và đã tới giờ retry.
- * Dùng FOR UPDATE SKIP LOCKED để nhiều worker chạy song song an toàn.
+ * 1 câu SQL duy nhất (CTE SELECT ... FOR UPDATE SKIP LOCKED → UPDATE ...
+ * FROM ... RETURNING) — atomic, không cần BEGIN/COMMIT thủ công (xem lý do
+ * ở đầu file — an toàn cả khi DATABASE_URL trỏ vào endpoint pooled).
  */
 export async function claimItems(jobId: string, limit = 1): Promise<QueueItem[]> {
-  const client = await pool.connect();
-  try {
-    await client.query("BEGIN");
-
-    const result = await client.query<RawItemRow>(
-      `SELECT id, merge_job_id, source_entity, source_record_id, template_id, sort_order, status, attempt_count
-         FROM merge_job_records
-        WHERE merge_job_id = $1
-          AND status IN ('QUEUED','RETRY')
-          AND (leased_until IS NULL OR leased_until < now())
-          AND (retry_at IS NULL OR retry_at <= now())
-        ORDER BY sort_order ASC
-        FOR UPDATE SKIP LOCKED
-        LIMIT $2`,
-      [jobId, limit],
-    );
-
-    const ids = result.rows.map((row) => row.id);
-    if (ids.length > 0) {
-      await client.query(
-        `UPDATE merge_job_records
-            SET status = 'PROCESSING',
-                attempt_count = attempt_count + 1,
-                leased_until = now() + ($2 || ' seconds')::interval,
-                started_at = COALESCE(started_at, now())
-          WHERE id = ANY($1::uuid[])`,
-        [ids, String(ITEM_LEASE_SECONDS)],
-      );
-    }
-
-    await client.query("COMMIT");
-    return result.rows.map((row) => toQueueItem({ ...row, status: "PROCESSING", attempt_count: row.attempt_count + 1 }));
-  } catch (error) {
-    await client.query("ROLLBACK");
-    throw error;
-  } finally {
-    client.release();
-  }
+  const result = await db.execute<RawItemRow>(sql`
+    WITH claimable AS (
+      SELECT id
+        FROM merge_job_records
+       WHERE merge_job_id = ${jobId}
+         AND status IN ('QUEUED', 'RETRY')
+         AND (leased_until IS NULL OR leased_until < now())
+         AND (retry_at IS NULL OR retry_at <= now())
+       ORDER BY sort_order ASC
+       FOR UPDATE SKIP LOCKED
+       LIMIT ${limit}
+    )
+    UPDATE merge_job_records m
+       SET status = 'PROCESSING',
+           attempt_count = m.attempt_count + 1,
+           leased_until = now() + (${String(ITEM_LEASE_SECONDS)} || ' seconds')::interval,
+           started_at = COALESCE(m.started_at, now())
+      FROM claimable
+     WHERE m.id = claimable.id
+    RETURNING m.id, m.merge_job_id, m.source_entity, m.source_record_id, m.template_id, m.sort_order, m.status, m.attempt_count
+  `);
+  return (result.rows as unknown as RawItemRow[]).map(toQueueItem);
 }
 
 /**
@@ -211,6 +208,38 @@ export async function failItem(
     .where(eq(mergeJobRecords.id, itemId));
 
   return finalStatus;
+}
+
+/**
+ * Đánh dấu TẤT CẢ item chưa terminal của 1 job là FAILED trực tiếp (bỏ qua
+ * retry — job-level đã fail, không còn worker nào sẽ quay lại xử lý các item
+ * này). Dùng khi job phải FAILED vì lỗi job-level (vd CLAIM_STALLED,
+ * RUN_JOB_CRASHED) XẢY RA TRƯỚC khi item được xử lý — nếu không, job ở trạng
+ * thái terminal FAILED nhưng item vẫn "QUEUED/RETRY mãi mãi" là trạng thái mơ
+ * hồ (completed=0, failed=0 — không ai biết vì sao). Trả về số item đã đánh dấu.
+ */
+export async function failAllNonTerminalItems(
+  jobId: string,
+  info: { errorCode: string; errorMessage: string },
+): Promise<number> {
+  const result = await db
+    .update(mergeJobRecords)
+    .set({
+      status: ITEM_STATUS.FAILED,
+      errorCode: info.errorCode,
+      errorMessage: info.errorMessage,
+      leasedUntil: null,
+      retryAt: null,
+      completedAt: new Date(),
+    })
+    .where(
+      and(
+        eq(mergeJobRecords.mergeJobId, jobId),
+        inArray(mergeJobRecords.status, [ITEM_STATUS.QUEUED, ITEM_STATUS.RETRY, ITEM_STATUS.PROCESSING]),
+      ),
+    )
+    .returning({ id: mergeJobRecords.id });
+  return result.length;
 }
 
 /**

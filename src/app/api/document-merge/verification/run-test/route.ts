@@ -163,29 +163,51 @@ export async function POST(request: Request) {
       .where(eq(mergeJobRecords.mergeJobId, jobId))
       .orderBy(mergeJobRecords.sortOrder);
 
+    // Chẩn đoán thật — luôn tính, dùng bất kể poll timeout hay job kết thúc
+    // (FAILED) rất nhanh. "Job FAILED" trước đây chỉ lộ chẩn đoán này khi
+    // timeout — 1 job fail nhanh (vd CLAIM_STALLED) lại rơi vào nhánh
+    // reachedTerminal=true và bị che sau {pass:true, status:"FAILED"} không
+    // ai nhìn thấy error_summary/lastStage/item thật. Sửa: lộ rõ trong CẢ 2
+    // trường hợp không COMPLETED.
+    const lastWorkerStage = (jobState?.metadata as { lastStage?: unknown } | null | undefined)?.lastStage ?? null;
+    const itemStatuses = items.map((i) => ({
+      id: i.id,
+      status: i.status,
+      attemptCount: i.attemptCount,
+      errorCode: i.errorCode ?? null,
+      errorMessage: i.errorMessage ? i.errorMessage.slice(0, 200) : null,
+    }));
+
     if (!reachedTerminal) {
-      // Timeout khi vẫn PROCESSING/QUEUED — trả chẩn đoán thật (stage worker
-      // cuối cùng, trạng thái từng item, lỗi an toàn) thay vì chỉ "chờ 120s
-      // rồi báo lỗi mơ hồ".
-      const lastWorkerStage = (jobState?.metadata as { lastStage?: unknown } | null | undefined)?.lastStage ?? null;
+      // Timeout khi vẫn PROCESSING/QUEUED.
       stages.poll = {
         pass: false,
         querySucceeded: true,
         timedOut: true,
         jobStatus: jobState?.status ?? null,
+        jobErrorSummary: jobState?.errorSummary ?? null,
         progressPercent: jobState?.progressPercent ?? null,
         lastWorkerStage,
-        itemStatuses: items.map((i) => ({
-          id: i.id,
-          status: i.status,
-          attemptCount: i.attemptCount,
-          errorCode: i.errorCode ?? null,
-          errorMessage: i.errorMessage ? i.errorMessage.slice(0, 200) : null,
-        })),
+        itemStatuses,
         error: `Job không tới terminal sau 120s (trạng thái hiện tại: ${jobState?.status ?? "UNKNOWN"}, ${jobState?.progressPercent ?? 0}%).`,
       };
+    } else if (jobState?.status !== "COMPLETED") {
+      // Đạt terminal nhanh nhưng KHÔNG COMPLETED (vd FAILED do CLAIM_STALLED/
+      // RUN_JOB_CRASHED trước khi item được xử lý) — polling "thành công" về
+      // mặt kỹ thuật (phát hiện đúng trạng thái) nhưng KHÔNG được coi là pass;
+      // phải lộ rõ error_summary/lastStage/item thay vì im lặng che sau status.
+      stages.poll = {
+        pass: false,
+        querySucceeded: true,
+        jobStatus: jobState?.status ?? null,
+        jobErrorSummary: jobState?.errorSummary ?? null,
+        progressPercent: jobState?.progressPercent ?? null,
+        lastWorkerStage,
+        itemStatuses,
+        error: jobState?.errorSummary ?? `Job kết thúc với trạng thái ${jobState?.status ?? "UNKNOWN"} (không phải COMPLETED).`,
+      };
     } else {
-      stages.poll = { pass: true, querySucceeded: true, status: jobState?.status ?? null, progressPercent: jobState?.progressPercent ?? null };
+      stages.poll = { pass: true, querySucceeded: true, status: jobState.status, progressPercent: jobState.progressPercent };
     }
 
     const completed = items.filter((i) => i.status === "COMPLETED");

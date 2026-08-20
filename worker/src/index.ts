@@ -35,6 +35,7 @@ import type { MergeTemplateField } from "../../src/db/schema";
 import {
   claimItems,
   completeItem,
+  failAllNonTerminalItems,
   failItem,
   finalizeJob,
   hasPendingItems,
@@ -394,13 +395,16 @@ async function runJob(jobId: string): Promise<{ processed: number; failed: numbe
         if (items.length === 0) {
           // Vẫn còn item QUEUED/RETRY nhưng claimItems() không claim được sau
           // nhiều lần thử — đây là lỗi thật (không phải "hết việc"). KHÔNG để
-          // job kẹt PROCESSING mãi mãi — fail rõ ràng kèm chẩn đoán.
+          // job kẹt PROCESSING mãi mãi — fail rõ ràng kèm chẩn đoán, VÀ đánh
+          // dấu item liên quan FAILED (không để lại "job FAILED nhưng item
+          // vẫn QUEUED mãi mãi" — trạng thái mơ hồ 0 completed/0 failed).
+          const errorMessage = `CLAIM_STALLED: còn ${check.queued} item QUEUED/RETRY nhưng claimItems() không claim được sau ${attempt} lần thử.`;
           await stage(jobId, "", "JOB_CLAIMED", Date.now(), false, "CLAIM_STALLED");
-          await finalizeJob(jobId, "FAILED", {
-            errorSummary: `CLAIM_STALLED: còn ${check.queued} item QUEUED/RETRY nhưng claimItems() không claim được sau ${attempt} lần thử.`,
-          });
-          console.log(JSON.stringify({ event: "pdf_worker_claim_stalled", jobId, queuedRemaining: check.queued, attempts: attempt }));
-          return { processed, failed };
+          const failedItemCount = await failAllNonTerminalItems(jobId, { errorCode: "CLAIM_STALLED", errorMessage });
+          await recomputeJobProgress(jobId);
+          await finalizeJob(jobId, "FAILED", { errorSummary: errorMessage });
+          console.log(JSON.stringify({ event: "pdf_worker_claim_stalled", jobId, queuedRemaining: check.queued, attempts: attempt, itemsMarkedFailed: failedItemCount }));
+          return { processed, failed: failed + failedItemCount };
         }
       }
 
@@ -427,10 +431,15 @@ async function runJob(jobId: string): Promise<{ processed: number; failed: numbe
     }
   } catch (error) {
     // Bất kỳ lỗi nào ngoài per-item try/catch (claimItems/recomputeJobProgress/
-    // DB tạm gián đoạn...) — job KHÔNG được để lại ở PROCESSING. Fail rõ ràng
-    // rồi re-throw để caller (/run) vẫn thấy lỗi qua HTTP 500.
+    // DB tạm gián đoạn...) — job KHÔNG được để lại ở PROCESSING, và item liên
+    // quan cũng KHÔNG được để lại QUEUED/RETRY mãi mãi (không ai còn quay lại
+    // xử lý). Fail rõ ràng cả job lẫn item rồi re-throw để caller (/run) vẫn
+    // thấy lỗi qua HTTP 500.
     const message = error instanceof Error ? error.message : String(error);
-    await finalizeJob(jobId, "FAILED", { errorSummary: `RUN_JOB_CRASHED: ${message.slice(0, 500)}` }).catch(() => undefined);
+    const errorSummary = `RUN_JOB_CRASHED: ${message.slice(0, 500)}`;
+    await failAllNonTerminalItems(jobId, { errorCode: "RUN_JOB_CRASHED", errorMessage: errorSummary }).catch(() => undefined);
+    await recomputeJobProgress(jobId).catch(() => undefined);
+    await finalizeJob(jobId, "FAILED", { errorSummary }).catch(() => undefined);
     console.log(JSON.stringify({ event: "pdf_worker_run_crashed", jobId, error: message.slice(0, 300) }));
     throw error;
   }

@@ -285,3 +285,70 @@ test("run-test: history.pass=false khi completed=0 và history=0 (KHÔNG vacuous
   assert.equal(stages.history.pass, false, "0 completed + 0 history không được coi là PASS");
   assert.equal(res.body.pass, false);
 });
+
+test("run-test: job FAILED nhanh (vd CLAIM_STALLED) + KHÔNG item nào terminal -> poll phải lộ rõ jobErrorSummary/lastWorkerStage/itemStatuses (KHÔNG bị che sau reachedTerminal=true)", async () => {
+  // Đúng kịch bản thực tế đã báo cáo: workerTrigger 200, job đạt FAILED rất
+  // nhanh (không timeout), items completed=0 failed=0 retries=0, history=0.
+  const db = seedDb((call) => {
+    if (call.root === "select" && call.table === "merge_jobs") {
+      return [
+        {
+          id: "job-1",
+          status: "FAILED",
+          progressPercent: 0,
+          outputPdfUrl: null,
+          outputZipUrl: null,
+          batchExpiresAt: null,
+          errorSummary: "CLAIM_STALLED: còn 1 item QUEUED/RETRY nhưng claimItems() không claim được sau 3 lần thử.",
+          metadata: { lastStage: { stage: "JOB_CLAIMED", ok: false, errorCode: "CLAIM_STALLED", durationMs: 1800 } },
+        },
+      ];
+    }
+    if (call.root === "select" && call.table === "merge_job_records") {
+      return [
+        {
+          id: "r1",
+          status: "FAILED",
+          attemptCount: 0,
+          errorCode: "CLAIM_STALLED",
+          errorMessage: "CLAIM_STALLED: còn 1 item QUEUED/RETRY nhưng claimItems() không claim được sau 3 lần thử.",
+          sha256: null,
+          storageKey: null,
+          documentHistoryId: null,
+          startedAt: null,
+          completedAt: new Date(),
+        },
+      ];
+    }
+    if (call.root === "select" && call.table === "document_history") return [];
+    return undefined;
+  });
+  const { POST, setTimeoutCalls } = makeContext({
+    db,
+    callWorkerImpl: async () => ({ ok: true, status: 200, data: { processed: 0 } }),
+  });
+
+  const res = await POST(new Request("https://app.example/api/document-merge/verification/run-test", {
+    method: "POST",
+    body: JSON.stringify({ records: 1 }),
+  }));
+
+  const stages = res.body.stages as Record<
+    string,
+    { pass: boolean; jobStatus?: string; jobErrorSummary?: string; lastWorkerStage?: { stage: string; errorCode?: string }; itemStatuses?: { status: string; errorCode?: string | null }[]; error?: string }
+  >;
+
+  // Poll phải dừng NGAY khi thấy terminal (không chạy hết 60 lần như timeout).
+  assert.equal(setTimeoutCalls.length, 1, "job đạt terminal ngay ở lần poll đầu — không cần poll thêm");
+
+  assert.equal(stages.poll.pass, false, "job FAILED không được coi là poll PASS");
+  assert.equal(stages.poll.jobStatus, "FAILED");
+  assert.match(String(stages.poll.jobErrorSummary), /CLAIM_STALLED/, "error_summary thật của job phải lộ ra, không bị che");
+  assert.equal(stages.poll.lastWorkerStage?.stage, "JOB_CLAIMED");
+  assert.equal(stages.poll.lastWorkerStage?.errorCode, "CLAIM_STALLED");
+  assert.equal(stages.poll.itemStatuses?.[0]?.status, "FAILED");
+  assert.equal(stages.poll.itemStatuses?.[0]?.errorCode, "CLAIM_STALLED");
+  assert.match(String(stages.poll.error), /CLAIM_STALLED/);
+
+  assert.equal(res.body.pass, false);
+});
