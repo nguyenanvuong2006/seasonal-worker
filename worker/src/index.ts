@@ -58,7 +58,7 @@ import { db } from "../../src/db";
 import { mergeJobs, mergeTemplateVersions } from "../../src/db/schema";
 import { eq } from "drizzle-orm";
 import { getDbIdentity } from "../../src/lib/document-merge/db-identity.ts";
-import { runClaimProbe } from "../../src/lib/document-merge/queue-diagnostics.ts";
+import { runClaimProbe, claimExistingJobItem } from "../../src/lib/document-merge/queue-diagnostics.ts";
 
 /**
  * App-level auth — LỚP RIÊNG, độc lập với Cloud Run IAM (IAM verify Google ID
@@ -543,6 +543,24 @@ const server = http.createServer(async (req, res) => {
         return json(res, 401, { error: "unauthorized" });
       }
       const report = await runClaimProbe(db);
+      return json(res, 200, report);
+    }
+
+    // POST /diag/claim-existing { jobId } — claim item của 1 job Vercel ĐÃ
+    // TẠO SẴN (không tự seed) — bài test THẬT cho race/visibility cross-
+    // process (Vercel ghi qua 1 connection, worker này đọc/claim qua
+    // connection RIÊNG của chính worker) — khác với /diag/claim-probe (seed
+    // VÀ claim trên cùng 1 connection, không phát hiện được lệch pha).
+    if (url.pathname === "/diag/claim-existing" && req.method === "POST") {
+      if (!isAuthorized(req)) {
+        return json(res, 401, { error: "unauthorized" });
+      }
+      const body = await readBody(req);
+      const jobId = String(body.jobId ?? "").trim();
+      if (!jobId) {
+        return json(res, 400, { error: "Thiếu jobId." });
+      }
+      const report = await claimExistingJobItem(db, jobId);
       return json(res, 200, report);
     }
 

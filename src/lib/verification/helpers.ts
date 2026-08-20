@@ -124,7 +124,8 @@ export type WorkerEndpoint =
   | "/verify-visual"
   | "/benchmark"
   | "/diag/db-identity"
-  | "/diag/claim-probe";
+  | "/diag/claim-probe"
+  | "/diag/claim-existing";
 
 /** Contract endpoint → HTTP method (worker: GET /health + /diag/db-identity, POST còn lại). */
 const WORKER_METHODS: Record<WorkerEndpoint, "GET" | "POST"> = {
@@ -134,6 +135,7 @@ const WORKER_METHODS: Record<WorkerEndpoint, "GET" | "POST"> = {
   "/benchmark": "POST",
   "/diag/db-identity": "GET",
   "/diag/claim-probe": "POST",
+  "/diag/claim-existing": "POST",
 };
 
 export interface CallWorkerOptions {

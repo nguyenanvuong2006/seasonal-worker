@@ -56,16 +56,48 @@ export type ClaimProbeBoundary =
   | "C_ROW_UPDATED_BUT_CLAIMITEMS_RETURNED_EMPTY"
   | "E_CLAIM_SUCCEEDED";
 
+export type RawItemRowAfterClaim = { status: string; leasedUntil: string | null; attemptCount: number };
+
 export interface ClaimProbeReport {
   jobId: string;
   itemId: string;
   eligibilityBeforeClaim: ClaimEligibility;
   claimItemsReturnedCount: number;
   claimItemsReturnedItemMatches: boolean;
-  rawRowAfterClaim: { status: string; leasedUntil: string | null; attemptCount: number } | null;
+  rawRowAfterClaim: RawItemRowAfterClaim | null;
   boundary: ClaimProbeBoundary;
   cleanupOk: boolean;
   cleanupError: string | null;
+}
+
+/**
+ * Ranh giới lỗi DÙNG CHUNG cho mọi diagnostic claim (probe tự-seed lẫn
+ * claim-existing trên job seed ở process khác) — 1 nơi định nghĩa duy nhất,
+ * không lặp lại logic if/else ở nhiều chỗ dễ lệch nhau.
+ */
+export function classifyClaimBoundary(
+  eligibilityBeforeClaim: ClaimEligibility,
+  claimItemsReturnedItemMatches: boolean,
+  rawRowAfterClaim: RawItemRowAfterClaim | null,
+): ClaimProbeBoundary {
+  const rowTransitionedToProcessing = rawRowAfterClaim?.status === "PROCESSING";
+  if (!eligibilityBeforeClaim.overallClaimEligible) return "A_NOT_ELIGIBLE";
+  if (claimItemsReturnedItemMatches && rowTransitionedToProcessing) return "E_CLAIM_SUCCEEDED";
+  if (!claimItemsReturnedItemMatches && rowTransitionedToProcessing) return "C_ROW_UPDATED_BUT_CLAIMITEMS_RETURNED_EMPTY";
+  return "B_ELIGIBLE_BUT_ROW_UNCHANGED";
+}
+
+async function readRawRowAfterClaim(database: DiagnosticDb, itemId: string): Promise<RawItemRowAfterClaim | null> {
+  const rawAfterResult = await database.execute(sql`
+    SELECT status, leased_until, attempt_count FROM merge_job_records WHERE id = ${itemId}
+  `);
+  const rawRow = rawAfterResult.rows?.[0] as Record<string, unknown> | undefined;
+  if (!rawRow) return null;
+  return {
+    status: String(rawRow.status),
+    leasedUntil: rawRow.leased_until ? new Date(rawRow.leased_until as string).toISOString() : null,
+    attemptCount: Number(rawRow.attempt_count),
+  };
 }
 
 export interface DiagnosticDb {
@@ -169,33 +201,11 @@ export async function runClaimProbe(database: DiagnosticDb): Promise<ClaimProbeR
 
     // ĐÚNG hàm production thật (worker.runJob() gọi hàm này) — không phải bản rút gọn.
     const claimed = await claimItems(job.id, 1);
-
-    const rawAfterResult = await database.execute(sql`
-      SELECT status, leased_until, attempt_count FROM merge_job_records WHERE id = ${item.id}
-    `);
-    const rawRow = rawAfterResult.rows?.[0] as Record<string, unknown> | undefined;
-    const rawRowAfterClaim = rawRow
-      ? {
-          status: String(rawRow.status),
-          leasedUntil: rawRow.leased_until ? new Date(rawRow.leased_until as string).toISOString() : null,
-          attemptCount: Number(rawRow.attempt_count),
-        }
-      : null;
+    const rawRowAfterClaim = await readRawRowAfterClaim(database, item.id);
 
     const claimItemsReturnedCount = claimed.length;
     const claimItemsReturnedItemMatches = claimed.some((c) => c.id === item.id);
-    const rowTransitionedToProcessing = rawRowAfterClaim?.status === "PROCESSING";
-
-    let boundary: ClaimProbeBoundary;
-    if (!eligibilityBeforeClaim.overallClaimEligible) {
-      boundary = "A_NOT_ELIGIBLE";
-    } else if (claimItemsReturnedItemMatches && rowTransitionedToProcessing) {
-      boundary = "E_CLAIM_SUCCEEDED";
-    } else if (!claimItemsReturnedItemMatches && rowTransitionedToProcessing) {
-      boundary = "C_ROW_UPDATED_BUT_CLAIMITEMS_RETURNED_EMPTY";
-    } else {
-      boundary = "B_ELIGIBLE_BUT_ROW_UNCHANGED";
-    }
+    const boundary = classifyClaimBoundary(eligibilityBeforeClaim, claimItemsReturnedItemMatches, rawRowAfterClaim);
 
     report = {
       jobId: job.id,
@@ -220,4 +230,64 @@ export async function runClaimProbe(database: DiagnosticDb): Promise<ClaimProbeR
   report.cleanupOk = cleanupOk;
   report.cleanupError = cleanupError;
   return report;
+}
+
+export interface ClaimExistingReport {
+  jobId: string;
+  itemId: string | null;
+  eligibilityBeforeClaim: ClaimEligibility | null;
+  claimItemsReturnedCount: number;
+  claimItemsReturnedItemMatches: boolean;
+  rawRowAfterClaim: RawItemRowAfterClaim | null;
+  boundary: ClaimProbeBoundary | "NO_ITEM_FOUND";
+}
+
+/**
+ * Claim item của 1 job ĐÃ ĐƯỢC TẠO SẴN bởi process/connection KHÁC (vd Vercel
+ * qua createAsyncMergeJob()) — KHÔNG tự seed. Đây là bài test THẬT cho race/
+ * visibility hypothesis: runClaimProbe() ở trên seed VÀ claim trên CÙNG 1
+ * connection (worker tự insert rồi tự claim) — không phát hiện được lệch pha
+ * cross-process/cross-connection giữa Vercel (ghi) và Cloud Run worker (đọc/
+ * claim) qua network thật, đúng như đường đi production /run thật sự đi.
+ * Hàm này được gọi từ endpoint worker (connection của worker, KHÔNG PHẢI
+ * connection đã tạo ra job) — mô phỏng chính xác request /run thật.
+ */
+export async function claimExistingJobItem(database: DiagnosticDb, jobId: string): Promise<ClaimExistingReport> {
+  const itemsResult = await database.execute(sql`
+    SELECT id FROM merge_job_records WHERE merge_job_id = ${jobId} ORDER BY sort_order ASC LIMIT 1
+  `);
+  const itemRow = itemsResult.rows?.[0] as { id?: string } | undefined;
+  if (!itemRow?.id) {
+    return {
+      jobId,
+      itemId: null,
+      eligibilityBeforeClaim: null,
+      claimItemsReturnedCount: 0,
+      claimItemsReturnedItemMatches: false,
+      rawRowAfterClaim: null,
+      boundary: "NO_ITEM_FOUND",
+    };
+  }
+  const itemId = itemRow.id;
+
+  const eligibilityBeforeClaim = await evaluateClaimEligibility(database, jobId, itemId);
+
+  // ĐÚNG hàm production thật, gọi trên connection NÀY (worker) — item được
+  // TẠO bởi connection khác (Vercel) trước đó, KHÔNG phải bởi hàm này.
+  const claimed = await claimItems(jobId, 1);
+  const rawRowAfterClaim = await readRawRowAfterClaim(database, itemId);
+
+  const claimItemsReturnedCount = claimed.length;
+  const claimItemsReturnedItemMatches = claimed.some((c) => c.id === itemId);
+  const boundary = classifyClaimBoundary(eligibilityBeforeClaim, claimItemsReturnedItemMatches, rawRowAfterClaim);
+
+  return {
+    jobId,
+    itemId,
+    eligibilityBeforeClaim,
+    claimItemsReturnedCount,
+    claimItemsReturnedItemMatches,
+    rawRowAfterClaim,
+    boundary,
+  };
 }

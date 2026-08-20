@@ -22,6 +22,7 @@ import {
   ListChecks,
   Loader2,
   Play,
+  Search,
   Server,
   ShieldCheck,
   XCircle,
@@ -230,6 +231,14 @@ export function VerificationPanel() {
           {btn("CLOUD_RUN", "Check Worker", <Server className="h-4 w-4" />, "/api/document-merge/verification/check-worker")}
           {btn("GOOGLE_DRIVE", "Check Google Drive", <ShieldCheck className="h-4 w-4" />, "/api/document-merge/verification/check-drive")}
           {btn("QUEUE", "Check Queue", <ListChecks className="h-4 w-4" />, "/api/document-merge/verification/check-queue")}
+          {btn(
+            "SEED_CHECK",
+            "Check 1-record Seed",
+            <Search className="h-4 w-4" />,
+            "/api/document-merge/verification/check-1record-seed",
+            { method: "POST" },
+            { disabled: !queuePassed, title: "Chạy Check Queue và đạt PASS trước." },
+          )}
           {btn(
             "1_RECORD",
             "Run 1-record Test",
