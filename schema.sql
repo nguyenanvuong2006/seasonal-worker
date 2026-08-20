@@ -943,7 +943,8 @@ CREATE TABLE IF NOT EXISTS request_kpi_cache (
   computed_at timestamptz NOT NULL DEFAULT now()
 );
 CREATE INDEX IF NOT EXISTS request_kpi_cache_computed_idx ON request_kpi_cache (computed_at);
-=======
+
+-- =====
 -- ============================================================
 -- CẬP NHẬT 2026-08-16 — EMPLOYMENT LIFECYCLE (Vòng đời làm việc)
 -- ------------------------------------------------------------
@@ -1015,3 +1016,100 @@ BEGIN
       WHERE status = 'APPROVED' AND end_date IS NULL;
   END IF;
 END $$;
+
+-- ============================================================
+-- DOCUMENT MERGE — ASYNC HTML/PDF ENGINE (Phase 2)
+-- Template versioning + document_history + archive_runs
+-- (idempotent, non-destructive — khớp migrations/2026-08-17-document-merge-async-phase2.sql)
+-- ============================================================
+
+ALTER TABLE merge_jobs ADD COLUMN IF NOT EXISTS output_pdf_file_id varchar(255);
+ALTER TABLE merge_jobs ADD COLUMN IF NOT EXISTS output_zip_file_id varchar(255);
+ALTER TABLE merge_jobs ADD COLUMN IF NOT EXISTS batch_expires_at timestamptz;
+
+ALTER TABLE merge_job_records ADD COLUMN IF NOT EXISTS filename varchar(255);
+ALTER TABLE merge_job_records ADD COLUMN IF NOT EXISTS file_size bigint;
+ALTER TABLE merge_job_records ADD COLUMN IF NOT EXISTS sha256 varchar(64);
+ALTER TABLE merge_job_records ADD COLUMN IF NOT EXISTS document_history_id uuid;
+
+CREATE TABLE IF NOT EXISTS merge_template_versions (
+  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  template_id uuid NOT NULL REFERENCES merge_templates(id) ON DELETE CASCADE,
+  version integer NOT NULL,
+  status varchar(16) NOT NULL DEFAULT 'DRAFT',
+  html_body text,
+  print_css text,
+  source_docx_name varchar(255),
+  retention_years integer,
+  mapping_snapshot jsonb DEFAULT '[]',
+  created_by varchar(64) NOT NULL,
+  published_at timestamptz,
+  archived_at timestamptz,
+  superseded_by integer,
+  created_at timestamptz NOT NULL DEFAULT now(),
+  updated_at timestamptz NOT NULL DEFAULT now(),
+  UNIQUE (template_id, version)
+);
+CREATE INDEX IF NOT EXISTS merge_template_version_status_idx ON merge_template_versions (template_id, status);
+CREATE UNIQUE INDEX IF NOT EXISTS merge_template_version_published_uq
+  ON merge_template_versions (template_id) WHERE status = 'PUBLISHED';
+
+CREATE TABLE IF NOT EXISTS document_history (
+  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  candidate_id uuid,
+  application_id uuid,
+  merge_job_id uuid,
+  merge_job_record_id uuid,
+  template_id uuid,
+  template_version integer,
+  document_type varchar(64),
+  generated_at timestamptz NOT NULL DEFAULT now(),
+  filename varchar(255) NOT NULL,
+  storage_provider varchar(32) NOT NULL DEFAULT 'google_drive',
+  storage_file_id varchar(255),
+  file_size bigint,
+  sha256 varchar(64),
+  retention_until timestamptz,
+  retention_policy_snapshot jsonb DEFAULT '{}',
+  archive_status varchar(24) NOT NULL DEFAULT 'ONLINE',
+  archived_at timestamptz,
+  archive_verified_at timestamptz,
+  archive_path text,
+  archive_sha256 varchar(64),
+  online_deleted_at timestamptz,
+  deletion_reason varchar(64),
+  created_by varchar(64),
+  created_at timestamptz NOT NULL DEFAULT now(),
+  updated_at timestamptz NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS document_history_archive_idx ON document_history (archive_status, retention_until);
+CREATE INDEX IF NOT EXISTS document_history_candidate_idx ON document_history (candidate_id);
+CREATE INDEX IF NOT EXISTS document_history_application_idx ON document_history (application_id);
+CREATE INDEX IF NOT EXISTS document_history_job_idx ON document_history (merge_job_id);
+
+CREATE TABLE IF NOT EXISTS archive_runs (
+  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  run_type varchar(16) NOT NULL DEFAULT 'MANUAL',
+  started_at timestamptz NOT NULL DEFAULT now(),
+  completed_at timestamptz,
+  status varchar(24) NOT NULL DEFAULT 'RUNNING',
+  manifest_path text,
+  downloaded_count integer NOT NULL DEFAULT 0,
+  verified_count integer NOT NULL DEFAULT 0,
+  failed_count integer NOT NULL DEFAULT 0,
+  error_summary text
+);
+CREATE INDEX IF NOT EXISTS archive_runs_started_idx ON archive_runs (started_at);
+
+ALTER TABLE merge_templates ADD COLUMN IF NOT EXISTS retention_years integer;
+ALTER TABLE merge_templates ADD COLUMN IF NOT EXISTS html_enabled boolean NOT NULL DEFAULT false;
+
+-- ============================================================
+-- DOCUMENT MERGE — TEMPLATE VERSIONING (Phase 3)
+-- ============================================================
+ALTER TABLE merge_templates ADD COLUMN IF NOT EXISTS current_published_version integer;
+
+-- ============================================================
+-- DOCUMENT MERGE — SEED: Dang_ky_Tap_nghe HTML version v1 (DRAFT)
+-- (khớp migrations/2026-08-21-dang-ky-tap-nghe-html-draft.sql)
+-- ============================================================

@@ -1,0 +1,25 @@
+{
+  "generatedAt": "2026-08-17T07:17:34.775Z",
+  "htmlSource": "/home/user/seasonal-worker/docs/visual-verification/dang-ky-tap-nghe-sample.html",
+  "templateName": "dang-ky-tap-nghe",
+  "durationMs": 204,
+  "pdf": {
+    "bytes": 39232,
+    "path": "/home/user/seasonal-worker/docs/visual-verification/out/rendered.pdf"
+  },
+  "checks": {
+    "pageDivCount": 5,
+    "realPdfPageCount": 6,
+    "expectedPageCount": 5,
+    "blankPages": [],
+    "horizontalOverflowPx": 0,
+    "checkboxCount": 22,
+    "unreplacedPlaceholders": [],
+    "fontsReady": true,
+    "fontChecks": {
+      "dejavu": true,
+      "serif": true
+    }
+  },
+  "pass": true
+}

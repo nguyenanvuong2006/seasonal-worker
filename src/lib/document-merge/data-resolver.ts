@@ -12,7 +12,7 @@
  * - CHECKBOX_OPTION: Checkbox option matching
  */
 
-import type { MergeTemplateField } from '@/db/schema';
+import type { MergeTemplateField } from '../../db/schema';
 import { formatValue, type FormatType } from './formatters.ts';
 import { isCheckboxMatch } from './checkbox-engine.ts';
 

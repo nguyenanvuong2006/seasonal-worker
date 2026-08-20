@@ -21,6 +21,7 @@ import {
   resolveDocumentKind,
   resolveDwClassification,
 } from "@/lib/document-merge/template-routing";
+import { JobProgressPanel } from "@/components/document-merge/job-progress-panel";
 
 type MergeTemplate = {
   id: string;
@@ -495,6 +496,18 @@ export function MergeWorkspace({
     printUrl?: string | null;
     dispatchedCount: number;
   } | null>(null);
+  // --- Async engine (HTML_PDF) — Phase 11 ---
+  const [engine, setEngine] = useState<"GOOGLE_DOCS" | "HTML_PDF">("GOOGLE_DOCS");
+  const [activeJobId, setActiveJobId] = useState<string | null>(null);
+
+  useEffect(() => {
+    fetch("/api/document-merge/engine", { cache: "no-store" })
+      .then((res) => res.json())
+      .then((data) => {
+        if (data.engine === "HTML_PDF") setEngine("HTML_PDF");
+      })
+      .catch(() => setEngine("GOOGLE_DOCS"));
+  }, []);
 
   useEffect(() => {
     if (selectedTemplateId) setTemplateId(selectedTemplateId);
@@ -625,6 +638,43 @@ export function MergeWorkspace({
     }
   };
 
+  // --- Phase 14: "Tạo Google Doc chỉnh sửa" cho MỘT hồ sơ ---
+  // Luôn dùng legacy Google Docs engine (editable output), không phụ thuộc
+  // feature flag HTML_PDF. Không bao giờ tự động tạo Docs cho cả batch.
+  const [singleDocBusy, setSingleDocBusy] = useState<string | null>(null);
+  const createEditableDoc = async (row: ApplicantRow) => {
+    const effective = autoRoute
+      ? templates.find((item) => item.isActive && item.documentKind === resolveDocumentKind({ declaredType: row.declaredType, dwMatch: row.dwMatch }))
+      : selectedTemplate;
+    if (!effective) {
+      alert("Chưa có template phù hợp để tạo Google Doc.");
+      return;
+    }
+    setSingleDocBusy(row.id);
+    try {
+      const res = await fetch("/api/document-merge/merge/execute", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          templateId: autoRoute ? undefined : effective.id,
+          autoRoute: false,
+          mergeMode: "INDIVIDUAL_DOCUMENTS",
+          batchPrint: false,
+          dispatchToApplicant: false,
+          records: { entityType: "daily_applications", recordIds: [row.id] },
+        }),
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || data.details || "Không tạo được Google Doc.");
+      if (data.outputUrl) window.open(data.outputUrl, "_blank", "noopener");
+      alert("Đã tạo Google Doc chỉnh sửa cho hồ sơ này.");
+    } catch (err) {
+      alert(err instanceof Error ? err.message : "Không tạo được Google Doc.");
+    } finally {
+      setSingleDocBusy(null);
+    }
+  };
+
   const execute = async (dispatchToApplicant: boolean) => {
     if (selectedIds.size === 0) {
       setMergeError("Chọn danh sách ứng viên đã xếp việc trước khi merge.");
@@ -638,7 +688,38 @@ export function MergeWorkspace({
     setMergeError(null);
     setDiagnostic(null);
     setMergeSuccess(null);
+    setActiveJobId(null);
     try {
+      // Engine HTML_PDF → async job: trả jobId ngay, Progress UI poll 4s.
+      // Engine GOOGLE_DOCS (default) → legacy synchronous (giữ nguyên hành vi cũ).
+      if (engine === "HTML_PDF") {
+        const res = await fetch("/api/document-merge/jobs", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            templateId: autoRoute ? undefined : templateId,
+            autoRoute,
+            mergeMode: batchPrint ? "ONE_DOCUMENT" : "INDIVIDUAL_DOCUMENTS",
+            dispatchToApplicant,
+            records: {
+              entityType: "daily_applications",
+              recordIds: Array.from(selectedIds),
+            },
+          }),
+        });
+        const data = await res.json();
+        if (!res.ok) {
+          setDiagnostic({
+            code: data.code || `JOB_HTTP_${res.status}`,
+            error: data.error || "Không tạo được merge job",
+            action: "Kiểm tra template đang hoạt động và mapping trước khi chạy lại.",
+          });
+          return;
+        }
+        setActiveJobId(data.jobId);
+        return;
+      }
+
       const res = await fetch("/api/document-merge/merge/execute", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -690,6 +771,13 @@ export function MergeWorkspace({
           Mặc định chọn một <b>template cố định</b> để trộn cho toàn bộ hồ sơ đã chọn. Chỉ khi bật <b>Auto Route</b>, hệ thống mới phân loại DW Cũ → Tài liệu A và DW Mới → Tài liệu B.
         </p>
       </div>
+
+      {activeJobId && (
+        <JobProgressPanel
+          jobId={activeJobId}
+          onClosed={() => setActiveJobId(null)}
+        />
+      )}
 
       {mergeSuccess && (
         <div className="rounded-2xl border border-emerald-300 bg-emerald-50/80 p-5">
@@ -825,6 +913,16 @@ export function MergeWorkspace({
                           <div className="font-mono text-[10px] text-slate-500">{row.cccd}</div>
                           {row.signatureConfirmedAt && <div className="text-[10px] font-bold text-emerald-700">Đã ký</div>}
                           {row.documentSentAt && !row.signatureConfirmedAt && <div className="text-[10px] text-amber-700">Đã gửi, chờ ký</div>}
+                          <button
+                            type="button"
+                            onClick={(e) => { e.stopPropagation(); void createEditableDoc(row); }}
+                            disabled={singleDocBusy !== null}
+                            title="Tạo Google Doc chỉnh sửa cho hồ sơ này (engine Google Docs — không dùng cho batch)"
+                            className="mt-1 inline-flex items-center gap-1 rounded border border-emerald-200 bg-emerald-50 px-1.5 py-0.5 text-[9px] font-semibold text-emerald-700 hover:bg-emerald-100 disabled:opacity-50"
+                          >
+                            {singleDocBusy === row.id ? <RefreshCw className="h-2.5 w-2.5 animate-spin" /> : <ExternalLink className="h-2.5 w-2.5" />}
+                            Google Doc
+                          </button>
                         </td>
                         <td className="px-3 py-2">
                           {autoRoute ? (

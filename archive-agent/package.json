@@ -1,0 +1,12 @@
+{
+  "name": "seasonal-worker-archive-agent",
+  "private": true,
+  "version": "1.0.0",
+  "description": "Archive Agent — tải PDF từ backend, lưu HDD/NAS, SHA-256 verify, manifest (Phase 12)",
+  "type": "module",
+  "scripts": {
+    "start": "node agent.mjs",
+    "dry-run": "node agent.mjs --dry-run"
+  },
+  "engines": { "node": ">=18" }
+}
