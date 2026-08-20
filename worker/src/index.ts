@@ -59,6 +59,7 @@ import { mergeJobs, mergeTemplateVersions } from "../../src/db/schema";
 import { eq } from "drizzle-orm";
 import { getDbIdentity } from "../../src/lib/document-merge/db-identity.ts";
 import { runClaimProbe, claimExistingJobItem } from "../../src/lib/document-merge/queue-diagnostics.ts";
+import { shouldBlockDiagnosticRequest } from "../../src/lib/document-merge/worker-diag-gate.ts";
 
 /**
  * App-level auth — LỚP RIÊNG, độc lập với Cloud Run IAM (IAM verify Google ID
@@ -520,16 +521,26 @@ const server = http.createServer(async (req, res) => {
   const url = new URL(req.url ?? "/", `http://${req.headers.host ?? "localhost"}`);
   try {
     if (url.pathname === "/health" && req.method === "GET") {
-      return json(res, 200, { ok: true });
+      // K_REVISION do Cloud Run tự set (không cần build-time inject) — an
+      // toàn để lộ (không phải secret), giúp production readiness check biết
+      // đang chạy đúng revision nào mà không cần thêm cơ chế build riêng.
+      return json(res, 200, { ok: true, revision: process.env.K_REVISION ?? null });
     }
 
     // ---------------------------------------------------------------
-    // GET /diag/db-identity, POST /diag/claim-probe — STAGING-ONLY diagnostics
-    // (CLAIM_STALLED root-cause investigation). Yêu cầu app-level auth như
-    // /run — không public. Xem src/lib/document-merge/db-identity.ts +
-    // queue-diagnostics.ts để biết chi tiết an toàn (không expose secret) và
-    // cách phân biệt các ranh giới lỗi claim.
+    // GET /diag/db-identity, POST /diag/claim-probe, POST /diag/claim-existing
+    // — CHỈ dùng cho điều tra CLAIM_STALLED trên STAGING. TẮT HOÀN TOÀN
+    // (404 — không tiết lộ cả sự tồn tại của path) khi WORKER_ENV=production,
+    // BẤT KỂ có auth đúng hay không — production worker không được phép có
+    // đường nào seed/xoá job+item thật, kể cả sau app secret. Xem
+    // worker-diag-gate.ts. Nếu KHÔNG set WORKER_ENV (staging hiện tại), giữ
+    // nguyên hành vi cũ: yêu cầu app-level auth như /run — xem
+    // src/lib/document-merge/db-identity.ts + queue-diagnostics.ts.
     // ---------------------------------------------------------------
+    if (shouldBlockDiagnosticRequest(url.pathname)) {
+      return json(res, 404, { error: "not found" });
+    }
+
     if (url.pathname === "/diag/db-identity" && req.method === "GET") {
       if (!isAuthorized(req)) {
         return json(res, 401, { error: "unauthorized" });
