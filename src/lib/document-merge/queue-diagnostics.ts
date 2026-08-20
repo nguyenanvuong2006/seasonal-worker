@@ -58,6 +58,19 @@ export type ClaimProbeBoundary =
 
 export type RawItemRowAfterClaim = { status: string; leasedUntil: string | null; attemptCount: number };
 
+// Turbopack/SWC không parse được chain nhiều cấp ngay sau `typeof import(...)`
+// (vd `typeof import("../../db").db.insert` — lỗi "Expected '{', got
+// 'interface'" dù `tsc` chấp nhận cú pháp này bình thường) — tách thành type
+// alias 1 cấp (`typeof import(...).db`) rồi dùng indexed access type
+// (`DbModule["insert"]`) để tương thích cả 2 công cụ.
+type DbModule = typeof import("../../db").db;
+
+export interface DiagnosticDb {
+  execute: (query: string | SQLWrapper) => Promise<{ rows: unknown[] }>;
+  insert: DbModule["insert"];
+  delete: DbModule["delete"];
+}
+
 export interface ClaimProbeReport {
   jobId: string;
   itemId: string;
@@ -98,12 +111,6 @@ async function readRawRowAfterClaim(database: DiagnosticDb, itemId: string): Pro
     leasedUntil: rawRow.leased_until ? new Date(rawRow.leased_until as string).toISOString() : null,
     attemptCount: Number(rawRow.attempt_count),
   };
-}
-
-export interface DiagnosticDb {
-  execute: (query: string | SQLWrapper) => Promise<{ rows: unknown[] }>;
-  insert: typeof import("../../db").db.insert;
-  delete: typeof import("../../db").db.delete;
 }
 
 /** Đánh giá ĐỘC LẬP từng predicate claimItems() dùng cho 1 item cụ thể — KHÔNG khoá row (không FOR UPDATE). */
