@@ -24,11 +24,18 @@ export async function POST() {
   const startedAt = Date.now();
   const storage = getStorageProvider();
   if (storage.name !== "google_drive") {
+    // "Bỏ qua" KHÔNG được phép hiển thị như PASS — verification chưa thật sự
+    // xác nhận Drive hoạt động. Lưu ý: giá trị này đọc STORAGE_PROVIDER của
+    // tiến trình Vercel (Next.js), KHÔNG phải cấu hình runtime của Cloud Run
+    // worker (đặt riêng qua --set-env-vars trong deploy-worker-staging.yml) —
+    // 1 process "local" không tự động nghĩa là worker cũng "local".
     return NextResponse.json({
-      pass: true,
+      pass: false,
+      skipped: true,
       stage: "GOOGLE_DRIVE",
-      note: `StorageProvider hiện tại = ${storage.name} (không phải google_drive) — check Drive bị bỏ qua.`,
+      error: `StorageProvider (Vercel) = "${storage.name}", không phải "google_drive" — check Drive BỊ BỎ QUA, không phải PASS. Đây là cấu hình của tiến trình Vercel; worker Cloud Run có biến STORAGE_PROVIDER RIÊNG — kiểm tra riêng (gcloud run services describe) nếu cần xác nhận worker cũng dùng google_drive.`,
       provider: storage.name,
+      checkedProcess: "vercel",
       durationMs: Date.now() - startedAt,
     });
   }

@@ -40,9 +40,11 @@ import {
   hasPendingItems,
   markJobProcessing,
   recomputeJobProgress,
+  recordJobStage,
   type QueueItem,
 } from "../../src/lib/document-merge/queue.ts";
-import { renderApplicantDocument } from "../../src/lib/document-merge/html-pipeline.ts";
+import { shouldRetryClaim, claimRetryDelayMs, type WorkerStage } from "../../src/lib/document-merge/queue-types.ts";
+import { renderApplicantDocumentFromParts } from "../../src/lib/document-merge/html-pipeline.ts";
 import { getStorageProvider } from "../../src/lib/storage/index.ts";
 import {
   buildIndividualPdfFilename,
@@ -85,16 +87,30 @@ let browser: Browser | null = null;
 
 async function getBrowser(): Promise<Browser> {
   if (!browser) {
+    // CHROMIUM_LAUNCH chỉ xảy ra 1 lần/container (cold start) — không gắn
+    // với 1 job/item cụ thể nên log riêng (console.log), không ghi vào
+    // merge_jobs.metadata.lastStage. Đây chính là bước hay treo nhất khi
+    // sai executablePath/thiếu dependency hệ thống — log rõ TRƯỚC khi launch
+    // để nếu treo, log Cloud Run vẫn cho biết đang kẹt ở đây.
+    const launchStartedAt = Date.now();
+    console.log(JSON.stringify({ event: "pdf_worker_stage", stage: "CHROMIUM_LAUNCH", phase: "start" }));
     const args = ["--no-sandbox", "--disable-dev-shm-usage", "--disable-gpu"];
     // Headless-shell trong sandbox/local cần single-process; Cloud Run image
     // (playwright noble) KHÔNG cần — bật qua env khi cần.
     if (process.env.CHROMIUM_SINGLE_PROCESS === "1") args.push("--single-process");
-    browser = await chromium.launch({
-      // Cho phép dùng custom Chromium (staging/CI/image nhẹ) — Cloud Run mặc
-      // định dùng browser của playwright image; env này chỉ override khi cần.
-      executablePath: process.env.CHROMIUM_EXECUTABLE_PATH?.trim() || undefined,
-      args,
-    });
+    try {
+      browser = await chromium.launch({
+        // Cho phép dùng custom Chromium (staging/CI/image nhẹ) — Cloud Run mặc
+        // định dùng browser của playwright image; env này chỉ override khi cần.
+        executablePath: process.env.CHROMIUM_EXECUTABLE_PATH?.trim() || undefined,
+        args,
+      });
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      console.log(JSON.stringify({ event: "pdf_worker_stage", stage: "CHROMIUM_LAUNCH", phase: "failed", durationMs: Date.now() - launchStartedAt, error: message.slice(0, 300) }));
+      throw error;
+    }
+    console.log(JSON.stringify({ event: "pdf_worker_stage", stage: "CHROMIUM_LAUNCH", phase: "done", durationMs: Date.now() - launchStartedAt, ok: true }));
   }
   return browser;
 }
@@ -181,6 +197,9 @@ interface TemplateSnapshot {
   version?: number | null;
   retentionYears?: number | null;
   fields?: FieldSnapshotRow[];
+  /** HTML/CSS của version PUBLISHED lúc tạo job — nguồn render DUY NHẤT (xem processItem). */
+  htmlBody?: string | null;
+  printCss?: string | null;
 }
 
 function toRenderFields(rows: FieldSnapshotRow[] = []): MergeTemplateField[] {
@@ -212,23 +231,45 @@ interface JobContext {
   templates: Record<string, TemplateSnapshot>;
 }
 
+/**
+ * Ghi stage + console.log structured — an toàn (không log dữ liệu ứng viên/
+ * secret). Không throw — 1 lỗi ghi diagnostic không được phép làm hỏng render.
+ */
+async function stage(jobId: string, itemId: string, name: WorkerStage, startedAt: number, ok: boolean, errorCode?: string): Promise<void> {
+  console.log(JSON.stringify({ event: "pdf_worker_stage", jobId, itemId, stage: name, durationMs: Date.now() - startedAt, ok, errorCode: errorCode ?? null }));
+  await recordJobStage(jobId, name, { itemId, startedAt, ok, errorCode });
+}
+
 async function processItem(item: QueueItem, jobCtx: JobContext): Promise<void> {
   const templateId = item.templateId ?? "";
   const snap = jobCtx.templates[templateId] ?? Object.values(jobCtx.templates)[0];
-  if (!snap?.googleDocId) {
-    await failItem(item.id, { errorCode: "TEMPLATE_MISSING", errorMessage: "Không có template cho record." }, { attemptCount: item.attemptCount });
+
+  let t = Date.now();
+  await stage(jobCtx.jobId, item.id, "TEMPLATE_LOADING", t, Boolean(snap?.htmlBody));
+  if (!snap?.htmlBody) {
+    // htmlBody null = template CHƯA có version PUBLISHED lúc tạo job (worker
+    // render TRỰC TIẾP từ snapshot — không tra cứu registry cứng nào khác).
+    await failItem(
+      item.id,
+      { errorCode: "TEMPLATE_NOT_PUBLISHED", errorMessage: "Template chưa có version PUBLISHED (HTML) lúc tạo job — vào Template Builder → Xuất bản phiên bản rồi tạo job lại." },
+      { attemptCount: item.attemptCount },
+    );
     return;
   }
 
+  t = Date.now();
   const records = await loadDailyApplicationRecords([item.sourceRecordId]);
   const recordData = records.get(item.sourceRecordId);
+  await stage(jobCtx.jobId, item.id, "ITEM_LOADING", t, Boolean(recordData));
   if (!recordData) {
     await failItem(item.id, { errorCode: "RECORD_NOT_FOUND", errorMessage: "Không tìm thấy hồ sơ ứng viên." }, { attemptCount: item.attemptCount });
     return;
   }
 
+  t = Date.now();
   const context = { currentUserName: jobCtx.createdBy, currentDate: new Date(), mergeIndex: item.sortOrder, mergeCount: 1 };
-  const rendered = renderApplicantDocument(snap.googleDocId, toRenderFields(snap.fields), recordData, context);
+  const rendered = renderApplicantDocumentFromParts(snap.htmlBody, snap.printCss, toRenderFields(snap.fields), recordData, context);
+  await stage(jobCtx.jobId, item.id, "DATA_RESOLUTION", t, rendered.valid);
   if (!rendered.valid) {
     await failItem(
       item.id,
@@ -240,8 +281,18 @@ async function processItem(item: QueueItem, jobCtx: JobContext): Promise<void> {
     );
     return;
   }
+  await stage(jobCtx.jobId, item.id, "HTML_RENDER", t, true);
 
+  // CHROMIUM_LAUNCH + PDF_RENDER: KHÔNG ghi "ok" trước khi renderPdfBytes()
+  // thật sự xong — nếu launch Chromium hoặc page.pdf() bị treo, lastStage
+  // phải DỪNG LẠI ở HTML_RENDER (bước trước) để chẩn đoán đúng chỗ treo,
+  // không được "nói dối" là CHROMIUM_LAUNCH đã ok trong khi thực ra chưa
+  // return. getBrowser() tự log mốc launch riêng (xem console.log bên dưới)
+  // vì nó chỉ chạy 1 lần/container (cold start), không gắn với item nào.
+  t = Date.now();
   const bytes = await renderPdfBytes(rendered.html);
+  await stage(jobCtx.jobId, item.id, "PDF_RENDER", t, true);
+
   const fullName = String(recordData.fullName ?? "ung-vien");
   const applicationId = String(recordData.id ?? item.sourceRecordId ?? "ung-vien");
   const documentType = snap.documentKind === "B" ? "Dang-ky-tap-nghe" : "Tai-lieu-merge";
@@ -251,11 +302,17 @@ async function processItem(item: QueueItem, jobCtx: JobContext): Promise<void> {
   const filename = buildIndividualPdfFilename(now, fullName, documentType, applicationId);
   const storageKey = buildIndividualStorageKey(now, filename);
 
+  t = Date.now();
+  const sha256 = await sha256Hex(bytes);
+  await stage(jobCtx.jobId, item.id, "SHA256", t, true);
+
+  t = Date.now();
   const storage = getStorageProvider();
   const stored = await storage.put(storageKey, bytes, "application/pdf");
+  await stage(jobCtx.jobId, item.id, "STORAGE_UPLOAD", t, true);
 
-  // SHA-256 + Document History (mỗi PDF = 1 record riêng, retention snapshot).
-  const sha256 = await sha256Hex(bytes);
+  // Document History (mỗi PDF = 1 record riêng, retention snapshot).
+  t = Date.now();
   const history = await createDocumentHistory({
     candidateId: null,
     applicationId: item.sourceRecordId,
@@ -273,7 +330,9 @@ async function processItem(item: QueueItem, jobCtx: JobContext): Promise<void> {
     createdBy: jobCtx.createdBy,
   });
   await linkRecordToHistory(item.id, history.id);
+  await stage(jobCtx.jobId, item.id, "HISTORY_WRITE", t, true);
 
+  t = Date.now();
   await completeItem(item.id, {
     pdfUrl: stored.url,
     storageKey,
@@ -282,6 +341,7 @@ async function processItem(item: QueueItem, jobCtx: JobContext): Promise<void> {
     sha256,
     documentHistoryId: history.id,
   });
+  await stage(jobCtx.jobId, item.id, "ITEM_COMPLETE", t, true);
 }
 
 /** SHA-256 hex của PDF bytes (mỗi PDF khi tạo phải tính). */
@@ -300,36 +360,79 @@ async function runJob(jobId: string): Promise<{ processed: number; failed: numbe
   const templates = (job.metadata as { templates?: Record<string, TemplateSnapshot> }).templates ?? {};
   const jobCtx: JobContext = { jobId, createdBy: job.createdBy, templates };
 
+  const jobStartedAt = Date.now();
   await markJobProcessing(jobId);
+  await stage(jobId, "", "JOB_CLAIMED", jobStartedAt, true);
 
   let processed = 0;
   let failed = 0;
   const startedAt = Date.now();
 
-  for (let iter = 0; iter < MAX_BATCH_ITERATIONS; iter++) {
-    const items = await claimItems(jobId, CONCURRENCY);
-    if (items.length === 0) break;
+  // Toàn bộ phần dưới đây PHẢI kết thúc job ở trạng thái terminal (COMPLETED/
+  // FAILED) — không bao giờ để merge_jobs kẹt ở PROCESSING vô thời hạn nếu có
+  // lỗi bất ngờ (claimItems/recomputeJobProgress ném lỗi, DB tạm gián đoạn...).
+  try {
+    for (let iter = 0; iter < MAX_BATCH_ITERATIONS; iter++) {
+      let items = await claimItems(jobId, CONCURRENCY);
 
-    // Render song song theo concurrency.
-    await Promise.all(
-      items.map(async (item) => {
-        try {
-          await processItem(item, jobCtx);
-          processed += 1;
-        } catch (error) {
-          failed += 1;
-          const message = error instanceof Error ? error.message : String(error);
-          await failItem(
-            item.id,
-            { errorCode: "RENDER_FAILED", errorMessage: message.slice(0, 500) },
-            { attemptCount: item.attemptCount },
-          );
-          console.log(JSON.stringify({ event: "pdf_render_failed", jobId, sequence: item.sortOrder, error: message.slice(0, 200) }));
+      // claimItems trả rỗng CÓ THỂ là "hết việc thật" (bình thường, thoát loop)
+      // HOẶC "bất thường" — vẫn còn item QUEUED/RETRY nhưng không claim được
+      // (vd visibility lag vừa insert xong). Phân biệt bằng cách đếm lại thay
+      // vì coi rỗng = hết việc ngay lần đầu — nếu còn item chưa terminal, retry
+      // claim vài lần trước khi kết luận thật sự kẹt.
+      if (items.length === 0) {
+        const check = await recomputeJobProgress(jobId);
+        if (check.queued === 0) break; // hết việc thật — thoát loop bình thường
+
+        let attempt = 1;
+        while (items.length === 0 && shouldRetryClaim(attempt)) {
+          await new Promise((r) => setTimeout(r, claimRetryDelayMs(attempt)));
+          items = await claimItems(jobId, CONCURRENCY);
+          attempt += 1;
         }
-      }),
-    );
 
-    await recomputeJobProgress(jobId);
+        if (items.length === 0) {
+          // Vẫn còn item QUEUED/RETRY nhưng claimItems() không claim được sau
+          // nhiều lần thử — đây là lỗi thật (không phải "hết việc"). KHÔNG để
+          // job kẹt PROCESSING mãi mãi — fail rõ ràng kèm chẩn đoán.
+          await stage(jobId, "", "JOB_CLAIMED", Date.now(), false, "CLAIM_STALLED");
+          await finalizeJob(jobId, "FAILED", {
+            errorSummary: `CLAIM_STALLED: còn ${check.queued} item QUEUED/RETRY nhưng claimItems() không claim được sau ${attempt} lần thử.`,
+          });
+          console.log(JSON.stringify({ event: "pdf_worker_claim_stalled", jobId, queuedRemaining: check.queued, attempts: attempt }));
+          return { processed, failed };
+        }
+      }
+
+      // Render song song theo concurrency.
+      await Promise.all(
+        items.map(async (item) => {
+          try {
+            await processItem(item, jobCtx);
+            processed += 1;
+          } catch (error) {
+            failed += 1;
+            const message = error instanceof Error ? error.message : String(error);
+            await failItem(
+              item.id,
+              { errorCode: "RENDER_FAILED", errorMessage: message.slice(0, 500) },
+              { attemptCount: item.attemptCount },
+            );
+            console.log(JSON.stringify({ event: "pdf_render_failed", jobId, sequence: item.sortOrder, error: message.slice(0, 200) }));
+          }
+        }),
+      );
+
+      await recomputeJobProgress(jobId);
+    }
+  } catch (error) {
+    // Bất kỳ lỗi nào ngoài per-item try/catch (claimItems/recomputeJobProgress/
+    // DB tạm gián đoạn...) — job KHÔNG được để lại ở PROCESSING. Fail rõ ràng
+    // rồi re-throw để caller (/run) vẫn thấy lỗi qua HTTP 500.
+    const message = error instanceof Error ? error.message : String(error);
+    await finalizeJob(jobId, "FAILED", { errorSummary: `RUN_JOB_CRASHED: ${message.slice(0, 500)}` }).catch(() => undefined);
+    console.log(JSON.stringify({ event: "pdf_worker_run_crashed", jobId, error: message.slice(0, 300) }));
+    throw error;
   }
 
   const progress = await recomputeJobProgress(jobId);
@@ -338,6 +441,7 @@ async function runJob(jobId: string): Promise<{ processed: number; failed: numbe
   // Nếu finalize lỗi → job FAILED (individual PDFs đã lưu, không mất dữ liệu).
   if (progress.terminal) {
     if (progress.completed > 0) {
+      const finalizeStartedAt = Date.now();
       try {
         const finalize = await finalizeBatchOutputs(jobId, { documentType: "Dang-ky-tap-nghe" });
         await finalizeJob(jobId, "COMPLETED", {
@@ -345,6 +449,7 @@ async function runJob(jobId: string): Promise<{ processed: number; failed: numbe
           outputZipUrl: finalize.zipUrl,
           errorSummary: progress.failed > 0 ? `${progress.failed} item FAILED (đã retry tối đa)` : null,
         });
+        await stage(jobId, "", "BATCH_FINALIZE", finalizeStartedAt, true);
         console.log(
           JSON.stringify({
             event: "pdf_batch_finalized",
@@ -357,6 +462,7 @@ async function runJob(jobId: string): Promise<{ processed: number; failed: numbe
       } catch (error) {
         const message = error instanceof Error ? error.message : String(error);
         await finalizeJob(jobId, "FAILED", { errorSummary: `FINALIZE_FAILED: ${message.slice(0, 500)}` });
+        await stage(jobId, "", "BATCH_FINALIZE", finalizeStartedAt, false, "FINALIZE_FAILED");
         console.log(JSON.stringify({ event: "pdf_batch_finalize_failed", jobId, error: message.slice(0, 300) }));
       }
     } else {

@@ -26,6 +26,8 @@ import {
   retryBackoffSeconds,
   shouldRetry,
   type ItemStatus,
+  type WorkerStage,
+  type WorkerStageEvent,
 } from "./queue-types.ts";
 
 export const ITEM_LEASE_SECONDS = 60; // worker phải heartbeat trong vòng này
@@ -109,6 +111,40 @@ export async function claimItems(jobId: string, limit = 1): Promise<QueueItem[]>
     throw error;
   } finally {
     client.release();
+  }
+}
+
+/**
+ * Ghi lại stage worker ĐANG chạy vào merge_jobs.metadata.lastStage — để 1 job
+ * kẹt PROCESSING (crash/hang/awaiting external service) luôn để lại dấu vết
+ * chẩn đoán được (verification/UI đọc lại field này khi timeout), thay vì
+ * chỉ biết "PROCESSING, 0%" và không rõ đang ở đâu. jsonb_set atomic — không
+ * cần đọc metadata hiện tại trước (an toàn khi nhiều item chạy song song,
+ * dù chỉ giữ lại stage GHI SAU CÙNG — đủ cho mục đích chẩn đoán "đang ở đâu").
+ * KHÔNG BAO GIỜ throw ra ngoài — 1 lỗi ghi diagnostic không được phép làm
+ * hỏng việc render PDF thật.
+ */
+export async function recordJobStage(
+  jobId: string,
+  stage: WorkerStage,
+  extra: { itemId?: string | null; startedAt: number; ok: boolean; errorCode?: string | null } = { startedAt: Date.now(), ok: true },
+): Promise<void> {
+  const event: WorkerStageEvent = {
+    stage,
+    itemId: extra.itemId ?? null,
+    startedAt: new Date(extra.startedAt).toISOString(),
+    durationMs: Date.now() - extra.startedAt,
+    ok: extra.ok,
+    errorCode: extra.errorCode ?? null,
+  };
+  try {
+    await db.execute(
+      sql`UPDATE merge_jobs
+             SET metadata = jsonb_set(COALESCE(metadata, '{}'::jsonb), '{lastStage}', ${JSON.stringify(event)}::jsonb, true)
+           WHERE id = ${jobId}`,
+    );
+  } catch {
+    // Diagnostic write không bao giờ được phép làm fail job thật.
   }
 }
 

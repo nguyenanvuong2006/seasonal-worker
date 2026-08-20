@@ -184,13 +184,19 @@ export async function createAsyncMergeJob(input: CreateAsyncJobInput): Promise<C
     fieldsByTemplate.set(f.templateId, list);
   }
 
-  // Snapshot version + retention từ merge_template_versions (PUBLISHED) — spec E/Q:
-  // PDF snapshot template_version + retention policy lúc tạo.
+  // Snapshot version + retention + HTML content từ merge_template_versions
+  // (PUBLISHED) — spec E/Q: PDF snapshot template_version + retention policy
+  // lúc tạo. QUAN TRỌNG: snapshot CẢ htmlBody/printCss (không chỉ version
+  // number) — worker (Cloud Run) render trực tiếp từ snapshot này, KHÔNG
+  // tra cứu lại merge_template_versions hay bất kỳ registry HTML cứng nào
+  // lúc render, để PDF cũ không bao giờ đổi nếu version publish sau này thay đổi.
   const publishedVersions = await db
     .select({
       templateId: mergeTemplateVersions.templateId,
       version: mergeTemplateVersions.version,
       retentionYears: mergeTemplateVersions.retentionYears,
+      htmlBody: mergeTemplateVersions.htmlBody,
+      printCss: mergeTemplateVersions.printCss,
     })
     .from(mergeTemplateVersions)
     .where(
@@ -242,6 +248,11 @@ export async function createAsyncMergeJob(input: CreateAsyncJobInput): Promise<C
                 version: versionByTemplate.get(tid)?.version ?? t?.currentPublishedVersion ?? null,
                 retentionYears: versionByTemplate.get(tid)?.retentionYears ?? null,
                 fields: fieldsByTemplate.get(tid) ?? [],
+                // Engine HTML_PDF render TRỰC TIẾP từ đây (xem worker processItem) —
+                // null khi template chưa có version PUBLISHED (worker sẽ fail rõ
+                // ràng thay vì thử registry cứng không còn đồng bộ với DB).
+                htmlBody: versionByTemplate.get(tid)?.htmlBody ?? null,
+                printCss: versionByTemplate.get(tid)?.printCss ?? null,
               },
             ];
           }),

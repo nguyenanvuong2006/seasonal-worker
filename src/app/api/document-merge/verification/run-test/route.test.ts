@@ -207,3 +207,81 @@ test("run-test: workerTrigger thành công -> polling merge_jobs vẫn chạy b�
   assert.equal(pollQueries.length > 0, true);
   assert.equal(res.body.pass, true);
 });
+
+test("run-test: job kẹt PROCESSING/0% suốt 120s -> poll.pass=false + timedOut=true + chẩn đoán thật (KHÔNG được báo pass=true chỉ vì query có kết quả)", async () => {
+  const db = seedDb((call) => {
+    if (call.root === "select" && call.table === "merge_jobs") {
+      return [
+        {
+          id: "job-1",
+          status: "PROCESSING",
+          progressPercent: 0,
+          outputPdfUrl: null,
+          outputZipUrl: null,
+          batchExpiresAt: null,
+          metadata: { lastStage: { stage: "CHROMIUM_LAUNCH", itemId: "r1", ok: true, durationMs: 12000 } },
+        },
+      ];
+    }
+    if (call.root === "select" && call.table === "merge_job_records") {
+      return [{ id: "r1", status: "PROCESSING", attemptCount: 1, sha256: null, storageKey: null, documentHistoryId: null, errorCode: null, errorMessage: null, startedAt: new Date(), completedAt: null }];
+    }
+    if (call.root === "select" && call.table === "document_history") {
+      return [];
+    }
+    return undefined;
+  });
+  const { POST, setTimeoutCalls } = makeContext({
+    db,
+    callWorkerImpl: async () => ({ ok: true, status: 200, data: { processed: 1 } }),
+  });
+
+  const res = await POST(new Request("https://app.example/api/document-merge/verification/run-test", {
+    method: "POST",
+    body: JSON.stringify({ records: 1 }),
+  }));
+
+  const stages = res.body.stages as Record<
+    string,
+    { pass: boolean; timedOut?: boolean; jobStatus?: string; lastWorkerStage?: { stage: string }; itemStatuses?: unknown[] }
+  >;
+  assert.equal(stages.poll.pass, false, "job không đạt terminal sau timeout — poll KHÔNG được pass=true");
+  assert.equal(stages.poll.timedOut, true);
+  assert.equal(stages.poll.jobStatus, "PROCESSING");
+  assert.equal(stages.poll.lastWorkerStage?.stage, "CHROMIUM_LAUNCH");
+  assert.equal(Array.isArray(stages.poll.itemStatuses), true);
+  assert.equal((stages.poll.itemStatuses as { status: string }[])[0]?.status, "PROCESSING");
+  assert.equal(res.body.pass, false);
+  // Đủ 60 lần poll (không dừng sớm vì không bao giờ đạt terminal).
+  assert.equal(setTimeoutCalls.length, 60);
+});
+
+test("run-test: history.pass=false khi completed=0 và history=0 (KHÔNG vacuous-pass '0 === 0')", async () => {
+  const db = seedDb((call) => {
+    if (call.root === "select" && call.table === "merge_jobs") {
+      return [{ id: "job-1", status: "FAILED", progressPercent: 0, outputPdfUrl: null, outputZipUrl: null, batchExpiresAt: null }];
+    }
+    if (call.root === "select" && call.table === "merge_job_records") {
+      return []; // không có item nào claim được / hoàn thành
+    }
+    if (call.root === "select" && call.table === "document_history") {
+      return [];
+    }
+    return undefined;
+  });
+  const { POST } = makeContext({
+    db,
+    callWorkerImpl: async () => ({ ok: true, status: 200, data: { processed: 0 } }),
+  });
+
+  const res = await POST(new Request("https://app.example/api/document-merge/verification/run-test", {
+    method: "POST",
+    body: JSON.stringify({ records: 1 }),
+  }));
+
+  const stages = res.body.stages as Record<string, { pass: boolean; count?: number; querySucceeded?: boolean }>;
+  assert.equal(stages.history.count, 0);
+  assert.equal(stages.history.querySucceeded, true, "query chạy thành công (trả []) — khác với 'verify passed'");
+  assert.equal(stages.history.pass, false, "0 completed + 0 history không được coi là PASS");
+  assert.equal(res.body.pass, false);
+});

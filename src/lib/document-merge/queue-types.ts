@@ -78,6 +78,53 @@ export function normalizeJobStatus(raw: string | null | undefined): JobStatus {
   }
 }
 
+/**
+ * Worker processing stages — chẩn đoán an toàn (không bao giờ chứa dữ liệu
+ * ứng viên/token/credentials), ghi vào merge_jobs.metadata.lastStage +
+ * console.log structured, để 1 job kẹt PROCESSING luôn có dấu vết thay vì
+ * "im lặng" (xem worker/src/index.ts recordStage()).
+ */
+export const WORKER_STAGES = [
+  "JOB_CLAIMED",
+  "ITEM_LOADING",
+  "TEMPLATE_LOADING",
+  "DATA_RESOLUTION",
+  "HTML_RENDER",
+  "CHROMIUM_LAUNCH",
+  "PDF_RENDER",
+  "SHA256",
+  "STORAGE_UPLOAD",
+  "HISTORY_WRITE",
+  "ITEM_COMPLETE",
+  "BATCH_FINALIZE",
+] as const;
+export type WorkerStage = (typeof WORKER_STAGES)[number];
+
+export interface WorkerStageEvent {
+  stage: WorkerStage;
+  itemId?: string | null;
+  startedAt: string;
+  durationMs: number;
+  ok: boolean;
+  /** Mã lỗi ngắn, KHÔNG bao giờ chứa message/stack đầy đủ hay dữ liệu nhạy cảm. */
+  errorCode?: string | null;
+}
+
+/**
+ * Quyết định có nên thử claim lại hay không khi lần claim đầu tiên trả về 0
+ * item dù job vẫn còn item QUEUED/RETRY (bất thường — không phải "hết việc
+ * thật sự", vì recomputeJobProgress đã xác nhận còn item chưa terminal).
+ * Thuần hàm — không I/O — để test được không cần DB thật.
+ */
+export function shouldRetryClaim(attempt: number, maxAttempts = 3): boolean {
+  return attempt < maxAttempts;
+}
+
+/** Backoff (ms) giữa các lần retry claim — ngắn hơn nhiều so với item retry backoff. */
+export function claimRetryDelayMs(attempt: number): number {
+  return Math.min(2000, 250 * 2 ** Math.max(0, attempt - 1));
+}
+
 export const DEFAULT_MAX_ATTEMPTS = 3;
 
 /** Exponential backoff (giây) cho item retry, có jitter. Không retry vô hạn. */

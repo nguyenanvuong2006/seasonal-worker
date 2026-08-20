@@ -141,25 +141,52 @@ export async function POST(request: Request) {
     }
 
     // 5. Poll tới terminal (max 120s)
+    const TERMINAL_STATUSES = ["COMPLETED", "FAILED", "CANCELLED"];
     let jobState: (typeof mergeJobs.$inferSelect) | null = null;
+    let reachedTerminal = false;
     for (let i = 0; i < 60; i++) {
       await new Promise((r) => setTimeout(r, 2000));
       const rows = await db.select().from(mergeJobs).where(eq(mergeJobs.id, jobId)).limit(1);
       jobState = rows[0] ?? null;
-      if (jobState && ["COMPLETED", "FAILED", "CANCELLED"].includes(jobState.status)) break;
-    }
-    if (!jobState) {
-      stages.poll = { pass: false, error: "Job không tới terminal sau 120s." };
-    } else {
-      stages.poll = { pass: true, status: jobState.status, progressPercent: jobState.progressPercent };
+      if (jobState && TERMINAL_STATUSES.includes(jobState.status)) {
+        reachedTerminal = true;
+        break;
+      }
     }
 
-    // 6. Verify items + history
+    // 6. Verify items + history (luôn truy vấn thật — querySucceeded tách biệt
+    // khỏi verificationPassed: 1 query trả [] không có nghĩa "đã verify OK",
+    // nó có nghĩa "chưa có gì để verify" — 2 điều khác nhau).
     const items = await db
       .select()
       .from(mergeJobRecords)
       .where(eq(mergeJobRecords.mergeJobId, jobId))
       .orderBy(mergeJobRecords.sortOrder);
+
+    if (!reachedTerminal) {
+      // Timeout khi vẫn PROCESSING/QUEUED — trả chẩn đoán thật (stage worker
+      // cuối cùng, trạng thái từng item, lỗi an toàn) thay vì chỉ "chờ 120s
+      // rồi báo lỗi mơ hồ".
+      const lastWorkerStage = (jobState?.metadata as { lastStage?: unknown } | null | undefined)?.lastStage ?? null;
+      stages.poll = {
+        pass: false,
+        querySucceeded: true,
+        timedOut: true,
+        jobStatus: jobState?.status ?? null,
+        progressPercent: jobState?.progressPercent ?? null,
+        lastWorkerStage,
+        itemStatuses: items.map((i) => ({
+          id: i.id,
+          status: i.status,
+          attemptCount: i.attemptCount,
+          errorCode: i.errorCode ?? null,
+          errorMessage: i.errorMessage ? i.errorMessage.slice(0, 200) : null,
+        })),
+        error: `Job không tới terminal sau 120s (trạng thái hiện tại: ${jobState?.status ?? "UNKNOWN"}, ${jobState?.progressPercent ?? 0}%).`,
+      };
+    } else {
+      stages.poll = { pass: true, querySucceeded: true, status: jobState?.status ?? null, progressPercent: jobState?.progressPercent ?? null };
+    }
 
     const completed = items.filter((i) => i.status === "COMPLETED");
     const failed = items.filter((i) => i.status === "FAILED");
@@ -176,7 +203,11 @@ export async function POST(request: Request) {
       const years = (h.retentionUntil.getTime() - (h.generatedAt ?? new Date()).getTime()) / 31557600000;
       return years >= 2 && years <= 4; // snapshot retention mặc định 3 năm
     });
+    // QUAN TRỌNG: historyRows/completed rỗng-rỗng KHÔNG được coi là "khớp"
+    // (0 === 0 là true toán học nhưng sai nghiệp vụ — "chưa xảy ra gì" không
+    // phải "verify passed"). completed.length > 0 là điều kiện bắt buộc.
     const historyOk =
+      completed.length > 0 &&
       historyRows.length === completed.length && // không duplicate history khi worker chạy lại
       historyRows.every((h) => Boolean(h.sha256 && h.storageFileId && h.templateVersion != null && h.retentionUntil)) &&
       retentionOk;
@@ -197,7 +228,9 @@ export async function POST(request: Request) {
     };
     stages.history = {
       pass: historyOk,
+      querySucceeded: true,
       count: historyRows.length,
+      expectedCount: completed.length,
       templateVersion: historyRows[0]?.templateVersion ?? null,
       retentionUntil: historyRows[0]?.retentionUntil ?? null,
       retentionOk,
