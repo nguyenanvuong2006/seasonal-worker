@@ -13,6 +13,14 @@
  *   POST /run  (Authorization: Bearer MERGE_WORKER_SECRET) — body { jobId? }
  *   GET  /health
  *
+ * Auth 2 LỚP ĐỘC LẬP, mỗi lớp 1 header riêng (không tranh chấp Authorization):
+ *   - Cloud Run IAM (--no-allow-unauthenticated): Google verify request TRƯỚC
+ *     KHI chạm code này, chấp nhận Google ID token ở `Authorization` HOẶC
+ *     `X-Serverless-Authorization` — Vercel client dùng header thứ 2 để
+ *     `Authorization` còn trống cho secret riêng của app (xem isAuthorized()).
+ *     Cloud Run tự xử lý, code trong file này KHÔNG cần đọc header đó.
+ *   - App-level (đoạn này): `Authorization: Bearer <MERGE_WORKER_SECRET>`.
+ *
  * Scale-to-zero: đây là Cloud Run *service* (min-instances=0). Vercel gọi POST /run
  * sau khi tạo job (qua after()), mỗi invocation xử lý tới khi queue rỗng hoặc hết
  * budget thời gian, rồi instance scale về 0.
@@ -48,10 +56,15 @@ import { mergeJobs, mergeTemplateVersions } from "../../src/db/schema";
 import { eq } from "drizzle-orm";
 
 /**
- * App-level auth: chấp nhận secret qua `Authorization: Bearer <secret>` (CLI/operator)
- * hoặc header `X-Merge-Worker-Secret: <secret>` (Vercel Preview — Authorization bị
- * chiếm bởi Google ID token cho Cloud Run IAM). KHÔNG weaken: secret vẫn bắt buộc
- * khi MERGE_WORKER_SECRET được set; lớp IAM (Cloud Run) xác thực Google token trước.
+ * App-level auth — LỚP RIÊNG, độc lập với Cloud Run IAM (IAM verify Google ID
+ * token TRƯỚC, ở tầng Cloud Run, code này không thấy request nào chưa qua IAM).
+ * Canonical: `Authorization: Bearer <secret>`. Google ID token cho Cloud Run
+ * IAM đi ở `X-Serverless-Authorization` (client mới) hoặc `Authorization`
+ * (nếu service allow-unauthenticated / gọi trực tiếp không qua Vercel) —
+ * Cloud Run tự tiêu thụ header đó, KHÔNG liên quan tới check này.
+ * `X-Merge-Worker-Secret` giữ lại CHỈ để tương thích ngược với client cũ
+ * (trước khi tách header) — không phải lớp bảo mật thứ 3. KHÔNG weaken: secret
+ * vẫn bắt buộc khi MERGE_WORKER_SECRET được set.
  */
 function isAuthorized(req: import("node:http").IncomingMessage): boolean {
   if (!WORKER_SECRET) return true;

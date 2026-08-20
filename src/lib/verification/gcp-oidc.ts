@@ -15,9 +15,11 @@
  *   3. Gọi IAM Credentials API `projects.serviceAccounts.generateIdToken`
  *      (endpoint hỗ trợ trực tiếp federated token) với
  *      audience = Cloud Run service URL → Google-issued ID token.
- *   4. Gửi ID token trong `Authorization: Bearer <id_token>` tới Cloud Run.
- *      Cloud Run (--no-allow-unauthenticated) chỉ chấp nhận Google-issued
- *      ID token có aud khớp service URL (hoặc OAuth2 token của service account).
+ *   4. Gửi ID token trong `X-Serverless-Authorization: Bearer <id_token>` tới
+ *      Cloud Run — Cloud Run chấp nhận header này y hệt `Authorization` cho
+ *      IAM (dùng khi app cần giữ `Authorization` cho auth riêng, xem
+ *      callWorker() ở helpers.ts). Cloud Run (--no-allow-unauthenticated) chỉ
+ *      chấp nhận Google-issued ID token có aud khớp service URL.
  *
  * IAM cần (service-level, xem docs/STAGING-VERIFICATION-RUNBOOK.md mục GCP):
  *   - principal/principalSet của pool (environment=preview) có

@@ -122,7 +122,7 @@ function mockOidcRoutes() {
   }) as typeof fetch;
 }
 
-test("callWorker with WIF configured uses GET /health with Google token and secret header", async () => {
+test("callWorker with WIF configured uses GET /health with ID token in X-Serverless-Authorization and secret in Authorization (2 independent headers, no clash)", async () => {
   process.env.PDF_MERGE_WORKER_URL = "https://worker.example/";
   process.env.MERGE_WORKER_SECRET = "secret";
   setWifEnv();
@@ -147,11 +147,17 @@ test("callWorker with WIF configured uses GET /health with Google token and secr
   assert.equal(workerCall.init?.method, "GET");
   assert.equal(workerCall.init?.body, undefined);
   const headers = workerCall.init?.headers as Record<string, string>;
-  assert.equal(headers.Authorization, "Bearer google-id-token");
+  // Cloud Run IAM layer — Google ID token, NEVER Authorization (that's the app's own header now).
+  assert.equal(headers["X-Serverless-Authorization"], "Bearer google-id-token");
+  // App-level layer — canonical path is Authorization.
+  assert.equal(headers.Authorization, "Bearer secret");
+  // X-Merge-Worker-Secret kept only for backward compat with older worker deployments.
   assert.equal(headers["X-Merge-Worker-Secret"], "secret");
+  assert.equal(result.diagnostics?.cloudRunAuthHeaderPresent, true);
+  assert.equal(result.diagnostics?.appAuthHeaderPresent, true);
 });
 
-test("callWorker with WIF configured uses POST /run with Google token and JSON body", async () => {
+test("callWorker with WIF configured uses POST /run with the same 2-header split and JSON body", async () => {
   process.env.PDF_MERGE_WORKER_URL = "https://worker.example";
   process.env.MERGE_WORKER_SECRET = "secret";
   setWifEnv();
@@ -176,8 +182,34 @@ test("callWorker with WIF configured uses POST /run with Google token and JSON b
   assert.equal(workerCall.init?.method, "POST");
   assert.equal(workerCall.init?.body, JSON.stringify({ jobId: "job-1" }));
   const headers = workerCall.init?.headers as Record<string, string>;
-  assert.equal(headers.Authorization, "Bearer google-id-token");
-  assert.equal(headers["X-Merge-Worker-Secret"], "secret");
+  assert.equal(headers["X-Serverless-Authorization"], "Bearer google-id-token");
+  assert.equal(headers.Authorization, "Bearer secret");
+});
+
+test("callWorker: ID token audience is the Cloud Run service origin (host only, no path)", async () => {
+  process.env.PDF_MERGE_WORKER_URL = `https://${EXPECTED_STAGING_WORKER_HOSTNAME}`;
+  process.env.MERGE_WORKER_SECRET = "secret";
+  setWifEnv();
+  const iamCalls: Array<{ body: string }> = [];
+  globalThis.fetch = (async (input: string | URL | Request, init?: RequestInit) => {
+    const url = String(input);
+    if (url.startsWith("https://sts.googleapis.com/")) {
+      return new Response(JSON.stringify({ access_token: "fed", expires_in: 3600 }), { status: 200 });
+    }
+    if (url.startsWith("https://iamcredentials.googleapis.com/")) {
+      iamCalls.push({ body: String(init?.body) });
+      return new Response(JSON.stringify({ token: "google-id-token" }), { status: 200 });
+    }
+    return new Response(JSON.stringify({ ok: true }), { status: 200 });
+  }) as typeof fetch;
+
+  const req = new Request("https://app.example", { headers: { "x-vercel-oidc-token": "oidc-jwt" } });
+  await callWorker("/run", { jobId: "job-1" }, 10_000, { request: req });
+
+  assert.equal(iamCalls.length, 1);
+  const audience = JSON.parse(iamCalls[0].body).audience;
+  assert.equal(audience, `https://${EXPECTED_STAGING_WORKER_HOSTNAME}`);
+  assert.equal(new URL(audience).pathname, "/", "audience must be the service origin, never /run or /health");
 });
 
 test("callWorker with WIF configured uses POST for /verify-visual and /benchmark", async () => {
@@ -439,14 +471,14 @@ test("callWorker: diagnostics never include the secret/token value, only boolean
 
   assert.equal(result.diagnostics?.workerHost, "worker.example");
   assert.equal(result.diagnostics?.workerSecretConfigured, true);
-  assert.equal(result.diagnostics?.sentWorkerSecretHeader, false); // no GOOGLE_WIF_* → secret goes in Authorization, not X-Merge-Worker-Secret
-  assert.equal(result.diagnostics?.hasAuthorizationHeader, true);
+  assert.equal(result.diagnostics?.cloudRunAuthHeaderPresent, false); // no GOOGLE_WIF_* configured
+  assert.equal(result.diagnostics?.appAuthHeaderPresent, true); // secret sent via Authorization
   assert.equal(JSON.stringify(result.diagnostics).includes("super-secret-value"), false);
 });
 
-test("callWorker: with WIF configured, diagnostics show whether X-Merge-Worker-Secret was actually sent (the missing-secret 401 scenario)", async () => {
+test("callWorker: with WIF configured but MERGE_WORKER_SECRET missing in Vercel, diagnostics prove Cloud Run IAM succeeded and only the app-level credential is absent", async () => {
   process.env.PDF_MERGE_WORKER_URL = "https://worker.example";
-  delete process.env.MERGE_WORKER_SECRET; // staging misconfiguration under investigation: secret unset in Vercel
+  delete process.env.MERGE_WORKER_SECRET; // the staging misconfiguration this test locks in a diagnostic for
   setWifEnv();
   globalThis.fetch = (async (input: string | URL | Request) => {
     const url = String(input);
@@ -456,7 +488,8 @@ test("callWorker: with WIF configured, diagnostics show whether X-Merge-Worker-S
     if (url.startsWith("https://iamcredentials.googleapis.com/")) {
       return new Response(JSON.stringify({ token: "google-id-token" }), { status: 200 });
     }
-    // Worker: Cloud Run IAM đã pass (token hợp lệ) nhưng thiếu X-Merge-Worker-Secret → app tự chặn.
+    // Worker: Cloud Run IAM đã pass (X-Serverless-Authorization hợp lệ) nhưng
+    // KHÔNG có Authorization (app secret) → app tự chặn, trả JSON của chính nó.
     return new Response(JSON.stringify({ error: "unauthorized" }), { status: 401, headers: JSON_HEADERS });
   }) as typeof fetch;
 
@@ -467,8 +500,8 @@ test("callWorker: with WIF configured, diagnostics show whether X-Merge-Worker-S
   assert.equal(result.status, 401);
   assert.equal(result.stage, "WORKER_AUTH");
   assert.equal(result.diagnostics?.workerSecretConfigured, false);
-  assert.equal(result.diagnostics?.sentWorkerSecretHeader, false);
-  assert.equal(result.diagnostics?.hasAuthorizationHeader, true); // ID token was sent — proves Cloud Run IAM layer was fine
+  assert.equal(result.diagnostics?.appAuthHeaderPresent, false); // no secret configured -> Authorization never sent
+  assert.equal(result.diagnostics?.cloudRunAuthHeaderPresent, true); // ID token WAS sent — proves Cloud Run IAM layer was fine
 });
 
 test("callWorker: rejects a URL with a path baked in as CONFIG (never sends the malformed request)", async () => {

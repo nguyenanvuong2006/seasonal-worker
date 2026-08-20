@@ -151,18 +151,19 @@ export type CallWorkerStage =
  * Chẩn đoán an toàn — CHỈ boolean/hostname, KHÔNG bao giờ chứa secret/token
  * value. Dùng để phân biệt "Cloud Run IAM từ chối" (CLOUD_RUN_IAM, request
  * chưa tới được code worker) với "worker nhận request nhưng app-level auth
- * (X-Merge-Worker-Secret) từ chối" (WORKER_AUTH) — 2 lớp auth độc lập, 401 ở
- * lớp nào cũng ra HTTP 401 giống nhau nên KHÔNG thể suy ra chỉ từ status.
+ * từ chối" (WORKER_AUTH) — 2 lớp auth ĐỘC LẬP, tách hẳn 2 header (xem
+ * callWorker) nên 401 ở lớp nào cũng không thể suy ra chỉ từ status code.
  */
 export interface CallWorkerDiagnostics {
   workerHost: string | null;
   /** Audience dùng khi lấy Google ID token (= workerHost khi có GOOGLE_WIF_*). */
   tokenAudienceHost: string | null;
-  hasAuthorizationHeader: boolean;
+  /** Có gửi X-Serverless-Authorization (Google ID token, lớp Cloud Run IAM) không. */
+  cloudRunAuthHeaderPresent: boolean;
+  /** Có gửi Authorization (app secret, lớp worker) không. */
+  appAuthHeaderPresent: boolean;
   /** MERGE_WORKER_SECRET có được cấu hình ở phía Vercel (server) hay không. */
   workerSecretConfigured: boolean;
-  /** Request gửi đi có kèm header X-Merge-Worker-Secret hay không. */
-  sentWorkerSecretHeader: boolean;
 }
 
 export interface CallWorkerResult<T> {
@@ -176,20 +177,29 @@ export interface CallWorkerResult<T> {
 /**
  * Gọi worker endpoint (server-side).
  *
- * Auth 2 LỚP ĐỘC LẬP (cả 2 đều có thể trả 401 — không suy diễn lớp nào từ
- * status code, phải dựa trên bằng chứng thực tế: Content-Type của response):
+ * Auth 2 LỚP ĐỘC LẬP, mỗi lớp 1 header RIÊNG — không còn tranh chấp
+ * `Authorization` giữa 2 lớp (đây chính là nguyên nhân 401 trước đây: khi có
+ * GOOGLE_WIF_*, ID token chiếm `Authorization`, app secret chỉ còn nằm ở
+ * header phụ `X-Merge-Worker-Secret` — nếu worker đang chạy PHIÊN BẢN CODE
+ * chưa biết fallback đó (hoặc chỉ kiểm tra `Authorization`), secret không
+ * bao giờ được worker thấy dù đã cấu hình đúng). Theo đúng pattern Cloud Run
+ * hỗ trợ cho service cần giữ `Authorization` cho việc riêng của mình:
+ *
  * - LỚP 1 — Cloud Run IAM: khi GOOGLE_WIF_* được cấu hình, lấy Google ID
  *   token (aud = worker URL) qua Vercel OIDC → STS → generateIdToken, gửi
- *   trong `Authorization: Bearer <id_token>`. Nếu Cloud Run tự từ chối token
- *   (trước khi request chạm tới code worker), Google trả trang lỗi của
- *   riêng Google — KHÔNG phải JSON do worker tạo ra.
- * - LỚP 2 — app-level: worker (`isAuthorized()`) yêu cầu header
- *   `X-Merge-Worker-Secret` (hoặc Authorization Bearer secret khi không có
- *   WIF) khớp `MERGE_WORKER_SECRET`. Nếu lớp 1 đã pass nhưng thiếu/sai secret
- *   này, worker TỰ trả JSON `{error:"unauthorized"}` (đúng Content-Type
- *   application/json worker luôn dùng) — bằng chứng request ĐÃ tới app.
- * Không có GOOGLE_WIF_* (local/dev): giữ hành vi cũ `Authorization: Bearer
- * <MERGE_WORKER_SECRET>`.
+ *   trong `X-Serverless-Authorization: Bearer <id_token>` — Cloud Run chấp
+ *   nhận header này cho IAM y hệt `Authorization`
+ *   (https://cloud.google.com/run/docs/troubleshooting#appropriate-auth).
+ *   Nếu Cloud Run tự từ chối token (trước khi request chạm tới code worker),
+ *   Google trả trang lỗi của riêng Google — KHÔNG phải JSON do worker tạo ra.
+ * - LỚP 2 — app-level: `Authorization: Bearer <MERGE_WORKER_SECRET>` — path
+ *   CHÍNH THỨC (canonical), worker (`isAuthorized()`) kiểm tra header này
+ *   trước tiên. Cũng gửi kèm `X-Merge-Worker-Secret` (giá trị giống hệt) để
+ *   tương thích ngược với bản worker cũ hơn — KHÔNG phải lớp bảo mật thứ 3,
+ *   chỉ là 1 secret gửi ở 2 chỗ trong lúc chuyển đổi. Nếu lớp 1 đã pass
+ *   nhưng thiếu/sai secret, worker TỰ trả JSON `{error:"unauthorized"}`
+ *   (đúng Content-Type application/json worker luôn dùng) — bằng chứng
+ *   request ĐÃ tới app.
  *
  * Trả kèm `stage` (CONFIG/VERCEL_OIDC/STS/GENERATE_ID_TOKEN/CLOUD_RUN_IAM/
  * WORKER_AUTH/WORKER_REQUEST/WORKER_RESPONSE) + `diagnostics` an toàn — không
@@ -222,24 +232,27 @@ export async function callWorker<T>(
     let tokenAudienceHost: string | null = null;
 
     if (getGcpWifConfig()) {
-      // Cloud Run IAM auth: Authorization mang Google ID token.
+      // Cloud Run IAM auth — header RIÊNG, không đụng Authorization (app secret dùng header đó).
       const tokenResult = await getCloudRunIdToken(url, options.request);
       if ("error" in tokenResult) {
         return { ok: false, status: 502, data: { error: tokenResult.error }, stage: tokenResult.stage };
       }
-      headers.Authorization = `Bearer ${tokenResult.idToken}`;
+      headers["X-Serverless-Authorization"] = `Bearer ${tokenResult.idToken}`;
       tokenAudienceHost = urlDiag.workerHost;
-      if (secret) headers["X-Merge-Worker-Secret"] = secret;
-    } else if (secret) {
+    }
+    if (secret) {
+      // App secret — path chính thức: Authorization. Gửi kèm X-Merge-Worker-Secret
+      // (cùng giá trị) chỉ để tương thích ngược, không phải lớp bảo mật riêng.
       headers.Authorization = `Bearer ${secret}`;
+      headers["X-Merge-Worker-Secret"] = secret;
     }
 
     const diagnostics: CallWorkerDiagnostics = {
       workerHost: urlDiag.workerHost,
       tokenAudienceHost,
-      hasAuthorizationHeader: Boolean(headers.Authorization),
+      cloudRunAuthHeaderPresent: Boolean(headers["X-Serverless-Authorization"]),
+      appAuthHeaderPresent: Boolean(headers.Authorization),
       workerSecretConfigured: Boolean(secret),
-      sentWorkerSecretHeader: Boolean(headers["X-Merge-Worker-Secret"]),
     };
 
     let res: Response;
