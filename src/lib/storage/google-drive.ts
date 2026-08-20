@@ -286,4 +286,25 @@ export class GoogleDriveStorageProvider implements StorageProvider {
     if (!found) return null;
     return { size: found.size ?? 0, sha256: found.sha256 };
   }
+
+  /**
+   * Đọc metadata CHÍNH thư mục root (GOOGLE_DRIVE_ROOT_FOLDER_ID) — THUẦN
+   * ĐỌC, không tạo/sửa/xoá bất kỳ gì. Dùng cho production readiness check
+   * (KHÔNG được phép ghi file probe vào Drive production — xem
+   * production-readiness.ts) để xác nhận root folder ID cấu hình đúng và
+   * account có quyền đọc nó, mà không cần bất kỳ thao tác ghi nào.
+   */
+  async getRootFolderMetadata(): Promise<{ id: string; name: string; trashed: boolean } | null> {
+    if (!this.rootFolderId) return null;
+    const res = await driveFetch(
+      `${DRIVE_API}/files/${this.rootFolderId}?fields=id,name,trashed&supportsAllDrives=true`,
+    );
+    if (!res.ok) {
+      if (res.status === 404) return null;
+      const detail = await res.text();
+      throw new Error(`GOOGLE_DRIVE_ROOT_METADATA_${res.status}: ${detail.slice(0, 500)}`);
+    }
+    const data = (await res.json()) as { id: string; name: string; trashed?: boolean };
+    return { id: data.id, name: data.name, trashed: Boolean(data.trashed) };
+  }
 }

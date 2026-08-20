@@ -1,0 +1,223 @@
+name: Deploy Document Merge Worker — PRODUCTION
+
+# QUAN TRỌNG: workflow này CHỈ build + deploy Cloud Run worker. Nó KHÔNG và
+# KHÔNG BAO GIỜ ĐƯỢC PHÉP thay đổi DOCUMENT_MERGE_ENGINE trên Vercel — engine
+# vẫn phải là GOOGLE_DOCS sau khi workflow này chạy xong. Việc worker
+# production TỒN TẠI không có nghĩa là HTML_PDF được kích hoạt (client không
+# thể chọn engine per-job — xem async-job.ts).
+
+on:
+  workflow_dispatch:
+    inputs:
+      concurrency:
+        description: 'PDF_RENDER_CONCURRENCY'
+        required: false
+        default: '4'
+        type: choice
+        options:
+          - '2'
+          - '4'
+          - '6'
+
+permissions:
+  contents: read
+  id-token: write
+
+concurrency:
+  group: deploy-worker-production
+  cancel-in-progress: false
+
+env:
+  REGION: ${{ vars.GCP_REGION || 'asia-southeast1' }}
+  PROJECT_ID: ${{ vars.GCP_PROJECT_ID }}
+  # Tên RIÊNG, KHÁC HẲN staging (seasonal-worker-pdf-staging) — không dùng
+  # biến tái sử dụng chung với staging để tránh 1 lần gõ nhầm biến làm cả 2
+  # workflow trỏ vào cùng 1 service.
+  SERVICE: ${{ vars.GCP_RUN_SERVICE_PRODUCTION || 'seasonal-worker-pdf-production' }}
+
+jobs:
+  guardrails:
+    runs-on: ubuntu-latest
+    # KHÔNG cần GitHub Environment 'production' cho job thuần kiểm tra tên —
+    # chỉ đọc `vars`/`env`, không chạm secret nào — nhưng job deploy phía sau
+    # (cần secret) BẮT BUỘC dùng `environment: production`.
+    steps:
+      - name: Guardrail — service name không được chứa "staging"
+        run: |
+          set -euo pipefail
+          SERVICE_LOWER=$(echo "${SERVICE}" | tr '[:upper:]' '[:lower:]')
+          if [[ "${SERVICE_LOWER}" == *staging* ]]; then
+            echo "❌ GCP_RUN_SERVICE_PRODUCTION chứa 'staging' — dừng lại, đây là workflow PRODUCTION." >&2
+            exit 1
+          fi
+          echo "✅ Service name OK: ${SERVICE}"
+
+      - name: Guardrail — không được set STORAGE_PROVIDER khác google_drive
+        run: |
+          set -euo pipefail
+          echo "✅ STORAGE_PROVIDER cố định = google_drive trong bước deploy (xem dưới), không nhận input tuỳ ý."
+
+  deploy:
+    needs: guardrails
+    runs-on: ubuntu-latest
+    # GitHub Environment 'production' — secret PROD_* chỉ nằm trong scope
+    # environment này, KHÔNG thể truy cập nếu job không khai báo đúng
+    # environment (đây là ranh giới an toàn thật, không chỉ là quy ước đặt tên).
+    environment: production
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Authenticate to Google Cloud
+        id: gcp-auth
+        uses: google-github-actions/auth@v2
+        with:
+          # WIF only — KHÔNG dùng service-account JSON key dài hạn.
+          workload_identity_provider: ${{ secrets.GCP_WORKLOAD_IDENTITY_PROVIDER }}
+          service_account: ${{ secrets.GCP_SERVICE_ACCOUNT }}
+
+      - name: Setup gcloud
+        uses: google-github-actions/setup-gcloud@v2
+        with:
+          project_id: ${{ env.PROJECT_ID }}
+
+      - name: Configure Docker for Artifact Registry
+        run: |
+          set -euo pipefail
+          gcloud auth configure-docker "${REGION}-docker.pkg.dev" --quiet
+
+      - name: Build & push image
+        run: |
+          set -euo pipefail
+          # Tag "worker-production" — KHÁC HẲN "worker-staging" — 2 image
+          # riêng biệt hoàn toàn dù cùng build từ 1 Dockerfile.
+          IMAGE="${REGION}-docker.pkg.dev/${PROJECT_ID}/document-merge/worker-production:${{ github.sha }}"
+
+          echo "Building worker image (production)..."
+          docker build -t "${IMAGE}" -f worker/Dockerfile .
+
+          echo "Pushing worker image..."
+          docker push "${IMAGE}"
+
+          echo "IMAGE=${IMAGE}" >> "${GITHUB_ENV}"
+
+      - name: Deploy to Cloud Run (PRODUCTION)
+        run: |
+          set -euo pipefail
+
+          # Runtime service account RIÊNG cho production — KHÔNG dùng lại
+          # seasonal-worker-merge@... (service account staging).
+          SA="${{ vars.GCP_RUN_SERVICE_ACCOUNT_PRODUCTION || 'seasonal-worker-merge-prod@seasonal-worker-505710.iam.gserviceaccount.com' }}"
+
+          # Guardrail RUNTIME (không phải tự-grep file YAML — 1 grep tìm
+          # đúng chữ nó đang đứng trong sẽ luôn tự khớp chính nó): mọi bí
+          # danh Secret Manager ở vế phải "=" trong --set-secrets PHẢI bắt
+          # đầu bằng "PROD_" — positive check, không phải tìm chữ cấm.
+          SET_SECRETS="DATABASE_URL=PROD_DATABASE_URL:latest,GOOGLE_CLIENT_ID=PROD_GOOGLE_CLIENT_ID:latest,GOOGLE_CLIENT_SECRET=PROD_GOOGLE_CLIENT_SECRET:latest,GOOGLE_REFRESH_TOKEN=PROD_GOOGLE_REFRESH_TOKEN:latest,MERGE_WORKER_SECRET=PROD_MERGE_WORKER_SECRET:latest,GOOGLE_DRIVE_ROOT_FOLDER_ID=PROD_GOOGLE_DRIVE_ROOT_FOLDER_ID:latest"
+          IFS=',' read -ra PAIRS <<< "${SET_SECRETS}"
+          for pair in "${PAIRS[@]}"; do
+            SECRET_REF="${pair#*=}"
+            SECRET_NAME="${SECRET_REF%%:*}"
+            if [[ "${SECRET_NAME}" != PROD_* ]]; then
+              echo "❌ Secret Manager reference '${SECRET_NAME}' không bắt đầu bằng PROD_ — dừng lại." >&2
+              exit 1
+            fi
+          done
+          echo "✅ Mọi secret reference đều PROD_* (${#PAIRS[@]} secrets)."
+
+          echo "Deploying service=${SERVICE} region=${REGION} project=${PROJECT_ID} service_account=${SA}"
+          echo "(Không in giá trị secret nào ở bước này — chỉ tên resource.)"
+
+          gcloud run deploy "${SERVICE}" \
+            --image "${IMAGE}" \
+            --region "${REGION}" \
+            --project "${PROJECT_ID}" \
+            --service-account "${SA}" \
+            --cpu 2 \
+            --memory 4Gi \
+            --min-instances 0 \
+            --max-instances 2 \
+            --timeout 3600 \
+            --concurrency 80 \
+            --no-allow-unauthenticated \
+            --set-env-vars "STORAGE_PROVIDER=google_drive,PDF_RENDER_CONCURRENCY=${{ github.event.inputs.concurrency }},MERGE_JOB_BATCH_TTL_DAYS=${{ vars.MERGE_JOB_BATCH_TTL_DAYS_PRODUCTION || '14' }},MERGE_DEFAULT_RETENTION_YEARS=${{ vars.MERGE_DEFAULT_RETENTION_YEARS_PRODUCTION || '3' }},WORKER_ENV=production" \
+            --set-secrets "${SET_SECRETS}"
+
+          # WORKER_ENV=production ở trên tắt /diag/* (404) — xem
+          # src/lib/document-merge/worker-diag-gate.ts. KHÔNG gọi /run ở
+          # workflow này — không tạo job/candidate thật nào.
+
+      - name: Show service URL
+        id: service-url
+        run: |
+          set -euo pipefail
+          URL=$(gcloud run services describe "${SERVICE}" --region "${REGION}" --project "${PROJECT_ID}" --format='value(status.url)')
+          if [ -z "${URL}" ]; then
+            echo "ERROR: Cloud Run service URL is empty." >&2
+            exit 1
+          fi
+          echo "✅ Worker production: ${URL}"
+          echo "GET  ${URL}/health (protected — Cloud Run IAM required)"
+          echo "POST ${URL}/run (protected — KHÔNG gọi trong workflow này)"
+          echo "url=${URL}" >> "${GITHUB_OUTPUT}"
+
+      - name: Authenticate for Cloud Run smoke test
+        id: smoke-auth
+        uses: google-github-actions/auth@v2
+        with:
+          workload_identity_provider: ${{ secrets.GCP_WORKLOAD_IDENTITY_PROVIDER }}
+          service_account: ${{ secrets.GCP_SERVICE_ACCOUNT }}
+          token_format: id_token
+          id_token_audience: ${{ steps.service-url.outputs.url }}
+          id_token_include_email: true
+
+      - name: Smoke test health (READ-ONLY — không gọi /run)
+        run: |
+          set -euo pipefail
+
+          URL="${{ steps.service-url.outputs.url }}"
+          TOKEN="${{ steps.smoke-auth.outputs.id_token }}"
+
+          if [ -z "${URL}" ] || [ -z "${TOKEN}" ]; then
+            echo "ERROR: URL hoặc token rỗng." >&2
+            exit 1
+          fi
+
+          echo "Testing protected endpoint: ${URL}/health"
+
+          RESPONSE=$(curl --fail --show-error --silent --retry 5 --retry-delay 3 --retry-all-errors \
+            -H "Authorization: Bearer ${TOKEN}" \
+            "${URL}/health")
+
+          echo "Health response: ${RESPONSE}"
+          echo "${RESPONSE}" | grep -q '"ok":true' || {
+            echo "ERROR: Worker health endpoint did not return ok:true" >&2
+            exit 1
+          }
+
+          echo "✅ Cloud Run PRODUCTION worker health check PASSED"
+
+      - name: Smoke test — /diag/* phải TẮT (404)
+        run: |
+          set -euo pipefail
+          URL="${{ steps.service-url.outputs.url }}"
+          TOKEN="${{ steps.smoke-auth.outputs.id_token }}"
+
+          STATUS=$(curl -s -o /dev/null -w '%{http_code}' \
+            -H "Authorization: Bearer ${TOKEN}" \
+            "${URL}/diag/db-identity")
+
+          if [ "${STATUS}" != "404" ]; then
+            echo "❌ /diag/db-identity trả HTTP ${STATUS} (kỳ vọng 404) — WORKER_ENV=production có thể chưa nhận đúng." >&2
+            exit 1
+          fi
+          echo "✅ /diag/db-identity đã tắt đúng (404) trên production worker."
+
+      - name: Reminder
+        run: |
+          echo "=================================================================="
+          echo " Worker PRODUCTION đã deploy. DOCUMENT_MERGE_ENGINE trên Vercel"
+          echo " VẪN LÀ GOOGLE_DOCS — workflow này KHÔNG đụng tới biến đó."
+          echo " KHÔNG có job/candidate thật nào được tạo bởi workflow này."
+          echo "=================================================================="
