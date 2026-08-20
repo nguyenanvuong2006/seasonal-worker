@@ -113,7 +113,32 @@ export async function POST(request: Request) {
 
     // 4. Trigger worker
     const triggered = await callWorker<{ processed?: number; failed?: number }>("/run", { jobId }, 30_000, { request });
-    stages.workerTrigger = { pass: triggered.ok, status: triggered.status, error: triggered.ok ? null : (triggered.data as { error?: string })?.error };
+    stages.workerTrigger = {
+      pass: triggered.ok,
+      status: triggered.status,
+      stage: triggered.stage ?? null,
+      error: triggered.ok ? null : (triggered.data as { error?: string })?.error,
+      diagnostics: triggered.diagnostics ?? null,
+    };
+
+    // Trigger thất bại (401/403/404/lỗi cấu hình/network...) = job sẽ KHÔNG BAO
+    // GIỜ tự chạy — polling 120s chỉ tốn thời gian chờ 1 kết quả không thể xảy
+    // ra. Dừng ngay, trả lỗi trigger thật (stage) thay vì timeout mơ hồ.
+    if (!triggered.ok) {
+      stages.poll = { pass: false, skipped: true, reason: "Worker trigger thất bại — không polling job sẽ không bao giờ chạy." };
+      stages.items = { pass: false, skipped: true, completed: 0, failed: 0 };
+      stages.history = { pass: false, skipped: true, count: 0 };
+      stages.finalize = { pass: false, skipped: true };
+
+      return NextResponse.json({
+        pass: false,
+        records,
+        jobId,
+        totalDurationMs: Date.now() - startedAt,
+        error: `Worker trigger thất bại (stage=${triggered.stage ?? "UNKNOWN"}, HTTP ${triggered.status}).`,
+        stages,
+      });
+    }
 
     // 5. Poll tới terminal (max 120s)
     let jobState: (typeof mergeJobs.$inferSelect) | null = null;

@@ -142,31 +142,58 @@ export type CallWorkerStage =
   | "VERCEL_OIDC"
   | "STS"
   | "GENERATE_ID_TOKEN"
-  | "CLOUD_RUN"
+  | "CLOUD_RUN_IAM"
   | "WORKER_AUTH"
+  | "WORKER_REQUEST"
   | "WORKER_RESPONSE";
+
+/**
+ * Chẩn đoán an toàn — CHỈ boolean/hostname, KHÔNG bao giờ chứa secret/token
+ * value. Dùng để phân biệt "Cloud Run IAM từ chối" (CLOUD_RUN_IAM, request
+ * chưa tới được code worker) với "worker nhận request nhưng app-level auth
+ * (X-Merge-Worker-Secret) từ chối" (WORKER_AUTH) — 2 lớp auth độc lập, 401 ở
+ * lớp nào cũng ra HTTP 401 giống nhau nên KHÔNG thể suy ra chỉ từ status.
+ */
+export interface CallWorkerDiagnostics {
+  workerHost: string | null;
+  /** Audience dùng khi lấy Google ID token (= workerHost khi có GOOGLE_WIF_*). */
+  tokenAudienceHost: string | null;
+  hasAuthorizationHeader: boolean;
+  /** MERGE_WORKER_SECRET có được cấu hình ở phía Vercel (server) hay không. */
+  workerSecretConfigured: boolean;
+  /** Request gửi đi có kèm header X-Merge-Worker-Secret hay không. */
+  sentWorkerSecretHeader: boolean;
+}
 
 export interface CallWorkerResult<T> {
   ok: boolean;
   status: number;
   data: T | { error?: string };
   stage?: CallWorkerStage;
+  diagnostics?: CallWorkerDiagnostics;
 }
 
 /**
  * Gọi worker endpoint (server-side).
  *
- * Auth 2 lớp:
- * - Cloud Run IAM: khi GOOGLE_WIF_* được cấu hình, lấy Google ID token
- *   (aud = worker URL) qua Vercel OIDC → STS → generateIdToken và gửi trong
- *   `Authorization: Bearer <id_token>`. App secret được gửi ở header riêng
- *   `X-Merge-Worker-Secret` (worker chấp nhận cả 2 nguồn — không weaken auth).
- * - Không có GOOGLE_WIF_* (local/dev): giữ hành vi cũ
- *   `Authorization: Bearer <MERGE_WORKER_SECRET>`.
+ * Auth 2 LỚP ĐỘC LẬP (cả 2 đều có thể trả 401 — không suy diễn lớp nào từ
+ * status code, phải dựa trên bằng chứng thực tế: Content-Type của response):
+ * - LỚP 1 — Cloud Run IAM: khi GOOGLE_WIF_* được cấu hình, lấy Google ID
+ *   token (aud = worker URL) qua Vercel OIDC → STS → generateIdToken, gửi
+ *   trong `Authorization: Bearer <id_token>`. Nếu Cloud Run tự từ chối token
+ *   (trước khi request chạm tới code worker), Google trả trang lỗi của
+ *   riêng Google — KHÔNG phải JSON do worker tạo ra.
+ * - LỚP 2 — app-level: worker (`isAuthorized()`) yêu cầu header
+ *   `X-Merge-Worker-Secret` (hoặc Authorization Bearer secret khi không có
+ *   WIF) khớp `MERGE_WORKER_SECRET`. Nếu lớp 1 đã pass nhưng thiếu/sai secret
+ *   này, worker TỰ trả JSON `{error:"unauthorized"}` (đúng Content-Type
+ *   application/json worker luôn dùng) — bằng chứng request ĐÃ tới app.
+ * Không có GOOGLE_WIF_* (local/dev): giữ hành vi cũ `Authorization: Bearer
+ * <MERGE_WORKER_SECRET>`.
  *
- * Trả kèm `stage` để phân biệt lỗi xảy ra ở đâu (CONFIG/VERCEL_OIDC/STS/
- * GENERATE_ID_TOKEN/CLOUD_RUN/WORKER_AUTH/WORKER_RESPONSE) — không bao giờ
- * trả secret/token trong response.
+ * Trả kèm `stage` (CONFIG/VERCEL_OIDC/STS/GENERATE_ID_TOKEN/CLOUD_RUN_IAM/
+ * WORKER_AUTH/WORKER_REQUEST/WORKER_RESPONSE) + `diagnostics` an toàn — không
+ * bao giờ trả secret/token trong response.
  */
 export async function callWorker<T>(
   path: WorkerEndpoint,
@@ -192,6 +219,7 @@ export async function callWorker<T>(
   const timer = setTimeout(() => controller.abort(), timeoutMs);
   try {
     const headers: Record<string, string> = { "Content-Type": "application/json" };
+    let tokenAudienceHost: string | null = null;
 
     if (getGcpWifConfig()) {
       // Cloud Run IAM auth: Authorization mang Google ID token.
@@ -200,10 +228,19 @@ export async function callWorker<T>(
         return { ok: false, status: 502, data: { error: tokenResult.error }, stage: tokenResult.stage };
       }
       headers.Authorization = `Bearer ${tokenResult.idToken}`;
+      tokenAudienceHost = urlDiag.workerHost;
       if (secret) headers["X-Merge-Worker-Secret"] = secret;
     } else if (secret) {
       headers.Authorization = `Bearer ${secret}`;
     }
+
+    const diagnostics: CallWorkerDiagnostics = {
+      workerHost: urlDiag.workerHost,
+      tokenAudienceHost,
+      hasAuthorizationHeader: Boolean(headers.Authorization),
+      workerSecretConfigured: Boolean(secret),
+      sentWorkerSecretHeader: Boolean(headers["X-Merge-Worker-Secret"]),
+    };
 
     let res: Response;
     try {
@@ -218,22 +255,27 @@ export async function callWorker<T>(
         ok: false,
         status: 0,
         data: { error: `Không kết nối được Cloud Run: ${error instanceof Error ? error.message : String(error)}` },
-        stage: "CLOUD_RUN",
+        stage: "WORKER_REQUEST",
+        diagnostics,
       };
     }
+    const contentType = res.headers.get("content-type") ?? "";
     const data = (await res.json().catch(() => ({}))) as T;
     if (!res.ok) {
-      // 401/403 = Cloud Run IAM hoặc app secret từ chối. 404 = route/host sai
-      // (base URL trỏ nhầm chỗ, hoặc bị nối thừa path). Còn lại = worker đã
-      // nhận request nhưng xử lý lỗi (business logic).
-      const stage: CallWorkerStage = res.status === 401 || res.status === 403
-        ? "WORKER_AUTH"
-        : res.status === 404
-          ? "CLOUD_RUN"
-          : "WORKER_RESPONSE";
-      return { ok: false, status: res.status, data, stage };
+      let stage: CallWorkerStage;
+      if (res.status === 401 || res.status === 403) {
+        // Worker luôn trả JSON (kể cả khi tự từ chối auth) — nếu response
+        // KHÔNG phải JSON, request chưa tới được code worker: Cloud Run IAM
+        // (Google) đã chặn trước. Đây là bằng chứng thực tế, không đoán từ status.
+        stage = contentType.includes("application/json") ? "WORKER_AUTH" : "CLOUD_RUN_IAM";
+      } else {
+        // 404/500/... đều là worker đã nhận + xử lý request (Cloud Run không
+        // 404 theo path — cả service dùng chung 1 container) → business/route lỗi.
+        stage = "WORKER_RESPONSE";
+      }
+      return { ok: false, status: res.status, data, stage, diagnostics };
     }
-    return { ok: true, status: res.status, data };
+    return { ok: true, status: res.status, data, diagnostics };
   } finally {
     clearTimeout(timer);
   }

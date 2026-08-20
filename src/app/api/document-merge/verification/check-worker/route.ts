@@ -41,13 +41,16 @@ export async function POST(request: Request) {
   const data = result.data as { ok?: boolean; error?: string };
   return NextResponse.json({
     pass: result.ok,
-    stage: result.stage ?? "CLOUD_RUN",
+    stage: result.stage ?? null,
     workerStatus: result.ok ? (data.ok ?? true) : null,
     error: result.ok ? null : (data.error ?? `HTTP ${result.status}`),
-    // An toàn để hiển thị (không phải secret) — giúp chẩn đoán URL sai mà không cần đoán mò.
+    httpStatus: result.status,
+    // An toàn để hiển thị (không phải secret) — giúp chẩn đoán URL sai / lệch
+    // auth layer (Cloud Run IAM vs app-level worker secret) mà không cần đoán mò.
     workerHost: urlDiag.workerHost,
     workerPath: "/health",
     hostnameMatchesExpectedStaging: urlDiag.hostnameMatchesExpectedStaging,
+    diagnostics: result.diagnostics ?? null,
     durationMs: Date.now() - startedAt,
   });
 }

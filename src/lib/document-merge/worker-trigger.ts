@@ -1,54 +1,38 @@
 /**
  * Trigger Cloud Run PDF worker sau khi tạo job — KHÔNG giữ HTTP request mở.
  *
- * Dùng Next.js after() (giống import engine v3) để lời gọi thật sự được gửi đi
- * kể cả khi response đã trả về trình duyệt. Nếu trigger thất bại (mất mạng,
- * cold start...) thì watchdog cron (Phase 4) sẽ reclaim/resume job treo.
+ * Dùng Next.js after() để lời gọi thật sự được gửi đi kể cả khi response đã
+ * trả về trình duyệt.
  *
- * Auth (giống callWorker): nếu GOOGLE_WIF_* cấu hình → lấy Google ID token
- * (Vercel OIDC → STS → generateIdToken, aud = worker URL) gửi trong
- * Authorization; app secret gửi ở header X-Merge-Worker-Secret. Ngược lại gửi
- * Authorization: Bearer secret như cũ.
+ * Auth: dùng CHUNG `callWorker()` (src/lib/verification/helpers.ts) — helper
+ * xác thực DUY NHẤT cho mọi lời gọi worker (Check Worker, verification E2E,
+ * merge thật). Trước đây file này tự lặp lại toàn bộ logic OIDC→STS→
+ * generateIdToken + header construction VÀ không kiểm tra response — một
+ * request bị worker từ chối (401 do X-Merge-Worker-Secret sai/thiếu) sẽ bị
+ * nuốt lặng lẽ, job kẹt QUEUED không ai biết vì sao. Giờ log lỗi (an toàn,
+ * không secret) qua stage/status để chẩn đoán được ngay, và chỉ có 1 chỗ auth
+ * cần đúng thay vì 2 bản dễ lệch nhau.
  */
 
 import "server-only";
 import { after } from "next/server";
-import { getCloudRunIdToken, getGcpWifConfig, getOidcTokenFromRequest } from "@/lib/verification/gcp-oidc";
+import { callWorker } from "@/lib/verification/helpers";
 
 export function triggerPdfWorker(jobId: string, request?: Request): void {
-  const baseUrl = process.env.PDF_MERGE_WORKER_URL?.trim();
-  if (!baseUrl) return; // chưa cấu hình worker (dev/test) — job ở QUEUED, watchdog xử lý sau.
-
-  const secret = process.env.MERGE_WORKER_SECRET ?? "";
-  const serviceUrl = baseUrl.replace(/\/$/, "");
-  const url = serviceUrl + "/run";
-  const oidcToken = getOidcTokenFromRequest(request);
-
   after(async () => {
-    try {
-      const headers: Record<string, string> = {
-        "Content-Type": "application/json",
-      };
-      if (getGcpWifConfig() && oidcToken) {
-        // Audience = service URL (không path) — Cloud Run verify aud khớp service.
-        const tokenResult = await getCloudRunIdToken(serviceUrl, request);
-        if ("error" in tokenResult) {
-          console.error(JSON.stringify({ event: "pdf_worker_trigger_auth_error", jobId, error: tokenResult.error.slice(0, 200) }));
-          return;
-        }
-        headers.Authorization = `Bearer ${tokenResult.idToken}`;
-        if (secret) headers["X-Merge-Worker-Secret"] = secret;
-      } else if (secret) {
-        headers.Authorization = `Bearer ${secret}`;
-      }
-
-      await fetch(url, {
-        method: "POST",
-        headers,
-        body: JSON.stringify({ jobId }),
-      });
-    } catch {
-      /* watchdog reclaim sau (Phase 4 cron) */
+    const result = await callWorker<{ processed?: number; failed?: number }>("/run", { jobId }, 30_000, { request });
+    if (!result.ok) {
+      // Không log secret/token — chỉ stage/status/diagnostics an toàn.
+      console.error(
+        JSON.stringify({
+          event: "pdf_worker_trigger_failed",
+          jobId,
+          stage: result.stage ?? null,
+          status: result.status,
+          error: (result.data as { error?: string } | undefined)?.error?.slice(0, 200) ?? null,
+          diagnostics: result.diagnostics ?? null,
+        }),
+      );
     }
   });
 }

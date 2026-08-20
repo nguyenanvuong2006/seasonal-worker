@@ -360,36 +360,115 @@ test("checkVerificationConfigPresence: reports booleans only, never values", () 
 // callWorker — stage classification for Cloud Run responses.
 // ---------------------------------------------------------------
 
-test("callWorker: HTTP 404 from Cloud Run is reported as stage CLOUD_RUN with safe diagnostics", async () => {
+// Worker THẬT (worker/src/index.ts) luôn set Content-Type: application/json
+// cho MỌI response nó tự tạo ra — kể cả lỗi auth 401 ({error:"unauthorized"}).
+// Cloud Run IAM (Google), khi tự chặn request TRƯỚC KHI chạm tới code worker,
+// trả về trang lỗi của Google — KHÔNG phải JSON. Đây là bằng chứng thực tế để
+// phân biệt 2 lớp auth độc lập, không đoán từ status code (401/403 dùng
+// chung ở cả 2 lớp).
+const JSON_HEADERS = { "Content-Type": "application/json" };
+
+test("callWorker: HTTP 404 from the worker's own JSON response is reported as stage WORKER_RESPONSE (Cloud Run itself never 404s by path)", async () => {
   process.env.PDF_MERGE_WORKER_URL = "https://worker.example";
-  globalThis.fetch = (async () => new Response(JSON.stringify({}), { status: 404 })) as typeof fetch;
+  globalThis.fetch = (async () =>
+    new Response(JSON.stringify({ error: "not found" }), { status: 404, headers: JSON_HEADERS })) as typeof fetch;
 
   const result = await callWorker("/health");
 
   assert.equal(result.ok, false);
   assert.equal(result.status, 404);
-  assert.equal(result.stage, "CLOUD_RUN");
+  assert.equal(result.stage, "WORKER_RESPONSE");
 });
 
-test("callWorker: HTTP 403 from Cloud Run IAM is reported as stage WORKER_AUTH", async () => {
+test("callWorker: HTTP 401/403 with the worker's own JSON error body is reported as stage WORKER_AUTH (request reached the app; app-level secret rejected it)", async () => {
   process.env.PDF_MERGE_WORKER_URL = "https://worker.example";
-  globalThis.fetch = (async () => new Response(JSON.stringify({}), { status: 403 })) as typeof fetch;
+  globalThis.fetch = (async () =>
+    new Response(JSON.stringify({ error: "unauthorized" }), { status: 401, headers: JSON_HEADERS })) as typeof fetch;
 
   const result = await callWorker("/health");
 
   assert.equal(result.ok, false);
-  assert.equal(result.status, 403);
+  assert.equal(result.status, 401);
   assert.equal(result.stage, "WORKER_AUTH");
 });
 
-test("callWorker: worker-level 500 is reported as stage WORKER_RESPONSE (not CLOUD_RUN)", async () => {
+test("callWorker: HTTP 401/403 WITHOUT a JSON body is reported as stage CLOUD_RUN_IAM (Google's own front door rejected the ID token before reaching the app)", async () => {
   process.env.PDF_MERGE_WORKER_URL = "https://worker.example";
-  globalThis.fetch = (async () => new Response(JSON.stringify({ error: "render failed" }), { status: 500 })) as typeof fetch;
+  // Google trả text/html (trang lỗi) hoặc không set content-type — không phải JSON của worker.
+  globalThis.fetch = (async () =>
+    new Response("<html>Unauthorized</html>", { status: 401, headers: { "Content-Type": "text/html" } })) as typeof fetch;
+
+  const result = await callWorker("/health");
+
+  assert.equal(result.ok, false);
+  assert.equal(result.status, 401);
+  assert.equal(result.stage, "CLOUD_RUN_IAM");
+});
+
+test("callWorker: worker-level 500 is reported as stage WORKER_RESPONSE", async () => {
+  process.env.PDF_MERGE_WORKER_URL = "https://worker.example";
+  globalThis.fetch = (async () =>
+    new Response(JSON.stringify({ error: "render failed" }), { status: 500, headers: JSON_HEADERS })) as typeof fetch;
 
   const result = await callWorker("/health");
 
   assert.equal(result.ok, false);
   assert.equal(result.stage, "WORKER_RESPONSE");
+});
+
+test("callWorker: network failure reaching Cloud Run is reported as stage WORKER_REQUEST", async () => {
+  process.env.PDF_MERGE_WORKER_URL = "https://worker.example";
+  globalThis.fetch = (async () => {
+    throw new Error("fetch failed: ECONNREFUSED");
+  }) as typeof fetch;
+
+  const result = await callWorker("/health");
+
+  assert.equal(result.ok, false);
+  assert.equal(result.status, 0);
+  assert.equal(result.stage, "WORKER_REQUEST");
+});
+
+test("callWorker: diagnostics never include the secret/token value, only booleans/hostnames", async () => {
+  process.env.PDF_MERGE_WORKER_URL = "https://worker.example";
+  process.env.MERGE_WORKER_SECRET = "super-secret-value";
+  globalThis.fetch = (async () =>
+    new Response(JSON.stringify({ ok: true }), { status: 200, headers: JSON_HEADERS })) as typeof fetch;
+
+  const result = await callWorker("/health");
+
+  assert.equal(result.diagnostics?.workerHost, "worker.example");
+  assert.equal(result.diagnostics?.workerSecretConfigured, true);
+  assert.equal(result.diagnostics?.sentWorkerSecretHeader, false); // no GOOGLE_WIF_* → secret goes in Authorization, not X-Merge-Worker-Secret
+  assert.equal(result.diagnostics?.hasAuthorizationHeader, true);
+  assert.equal(JSON.stringify(result.diagnostics).includes("super-secret-value"), false);
+});
+
+test("callWorker: with WIF configured, diagnostics show whether X-Merge-Worker-Secret was actually sent (the missing-secret 401 scenario)", async () => {
+  process.env.PDF_MERGE_WORKER_URL = "https://worker.example";
+  delete process.env.MERGE_WORKER_SECRET; // staging misconfiguration under investigation: secret unset in Vercel
+  setWifEnv();
+  globalThis.fetch = (async (input: string | URL | Request) => {
+    const url = String(input);
+    if (url.startsWith("https://sts.googleapis.com/")) {
+      return new Response(JSON.stringify({ access_token: "fed", expires_in: 3600 }), { status: 200 });
+    }
+    if (url.startsWith("https://iamcredentials.googleapis.com/")) {
+      return new Response(JSON.stringify({ token: "google-id-token" }), { status: 200 });
+    }
+    // Worker: Cloud Run IAM đã pass (token hợp lệ) nhưng thiếu X-Merge-Worker-Secret → app tự chặn.
+    return new Response(JSON.stringify({ error: "unauthorized" }), { status: 401, headers: JSON_HEADERS });
+  }) as typeof fetch;
+
+  const req = new Request("https://app.example", { headers: { "x-vercel-oidc-token": "oidc-jwt" } });
+  const result = await callWorker("/run", { jobId: "job-1" }, 10_000, { request: req });
+
+  assert.equal(result.ok, false);
+  assert.equal(result.status, 401);
+  assert.equal(result.stage, "WORKER_AUTH");
+  assert.equal(result.diagnostics?.workerSecretConfigured, false);
+  assert.equal(result.diagnostics?.sentWorkerSecretHeader, false);
+  assert.equal(result.diagnostics?.hasAuthorizationHeader, true); // ID token was sent — proves Cloud Run IAM layer was fine
 });
 
 test("callWorker: rejects a URL with a path baked in as CONFIG (never sends the malformed request)", async () => {
