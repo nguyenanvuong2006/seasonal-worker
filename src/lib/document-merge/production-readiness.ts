@@ -137,9 +137,13 @@ export async function checkDatabase(db: ReadOnlyDb): Promise<CheckResult> {
 }
 
 export async function checkMigrations(db: ReadOnlyDb): Promise<MigrationsCheckResult> {
+  // LƯU Ý: drizzle `sql` template nội suy 1 mảng JS thành danh sách tham số
+  // ngăn cách bởi dấu phẩy trong ngoặc — đúng cú pháp cho IN (...), KHÔNG
+  // phải array literal Postgres (ANY(...) cần ARRAY[...] hoặc '{...}'::type[],
+  // không nhận 1 tuple — dùng ANY ở đây sẽ lỗi 42809 lúc chạy thật).
   const result = await db.execute(sql`
     SELECT table_name FROM information_schema.tables
-    WHERE table_schema = 'public' AND table_name = ANY(${[...EXPECTED_TABLES]})
+    WHERE table_schema = 'public' AND table_name IN ${[...EXPECTED_TABLES]}
   `);
   const present = new Set((result.rows as { table_name: string }[]).map((r) => r.table_name));
   const tables = Object.fromEntries(EXPECTED_TABLES.map((t) => [t, present.has(t)])) as MigrationsCheckResult["tables"];
