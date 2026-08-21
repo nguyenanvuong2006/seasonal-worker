@@ -37,12 +37,44 @@ const CHECKBOX = {
 /** Null/empty value representation */
 const NULL_PLACEHOLDER = '';
 
+/** Timezone hiển thị chuẩn cho mọi ngày/giờ trong document — hệ thống dành cho Việt Nam. */
+const DISPLAY_TIMEZONE = 'Asia/Ho_Chi_Minh';
+
+/**
+ * Trích day/month/year/hour/minute theo timezone Asia/Ho_Chi_Minh — KHÔNG
+ * dùng Date.getDate()/getHours() (đọc theo timezone của TIẾN TRÌNH server,
+ * không phải Việt Nam). Vercel Functions mặc định chạy UTC (không set TZ) —
+ * với timestamptz có giờ thật (vd submittedAt, documentSentAt — khác hẳn cột
+ * `date` thuần như regDate/startingDate/dob vốn không có time-of-day nên
+ * không bị ảnh hưởng), 1 giá trị lúc 22:00 UTC là 05:00 sáng hôm SAU giờ
+ * Việt Nam — đọc theo giờ server (UTC) sẽ in sai lùi 1 ngày so với ngày thật
+ * người Việt Nam nhìn thấy trên đồng hồ. Dùng Intl.DateTimeFormat với
+ * timeZone cố định để kết quả GIỐNG HỆT nhau dù server chạy ở UTC, giờ Việt
+ * Nam, hay bất kỳ đâu.
+ */
+function extractDateParts(date: Date): { day: string; month: string; year: string; hours: string; minutes: string } {
+  const parts = new Intl.DateTimeFormat('en-CA', {
+    timeZone: DISPLAY_TIMEZONE,
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+    hour: '2-digit',
+    minute: '2-digit',
+    hour12: false,
+  }).formatToParts(date);
+  const get = (type: string) => parts.find((p) => p.type === type)?.value ?? '';
+  // Intl có thể trả "24" cho giờ nửa đêm khi hour12=false ở 1 số runtime —
+  // chuẩn hoá về "00" để khớp định dạng 24h thông thường (00:00-23:59).
+  const hours = get('hour') === '24' ? '00' : get('hour');
+  return { day: get('day'), month: get('month'), year: get('year'), hours, minutes: get('minute') };
+}
+
 /**
  * Format date theo các pattern
  */
-function formatDate(value: string | Date | null | undefined, pattern: string): string {
-  if (!value) return NULL_PLACEHOLDER;
-  
+function formatDate(value: string | Date | null | undefined, pattern: string, fallbackValue?: string): string {
+  if (!value) return fallbackValue ?? NULL_PLACEHOLDER;
+
   let date: Date;
   if (value instanceof Date) {
     date = value;
@@ -60,23 +92,26 @@ function formatDate(value: string | Date | null | undefined, pattern: string): s
       }
     }
   } else {
-    return NULL_PLACEHOLDER;
+    return fallbackValue ?? NULL_PLACEHOLDER;
   }
-  
-  if (isNaN(date.getTime())) return NULL_PLACEHOLDER;
-  
-  const day = String(date.getDate()).padStart(2, '0');
-  const month = String(date.getMonth() + 1).padStart(2, '0');
-  const year = date.getFullYear();
-  const hours = String(date.getHours()).padStart(2, '0');
-  const minutes = String(date.getMinutes()).padStart(2, '0');
-  
-  return pattern
-    .replace('DD', day)
-    .replace('MM', month)
-    .replace('YYYY', String(year))
-    .replace('HH', hours)
-    .replace('MM', minutes);
+
+  // Ngày không parse được (chuỗi rác) — trước đây luôn trả rỗng, bỏ qua
+  // fallbackValue dù đã cấu hình (khác NUMBER/CURRENCY_VND, vốn dùng
+  // fallbackValue đúng cho trường hợp này) — field required với dữ liệu
+  // nguồn hỏng sẽ lặng lẽ in trống thay vì fallback đã cấu hình.
+  if (isNaN(date.getTime())) return fallbackValue ?? NULL_PLACEHOLDER;
+
+  const { day, month, year, hours, minutes } = extractDateParts(date);
+
+  // Thay token trong 1 lần quét regex duy nhất — KHÔNG dùng .replace() nối
+  // chuỗi tuần tự: pattern 'DD/MM/YYYY HH:mm' có 'MM' (tháng, hoa) và 'mm'
+  // (phút, thường) khác nhau CHỈ ở chữ hoa/thường. .replace('MM', month) rồi
+  // .replace('MM', minutes) tìm lại 'MM' hoa lần 2 — không còn khớp gì (chỉ
+  // còn 'mm' thường) nên phút KHÔNG BAO GIỜ được thay, output giữ nguyên
+  // literal "mm". Quét 1 lần bằng regex tránh hoàn toàn việc token này "ăn"
+  // vào lượt thay của token khác.
+  const tokens: Record<string, string> = { DD: day, MM: month, YYYY: year, HH: hours, mm: minutes };
+  return pattern.replace(/DD|MM|YYYY|HH|mm/g, (token) => tokens[token]);
 }
 
 /**
@@ -137,13 +172,13 @@ export function formatValue(
   
   switch (formatType) {
     case 'DATE_DDMMYYYY':
-      return formatDate(stringValue, 'DD/MM/YYYY');
-      
+      return formatDate(stringValue, 'DD/MM/YYYY', fallbackValue);
+
     case 'DATE_DD_MM_YYYY':
-      return formatDate(stringValue, 'DD-MM-YYYY');
-      
+      return formatDate(stringValue, 'DD-MM-YYYY', fallbackValue);
+
     case 'DATE_DDMMYYYY_HHMM':
-      return formatDate(stringValue, 'DD/MM/YYYY HH:mm');
+      return formatDate(stringValue, 'DD/MM/YYYY HH:mm', fallbackValue);
       
     case 'UPPERCASE':
       return formatTextCase(stringValue, 'UPPER');
