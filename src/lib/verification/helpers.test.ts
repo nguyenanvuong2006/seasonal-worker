@@ -90,11 +90,12 @@ test("callWorker omits Authorization when worker secret is empty", async () => {
 });
 
 
-function setWifEnv() {
+function setWifEnv(overrides: Record<string, string> = {}) {
   process.env.GOOGLE_WIF_PROJECT_NUMBER = "68054464426";
   process.env.GOOGLE_WIF_POOL_ID = "vercel-staging";
   process.env.GOOGLE_WIF_PROVIDER_ID = "vercel-preview";
   process.env.GOOGLE_WIF_SERVICE_ACCOUNT = "seasonal-worker-merge@seasonal-worker-505710.iam.gserviceaccount.com";
+  Object.assign(process.env, overrides);
 }
 
 function mockOidcRoutes() {
@@ -210,6 +211,32 @@ test("callWorker: ID token audience is the Cloud Run service origin (host only, 
   const audience = JSON.parse(iamCalls[0].body).audience;
   assert.equal(audience, `https://${EXPECTED_STAGING_WORKER_HOSTNAME}`);
   assert.equal(new URL(audience).pathname, "/", "audience must be the service origin, never /run or /health");
+});
+
+test("callWorker: ID token audience follows PDF_MERGE_WORKER_URL for ANY configured worker (production URL, not just the hardcoded staging one) — no code path is staging-specific", async () => {
+  const PRODUCTION_URL = "https://seasonal-worker-pdf-production-abc123-as.a.run.app";
+  process.env.PDF_MERGE_WORKER_URL = PRODUCTION_URL;
+  process.env.MERGE_WORKER_SECRET = "prod-secret";
+  setWifEnv({ GOOGLE_WIF_SERVICE_ACCOUNT: "vercel-document-merge-production@seasonal-worker-505710.iam.gserviceaccount.com" });
+  const iamCalls: Array<{ body: string }> = [];
+  globalThis.fetch = (async (input: string | URL | Request, init?: RequestInit) => {
+    const url = String(input);
+    if (url.startsWith("https://sts.googleapis.com/")) {
+      return new Response(JSON.stringify({ access_token: "fed", expires_in: 3600 }), { status: 200 });
+    }
+    if (url.startsWith("https://iamcredentials.googleapis.com/")) {
+      iamCalls.push({ body: String(init?.body) });
+      return new Response(JSON.stringify({ token: "google-id-token" }), { status: 200 });
+    }
+    return new Response(JSON.stringify({ ok: true }), { status: 200 });
+  }) as typeof fetch;
+
+  const req = new Request("https://app.example", { headers: { "x-vercel-oidc-token": "oidc-jwt" } });
+  const result = await callWorker("/health", undefined, 10_000, { request: req });
+
+  assert.equal(result.ok, true);
+  assert.equal(iamCalls.length, 1);
+  assert.equal(JSON.parse(iamCalls[0].body).audience, PRODUCTION_URL, "audience = đúng PDF_MERGE_WORKER_URL đang cấu hình, bất kể staging hay production");
 });
 
 test("callWorker with WIF configured uses POST for /verify-visual and /benchmark", async () => {

@@ -73,6 +73,38 @@ test("getGcpWifConfig returns null when any variable is missing", () => {
   assert.deepEqual(getGcpWifConfig(), CFG);
 });
 
+test("getGcpWifConfig: KHÔNG có default/fallback cho bất kỳ biến nào — thiếu env = null, không âm thầm dùng giá trị của môi trường khác (staging)", () => {
+  // Đây chính là bằng chứng "Production không thể vô tình dùng credential
+  // staging": code không hardcode bất kỳ giá trị fallback nào cho 4 biến
+  // WIF — mọi giá trị PHẢI đến từ chính process.env của deployment đang
+  // chạy (Vercel scope biến môi trường theo environment — Production/
+  // Preview có process.env RIÊNG, code này không tự trộn 2 nguồn).
+  for (const key of ["GOOGLE_WIF_PROJECT_NUMBER", "GOOGLE_WIF_POOL_ID", "GOOGLE_WIF_PROVIDER_ID", "GOOGLE_WIF_SERVICE_ACCOUNT"] as const) {
+    setWifEnv();
+    delete process.env[key];
+    assert.equal(getGcpWifConfig(), null, `thiếu ${key} phải trả null, không fallback về giá trị nào khác`);
+  }
+});
+
+test("getCloudRunIdToken: KHÔNG bao giờ đọc GOOGLE_APPLICATION_CREDENTIALS / service-account key tĩnh — set biến đó không ảnh hưởng flow", async () => {
+  // Chứng minh "no static GCP service-account key is required": toàn bộ
+  // flow chỉ dùng Vercel OIDC token (header/env) + STS + generateIdToken —
+  // set 1 biến kiểu credential-file KHÔNG được phép làm thay đổi hành vi.
+  setWifEnv();
+  process.env.GOOGLE_APPLICATION_CREDENTIALS = "/tmp/should-be-ignored.json";
+  try {
+    mockFetch({
+      "https://sts.googleapis.com/": () => jsonResponse({ access_token: "fed-access-token", expires_in: 3600 }),
+      "https://iamcredentials.googleapis.com/": () => jsonResponse({ token: "google-id-token" }),
+    });
+    const req = new Request("https://example.com", { headers: { "x-vercel-oidc-token": "oidc-jwt" } });
+    const result = await getCloudRunIdToken("https://worker.run.app", req);
+    assert.deepEqual(result, { idToken: "google-id-token" }, "flow vẫn thành công qua đúng đường OIDC→STS→generateIdToken, không rẽ nhánh nào đọc credential file");
+  } finally {
+    delete process.env.GOOGLE_APPLICATION_CREDENTIALS;
+  }
+});
+
 test("stsAudience uses workload identity pool provider resource name", () => {
   assert.equal(
     stsAudience(CFG),
