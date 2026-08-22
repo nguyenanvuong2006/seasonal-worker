@@ -14,12 +14,15 @@ import {
   dwData,
   mergeTemplateFields,
   mergeTemplates,
+  mergeTemplateVersions,
   workerProfiles,
 } from "@/db/schema";
 import { createGoogleDocsService } from "@/lib/document-merge/google-docs-service";
 import { resolveAllFields, validateRequiredFields, type MergeContext } from "@/lib/document-merge/data-resolver";
 import { applyFallbackPlaceholders, buildPreviewContent } from "@/lib/document-merge/preview-merge";
 import { buildApplicantMergeRecord } from "@/lib/document-merge/applicant-record";
+import { renderApplicantDocumentFromVersion } from "@/lib/document-merge/html-pipeline";
+import { loadDailyApplicationRecords } from "@/lib/document-merge/record-loader";
 import {
   documentKindLabel,
   resolveDocumentKind,
@@ -90,6 +93,180 @@ function diagnosePreviewError(error: unknown): Diagnostic {
   };
 }
 
+/**
+ * HTML VERSION PREVIEW — nhánh CHỈ ĐỌC, ADMIN-only, không dùng cho production job.
+ *
+ * Đây là đường an toàn DUY NHẤT để xem trước trực quan một template version
+ * (kể cả DRAFT) qua ĐÚNG renderer HTML mà worker HTML_PDF dùng:
+ *   `renderApplicantDocumentFromVersion` → `renderApplicantDocumentFromParts`
+ *   → `renderApplicantHtmlFromParts` (cùng module mà worker import).
+ *
+ * KHÔNG publish, KHÔNG tạo merge_jobs / merge_job_records / document_history,
+ * KHÔNG gọi Google Docs/Drive/Cloud Run, KHÔNG tạo PDF, KHÔNG email/dispatch,
+ * KHÔNG UPDATE daily_applications / merge_templates / versions.
+ */
+async function handleHtmlVersionPreview(input: {
+  applicationId: string;
+  templateId: string;
+  htmlVersion: unknown;
+  autoRoute: boolean;
+}): Promise<Response> {
+  // Lớp bảo mật thứ hai: chỉ ADMIN được xem HTML DRAFT trực quan.
+  const adminGuard = await requirePermission(["ADMIN"], "document_merge.history.view");
+  if (!adminGuard.ok) {
+    return NextResponse.json({ error: adminGuard.error }, { status: adminGuard.status });
+  }
+
+  const versionNumber = typeof input.htmlVersion === "number" ? input.htmlVersion : Number.NaN;
+  if (!Number.isInteger(versionNumber) || versionNumber <= 0) {
+    return NextResponse.json(
+      {
+        code: "HTML_VERSION_INVALID",
+        error: "htmlVersion phải là số nguyên > 0.",
+        action: "Truyền htmlVersion (vd 3) cùng templateId/applicationId/autoRoute:false khi muốn xem trước HTML của một version cụ thể.",
+      },
+      { status: 400 },
+    );
+  }
+
+  if (!input.applicationId) {
+    return NextResponse.json(
+      {
+        code: "APPLICATION_REQUIRED",
+        error: "Thiếu applicationId để xem trước HTML version.",
+        action: "Truyền applicationId của ứng viên thật.",
+      },
+      { status: 400 },
+    );
+  }
+
+  if (!input.templateId) {
+    return NextResponse.json(
+      {
+        code: "TEMPLATE_REQUIRED",
+        error: "Thiếu templateId để xem trước HTML version.",
+        action: "Truyền templateId cố định (không auto-route) khi dùng htmlVersion.",
+      },
+      { status: 400 },
+    );
+  }
+
+  if (input.autoRoute !== false) {
+    return NextResponse.json(
+      {
+        code: "HTML_VERSION_AUTO_ROUTE_FORBIDDEN",
+        error: "htmlVersion preview yêu cầu autoRoute:false (template cố định).",
+        action: "Truyền autoRoute:false để xem đúng templateId + htmlVersion đã chọn.",
+      },
+      { status: 400 },
+    );
+  }
+
+  const [template] = await db
+    .select()
+    .from(mergeTemplates)
+    .where(eq(mergeTemplates.id, input.templateId))
+    .limit(1);
+  if (!template) {
+    return NextResponse.json(
+      {
+        code: "TEMPLATE_NOT_FOUND",
+        error: "Không tìm thấy template.",
+        action: "Kiểm tra templateId.",
+        templateId: input.templateId,
+      },
+      { status: 404 },
+    );
+  }
+
+  // Load ĐÚNG version được yêu cầu (DRAFT / PUBLISHED / ARCHIVED đều đọc được —
+  // đây là nhánh preview chỉ-đọc; KHÔNG yêu cầu currentPublishedVersion).
+  const [version] = await db
+    .select()
+    .from(mergeTemplateVersions)
+    .where(
+      and(
+        eq(mergeTemplateVersions.templateId, input.templateId),
+        eq(mergeTemplateVersions.version, versionNumber),
+      ),
+    )
+    .limit(1);
+  if (!version) {
+    return NextResponse.json(
+      {
+        code: "VERSION_NOT_FOUND",
+        error: `Template chưa có version ${String(input.htmlVersion)}.`,
+        action: "Kiểm tra danh sách version trong Template Builder.",
+        templateId: input.templateId,
+        htmlVersion: input.htmlVersion,
+      },
+      { status: 404 },
+    );
+  }
+
+  const fields = await db
+    .select()
+    .from(mergeTemplateFields)
+    .where(and(eq(mergeTemplateFields.templateId, template.id), eq(mergeTemplateFields.isOrphaned, false)));
+  if (fields.length === 0) {
+    return NextResponse.json(
+      {
+        code: "MAPPING_MISSING",
+        error: `Template “${template.name}” chưa có placeholder mapping đang hoạt động.`,
+        action: "Mở Mapping Inspector và kiểm tra mapping trước khi Preview.",
+        templateId: template.id,
+        templateName: template.name,
+      },
+      { status: 422 },
+    );
+  }
+
+  // CÙNG record loader mà HTML_PDF worker dùng (loadDailyApplicationRecords).
+  const records = await loadDailyApplicationRecords([input.applicationId]);
+  const recordData = records.get(input.applicationId);
+  if (!recordData) {
+    return NextResponse.json(
+      {
+        code: "APPLICATION_NOT_FOUND",
+        error: "Không tìm thấy hồ sơ ứng viên.",
+        action: "Tải lại danh sách và chọn lại ứng viên.",
+      },
+      { status: 404 },
+    );
+  }
+
+  const context: MergeContext = {
+    currentUserId: adminGuard.session.id,
+    currentUserName: adminGuard.session.fullName,
+    currentDate: new Date(),
+    mergeIndex: 1,
+    mergeCount: 1,
+  };
+
+  const rendered = renderApplicantDocumentFromVersion(version, fields, recordData, context);
+  const pageCount = (rendered.html.match(/class="[^"]*\bpage\b[^"]*"/g) ?? []).length;
+  const sectionCount = (rendered.html.match(/<section\b/gi) ?? []).length;
+
+  return NextResponse.json({
+    mode: "HTML_VERSION_PREVIEW",
+    renderedHtml: rendered.html,
+    version: version.version,
+    versionStatus: version.status,
+    templateId: template.id,
+    templateName: template.name,
+    templateKind: template.documentKind,
+    recordId: input.applicationId,
+    applicationId: input.applicationId,
+    fullName: typeof recordData.fullName === "string" ? recordData.fullName : undefined,
+    unresolved: rendered.unreplaced,
+    missingFields: rendered.missingFields,
+    valid: rendered.valid,
+    pageCount,
+    sectionCount,
+    renderer: "renderApplicantDocumentFromVersion (shared HTML_PDF renderer)",
+  });
+}
+
 export async function POST(request: Request) {
   const guard = await requirePermission(["ADMIN", "HR_RECRUITER", "HR_SUPPORT"], "document_merge.execute");
   if (!guard.ok) {
@@ -101,6 +278,19 @@ export async function POST(request: Request) {
     const applicationId = String(body.applicationId ?? body.recordId ?? "").trim();
     const requestedTemplateId = body.templateId ? String(body.templateId) : "";
     const autoRoute = body.autoRoute !== false;
+    const htmlVersion = body.htmlVersion;
+
+    // Nhánh HTML VERSION PREVIEW (chỉ-đọc, ADMIN-only) — chỉ kích hoạt khi
+    // client truyền RÕ `htmlVersion`. Vắng htmlVersion → giữ nguyên 100% hành
+    // vi Google Docs preview cũ bên dưới.
+    if (htmlVersion !== undefined && htmlVersion !== null) {
+      return await handleHtmlVersionPreview({
+        applicationId,
+        templateId: requestedTemplateId,
+        htmlVersion,
+        autoRoute,
+      });
+    }
 
     if (!applicationId) {
       return NextResponse.json(
