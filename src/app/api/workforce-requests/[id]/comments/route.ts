@@ -45,6 +45,18 @@ export async function POST(req: Request, ctx: { params: Promise<{ id: string }> 
   if (!text) return NextResponse.json({ error: "Nội dung bình luận không được trống." }, { status: 400 });
   if (text.length > 2000) return NextResponse.json({ error: "Bình luận tối đa 2000 ký tự." }, { status: 400 });
 
+  // Production Recovery audit (IDOR) — GET đã scope-check, POST thì không — 1 DEPT_MANAGER bị
+  // giới hạn Data Scope có thể bình luận trên Workforce Request của phòng ban khác.
+  const [request] = await db
+    .select({ departmentId: recruitmentRequests.departmentId })
+    .from(recruitmentRequests)
+    .where(and(eq(recruitmentRequests.id, id), isNull(recruitmentRequests.deletedAt)));
+  if (!request) return NextResponse.json({ error: "Không tìm thấy Workforce Request." }, { status: 404 });
+  const scope = await getUserScope(guard.session);
+  if (!scopeAllowsDepartment(scope, request.departmentId)) {
+    return NextResponse.json({ error: "Không tìm thấy Workforce Request." }, { status: 404 });
+  }
+
   try {
     const comment = await addRequestComment(id, guard.session, text);
     return NextResponse.json({ success: true, comment });
