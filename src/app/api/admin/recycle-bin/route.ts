@@ -8,6 +8,12 @@ import { normalizePersonName } from "@/lib/person-name";
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
+// Production Recovery audit (performance) — TRƯỚC ĐÂY không có .limit() nào: đọc TOÀN BỘ hàng
+// đã soft-delete từ dw_data/daily_applications (2 bảng lớn nhất, tăng liên tục theo mùa vụ) mỗi
+// lần mở Recycle Bin. Giới hạn 500 bản gần nhất/loại — Recycle Bin dùng để khôi phục nhầm lẫn gần
+// đây, không phải xem toàn bộ lịch sử xoá từ trước tới nay.
+const RECYCLE_BIN_LIMIT = 500;
+
 /** SOFT DELETE (Giai đoạn 2 #7) — Recycle Bin: xem & khôi phục mọi hồ sơ đã "xoá" (deleted_at IS NOT NULL). */
 export async function GET() {
   const guard = await requireRoleAndPermission(["ADMIN"], "recycle_bin.manage");
@@ -24,7 +30,8 @@ export async function GET() {
       })
       .from(departments)
       .where(isNotNull(departments.deletedAt))
-      .orderBy(desc(departments.deletedAt)),
+      .orderBy(desc(departments.deletedAt))
+      .limit(RECYCLE_BIN_LIMIT),
     db
       .select({
         id: dwData.id,
@@ -35,7 +42,8 @@ export async function GET() {
       })
       .from(dwData)
       .where(isNotNull(dwData.deletedAt))
-      .orderBy(desc(dwData.deletedAt)),
+      .orderBy(desc(dwData.deletedAt))
+      .limit(RECYCLE_BIN_LIMIT),
     db
       .select({
         id: dailyApplications.id,
@@ -46,7 +54,8 @@ export async function GET() {
       })
       .from(dailyApplications)
       .where(isNotNull(dailyApplications.deletedAt))
-      .orderBy(desc(dailyApplications.deletedAt)),
+      .orderBy(desc(dailyApplications.deletedAt))
+      .limit(RECYCLE_BIN_LIMIT),
   ]);
 
   // Chuẩn hoá họ tên trước khi trả về UI (label là họ tên lao động).

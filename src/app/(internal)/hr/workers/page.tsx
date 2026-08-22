@@ -37,18 +37,22 @@ export default function DwDataPage() {
   const load = useCallback(
     async (p = page, query = q) => {
       setLoading(true);
-      const params = new URLSearchParams({ page: String(p), limit: String(limit) });
-      if (query) params.set("q", query);
-      const res = await fetch(`/api/workers?${params}`);
-      if (!res.ok) {
-        toast({ title: "Không có quyền truy cập DW Data", variant: "destructive" });
+      try {
+        const params = new URLSearchParams({ page: String(p), limit: String(limit) });
+        if (query) params.set("q", query);
+        const res = await fetch(`/api/workers?${params}`);
+        if (!res.ok) {
+          toast({ title: "Không có quyền truy cập DW Data", variant: "destructive" });
+          return;
+        }
+        const d = await res.json();
+        setRows(d.rows ?? []);
+        setTotal(d.total ?? 0);
+      } catch {
+        toast({ title: "Không kết nối được tới máy chủ — thử lại.", variant: "destructive" });
+      } finally {
         setLoading(false);
-        return;
       }
-      const d = await res.json();
-      setRows(d.rows ?? []);
-      setTotal(d.total ?? 0);
-      setLoading(false);
     },
     [page, q],
   );
@@ -72,25 +76,29 @@ export default function DwDataPage() {
       toast({ title: CCCD_ERROR_MESSAGE, variant: "destructive" });
       return;
     }
-    const res = await fetch("/api/workers", {
-      method: "PATCH",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        ...form,
-        oldCccd,
-        cascadeCccd: form.cccd !== oldCccd,
-      }),
-    });
-    const d = await res.json();
-    if (!res.ok) {
-      toast({ title: d.error ?? "Lưu thất bại", variant: "destructive" });
-      return;
+    try {
+      const res = await fetch("/api/workers", {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          ...form,
+          oldCccd,
+          cascadeCccd: form.cccd !== oldCccd,
+        }),
+      });
+      const d = await res.json();
+      if (!res.ok) {
+        toast({ title: d.error ?? "Lưu thất bại", variant: "destructive" });
+        return;
+      }
+      toast({
+        title: form.cccd !== oldCccd ? "✅ Đã sửa CCCD & đồng bộ lịch sử đơn" : "✅ Đã cập nhật hồ sơ DW",
+      });
+      setEdit(null);
+      await load(page, q);
+    } catch {
+      toast({ title: "Không kết nối được tới máy chủ — thử lại.", variant: "destructive" });
     }
-    toast({
-      title: form.cccd !== oldCccd ? "✅ Đã sửa CCCD & đồng bộ lịch sử đơn" : "✅ Đã cập nhật hồ sơ DW",
-    });
-    setEdit(null);
-    await load(page, q);
   };
 
   const totalPages = Math.max(1, Math.ceil(total / limit));

@@ -1395,7 +1395,10 @@ export type AllocationCandidateSession = {
   currentRequestCode: string | null;
 };
 
-export async function listSessionsForAllocation(search?: string): Promise<AllocationCandidateSession[]> {
+export async function listSessionsForAllocation(
+  search?: string,
+  scope: string[] | null = null,
+): Promise<AllocationCandidateSession[]> {
   const conditions = [
     eq(employmentSessions.status, "APPROVED"),
     isNull(employmentSessions.endDate),
@@ -1405,6 +1408,13 @@ export async function listSessionsForAllocation(search?: string): Promise<Alloca
   if (search?.trim()) {
     const q = `%${search.trim()}%`;
     conditions.push(or(sql`${workerProfiles.fullName} ILIKE ${q}`, sql`${workerProfiles.cccd} ILIKE ${q}`)!);
+  }
+  // Production Recovery audit (PII leak) — TRƯỚC ĐÂY không lọc Data Scope: trả fullName+CCCD cho
+  // tối đa 200 session ACTIVE TOÀN CÔNG TY, kể cả khi caller bị giới hạn scope. Các endpoint khác
+  // dùng chung employmentSessions.deptId đều lọc — endpoint này thì không, dù cùng risk (PII).
+  if (scope !== null) {
+    if (scope.length === 0) return [];
+    conditions.push(inArray(employmentSessions.deptId, scope));
   }
 
   const rows = await db

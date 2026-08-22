@@ -31,7 +31,9 @@ const WORD_START = /(^|[-'’‘.\s])([\p{L}])/gu;
  */
 export function normalizePersonName(value: unknown): string {
   if (typeof value !== "string") return "";
-  const collapsed = value.replace(/\s+/g, " ").trim();
+  // NFC — tên nhập/import từ nguồn khác (PDF, tool khác) có thể ở dạng NFD (dấu tổ hợp rời) —
+  // nhìn giống hệt NFC nhưng khác byte, làm 2 tên "giống nhau" so sánh chuỗi (===, dedup) ra khác.
+  const collapsed = value.normalize("NFC").replace(/\s+/g, " ").trim();
   if (!collapsed) return "";
   const lower = collapsed.toLowerCase();
   return lower.replace(WORD_START, (_match, separator: string, letter: string) => separator + letter.toUpperCase());

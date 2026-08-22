@@ -45,6 +45,16 @@ export async function PATCH(req: Request, ctx: { params: Promise<{ id: string }>
     return NextResponse.json({ error: "Thiếu planningPeriodId." }, { status: 400 });
   }
 
+  // Production Recovery audit (IDOR) — GET trên CÙNG resource đã scope-check, PATCH thì không —
+  // 1 HR_RECRUITER bị giới hạn Data Scope có thể liên kết Workforce Request của phòng ban khác
+  // với 1 Planning Period bất kỳ. Thêm check giống hệt GET.
+  const detail = await getRequestDetail(id);
+  if (!detail) return NextResponse.json({ error: "Không tìm thấy Workforce Request." }, { status: 404 });
+  const scope = await getUserScope(guard.session);
+  if (!scopeAllowsDepartment(scope, detail.request.departmentId)) {
+    return NextResponse.json({ error: "Không tìm thấy Workforce Request." }, { status: 404 });
+  }
+
   try {
     await linkRequestToPlanningPeriod(id, body.planningPeriodId, guard.session.username);
     await writeAudit(guard.session, "LINK_REQUEST_TO_PLANNING", "recruitment_requests", {

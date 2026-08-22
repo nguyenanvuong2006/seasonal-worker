@@ -29,19 +29,18 @@ export async function POST(req: Request) {
     return NextResponse.json({ error: "Tối đa 200 yêu cầu mỗi lần thao tác." }, { status: 400 });
   }
 
-  // Data Scope check
+  // Data Scope check — truyền TRỰC TIẾP vào mutation function (xem recruitment-request.ts).
   const scope = await getUserScope(guard.session);
-  // (Scope filtering is handled in the mutation functions)
 
   try {
     switch (body.action) {
       case "activate": {
-        const count = await batchUpdateStatus(body.ids, "PROCESSING", guard.session.username);
+        const count = await batchUpdateStatus(body.ids, "PROCESSING", guard.session.username, scope);
         await writeAudit(guard.session, "BATCH_ACTIVATE_RECRUITMENT_REQUESTS", "recruitment_requests", { ids: body.ids, count });
         return NextResponse.json({ success: true, count });
       }
       case "cancel": {
-        const count = await batchUpdateStatus(body.ids, "CANCELLED", guard.session.username);
+        const count = await batchUpdateStatus(body.ids, "CANCELLED", guard.session.username, scope);
         await writeAudit(guard.session, "BATCH_CANCEL_RECRUITMENT_REQUESTS", "recruitment_requests", { ids: body.ids, count });
         return NextResponse.json({ success: true, count });
       }
@@ -52,12 +51,12 @@ export async function POST(req: Request) {
         if (!valid.includes(s)) {
           return NextResponse.json({ error: `Status phải là một trong: ${valid.join(", ")}` }, { status: 400 });
         }
-        const count = await batchUpdateStatus(body.ids, s, guard.session.username);
+        const count = await batchUpdateStatus(body.ids, s, guard.session.username, scope);
         await writeAudit(guard.session, "BATCH_STATUS_RECRUITMENT_REQUESTS", "recruitment_requests", { ids: body.ids, status: s, count });
         return NextResponse.json({ success: true, count });
       }
       case "delete": {
-        const count = await softDeleteRecruitmentRequests(body.ids, guard.session.username);
+        const count = await softDeleteRecruitmentRequests(body.ids, guard.session.username, scope);
         await writeAudit(guard.session, "BATCH_DELETE_RECRUITMENT_REQUESTS", "recruitment_requests", { ids: body.ids, count });
         return NextResponse.json({ success: true, count });
       }

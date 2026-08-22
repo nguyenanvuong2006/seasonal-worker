@@ -1,5 +1,5 @@
 import { NextResponse } from "next/server";
-import { requirePermission } from "@/lib/auth";
+import { getUserScope, requirePermission } from "@/lib/auth";
 import { listSessionsForAllocation } from "@/lib/workforce-request";
 
 export const runtime = "nodejs";
@@ -13,6 +13,7 @@ export async function GET(req: Request) {
   const url = new URL(req.url);
   const search = url.searchParams.get("search") ?? undefined;
 
-  const rows = await listSessionsForAllocation(search);
+  const scope = await getUserScope(guard.session);
+  const rows = await listSessionsForAllocation(search, scope);
   return NextResponse.json({ rows });
 }

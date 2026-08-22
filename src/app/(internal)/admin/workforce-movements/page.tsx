@@ -104,12 +104,23 @@ export default function WorkforceMovementsPage() {
 
   const load = useCallback(async () => {
     setLoading(true);
-    const [movRes, deptRes] = await Promise.all([fetch("/api/workforce-movements"), fetch("/api/departments?scope=all")]);
-    const movData = await movRes.json();
-    const deptData = await deptRes.json();
-    setRows(movData.rows ?? []);
-    setDepts(deptData.rows ?? []);
-    setLoading(false);
+    try {
+      const [movRes, deptRes] = await Promise.all([fetch("/api/workforce-movements"), fetch("/api/departments?scope=all")]);
+      if (!movRes.ok || !deptRes.ok) {
+        const failed = !movRes.ok ? movRes : deptRes;
+        const data = await failed.json().catch(() => ({}));
+        toast({ title: data.error ?? "Không tải được danh sách yêu cầu.", variant: "destructive" });
+        return;
+      }
+      const movData = await movRes.json();
+      const deptData = await deptRes.json();
+      setRows(movData.rows ?? []);
+      setDepts(deptData.rows ?? []);
+    } catch {
+      toast({ title: "Không kết nối được tới máy chủ — thử lại.", variant: "destructive" });
+    } finally {
+      setLoading(false);
+    }
   }, []);
 
   useEffect(() => {

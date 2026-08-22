@@ -490,9 +490,9 @@ CREATE UNIQUE INDEX IF NOT EXISTS worker_profile_cccd_uq ON worker_profiles (ccc
 
 CREATE TABLE IF NOT EXISTS employment_sessions (
   id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
-  worker_id uuid NOT NULL,
+  worker_id uuid NOT NULL REFERENCES worker_profiles(id) ON DELETE RESTRICT,
   daily_application_id uuid,
-  dept_id uuid,
+  dept_id uuid REFERENCES departments(id) ON DELETE RESTRICT,
   reg_date date NOT NULL,
   status varchar(40) NOT NULL DEFAULT 'PENDING',
   starting_date date,
@@ -528,9 +528,9 @@ CREATE UNIQUE INDEX IF NOT EXISTS user_dept_scope_uq ON user_department_scopes (
 CREATE TABLE IF NOT EXISTS workforce_movements (
   id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
   movement_type varchar(24) NOT NULL,
-  worker_id uuid NOT NULL,
-  from_dept_id uuid,
-  to_dept_id uuid,
+  worker_id uuid NOT NULL REFERENCES worker_profiles(id) ON DELETE RESTRICT,
+  from_dept_id uuid REFERENCES departments(id) ON DELETE RESTRICT,
+  to_dept_id uuid REFERENCES departments(id) ON DELETE RESTRICT,
   effective_date date NOT NULL,
   reason text,
   note text,
@@ -546,7 +546,7 @@ CREATE INDEX IF NOT EXISTS workforce_movement_type_status_idx ON workforce_movem
 
 CREATE TABLE IF NOT EXISTS planning_periods (
   id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
-  department_id uuid NOT NULL,
+  department_id uuid NOT NULL REFERENCES departments(id) ON DELETE RESTRICT,
   section varchar(120),
   group_name varchar(120),
   location varchar(120),

@@ -6,7 +6,7 @@ import { getUserScope, requireRoleAndPermission, writeAudit } from "@/lib/auth";
 import { scopeAllowsDepartment } from "@/lib/data-scope";
 import { todayStr } from "@/lib/helpers";
 import { normalizePersonName } from "@/lib/person-name";
-import { runRules } from "@/lib/rule-engine";
+import { loadActiveRules, runRules } from "@/lib/rule-engine";
 import { queueNotification } from "@/lib/notifications";
 import { autoAllocateInternship } from "@/lib/planning";
 import { isValidCccd, normalizeCccd } from "@/lib/validators";
@@ -190,14 +190,22 @@ export async function POST(req: Request) {
         .select()
         .from(dailyApplications)
         .where(inArray(dailyApplications.id, result.processedIds));
+      // Perf (Production Recovery audit) — TRƯỚC ĐÂY runRules() tự query lại bảng `rules` (cùng
+      // entityType/trigger, kết quả giống hệt) ở MỖI vòng lặp. Tải 1 lần, dùng chung cho cả batch.
+      const preloadedRules = await loadActiveRules("daily_application");
       for (const row of approvedRows) {
-        const actions = await runRules("daily_application", "ON_APPROVE", {
-          age: row.age,
-          gender: row.gender,
-          ethnicity: row.ethnicity,
-          dwMatch: row.dwMatch,
-          declaredType: row.declaredType,
-        });
+        const actions = await runRules(
+          "daily_application",
+          "ON_APPROVE",
+          {
+            age: row.age,
+            gender: row.gender,
+            ethnicity: row.ethnicity,
+            dwMatch: row.dwMatch,
+            declaredType: row.declaredType,
+          },
+          preloadedRules,
+        );
         const notes = actions.filter((a) => a.type === "FLAG_NOTE").map((a) => `${a.value} (rule: ${a.ruleName})`);
         if (notes.length) {
           await db

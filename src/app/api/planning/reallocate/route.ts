@@ -1,5 +1,9 @@
 import { NextResponse } from "next/server";
+import { and, eq, isNull } from "drizzle-orm";
+import { db } from "@/db";
+import { recruitmentRequests } from "@/db/schema";
 import { getUserScope, requirePermission, writeAudit } from "@/lib/auth";
+import { scopeAllowsDepartment } from "@/lib/data-scope";
 import {
   listOpenAllocationsForRequest,
   listReallocationTargets,
@@ -36,6 +40,20 @@ export async function GET(req: Request) {
   if (!requestId) return NextResponse.json({ error: "Thiếu requestId." }, { status: 400 });
 
   const scope = await getUserScope(guard.session);
+
+  // Production Recovery audit (PII leak / IDOR) — listOpenAllocationsForRequest() trả
+  // fullName+CCCD+gender cho requestId BẤT KỲ, không scope-check. reallocateDws() (POST) đã
+  // scope-check nguồn LẪN đích; GET (dựng màn hình) trước đây thì không — 1 tài khoản Data
+  // Scope hạn chế có thể xem tên+CCCD lao động thuộc phòng ban ngoài scope chỉ bằng cách biết
+  // (hoặc đoán, id lộ qua list response khác) requestId của phòng ban đó.
+  const [sourceRequest] = await db
+    .select({ departmentId: recruitmentRequests.departmentId })
+    .from(recruitmentRequests)
+    .where(and(eq(recruitmentRequests.id, requestId), isNull(recruitmentRequests.deletedAt)));
+  if (!sourceRequest || !scopeAllowsDepartment(scope, sourceRequest.departmentId)) {
+    return NextResponse.json({ error: "Không tìm thấy yêu cầu tuyển dụng." }, { status: 404 });
+  }
+
   const [allocations, targets] = await Promise.all([
     listOpenAllocationsForRequest(requestId),
     listReallocationTargets(scope, { excludeRequestId: requestId }),

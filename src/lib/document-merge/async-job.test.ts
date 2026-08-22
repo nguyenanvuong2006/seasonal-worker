@@ -85,7 +85,7 @@ test("createAsyncMergeJob: snapshots htmlBody/printCss from the PUBLISHED versio
     records: { entityType: "daily_applications", recordIds: ["app-1"] },
     createdBy: "admin",
     scopeDeptIds: null,
-    engine: "HTML_PDF",
+    engine: "GOOGLE_DOCS",
   });
 
   const jobInsert = db.calls.find((c) => c.root === "insert" && c.table === "merge_jobs");
@@ -107,7 +107,7 @@ test("createAsyncMergeJob: no PUBLISHED version -> htmlBody/printCss are null (w
     records: { entityType: "daily_applications", recordIds: ["app-1"] },
     createdBy: "admin",
     scopeDeptIds: null,
-    engine: "HTML_PDF",
+    engine: "GOOGLE_DOCS",
   });
 
   const jobInsert = db.calls.find((c) => c.root === "insert" && c.table === "merge_jobs");
@@ -115,4 +115,58 @@ test("createAsyncMergeJob: no PUBLISHED version -> htmlBody/printCss are null (w
   const snap = values.metadata.templates["tpl-1"];
   assert.equal(snap.htmlBody, null);
   assert.equal(snap.printCss, null);
+});
+
+test("createAsyncMergeJob: engine HTML_PDF bị từ chối vĩnh viễn — không tạo job, không silent fallback (mẫu đơn chính thức không được tái tạo bằng HTML)", async () => {
+  const db = fixtureDb(PUBLISHED_VERSION_ROW);
+  const mod = await load(db);
+
+  await assert.rejects(
+    () =>
+      mod.createAsyncMergeJob({
+        templateId: "tpl-1",
+        autoRoute: false,
+        records: { entityType: "daily_applications", recordIds: ["app-1"] },
+        createdBy: "admin",
+        scopeDeptIds: null,
+        engine: "HTML_PDF",
+      }),
+    /HTML_PDF.*vô hiệu hoá vĩnh viễn/,
+  );
+
+  const jobInsert = db.calls.find((c) => c.root === "insert" && c.table === "merge_jobs");
+  assert.equal(jobInsert, undefined, "KHÔNG được tạo merge_jobs row khi engine=HTML_PDF bị từ chối");
+});
+
+test("createAsyncMergeJob: engine mặc định từ getDocumentMergeEngine()=HTML_PDF (misconfiguration) cũng bị từ chối — không đọc lén qua input.engine để bypass", async () => {
+  const db = fixtureDb(PUBLISHED_VERSION_ROW);
+  const mod = await loadModule(new URL("./async-job.ts", import.meta.url), {
+    stubs: {
+      "server-only": serverOnlyStub,
+      "drizzle-orm": drizzleStub,
+      "@/db": { db },
+      "@/db/schema": schemaStub,
+      "./engine-config.ts": { getDocumentMergeEngine: () => "HTML_PDF" },
+      "./template-routing.ts": {
+        selectTemplateForApplicant: () => ({ template: null, kind: "GENERIC" }),
+        documentKindLabel: (k: string) => k,
+      },
+      "./queue-types.ts": {
+        ITEM_STATUS: { QUEUED: "QUEUED" },
+        JOB_STATUS: { QUEUED: "QUEUED" },
+      },
+    },
+  }) as AsyncJobModule;
+
+  await assert.rejects(
+    () =>
+      mod.createAsyncMergeJob({
+        templateId: "tpl-1",
+        autoRoute: false,
+        records: { entityType: "daily_applications", recordIds: ["app-1"] },
+        createdBy: "admin",
+        scopeDeptIds: null,
+      }),
+    /HTML_PDF.*vô hiệu hoá vĩnh viễn/,
+  );
 });
