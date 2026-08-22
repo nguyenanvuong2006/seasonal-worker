@@ -1,6 +1,7 @@
 # PR5 — Final Report: Controlled Staging E2E (PDF Overlay)
 
 > Generated: 2026-08-22 (UTC) · Branch `arena/01a02943-seasonal-worker` · PR #78
+> **UPDATED POST-MERGE**: PR #78 merged by operator at 2026-08-22T12:36:36Z (merge commit `3bf768c`).
 
 ## Operator decisions (đầu vào)
 
@@ -14,7 +15,7 @@ ACTIVATION_ALLOWED     = NO     (giữ nguyên — PR6 + operator approval)
 
 | Field | Value |
 |---|---|
-| **PR5_STATUS** | OPEN — chờ CI/Vercel + operator chạy staging E2E (KHÔNG merge) |
+| **PR5_STATUS** | **MERGED** (operator instruction 2026-08-22; merge commit `3bf768cec5bb187494784142e960b59178f8bed8`) — staging E2E live-run vẫn còn PENDING (operator-gated) |
 | **BASE_MAIN_SHA** | `2f3cb44de0d6ac7f10051777ec38722960edcca2` (PR #73/#74/#76/#77 verified in main) |
 | **BRANCH** | `arena/01a02943-seasonal-worker` |
 | **COMMITS** | `1b9cff9` (feat: staging E2E path) · `b655f25` (chore: workflow operator-install) · `b790ccb` (fix: PdfOverlayError code in failure message) |
@@ -33,7 +34,7 @@ ACTIVATION_ALLOWED     = NO     (giữ nguyên — PR6 + operator approval)
 | **PR_NUMBER / PR_URL** | #78 — https://github.com/nguyenanvuong2006/seasonal-worker/pull/78 |
 | **PR_CHECKS** | Vercel Preview Comments ✅ · Vercel – seasonal-worker ✅ (deployment pass) |
 | **MERGEABLE** | YES (`mergeable=MERGEABLE`, `mergeStateStatus=CLEAN`) |
-| **MERGED** | NO |
+| **MERGED** | **YES** (operator instruction — 2026-08-22T12:36:36Z, `3bf768c`) |
 | **PRODUCTION_CHANGED** | NO |
 | **ENGINE_DEFAULT** | GOOGLE_DOCS (không đổi) |
 | **ACTIVATION_ALLOWED** | NO |
@@ -70,4 +71,4 @@ gh workflow run "Staging E2E — PDF Overlay (PR5)" --ref arena/01a02943-seasona
 # ACTIVATION_ALLOWED vẫn NO — thuộc PR6 + approval tường minh.
 ```
 
-> KHÔNG merge PR5 cho tới khi operator xác nhận STAGING_E2E gates từ evidence thật.
+> PR5 đã được merge theo operator instruction (2026-08-22). STAGING_E2E_1_RECORD / STAGING_E2E_10_RECORD vẫn PENDING cho tới khi operator chạy staging E2E (xem ONE NEXT OPERATOR ACTION). ACTIVATION_ALLOWED vẫn NO — thuộc PR6 + approval tường minh.
