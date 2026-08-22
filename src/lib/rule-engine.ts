@@ -53,17 +53,22 @@ function evalCondition(input: RuleInput, cond: { field: string; op: string; valu
   }
 }
 
-/** Chạy toàn bộ rule đang Active khớp với entityType + trigger, trả về danh sách hành động cần áp dụng. */
+/** Tải rule theo entityType — tách riêng để caller lặp nhiều lần (vd duyệt hàng loạt) có thể tải
+ *  MỘT LẦN rồi truyền vào runRules() qua preloadedRules, thay vì query lại giống hệt mỗi vòng lặp. */
+export async function loadActiveRules(entityType: string): Promise<Rule[]> {
+  return db.select().from(rules).where(eq(rules.entityType, entityType)).orderBy(asc(rules.sortOrder));
+}
+
+/** Chạy toàn bộ rule đang Active khớp với entityType + trigger, trả về danh sách hành động cần áp dụng.
+ *  preloadedRules (tuỳ chọn) — truyền kết quả loadActiveRules() đã tải sẵn để tránh N+1 khi gọi
+ *  lặp lại cho cùng entityType trong 1 vòng lặp (vd duyệt hàng loạt) — mặc định tự tải như cũ. */
 export async function runRules(
   entityType: string,
   trigger: string,
   input: RuleInput,
+  preloadedRules?: Rule[],
 ): Promise<RuleActionResult[]> {
-  const activeRules = await db
-    .select()
-    .from(rules)
-    .where(eq(rules.entityType, entityType))
-    .orderBy(asc(rules.sortOrder));
+  const activeRules = preloadedRules ?? (await loadActiveRules(entityType));
 
   const results: RuleActionResult[] = [];
   for (const rule of activeRules) {

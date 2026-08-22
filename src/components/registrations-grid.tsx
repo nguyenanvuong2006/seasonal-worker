@@ -156,12 +156,14 @@ type HistoryLog = {
 
 function HistoryPanel({ row, canRestore, onClose, onRestored }: { row: AppRow; canRestore: boolean; onClose: () => void; onRestored: () => void }) {
   const [logs, setLogs] = React.useState<HistoryLog[] | null>(null);
+  const [loadError, setLoadError] = React.useState(false);
   const [busyId, setBusyId] = React.useState<string | null>(null);
 
   React.useEffect(() => {
     fetch(`/api/admin/history?targetType=daily_applications&id=${row.id}`)
-      .then((r) => r.json())
-      .then((d) => setLogs(d.rows ?? []));
+      .then((r) => (r.ok ? r.json() : Promise.reject(new Error(`HTTP ${r.status}`))))
+      .then((d) => setLogs(d.rows ?? []))
+      .catch(() => setLoadError(true));
   }, [row.id]);
 
   const restore = async (auditLogId: string) => {
@@ -187,7 +189,9 @@ function HistoryPanel({ row, canRestore, onClose, onRestored }: { row: AppRow; c
 
   return (
     <Modal open onClose={onClose} title={`Lịch sử chỉnh sửa: ${row.fullName}`} width="max-w-2xl">
-      {logs === null ? (
+      {loadError ? (
+        <p className="p-6 text-center text-sm text-danger">Không tải được lịch sử chỉnh sửa — thử đóng và mở lại.</p>
+      ) : logs === null ? (
         <div className="p-6 text-center">
           <Loader2 className="mx-auto h-5 w-5 animate-spin text-primary" />
         </div>
