@@ -357,7 +357,12 @@ test("dán 100 dòng từ Excel: tạo đủ 100 yêu cầu trong MỘT transact
 
   const inserts = db.writesTo("recruitment_requests").filter((c) => c.root === "insert");
   assert.equal(inserts.length, 100, "mỗi dòng hợp lệ tạo đúng 1 bản ghi");
-  assert.equal(db.transactions, 1, "cả lô nằm trong một transaction duy nhất");
+  // B1 fix (Production Recovery audit) — mỗi dòng giờ chạy trong 1 SAVEPOINT riêng (tx.transaction()
+  // lồng trong outer transaction) để 1 dòng lỗi SQL thật không làm poison + silently rollback cả lô
+  // (xem comment tại importRecruitmentRequests). 1 outer + 100 nested (1/dòng) = 101 lệnh transaction,
+  // nhưng vẫn CÙNG 1 kết nối/outer transaction — cả lô vẫn atomic ở mức "tất cả savepoint COMMIT cùng
+  // lúc khi outer COMMIT", không phải 100 transaction độc lập.
+  assert.equal(db.transactions, 101, "1 outer transaction + 1 savepoint/dòng — vẫn 1 kết nối/outer transaction duy nhất");
 });
 
 test("trùng Request Code: cập nhật thay vì tạo bản ghi thứ hai", async () => {

@@ -129,210 +129,220 @@ export async function importRecruitmentRequests(
         canonical["Group"],
       );
 
-      // Check for existing
-      const existing = await tx
-        .select({ id: recruitmentRequests.id, departmentId: recruitmentRequests.departmentId })
-        .from(recruitmentRequests)
-        .where(and(eq(recruitmentRequests.requestCode, requestCode), isNull(recruitmentRequests.deletedAt)))
-        .limit(1);
+      // B1 (Production Recovery audit) — TRƯỚC ĐÂY mỗi dòng chạy try/catch NHƯNG dùng CHUNG 1
+      // transaction/connection (`tx`) với mọi dòng khác. Nếu 1 dòng làm Postgres raise lỗi SQL
+      // thật (vd value too long cho varchar, CHECK constraint) thì theo ngữ nghĩa Postgres, TOÀN
+      // BỘ transaction bị "aborted" — mọi câu lệnh sau đó (kể cả của các dòng hợp lệ phía sau)
+      // đều fail với 25P02, bị catch ở đây và ghi nhầm thành ERROR của TỪNG dòng, RỒI vì catch
+      // không re-throw nên outer transaction vẫn chạy tới COMMIT — Postgres âm thầm hạ COMMIT
+      // trên 1 aborted transaction thành ROLLBACK, KHÔNG báo lỗi. Kết quả: UI báo "N dòng đã
+      // insert" nhưng DB có 0 dòng thật — mất dữ liệu im lặng, báo cáo thành công giả.
+      // Fix: mỗi dòng chạy trong SAVEPOINT riêng (`tx.transaction()` lồng nhau — drizzle-orm
+      // node-postgres dùng SAVEPOINT/ROLLBACK TO SAVEPOINT cho transaction lồng nhau thật). Lỗi
+      // 1 dòng chỉ rollback đúng savepoint của dòng đó — transaction ngoài (và các dòng khác)
+      // không bị ảnh hưởng.
+      const rowResult = await tx.transaction(async (tx2) => {
+        // Check for existing
+        const existing = await tx2
+          .select({ id: recruitmentRequests.id, departmentId: recruitmentRequests.departmentId })
+          .from(recruitmentRequests)
+          .where(and(eq(recruitmentRequests.requestCode, requestCode), isNull(recruitmentRequests.deletedAt)))
+          .limit(1);
 
-      if (existing.length > 0) {
-        // IDOR fix (Production Recovery audit) — TRƯỚC ĐÂY chỉ scope-check phòng ban CỦA DÒNG
-        // ĐANG IMPORT (route.ts), không re-check phòng ban của record ĐANG BỊ GHI ĐÈ. Request
-        // Code là mã nghiệp vụ dễ đoán/lộ (không phải UUID bí mật) — 1 tài khoản scope-hạn-chế
-        // có thể "chiếm" (ghi đè toàn bộ dữ liệu + đổi departmentId) 1 request thuộc phòng ban
-        // KHÁC chỉ bằng cách import 1 dòng trùng Request Code với Location/Dept giải quyết về
-        // phòng ban CỦA HỌ. Chặn tại đây — nguồn ghi duy nhất của cả import lẫn paste-import.
-        if (!scopeAllowsDepartment(scope, existing[0].departmentId)) {
-          results.push({
-            rowIndex: i + 1,
-            status: "ERROR",
-            requestCode,
-            message: "Request Code đã tồn tại thuộc phòng ban ngoài Data Scope được cấp — không thể ghi đè.",
-          });
-          continue;
-        }
-        if (skip) {
-          results.push({ rowIndex: i + 1, status: "SKIPPED", requestCode, message: "Request Code đã tồn tại, bỏ qua" });
-          continue;
-        }
-        if (update) {
-          // Yêu cầu #C/#D — Balance được tính lại bởi provisionRecruitmentRequest()
-          // (snapshot cố định + Quit During Request live), KHÔNG dùng Current
-          // realtime trực tiếp ở đây và KHÔNG reset snapshot đã có (mục C: "Không
-          // overwrite snapshot khi import lại cùng Request Code").
-          const maleRq = toInt(canonical["Male Rq"]);
-          const femaleRq = toInt(canonical["Female Rq"]);
-          const requestedDateVal = parseDate(canonical["Requested Date"] ?? "");
-          const expectedDateVal = parseDate(canonical["Expected Date"] ?? "");
-          const startingDateVal = parseDate(canonical["Starting Date"] ?? "");
-          const endDateVal = parseDate(canonical["End Date"] ?? "");
-          const statusVal = normalizeStatus(canonical["Status"]) ?? "PENDING";
-          await tx
-            .update(recruitmentRequests)
-            .set({
-              requester: canonical["Requester"] ?? "",
-              position: canonical["Position"] ?? null,
-              jobTitle: canonical["Job title"] ?? null,
-              location: canonical["Location"] ?? null,
-              section: canonical["Section"] ?? null,
-              groupName: canonical["Group"] ?? null,
-              division: canonical["Division"] ?? null,
-              department: canonical["Department"] ?? null,
-              reason: canonical["Reason"] ?? null,
-              noteForReason: canonical["Note for reason"] ?? null,
-              specialRequirements: canonical["Special Requirements"] ?? null,
+        if (existing.length > 0) {
+          // IDOR fix (Production Recovery audit) — TRƯỚC ĐÂY chỉ scope-check phòng ban CỦA DÒNG
+          // ĐANG IMPORT (route.ts), không re-check phòng ban của record ĐANG BỊ GHI ĐÈ. Request
+          // Code là mã nghiệp vụ dễ đoán/lộ (không phải UUID bí mật) — 1 tài khoản scope-hạn-chế
+          // có thể "chiếm" (ghi đè toàn bộ dữ liệu + đổi departmentId) 1 request thuộc phòng ban
+          // KHÁC chỉ bằng cách import 1 dòng trùng Request Code với Location/Dept giải quyết về
+          // phòng ban CỦA HỌ. Chặn tại đây — nguồn ghi duy nhất của cả import lẫn paste-import.
+          if (!scopeAllowsDepartment(scope, existing[0].departmentId)) {
+            return {
+              status: "ERROR" as const,
+              message: "Request Code đã tồn tại thuộc phòng ban ngoài Data Scope được cấp — không thể ghi đè.",
+            };
+          }
+          if (skip) {
+            return { status: "SKIPPED" as const, message: "Request Code đã tồn tại, bỏ qua" };
+          }
+          if (update) {
+            // Yêu cầu #C/#D — Balance được tính lại bởi provisionRecruitmentRequest()
+            // (snapshot cố định + Quit During Request live), KHÔNG dùng Current
+            // realtime trực tiếp ở đây và KHÔNG reset snapshot đã có (mục C: "Không
+            // overwrite snapshot khi import lại cùng Request Code").
+            const maleRq = toInt(canonical["Male Rq"]);
+            const femaleRq = toInt(canonical["Female Rq"]);
+            const requestedDateVal = parseDate(canonical["Requested Date"] ?? "");
+            const expectedDateVal = parseDate(canonical["Expected Date"] ?? "");
+            const startingDateVal = parseDate(canonical["Starting Date"] ?? "");
+            const endDateVal = parseDate(canonical["End Date"] ?? "");
+            const statusVal = normalizeStatus(canonical["Status"]) ?? "PENDING";
+            await tx2
+              .update(recruitmentRequests)
+              .set({
+                requester: canonical["Requester"] ?? "",
+                position: canonical["Position"] ?? null,
+                jobTitle: canonical["Job title"] ?? null,
+                location: canonical["Location"] ?? null,
+                section: canonical["Section"] ?? null,
+                groupName: canonical["Group"] ?? null,
+                division: canonical["Division"] ?? null,
+                department: canonical["Department"] ?? null,
+                reason: canonical["Reason"] ?? null,
+                noteForReason: canonical["Note for reason"] ?? null,
+                specialRequirements: canonical["Special Requirements"] ?? null,
+                maleRq,
+                femaleRq,
+                maleApplication: toInt(canonical["Male Application"]),
+                femaleApplication: toInt(canonical["Female Application"]),
+                maleInterviewed: toInt(canonical["Male Interviewed"]),
+                femaleInterviewed: toInt(canonical["Female Interviewed"]),
+                maleRecruited: toInt(canonical["Male Recruited"]),
+                femaleRecruited: toInt(canonical["Female Recruited"]),
+                maleQuit: toInt(canonical["Male Quit"]),
+                femaleQuit: toInt(canonical["Female Quit"]),
+                status: statusVal,
+                requestedDate: requestedDateVal,
+                expectedDate: expectedDateVal,
+                startingDate: startingDateVal,
+                endDate: endDateVal,
+                offeredDate: parseDate(canonical["Offered Date"] ?? ""),
+                completedDate: parseDate(canonical["Completed Date"] ?? ""),
+                ...deltas,
+                departmentId,
+                month: canonical["Month"] ?? null,
+                cost: toInt(canonical["Cost"]),
+                remarks: canonical["Remarks"] ?? null,
+                to: canonical["To"] ?? null,
+                rqStatus: canonical["Rq Status"] ?? null,
+                monthRc: canonical["Month_Rc"] ?? null,
+                // DERIVED — luôn tính lại, KHÔNG lấy giá trị Excel (Yêu cầu #10).
+                totalRequest,
+                recruitedVsExpected,
+                screened: toInt(canonical["Screened"]),
+                interview: toInt(canonical["Interview"]),
+                recruit: toInt(canonical["Recruit"]),
+                departmentText: canonical["Department"] ?? null,
+                monthReport: canonical["Month_Report"] ?? null,
+                updatedAt: new Date(),
+              })
+              .where(eq(recruitmentRequests.id, existing[0].id));
+
+            // Snapshot (nếu chưa có) + auto-link Planning + auto-allocate — idempotent,
+            // an toàn gọi lại khi import trùng Request Code (mục Q).
+            await provisionRecruitmentRequest(tx2, {
+              requestId: existing[0].id,
+              departmentId,
               maleRq,
               femaleRq,
-              maleApplication: toInt(canonical["Male Application"]),
-              femaleApplication: toInt(canonical["Female Application"]),
-              maleInterviewed: toInt(canonical["Male Interviewed"]),
-              femaleInterviewed: toInt(canonical["Female Interviewed"]),
-              maleRecruited: toInt(canonical["Male Recruited"]),
-              femaleRecruited: toInt(canonical["Female Recruited"]),
-              maleQuit: toInt(canonical["Male Quit"]),
-              femaleQuit: toInt(canonical["Female Quit"]),
-              status: statusVal,
-              requestedDate: requestedDateVal,
-              expectedDate: expectedDateVal,
+              location: canonical["Location"] ?? null,
+              division: canonical["Division"] ?? null,
+              section: canonical["Section"] ?? null,
+              groupName: canonical["Group"] ?? null,
               startingDate: startingDateVal,
+              expectedDate: expectedDateVal,
+              requestedDate: requestedDateVal,
               endDate: endDateVal,
-              offeredDate: parseDate(canonical["Offered Date"] ?? ""),
-              completedDate: parseDate(canonical["Completed Date"] ?? ""),
-              ...deltas,
-              departmentId,
-              month: canonical["Month"] ?? null,
-              cost: toInt(canonical["Cost"]),
-              remarks: canonical["Remarks"] ?? null,
-              to: canonical["To"] ?? null,
-              rqStatus: canonical["Rq Status"] ?? null,
-              monthRc: canonical["Month_Rc"] ?? null,
-              // DERIVED — luôn tính lại, KHÔNG lấy giá trị Excel (Yêu cầu #10).
-              totalRequest,
-              recruitedVsExpected,
-              screened: toInt(canonical["Screened"]),
-              interview: toInt(canonical["Interview"]),
-              recruit: toInt(canonical["Recruit"]),
-              departmentText: canonical["Department"] ?? null,
-              monthReport: canonical["Month_Report"] ?? null,
-              updatedAt: new Date(),
-            })
-            .where(eq(recruitmentRequests.id, existing[0].id));
+              status: statusVal,
+              actor: createdBy,
+            });
 
-          // Snapshot (nếu chưa có) + auto-link Planning + auto-allocate — idempotent,
-          // an toàn gọi lại khi import trùng Request Code (mục Q).
-          await provisionRecruitmentRequest(tx, {
-            requestId: existing[0].id,
-            departmentId,
-            maleRq,
-            femaleRq,
+            return { status: "UPDATED" as const, message: "Đã cập nhật" };
+          }
+          return { status: "SKIPPED" as const, message: "Request Code đã tồn tại" };
+        }
+
+        // Insert new
+        // Balance ban đầu = Rq (chưa snapshot) — provisionRecruitmentRequest() bên
+        // dưới sẽ snapshot Current Workforce THEO DEPARTMENT và ghi lại Balance
+        // đúng công thức (mục C/D) NGAY sau khi có request.id.
+        const maleRq = toInt(canonical["Male Rq"]);
+        const femaleRq = toInt(canonical["Female Rq"]);
+        const requestedDateVal = parseDate(canonical["Requested Date"] ?? "");
+        const expectedDateVal = parseDate(canonical["Expected Date"] ?? "");
+        const startingDateVal = parseDate(canonical["Starting Date"] ?? "");
+        const endDateVal = parseDate(canonical["End Date"] ?? "");
+        const statusVal = normalizeStatus(canonical["Status"]) ?? "PENDING";
+        const balance = computeBalanceFromCanonical(canonical);
+        const [inserted] = await tx2
+          .insert(recruitmentRequests)
+          .values({
+            requestCode,
+            requester: canonical["Requester"] ?? "",
+            position: canonical["Position"] ?? null,
+            jobTitle: canonical["Job title"] ?? null,
             location: canonical["Location"] ?? null,
-            division: canonical["Division"] ?? null,
             section: canonical["Section"] ?? null,
             groupName: canonical["Group"] ?? null,
-            startingDate: startingDateVal,
-            expectedDate: expectedDateVal,
-            requestedDate: requestedDateVal,
-            endDate: endDateVal,
+            division: canonical["Division"] ?? null,
+            department: canonical["Department"] ?? null,
+            reason: canonical["Reason"] ?? null,
+            noteForReason: canonical["Note for reason"] ?? null,
+            specialRequirements: canonical["Special Requirements"] ?? null,
+            maleRq,
+            femaleRq,
+            maleApplication: toInt(canonical["Male Application"]),
+            femaleApplication: toInt(canonical["Female Application"]),
+            maleInterviewed: toInt(canonical["Male Interviewed"]),
+            femaleInterviewed: toInt(canonical["Female Interviewed"]),
+            maleRecruited: toInt(canonical["Male Recruited"]),
+            femaleRecruited: toInt(canonical["Female Recruited"]),
+            maleQuit: toInt(canonical["Male Quit"]),
+            femaleQuit: toInt(canonical["Female Quit"]),
+            maleBalance: balance.maleBalance,
+            femaleBalance: balance.femaleBalance,
+            totalBalance: balance.totalBalance,
             status: statusVal,
-            actor: createdBy,
-          });
+            requestedDate: requestedDateVal,
+            expectedDate: expectedDateVal,
+            startingDate: startingDateVal,
+            endDate: endDateVal,
+            offeredDate: parseDate(canonical["Offered Date"] ?? ""),
+            completedDate: parseDate(canonical["Completed Date"] ?? ""),
+            ...deltas,
+            departmentId,
+            month: canonical["Month"] ?? null,
+            cost: toInt(canonical["Cost"]),
+            remarks: canonical["Remarks"] ?? null,
+            to: canonical["To"] ?? null,
+            rqStatus: canonical["Rq Status"] ?? null,
+            monthRc: canonical["Month_Rc"] ?? null,
+            // DERIVED — luôn tính lại, KHÔNG lấy giá trị Excel (Yêu cầu #10).
+            totalRequest,
+            recruitedVsExpected,
+            screened: toInt(canonical["Screened"]),
+            interview: toInt(canonical["Interview"]),
+            recruit: toInt(canonical["Recruit"]),
+            departmentText: canonical["Department"] ?? null,
+            monthReport: canonical["Month_Report"] ?? null,
+            createdBy,
+          })
+          .returning({ id: recruitmentRequests.id });
 
-          results.push({ rowIndex: i + 1, status: "UPDATED", requestCode, message: "Đã cập nhật" });
-        } else {
-          results.push({ rowIndex: i + 1, status: "SKIPPED", requestCode, message: "Request Code đã tồn tại" });
-        }
-        continue;
-      }
-
-      // Insert new
-      // Balance ban đầu = Rq (chưa snapshot) — provisionRecruitmentRequest() bên
-      // dưới sẽ snapshot Current Workforce THEO DEPARTMENT và ghi lại Balance
-      // đúng công thức (mục C/D) NGAY sau khi có request.id.
-      const maleRq = toInt(canonical["Male Rq"]);
-      const femaleRq = toInt(canonical["Female Rq"]);
-      const requestedDateVal = parseDate(canonical["Requested Date"] ?? "");
-      const expectedDateVal = parseDate(canonical["Expected Date"] ?? "");
-      const startingDateVal = parseDate(canonical["Starting Date"] ?? "");
-      const endDateVal = parseDate(canonical["End Date"] ?? "");
-      const statusVal = normalizeStatus(canonical["Status"]) ?? "PENDING";
-      const balance = computeBalanceFromCanonical(canonical);
-      const [inserted] = await tx
-        .insert(recruitmentRequests)
-        .values({
-          requestCode,
-          requester: canonical["Requester"] ?? "",
-          position: canonical["Position"] ?? null,
-          jobTitle: canonical["Job title"] ?? null,
-          location: canonical["Location"] ?? null,
-          section: canonical["Section"] ?? null,
-          groupName: canonical["Group"] ?? null,
-          division: canonical["Division"] ?? null,
-          department: canonical["Department"] ?? null,
-          reason: canonical["Reason"] ?? null,
-          noteForReason: canonical["Note for reason"] ?? null,
-          specialRequirements: canonical["Special Requirements"] ?? null,
+        // SNAPSHOT Current Workforce + auto-link Planning + auto-allocate ACTIVE
+        // workforce theo Department (mục C, E, F, G) — chạy ngay khi request mới
+        // được tạo, trong CÙNG transaction để đảm bảo tính nguyên tử.
+        await provisionRecruitmentRequest(tx2, {
+          requestId: inserted.id,
+          departmentId,
           maleRq,
           femaleRq,
-          maleApplication: toInt(canonical["Male Application"]),
-          femaleApplication: toInt(canonical["Female Application"]),
-          maleInterviewed: toInt(canonical["Male Interviewed"]),
-          femaleInterviewed: toInt(canonical["Female Interviewed"]),
-          maleRecruited: toInt(canonical["Male Recruited"]),
-          femaleRecruited: toInt(canonical["Female Recruited"]),
-          maleQuit: toInt(canonical["Male Quit"]),
-          femaleQuit: toInt(canonical["Female Quit"]),
-          maleBalance: balance.maleBalance,
-          femaleBalance: balance.femaleBalance,
-          totalBalance: balance.totalBalance,
-          status: statusVal,
-          requestedDate: requestedDateVal,
-          expectedDate: expectedDateVal,
+          location: canonical["Location"] ?? null,
+          division: canonical["Division"] ?? null,
+          section: canonical["Section"] ?? null,
+          groupName: canonical["Group"] ?? null,
           startingDate: startingDateVal,
+          expectedDate: expectedDateVal,
+          requestedDate: requestedDateVal,
           endDate: endDateVal,
-          offeredDate: parseDate(canonical["Offered Date"] ?? ""),
-          completedDate: parseDate(canonical["Completed Date"] ?? ""),
-          ...deltas,
-          departmentId,
-          month: canonical["Month"] ?? null,
-          cost: toInt(canonical["Cost"]),
-          remarks: canonical["Remarks"] ?? null,
-          to: canonical["To"] ?? null,
-          rqStatus: canonical["Rq Status"] ?? null,
-          monthRc: canonical["Month_Rc"] ?? null,
-          // DERIVED — luôn tính lại, KHÔNG lấy giá trị Excel (Yêu cầu #10).
-          totalRequest,
-          recruitedVsExpected,
-          screened: toInt(canonical["Screened"]),
-          interview: toInt(canonical["Interview"]),
-          recruit: toInt(canonical["Recruit"]),
-          departmentText: canonical["Department"] ?? null,
-          monthReport: canonical["Month_Report"] ?? null,
-          createdBy,
-        })
-        .returning({ id: recruitmentRequests.id });
+          status: statusVal,
+          actor: createdBy,
+        });
 
-      // SNAPSHOT Current Workforce + auto-link Planning + auto-allocate ACTIVE
-      // workforce theo Department (mục C, E, F, G) — chạy ngay khi request mới
-      // được tạo, trong CÙNG transaction để đảm bảo tính nguyên tử.
-      await provisionRecruitmentRequest(tx, {
-        requestId: inserted.id,
-        departmentId,
-        maleRq,
-        femaleRq,
-        location: canonical["Location"] ?? null,
-        division: canonical["Division"] ?? null,
-        section: canonical["Section"] ?? null,
-        groupName: canonical["Group"] ?? null,
-        startingDate: startingDateVal,
-        expectedDate: expectedDateVal,
-        requestedDate: requestedDateVal,
-        endDate: endDateVal,
-        status: statusVal,
-        actor: createdBy,
+        return { status: "INSERTED" as const, message: "Đã thêm mới" };
       });
 
-      results.push({ rowIndex: i + 1, status: "INSERTED", requestCode, message: "Đã thêm mới" });
+      results.push({ rowIndex: i + 1, status: rowResult.status, requestCode, message: rowResult.message });
     } catch (err) {
       results.push({
         rowIndex: i + 1,
