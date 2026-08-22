@@ -1,0 +1,158 @@
+{
+  "generatedAt": "2026-08-22T11:25:02.103Z",
+  "artifacts": [
+    {
+      "fixtureId": "vietnamese-name",
+      "filename": "fixtures/vietnamese-name.pdf",
+      "sha256": "54da51a03e29a668a2d6cc462af01d6aefb7df4c9a40bd2beaa1b82f45dff1ee",
+      "bytes": 5892,
+      "pageCount": 1,
+      "tags": [
+        "unicode",
+        "vietnamese",
+        "basic"
+      ]
+    },
+    {
+      "fixtureId": "long-address",
+      "filename": "fixtures/long-address.pdf",
+      "sha256": "765b0c68e95d7546fec368eb51cf7d7651063a4412ac49ce4f015ee08b6d8291",
+      "bytes": 8023,
+      "pageCount": 1,
+      "tags": [
+        "multiline",
+        "vietnamese",
+        "wrap"
+      ]
+    },
+    {
+      "fixtureId": "dates",
+      "filename": "fixtures/dates.pdf",
+      "sha256": "7891f78d124d0ec2e6f03bbe78ed1b855da915cd9ea71aa790f41c1c221c948c",
+      "bytes": 4282,
+      "pageCount": 1,
+      "tags": [
+        "date",
+        "format"
+      ]
+    },
+    {
+      "fixtureId": "currency",
+      "filename": "fixtures/currency.pdf",
+      "sha256": "e8c3bc57ea9dc283c59bd14582b4c0e4c8f5311872eb91299b61a3254bfa22ea",
+      "bytes": 4576,
+      "pageCount": 1,
+      "tags": [
+        "number",
+        "format"
+      ]
+    },
+    {
+      "fixtureId": "multiline",
+      "filename": "fixtures/multiline.pdf",
+      "sha256": "de84df1cbb91060819912ab59c8dc1ab934869aa232db391bae0a1a8bc88c96a",
+      "bytes": 7029,
+      "pageCount": 1,
+      "tags": [
+        "multiline",
+        "wrap"
+      ]
+    },
+    {
+      "fixtureId": "shrink-to-fit",
+      "filename": "fixtures/shrink-to-fit.pdf",
+      "sha256": "8429da30fecfa755b5c8d9a3e7d8c0b3ef53456cd13ad42eba66c3cdc69595fa",
+      "bytes": 6302,
+      "pageCount": 1,
+      "tags": [
+        "shrink",
+        "fit"
+      ]
+    },
+    {
+      "fixtureId": "alignment",
+      "filename": "fixtures/alignment.pdf",
+      "sha256": "29c8162481ffce20c36b4502197fadfce0a1a5073de70e6b082f18d658caf4ac",
+      "bytes": 5425,
+      "pageCount": 1,
+      "tags": [
+        "alignment",
+        "horizontal"
+      ]
+    },
+    {
+      "fixtureId": "vertical-alignment",
+      "filename": "fixtures/vertical-alignment.pdf",
+      "sha256": "b6708416049b38bfa3fb7624ac6a5ae9d5ec154818a711e6ec5f2fe1d71256b2",
+      "bytes": 5324,
+      "pageCount": 1,
+      "tags": [
+        "alignment",
+        "vertical"
+      ]
+    },
+    {
+      "fixtureId": "checkbox-checked",
+      "filename": "fixtures/checkbox-checked.pdf",
+      "sha256": "ee2655398200772b3a8c2d13a235e0a36873e38bd33c6140a859615d8bd21962",
+      "bytes": 3327,
+      "pageCount": 1,
+      "tags": [
+        "checkbox",
+        "checked"
+      ]
+    },
+    {
+      "fixtureId": "checkbox-unchecked",
+      "filename": "fixtures/checkbox-unchecked.pdf",
+      "sha256": "0442f3bb38e4ca04db78bc5a5e6b5fee1a8f6b50e13ae1e88a42b83d42dd182d",
+      "bytes": 3288,
+      "pageCount": 1,
+      "tags": [
+        "checkbox",
+        "unchecked"
+      ]
+    },
+    {
+      "fixtureId": "multi-position",
+      "filename": "fixtures/multi-position.pdf",
+      "sha256": "d5e7640528cdea576ca10a4b315905907b0b2f7dc827647b347480d5d6c9b45e",
+      "bytes": 5713,
+      "pageCount": 1,
+      "tags": [
+        "multi-position"
+      ]
+    },
+    {
+      "fixtureId": "multi-page",
+      "filename": "fixtures/multi-page.pdf",
+      "sha256": "9bbd070438b8edc02ab6faba128a4df0d6c6ba9ebd2bc56a8b39d52605bf87ec",
+      "bytes": 5138,
+      "pageCount": 3,
+      "tags": [
+        "multi-page"
+      ]
+    },
+    {
+      "fixtureId": "page-boundaries",
+      "filename": "fixtures/page-boundaries.pdf",
+      "sha256": "68c7465cefa2b6891100201498e4702551daa7e59c44a57a3dba9f5654dbca66",
+      "bytes": 5685,
+      "pageCount": 1,
+      "tags": [
+        "boundary",
+        "edge"
+      ]
+    }
+  ],
+  "totalBytes": 70004,
+  "renderer": "pdf-overlay-renderer",
+  "environment": "staging-verification",
+  "marker": {
+    "nonProduction": true,
+    "environment": "unknown",
+    "engine": "GOOGLE_DOCS",
+    "generatedAt": "2026-08-22T11:25:02.103Z",
+    "disclaimer": "Đây là artifact verification NON-PRODUCTION. KHÔNG dùng cho mục đích nghiệp vụ. Dữ liệu là fixture giả, KHÔNG phải candidate thật."
+  }
+}
