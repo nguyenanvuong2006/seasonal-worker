@@ -1,12 +1,18 @@
 /**
- * PDF Overlay Verification — readiness gate state model (PR4).
+ * PDF Overlay Verification — readiness gate state model (PR4 + PR5).
  *
  * Quản lý trạng thái sẵn sàng của PDF Overlay qua các gate:
  *   INFRASTRUCTURE_READY → PDF_OVERLAY_IMPLEMENTED → VISUAL_GATE_PENDING →
  *   VISUAL_GATE_APPROVED → BENCHMARK_GATE_PENDING → BENCHMARK_GATE_APPROVED →
- *   ACTIVATION_ALLOWED
+ *   STAGING_E2E_1_RECORD → STAGING_E2E_10_RECORD → ACTIVATION_ALLOWED
  *
- * VISUAL_GATE và BENCHMARK_GATE KHÔNG tự động PASS — cần operator review.
+ * VISUAL_GATE, BENCHMARK_GATE KHÔNG tự động PASS — cần operator review.
+ * STAGING_E2E_* tự PASS khi báo cáo E2E staging (machine-readable) hợp lệ —
+ * nhưng KHÔNG bao giờ tự bật ACTIVATION_ALLOWED.
+ *
+ * ACTIVATION_ALLOWED (PR5 trở đi): CHỈ operator đặt PASS trực tiếp qua
+ * updateGate() (thuộc PR6 + approval tường minh). computeReadinessState chỉ
+ * tính canProceedToActivation (đủ điều kiện tiền đề) — không tự PASS gate.
  * KHÔNG có gate nào tự kích hoạt PDF Overlay.
  */
 
@@ -16,6 +22,7 @@ import type {
   GateStatus,
   VisualVerificationReport,
   BenchmarkReport,
+  StagingE2EReport,
 } from "./types.ts";
 
 const GATE_ORDER: readonly ReadinessGate[] = [
@@ -25,6 +32,8 @@ const GATE_ORDER: readonly ReadinessGate[] = [
   "VISUAL_GATE_APPROVED",
   "BENCHMARK_GATE_PENDING",
   "BENCHMARK_GATE_APPROVED",
+  "STAGING_E2E_1_RECORD",
+  "STAGING_E2E_10_RECORD",
   "ACTIVATION_ALLOWED",
 ];
 
@@ -69,10 +78,13 @@ export function updateGate(
     }
   }
 
-  // canProceedToActivation chỉ true khi BENCHMARK_GATE_APPROVED đã PASS
+  // canProceedToActivation = đủ 4 gate tiền đề (visual + benchmark + 2 E2E staging).
+  // ACTIVATION_ALLOWED vẫn là quyết định OPERATOR riêng (updateGate trực tiếp).
   updated.canProceedToActivation =
+    updated.gates["VISUAL_GATE_APPROVED"].status === "PASS" &&
     updated.gates["BENCHMARK_GATE_APPROVED"].status === "PASS" &&
-    updated.gates["VISUAL_GATE_APPROVED"].status === "PASS";
+    updated.gates["STAGING_E2E_1_RECORD"].status === "PASS" &&
+    updated.gates["STAGING_E2E_10_RECORD"].status === "PASS";
 
   return updated;
 }
@@ -172,12 +184,67 @@ export function evaluateBenchmarkGate(
 }
 
 /**
- * Tính ReadinessState từ visual + benchmark reports.
- * VISUAL_GATE và BENCHMARK_GATE KHÔNG tự động PASS.
+ * Đánh giá 1 báo cáo staging E2E (PR5) → trạng thái gate.
+ * PASS chỉ khi: report PASS, đủ itemCount, completed == recordCount,
+ * failed == 0, historyCount == recordCount (không duplicate/missing),
+ * productionIsolation đúng (engineDefault GOOGLE_DOCS, không mutation,
+ * không PII, activationAllowed=false).
+ */
+export function evaluateStagingE2EGate(
+  report: StagingE2EReport | null | undefined,
+): { status: "PASS" | "FAIL" | "PENDING"; reason: string } {
+  if (!report) {
+    return { status: "PENDING", reason: "Chưa có báo cáo staging E2E." };
+  }
+  if (report.status !== "PASS") {
+    return { status: "FAIL", reason: `Báo cáo staging E2E status=${report.status}.` };
+  }
+  if (report.itemCount !== report.recordCount) {
+    return { status: "FAIL", reason: `itemCount=${report.itemCount} != recordCount=${report.recordCount}.` };
+  }
+  if (report.completed !== report.recordCount || report.failed !== 0) {
+    return {
+      status: "FAIL",
+      reason: `completed=${report.completed} (kỳ vọng ${report.recordCount}), failed=${report.failed} (kỳ vọng 0).`,
+    };
+  }
+  if (report.historyCount !== report.recordCount) {
+    return { status: "FAIL", reason: `historyCount=${report.historyCount} != recordCount=${report.recordCount}.` };
+  }
+  if (report.sha256s.length !== report.recordCount) {
+    return { status: "FAIL", reason: `sha256s=${report.sha256s.length} != recordCount=${report.recordCount}.` };
+  }
+  if (report.productionIsolation.engineDefault !== "GOOGLE_DOCS") {
+    return { status: "FAIL", reason: `engineDefault=${report.productionIsolation.engineDefault} != GOOGLE_DOCS.` };
+  }
+  if (report.productionIsolation.productionMutated) {
+    return { status: "FAIL", reason: "productionMutated=true — E2E đã đụng production." };
+  }
+  if (report.productionIsolation.piiInFixtures) {
+    return { status: "FAIL", reason: "piiInFixtures=true — fixture chứa PII." };
+  }
+  return {
+    status: "PASS",
+    reason: `Staging E2E ${report.recordCount} record PASS — job ${report.jobId}, completed=${report.completed}, failed=${report.failed}, history=${report.historyCount}.`,
+  };
+}
+
+export interface StagingE2EInput {
+  oneRecord?: StagingE2EReport | null;
+  tenRecord?: StagingE2EReport | null;
+}
+
+/**
+ * Tính ReadinessState từ visual + benchmark + staging E2E reports.
+ * VISUAL_GATE, BENCHMARK_GATE KHÔNG tự động PASS — cần operator review.
+ * STAGING_E2E_* tự PASS khi báo cáo hợp lệ (evaluateStagingE2EGate).
+ * ACTIVATION_ALLOWED KHÔNG BAO GIỜ tự PASS — luôn BLOCKED chờ operator
+ * (updateGate trực tiếp, thuộc PR6).
  */
 export function computeReadinessState(
   visualReport: VisualVerificationReport | null,
   benchmarkReport: BenchmarkReport | null,
+  stagingE2E: StagingE2EInput | null = null,
 ): ReadinessState {
   let state = createInitialReadinessState();
 
@@ -213,22 +280,40 @@ export function computeReadinessState(
     state.notes.push("BENCHMARK_GATE: chưa chạy benchmark.");
   }
 
-  // ACTIVATION_ALLOWED: chỉ khi cả 2 gate đều APPROVED (PASS)
-  if (
-    state.gates["VISUAL_GATE_APPROVED"].status === "PASS" &&
-    state.gates["BENCHMARK_GATE_APPROVED"].status === "PASS"
-  ) {
-    state = updateGate(state, "ACTIVATION_ALLOWED", "PASS", "Both gates approved by operator.");
-    state.canProceedToActivation = true;
-  } else {
-    state = updateGate(
-      state,
-      "ACTIVATION_ALLOWED",
-      "BLOCKED",
-      "VISUAL_GATE and/or BENCHMARK_GATE chưa được operator APPROVE.",
-    );
-    state.canProceedToActivation = false;
+  // STAGING E2E gates (PR5): tự PASS khi báo cáo machine-readable hợp lệ.
+  const e2eOne = stagingE2E?.oneRecord ?? null;
+  const e2eTen = stagingE2E?.tenRecord ?? null;
+  const e2eOneEval = evaluateStagingE2EGate(e2eOne);
+  if (e2eOneEval.status === "PASS") {
+    state = updateGate(state, "STAGING_E2E_1_RECORD", "PASS", e2eOneEval.reason);
+  } else if (e2eOneEval.status === "FAIL") {
+    state = updateGate(state, "STAGING_E2E_1_RECORD", "FAIL", e2eOneEval.reason);
   }
+  state.notes.push(`STAGING_E2E_1_RECORD: ${e2eOneEval.status} — ${e2eOneEval.reason}`);
+  const e2eTenEval = evaluateStagingE2EGate(e2eTen);
+  if (e2eTenEval.status === "PASS") {
+    state = updateGate(state, "STAGING_E2E_10_RECORD", "PASS", e2eTenEval.reason);
+  } else if (e2eTenEval.status === "FAIL") {
+    state = updateGate(state, "STAGING_E2E_10_RECORD", "FAIL", e2eTenEval.reason);
+  }
+  state.notes.push(`STAGING_E2E_10_RECORD: ${e2eTenEval.status} — ${e2eTenEval.reason}`);
+
+  // ACTIVATION_ALLOWED: KHÔNG BAO GIỜ tự PASS (PR5) — luôn là quyết định
+  // operator (updateGate trực tiếp, PR6 + approval tường minh).
+  const missingPrereqs = GATE_ORDER.filter(
+    (g) =>
+      (g === "VISUAL_GATE_APPROVED" ||
+        g === "BENCHMARK_GATE_APPROVED" ||
+        g === "STAGING_E2E_1_RECORD" ||
+        g === "STAGING_E2E_10_RECORD") &&
+      state.gates[g].status !== "PASS",
+  );
+  const activationReason =
+    missingPrereqs.length === 0
+      ? "Tất cả gate tiền đề đã PASS — ACTIVATION_ALLOWED cần operator approval tường minh (PR6). KHÔNG tự kích hoạt."
+      : `Các gate tiền đề chưa PASS: ${missingPrereqs.join(", ")} — ACTIVATION_ALLOWED bị BLOCKED.`;
+  state = updateGate(state, "ACTIVATION_ALLOWED", "BLOCKED", activationReason);
+  state.notes.push(`ACTIVATION_ALLOWED: BLOCKED (operator decision — ${activationReason})`);
 
   return state;
 }

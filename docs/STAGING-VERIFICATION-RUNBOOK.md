@@ -198,3 +198,17 @@ verify item/history (sha256, retention +3y, không duplicate) → Drive metadata
 Production DB/Drive bị trỏ tới · template sai bị publish · job chạm data production thật ·
 worker crash · history sai (sha256/retention/duplicate) · batch PDF/ZIP thiếu · duplicate processing ·
 visual khác biệt lớn · cleanup đụng data không-test.
+
+## 10. (PR5) Staging E2E riêng cho PDF Overlay renderer — `/run-overlay`
+
+Từ PR5, PDF Overlay renderer có đường staging E2E RIÊNG qua worker endpoint
+`POST /run-overlay` (bị chặn 404 hoàn toàn khi `WORKER_ENV=production` — xem
+`worker-diag-gate.ts`). Đây là bản E2E có kiểm soát: tạo ĐÚNG 1 job success +
+1 job failure (fixture synthetic, KHÔNG PII), đi qua queue/storage/history THẬT
+trên staging, xuất evidence machine-readable.
+
+```bash
+gh workflow run "Staging E2E — PDF Overlay (PR5)" --ref <branch> -f records=1   # rồi records=10
+```
+
+Xem runbook đầy đủ: `docs/pdf-overlay-staging-e2e/README.md`.

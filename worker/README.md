@@ -79,3 +79,14 @@ cd worker && npm run verify:visual
 # 3. GATE: CHỈ publish version khi report pass + so sánh visual với reference
 #    (số trang, text position, tables, borders, font, checkbox, header/footer, tiếng Việt).
 ```
+
+## Endpoint staging-only: POST /run-overlay (PR5)
+
+Controlled staging E2E cho PDF Overlay renderer — đi qua queue/storage/history
+THẬT nhưng CHỈ nhận job `engine='PDF_OVERLAY'` + `metadata.e2e` snapshot
+NON-PRODUCTION (xem `src/lib/document-merge/pdf-overlay/staging-e2e.ts`).
+Auth: `Authorization: Bearer <MERGE_WORKER_SECRET>` (như /run).
+
+**Bị chặn 404 hoàn toàn khi `WORKER_ENV=production`** (worker-diag-gate.ts) —
+production worker không bao giờ có endpoint này. Dùng bởi
+`scripts/staging-e2e-overlay.mjs` (xem `docs/pdf-overlay-staging-e2e/README.md`).
