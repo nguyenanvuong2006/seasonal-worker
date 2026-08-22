@@ -62,3 +62,12 @@ jobs:
           console.log("VERIFY:", JSON.stringify(r.rows[0]));
           await c.end();
           EOF
+                # PR5 root-cause hardening: xác minh schema /run-overlay cần NGAY sau migration.
+      # Một migration KHÔNG thể "báo thành công" trong khi /run-overlay vẫn kỳ vọng
+      # bảng/cột chưa có — bước này fail workflow (exit 1, SCHEMA_MISMATCH) nếu thiếu.
+      # Nguồn sự thật DUY NHẤT: src/lib/document-merge/pdf-overlay/required-schema.ts
+      # (cùng contract worker /run-overlay dùng — xem scripts/verify-required-schema.mjs).
+      - name: Verify required overlay schema (PR5)
+        env:
+          DATABASE_URL: ${{ secrets.STAGING_DATABASE_URL }}
+        run: node --import tsx scripts/verify-required-schema.mjs
