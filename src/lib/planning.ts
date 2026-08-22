@@ -1,5 +1,5 @@
 import "server-only";
-import { and, desc, eq, inArray, isNull, lte, ne, notInArray, or, sql } from "drizzle-orm";
+import { and, desc, eq, gte, inArray, isNull, lte, ne, notInArray, or, sql } from "drizzle-orm";
 import { db } from "@/db";
 import {
   departments,
@@ -114,34 +114,71 @@ export async function createPeriod(input: {
     }
   }
 
-  const [period] = await db
-    .insert(planningPeriods)
-    .values({
-      departmentId: input.departmentId,
-      section,
-      groupName,
-      location,
-      division,
-      startDate: input.startDate,
-      endDate: input.endDate,
-      status: input.activateNow ? "ACTIVE" : "DRAFT",
-      version: 1,
-      requestType,
-      supplementIndex,
-      parentPeriodId,
-      createdBy: input.createdBy,
-    })
-    .returning();
+  // A2 (Production Recovery audit) — TRƯỚC ĐÂY không có idempotency guard nào: double-click hoặc
+  // fetch-retry (client timeout) gửi 2 POST /api/planning giống hệt nhau → 2 planning_periods
+  // ACTIVE riêng biệt, cả 2 đều supersededBy=null → mọi aggregate (dashboard, analytics) CỘNG
+  // DỒN cả 2, nhân đôi demand đã báo cáo. `planning_active_dept_section_uq` (unique index cũ)
+  // đã bị DROP có chủ đích (migrations/2026-08-13-...) để cho phép SUPPLEMENT tồn tại song song
+  // với ORIGINAL cùng dept+khoảng thời gian — nên không thể khôi phục unique index đó nguyên
+  // trạng. Thay vào đó: debounce theo NỘI DUNG THẬT + NGƯỜI TẠO trong cửa sổ ngắn — nếu CÙNG
+  // người vừa tạo 1 period giống hệt (department/section/group/ngày/loại/parent) trong 15 giây
+  // gần nhất, coi là double-submit và trả về bản ghi đã có thay vì tạo bản ghi thứ 2. Đây là
+  // debounce chống double-click/retry, KHÔNG phải khoá concurrency tuyệt đối — 2 submit thật sự
+  // độc lập (khác người, hoặc cách nhau lâu) vẫn được tạo bình thường, đúng chủ đích migration.
+  return db.transaction(async (tx) => {
+    const debounceSince = new Date(Date.now() - 15_000);
+    const [recentDuplicate] = await tx
+      .select({ id: planningPeriods.id })
+      .from(planningPeriods)
+      .where(
+        and(
+          eq(planningPeriods.departmentId, input.departmentId),
+          section ? eq(planningPeriods.section, section) : isNull(planningPeriods.section),
+          groupName ? eq(planningPeriods.groupName, groupName) : isNull(planningPeriods.groupName),
+          eq(planningPeriods.startDate, input.startDate),
+          eq(planningPeriods.endDate, input.endDate),
+          eq(planningPeriods.requestType, requestType),
+          parentPeriodId ? eq(planningPeriods.parentPeriodId, parentPeriodId) : isNull(planningPeriods.parentPeriodId),
+          eq(planningPeriods.createdBy, input.createdBy),
+          gte(planningPeriods.createdAt, debounceSince),
+        ),
+      )
+      .orderBy(desc(planningPeriods.createdAt))
+      .limit(1);
+    if (recentDuplicate) {
+      const [existing] = await tx.select().from(planningPeriods).where(eq(planningPeriods.id, recentDuplicate.id));
+      return existing;
+    }
 
-  await db.insert(planningTargets).values({
-    planningPeriodId: period.id,
-    demandMale,
-    demandFemale,
-    targetCount,
-    note: input.note ?? null,
+    const [period] = await tx
+      .insert(planningPeriods)
+      .values({
+        departmentId: input.departmentId,
+        section,
+        groupName,
+        location,
+        division,
+        startDate: input.startDate,
+        endDate: input.endDate,
+        status: input.activateNow ? "ACTIVE" : "DRAFT",
+        version: 1,
+        requestType,
+        supplementIndex,
+        parentPeriodId,
+        createdBy: input.createdBy,
+      })
+      .returning();
+
+    await tx.insert(planningTargets).values({
+      planningPeriodId: period.id,
+      demandMale,
+      demandFemale,
+      targetCount,
+      note: input.note ?? null,
+    });
+
+    return period;
   });
-
-  return period;
 }
 
 /** Kích hoạt 1 kế hoạch DRAFT -> ACTIVE. */
