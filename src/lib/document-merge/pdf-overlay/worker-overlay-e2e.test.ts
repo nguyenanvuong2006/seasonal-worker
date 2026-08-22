@@ -18,6 +18,7 @@ import { loadModule } from "../../test-support/load-module.ts";
 import { buildStagingE2ESnapshot, renderStagingE2EItem, type OverlayE2ESnapshot } from "./staging-e2e.ts";
 import { PdfOverlayError } from "./types.ts";
 import { buildIndividualPdfFilename, buildIndividualStorageKey } from "../filename.ts";
+import { assertOverlayRequiredSchema as realAssertOverlayRequiredSchema, OverlaySchemaError } from "./required-schema.ts";
 
 const schemaStub = {
   mergeJobs: makeTable("merge_jobs"),
@@ -111,7 +112,7 @@ function makeHistoryStub() {
   };
 }
 
-async function loadRunner(db: FakeDb, spies: QueueSpies, historyStub: ReturnType<typeof makeHistoryStub>, opts: { storageThrows?: boolean } = {}) {
+async function loadRunner(db: FakeDb, spies: QueueSpies, historyStub: ReturnType<typeof makeHistoryStub>, opts: { storageThrows?: boolean; realPreflight?: boolean } = {}) {
   const snapshot = await buildStagingE2ESnapshot(1);
   const mod = await loadModule(new URL("./worker-overlay-e2e.ts", import.meta.url), {
     stubs: {
@@ -144,6 +145,14 @@ async function loadRunner(db: FakeDb, spies: QueueSpies, historyStub: ReturnType
         }),
       },
       "./types.ts": { PdfOverlayError },
+      "./required-schema.ts": {
+        // Mặc định no-op để các test path-bình-thường chạy "như trước" (preflight
+        // đã thoả). realPreflight=true → dùng assertOverlayRequiredSchema THẬT để
+        // kiểm chứng default path phát hiện schema thiếu (yêu cầu root-cause #3).
+        assertOverlayRequiredSchema: opts.realPreflight ? realAssertOverlayRequiredSchema : async () => undefined,
+        checkOverlaySchema: async () => ({ ok: true, requiredTableCount: 3, observedTableCount: 3, missingTables: [], missingColumns: [] }),
+        OverlaySchemaError,
+      },
       "./staging-e2e.ts": {
         OVERLAY_E2E_DOCUMENT_TYPE: "PDF-Overlay-E2E",
         OVERLAY_E2E_ENGINE: "PDF_OVERLAY",
@@ -361,4 +370,100 @@ test("worker-overlay-e2e: item QUEUED không claim được → CLAIM_STALLED: f
   assert.equal((stall.args[1] as { errorCode?: string }).errorCode, "CLAIM_STALLED");
   const finalize = spies.finalizeJob.calls.find((c) => c.args[1] === "FAILED");
   assert.ok(finalize, "finalizeJob FAILED được gọi");
+});
+
+test("worker-overlay-e2e: SCHEMA_MISMATCH (default preflight, schema thiếu) → throw TRƯỚC overlay query, KHÔNG side effect", async () => {
+  // realPreflight=true → default path chạy assertOverlayRequiredSchema THẬT qua
+  // makeDrizzleSchemaQuerier(db). Fake db.execute trả rows rỗng → probe thấy 0
+  // bảng → thiếu toàn bộ → SCHEMA_MISMATCH (yêu cầu root-cause #3, #4, #8).
+  const db = createFakeDb({ respond: () => [] });
+  const spies = makeQueueSpies();
+  const runner = await loadRunner(db, spies, makeHistoryStub(), { realPreflight: true });
+
+  await assert.rejects(
+    () => runner.runOverlayE2EJob("job-1", { storage: {} as never }),
+    (err: unknown) => {
+      assert.ok(err instanceof OverlaySchemaError, "phải là OverlaySchemaError");
+      assert.equal((err as OverlaySchemaError).code, "SCHEMA_MISMATCH");
+      assert.match((err as Error).message, /SCHEMA_MISMATCH/);
+      // Chẩn đoán chỉ rõ bảng thiếu (operator biết migration nào thiếu).
+      assert.match((err as Error).message, /merge_jobs/);
+      assert.match((err as Error).message, /merge_job_records/);
+      assert.match((err as Error).message, /document_history/);
+      return true;
+    },
+  );
+
+  // Preflight chặn TRƯỚC overlay query: KHÔNG select merge_jobs, KHÔNG side effect.
+  assert.equal(
+    db.calls.some((c) => c.root === "select" && c.table === "merge_jobs"),
+    false,
+    "KHÔNG thực hiện overlay query (merge_jobs select) khi schema thiếu",
+  );
+  assert.equal(spies.markJobProcessing.calls, 0, "KHÔNG markJobProcessing");
+  assert.equal(spies.claimItems.calls, 0, "KHÔNG claimItems");
+  assert.equal(spies.finalizeJob.calls.length, 0, "KHÔNG finalizeJob");
+});
+
+test("worker-overlay-e2e: SCHEMA_MISMATCH (inject assertSchema) → propagate, KHÔNG side effect", async () => {
+  const db = createFakeDb({ respond: () => [] });
+  const spies = makeQueueSpies();
+  const runner = await loadRunner(db, spies, makeHistoryStub());
+
+  const schemaErr = new OverlaySchemaError({
+    ok: false,
+    requiredTableCount: 3,
+    observedTableCount: 2,
+    missingTables: ["document_history"],
+    missingColumns: [],
+  });
+
+  await assert.rejects(
+    () => runner.runOverlayE2EJob("job-1", { storage: {} as never, assertSchema: async () => { throw schemaErr; } }),
+    (err: unknown) => {
+      assert.ok(err instanceof OverlaySchemaError);
+      assert.equal((err as OverlaySchemaError).code, "SCHEMA_MISMATCH");
+      return true;
+    },
+  );
+
+  assert.equal(
+    db.calls.some((c) => c.root === "select" && c.table === "merge_jobs"),
+    false,
+    "overlay query không chạy khi assertSchema throw",
+  );
+  assert.equal(spies.markJobProcessing.calls, 0);
+  assert.equal(spies.claimItems.calls, 0);
+  assert.equal(spies.finalizeJob.calls.length, 0);
+});
+
+test("worker-overlay-e2e: schema hợp lệ → preflight pass, path thành công vẫn như cũ", async () => {
+  // Mặc định preflight no-op (đã "thoả") → success path KHÔNG đổi so với trước.
+  const snapshot = await buildStagingE2ESnapshot(1);
+  const db = createFakeDb({
+    respond: (call) => {
+      if (call.root === "select" && call.table === "merge_jobs") return [jobRow({ metadata: { e2e: snapshot } })];
+      if (call.root === "select" && call.table === "merge_job_records") return [];
+      return { rowCount: 1 };
+    },
+  });
+  const spies = makeQueueSpies();
+  spies.claimItems.results = [
+    [{ id: "item-1", mergeJobId: "job-1", sourceEntity: "staging_e2e_fixture", sourceRecordId: "22222222-2222-4222-8222-222222222222", templateId: null, sortOrder: 1, status: "QUEUED", attemptCount: 0 }],
+  ];
+  spies.recomputeJobProgress.results = [
+    { queued: 0, completed: 1, failed: 0, terminal: false },
+    { queued: 0, completed: 1, failed: 0, terminal: false },
+    { queued: 0, completed: 1, failed: 0, terminal: true },
+  ];
+  const runner = await loadRunner(db, spies, makeHistoryStub());
+  const storage = {
+    name: "local",
+    put: async (key: string) => ({ key, url: `file://${key}` }),
+    getMetadata: async () => ({ size: 10 }),
+  };
+  const result = await runner.runOverlayE2EJob("job-1", { storage: storage as never, concurrency: 1 });
+  assert.equal(result.processed, 1);
+  assert.equal(result.failed, 0);
+  assert.ok(spies.finalizeJob.calls.some((c) => c.args[1] === "COMPLETED"), "vẫn finalize COMPLETED");
 });

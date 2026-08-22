@@ -20,7 +20,7 @@
  *     còn lại (parity với HTML runner — không để job kẹt PROCESSING mãi).
  */
 
-import { eq } from "drizzle-orm";
+import { eq, sql, type SQLWrapper } from "drizzle-orm";
 
 import { db } from "../../../db";
 import { mergeJobRecords, mergeJobs } from "../../../db/schema";
@@ -52,6 +52,7 @@ import {
   renderStagingE2EItem,
   type OverlayE2ESnapshot,
 } from "./staging-e2e.ts";
+import { assertOverlayRequiredSchema, type SchemaQuerier } from "./required-schema.ts";
 
 export interface OverlayE2ERunOptions {
   /** Storage provider — mặc định getStorageProvider() (env staging). Test inject được. */
@@ -61,6 +62,13 @@ export interface OverlayE2ERunOptions {
   /** Chống loop vô hạn — mặc định 1000 (parity HTML runner). */
   maxIterations?: number;
   log?: (obj: Record<string, unknown>) => void;
+  /**
+   * Override schema preflight (PR5 root-cause hardening). Mặc định:
+   * assertOverlayRequiredSchema qua db thật → throw SCHEMA_MISMATCH nếu thiếu
+   * bảng/cột TRƯỚC overlay query. Test inject được để deterministic; production
+   * (/run-overlay) KHÔNG truyền → luôn chạy preflight thật.
+   */
+  assertSchema?: () => Promise<void>;
 }
 
 interface OverlayE2EItemContext {
@@ -69,6 +77,20 @@ interface OverlayE2EItemContext {
   snapshot: OverlayE2ESnapshot;
   storage: StorageProvider;
   log: (obj: Record<string, unknown>) => void;
+}
+
+/**
+ * Bọc drizzle `db.execute` thành SchemaQuerier (parity standalone verifier dùng
+ * pg). Probe SQL (xem required-schema.ts) CHỈ chứa identifier từ contract — không
+ * phải input người dùng — nên sql.raw an toàn (không injection).
+ */
+type OverlayExecutableDb = { execute: (query: string | SQLWrapper) => Promise<{ rows: unknown[] }> };
+
+function makeDrizzleSchemaQuerier(database: OverlayExecutableDb): SchemaQuerier {
+  return async (sqlText) => {
+    const result = await database.execute(sql.raw(sqlText));
+    return (result?.rows ?? []) as Record<string, unknown>[];
+  };
 }
 
 /** Ghi stage (không bao giờ throw — parity worker HTML). */
@@ -166,6 +188,13 @@ export async function runOverlayE2EJob(
   jobId: string,
   options: OverlayE2ERunOptions = {},
 ): Promise<{ processed: number; failed: number }> {
+  // PR5 root-cause hardening: deterministic schema preflight TRƯỚC overlay query.
+  // Phát hiện thiếu/không tương thích bảng-cột (SCHEMA_MISMATCH) ngay lập tức thay
+  // vì để query thật nổ lỗi mờ ở giữa vòng claim/render. Mặc định probe qua db
+  // thật; test inject được qua options.assertSchema để deterministic.
+  const assertSchema = options.assertSchema ?? (() => assertOverlayRequiredSchema(makeDrizzleSchemaQuerier(db)));
+  await assertSchema();
+
   const log = options.log ?? ((obj: Record<string, unknown>) => console.log(JSON.stringify(obj)));
   const storage = options.storage ?? getStorageProvider();
   const concurrency = Math.max(1, options.concurrency ?? 4);
