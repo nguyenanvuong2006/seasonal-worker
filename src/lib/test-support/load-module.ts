@@ -73,6 +73,15 @@ export function loadModule(url: URL, options: LoadOptions): Record<string, unkno
     parseFloat,
     setTimeout,
     clearTimeout,
+    // Web globals (Node 18+ via undici) — route.ts thường dùng FormData/File/Request.
+    File,
+    FormData,
+    Blob,
+    Request,
+    Response,
+    URL,
+    Headers,
+    AbortController,
   });
 
   vm.runInContext(js, context);
