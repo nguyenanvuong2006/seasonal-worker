@@ -16,14 +16,16 @@ import {
 import { MergeWorkspace } from "@/components/document-merge/merge-workspace";
 import { TemplateLibrary } from "@/components/document-merge/template-library";
 import { VerificationPanel } from "@/components/document-merge/verification-panel";
+import { PdfOverlayTab } from "@/components/document-merge/pdf-overlay/pdf-overlay-tab";
 
-type TabType = "templates" | "merge" | "history" | "fields" | "verification";
+type TabType = "templates" | "merge" | "history" | "fields" | "pdf-overlay" | "verification";
 
 const TABS: { id: TabType; label: string; icon: typeof FileText }[] = [
   { id: "templates", label: "Quản lý Templates", icon: FileText },
   { id: "merge", label: "Thực hiện Merge", icon: Layers },
   { id: "history", label: "Lịch sử Merge", icon: HistoryIcon },
   { id: "fields", label: "Danh mục Placeholders", icon: Key },
+  { id: "pdf-overlay", label: "PDF Overlay", icon: Layers },
   { id: "verification", label: "Verification", icon: ShieldCheck },
 ];
 
@@ -85,6 +87,7 @@ function DocumentMergeContent() {
         {activeTab === "merge" && <MergeWorkspace selectedTemplateId={selectedTemplateId} onSelectTemplateId={setSelectedTemplateId} onSwitchToHistory={() => setActiveTab("history")} />}
         {activeTab === "history" && <HistoryTab />}
         {activeTab === "fields" && <FieldsTab />}
+        {activeTab === "pdf-overlay" && <PdfOverlayTab />}
         {activeTab === "verification" && <VerificationPanel />}
       </main>
     </div>
