@@ -16,6 +16,7 @@ import assert from "node:assert/strict";
 import { createFakeDb, drizzleStub, makeTable, type FakeDb } from "../../test-support/fake-drizzle.ts";
 import { loadModule } from "../../test-support/load-module.ts";
 import { buildStagingE2ESnapshot, renderStagingE2EItem, type OverlayE2ESnapshot } from "./staging-e2e.ts";
+import { PdfOverlayError } from "./types.ts";
 import { buildIndividualPdfFilename, buildIndividualStorageKey } from "../filename.ts";
 
 const schemaStub = {
@@ -142,6 +143,7 @@ async function loadRunner(db: FakeDb, spies: QueueSpies, historyStub: ReturnType
           itemCount: 1,
         }),
       },
+      "./types.ts": { PdfOverlayError },
       "./staging-e2e.ts": {
         OVERLAY_E2E_DOCUMENT_TYPE: "PDF-Overlay-E2E",
         OVERLAY_E2E_ENGINE: "PDF_OVERLAY",

@@ -41,6 +41,7 @@ import { claimRetryDelayMs, shouldRetryClaim, type WorkerStage } from "../queue-
 import { createDocumentHistory, linkRecordToHistory } from "../document-history.ts";
 import { buildIndividualPdfFilename, buildIndividualStorageKey } from "../filename.ts";
 import { finalizeBatchOutputs } from "../batch-finalize.ts";
+import { PdfOverlayError } from "./types.ts";
 import {
   OVERLAY_E2E_DOCUMENT_TYPE,
   OVERLAY_E2E_ENGINE,
@@ -230,12 +231,13 @@ export async function runOverlayE2EJob(
           } catch (error) {
             failed += 1;
             const message = error instanceof Error ? error.message : String(error);
+            const code = error instanceof PdfOverlayError ? error.code : "RENDER_FAILED";
             await failItem(
               item.id,
-              { errorCode: "RENDER_FAILED", errorMessage: message.slice(0, 500) },
+              { errorCode: "RENDER_FAILED", errorMessage: `${code}: ${message}`.slice(0, 500) },
               { attemptCount: item.attemptCount },
             );
-            log({ event: "pdf_overlay_e2e_item_failed", jobId, sequence: item.sortOrder, error: message.slice(0, 200) });
+            log({ event: "pdf_overlay_e2e_item_failed", jobId, sequence: item.sortOrder, error: `${code}: ${message}`.slice(0, 200) });
           }
         }),
       );
