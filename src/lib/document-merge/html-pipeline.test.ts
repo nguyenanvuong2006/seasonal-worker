@@ -88,3 +88,20 @@ test("renderApplicantDocumentFromVersion: version chưa có HTML → throw rõ r
     /HTML_TEMPLATE_EMPTY/,
   );
 });
+
+test("renderApplicantDocumentFromVersion DELEGATE tới đúng renderApplicantDocumentFromParts (worker HTML_PDF path)", () => {
+  const version = { htmlBody: "<p><<Ho_ten>> - <<Ghi_chu_noi_bo>></p>", printCss: "p{color:red}" };
+  const fields = [
+    field({ placeholder: "Ho_ten", sourcePath: "fullName" }),
+    field({ placeholder: "Ghi_chu_noi_bo", isRequired: false }),
+  ];
+  const recordData = { fullName: "Bùi Nguyễn Phương Vy" };
+  const context = { currentDate: new Date(), mergeIndex: 1, mergeCount: 1 };
+
+  const fromVersion = renderApplicantDocumentFromVersion(version, fields, recordData, context);
+  const fromParts = renderApplicantDocumentFromParts(version.htmlBody, version.printCss, fields, recordData, context);
+
+  assert.deepEqual(fromVersion, fromParts, "nhánh version phải cho kết quả GIỐNG HỆT worker path (renderApplicantDocumentFromParts)");
+  assert.match(fromVersion.html, /Bùi Nguyễn Phương Vy/);
+  assert.match(fromVersion.html, /color:red/);
+});
