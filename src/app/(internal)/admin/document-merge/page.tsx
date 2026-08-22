@@ -8,6 +8,7 @@ import {
   History as HistoryIcon,
   Key,
   Layers,
+  MapPin,
   RefreshCw,
   Search,
   ShieldCheck,
@@ -16,14 +17,16 @@ import {
 import { MergeWorkspace } from "@/components/document-merge/merge-workspace";
 import { TemplateLibrary } from "@/components/document-merge/template-library";
 import { VerificationPanel } from "@/components/document-merge/verification-panel";
+import { PdfMapper } from "@/components/document-merge/pdf-mapper/pdf-mapper";
 
-type TabType = "templates" | "merge" | "history" | "fields" | "verification";
+type TabType = "templates" | "merge" | "history" | "fields" | "verification" | "pdfmapper";
 
 const TABS: { id: TabType; label: string; icon: typeof FileText }[] = [
   { id: "templates", label: "Quản lý Templates", icon: FileText },
   { id: "merge", label: "Thực hiện Merge", icon: Layers },
   { id: "history", label: "Lịch sử Merge", icon: HistoryIcon },
   { id: "fields", label: "Danh mục Placeholders", icon: Key },
+  { id: "pdfmapper", label: "PDF Mapper", icon: MapPin },
   { id: "verification", label: "Verification", icon: ShieldCheck },
 ];
 
@@ -85,6 +88,7 @@ function DocumentMergeContent() {
         {activeTab === "merge" && <MergeWorkspace selectedTemplateId={selectedTemplateId} onSelectTemplateId={setSelectedTemplateId} onSwitchToHistory={() => setActiveTab("history")} />}
         {activeTab === "history" && <HistoryTab />}
         {activeTab === "fields" && <FieldsTab />}
+        {activeTab === "pdfmapper" && <PdfMapperTab selectedTemplateId={selectedTemplateId} onSelectTemplateId={setSelectedTemplateId} />}
         {activeTab === "verification" && <VerificationPanel />}
       </main>
     </div>
@@ -97,6 +101,41 @@ export default function DocumentMergeCenterPage() {
       <DocumentMergeContent />
     </Suspense>
   );
+}
+
+function PdfMapperTab({ selectedTemplateId, onSelectTemplateId }: { selectedTemplateId: string; onSelectTemplateId: (id: string) => void }) {
+  const [templates, setTemplates] = useState<{ id: string; name: string }[]>([]);
+  const [loading, setLoading] = useState(true);
+
+  useEffect(() => {
+    fetch("/api/document-merge/templates", { cache: "no-store" })
+      .then((res) => res.json())
+      .then((data) => {
+        if (Array.isArray(data)) setTemplates(data);
+        else setTemplates([]);
+      })
+      .finally(() => setLoading(false));
+  }, []);
+
+  if (loading) return <div className="rounded-xl border border-slate-200 bg-white p-10 text-center text-sm text-slate-500">Đang tải templates...</div>;
+  if (templates.length === 0) return <div className="rounded-xl border border-dashed border-slate-300 bg-white p-10 text-center text-sm text-slate-500">Chưa có template nào.</div>;
+
+  if (!selectedTemplateId) {
+    return (
+      <div className="space-y-3">
+        <p className="text-sm text-slate-600">Chọn template để mở PDF Mapper:</p>
+        <div className="grid grid-cols-1 gap-2 sm:grid-cols-2 lg:grid-cols-3">
+          {templates.map((t) => (
+            <button key={t.id} onClick={() => onSelectTemplateId(t.id)} className="rounded-xl border border-slate-200 bg-white p-4 text-left text-sm font-semibold text-slate-800 hover:border-emerald-600">
+              {t.name}
+            </button>
+          ))}
+        </div>
+      </div>
+    );
+  }
+
+  return <PdfMapper templateId={selectedTemplateId} />;
 }
 
 function HistoryTab() {
