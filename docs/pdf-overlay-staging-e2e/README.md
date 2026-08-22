@@ -14,7 +14,7 @@
 | Endpoint worker | `worker/src/index.ts` → `POST /run-overlay` | Body `{jobId}`; auth như /run; **bị chặn 404 khi WORKER_ENV=production** |
 | Gate production | `src/lib/document-merge/worker-diag-gate.ts` | `shouldBlockRestrictedWorkerRequest` (gộp `/diag/*` + `/run-overlay`) |
 | E2E script | `scripts/staging-e2e-overlay.mjs` | Tạo ĐÚNG 1 job success + 1 job failure (synthetic), trigger worker, verify toàn bộ, xuất evidence JSON |
-| Workflow CI | `.github/workflows/staging-e2e-overlay.yml` | `workflow_dispatch`, environment `staging`, upload evidence artifact |
+| Workflow CI (operator-install) | `docs/pdf-overlay-staging-e2e/github-workflow-staging-e2e-overlay.yml` | `workflow_dispatch`, environment `staging`, upload evidence artifact. ⚠️ Bot PR không có GitHub `workflows` permission nên file này nằm NGOÀI `.github/workflows/` — operator copy vào `.github/workflows/staging-e2e-overlay.yml` (sau PR5 merge hoặc trên branch bất kỳ) rồi dispatch |
 | Readiness model | `src/lib/document-merge/pdf-overlay/verification/{readiness,types}.ts` | Gate mới `STAGING_E2E_1_RECORD` / `STAGING_E2E_10_RECORD`; ACTIVATION_ALLOWED không bao giờ tự PASS |
 
 ## Luồng dữ liệu
@@ -53,6 +53,15 @@ scripts/staging-e2e-overlay.mjs (CI runner)
 
 ## Chạy (CI/cloud runner — không chạy trên máy user)
 
+> ⚠️ **Bước 0 (operator, 1 lần):** copy `docs/pdf-overlay-staging-e2e/github-workflow-staging-e2e-overlay.yml`
+> → `.github/workflows/staging-e2e-overlay.yml` rồi push (GitHub App của bot PR
+> không có `workflows` permission — operator account thì có). Workflow yêu cầu
+> environment `staging` với `GCP_WORKLOAD_IDENTITY_PROVIDER` / `GCP_SERVICE_ACCOUNT`
+> / `STAGING_DATABASE_URL` (đã dùng bởi deploy/migrate staging workflows) + quyền
+> đọc Google Secret Manager cho `STAGING_MERGE_WORKER_SECRET`,
+> `STAGING_GOOGLE_DRIVE_ROOT_FOLDER_ID`, `STAGING_GOOGLE_CLIENT_ID`,
+> `STAGING_GOOGLE_CLIENT_SECRET`, `STAGING_GOOGLE_REFRESH_TOKEN`.
+
 ### 1. Deploy worker staging từ branch PR5 (có /run-overlay)
 
 ```bash
@@ -63,15 +72,13 @@ gh workflow run "Deploy Document Merge Worker — STAGING" --ref arena/01a02943-
 ### 2. Chạy E2E 1-record
 
 ```bash
-gh workflow run "Staging E2E — PDF Overlay (PR5)" --ref arena/01a02943-seasonal-worker \
-  -f records=1
+gh workflow run "Staging E2E — PDF Overlay (PR5)" --ref <branch> -f records=1
 ```
 
 ### 3. Chạy E2E 10-record (CHỈ khi 1-record PASS)
 
 ```bash
-gh workflow run "Staging E2E — PDF Overlay (PR5)" --ref arena/01a02943-seasonal-worker \
-  -f records=10
+gh workflow run "Staging E2E — PDF Overlay (PR5)" --ref <branch> -f records=10
 ```
 
 Artifact `staging-e2e-overlay-<n>-evidence` chứa `evidence-overlay-<n>.json` (+ `.sha256`) + log.
