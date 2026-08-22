@@ -12,6 +12,7 @@ import {
   uniqueIndex,
   check,
   bigint,
+  doublePrecision,
 } from "drizzle-orm/pg-core";
 import { sql } from "drizzle-orm";
 
@@ -1607,3 +1608,90 @@ export const archiveRuns = pgTable(
 export type MergeTemplateVersion = typeof mergeTemplateVersions.$inferSelect;
 export type DocumentHistory = typeof documentHistory.$inferSelect;
 export type ArchiveRun = typeof archiveRuns.$inferSelect;
+
+/* ============================================================
+   PDF OVERLAY ENGINE — FOUNDATION (PR1)
+   ---------------------------------------------------------------
+   TÁCH RIÊNG hoàn toàn khỏi merge_template_versions (HTML DRAFT/
+   PUBLISHED). HTML DRAFT v3 KHÔNG bị đụng tới.
+
+   pdf_template_versions: 1 bản PDF nền (background) bất biến, được
+   version hoá (DRAFT → PUBLISHED → ARCHIVED), chỉ 1 PUBLISHED/template.
+   PDF nền được blanked (placeholder đã bị xoá) trước khi dùng — nội dung
+   tĩnh của biểu mẫu nhà nước được giữ nguyên 1:1, giá trị động vẽ đè
+   lên theo tọa độ.
+
+   pdf_field_positions: bản đồ tọa độ theo version. Một placeholder có
+   thể có NHIỀU position (cùng page hoặc khác page) — tất cả cùng đọc
+   MỘT giá trị đã resolve (resolveAllFields) và vẽ lặp lại.
+   ============================================================ */
+export const pdfTemplateVersions = pgTable(
+  "pdf_template_versions",
+  {
+    id: uuid("id").defaultRandom().primaryKey(),
+    templateId: uuid("template_id")
+      .notNull()
+      .references(() => mergeTemplates.id, { onDelete: "cascade" }),
+    version: integer("version").notNull(),
+    status: varchar("status", { length: 16 }).notNull().default("DRAFT"), // DRAFT | PUBLISHED | ARCHIVED
+    pdfStorageKey: text("pdf_storage_key").notNull(),
+    sha256: varchar("sha256", { length: 64 }).notNull(),
+    pageCount: integer("page_count").notNull(),
+    pageLayout: jsonb("page_layout").$type<{ pageNumber: number; width: number; height: number; rotation: number }[]>().notNull().default([]),
+    sourceNote: text("source_note"),
+    createdBy: varchar("created_by", { length: 64 }).notNull(),
+    publishedAt: timestamp("published_at", { withTimezone: true }),
+    archivedAt: timestamp("archived_at", { withTimezone: true }),
+    supersededBy: integer("superseded_by"),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+    updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [
+    uniqueIndex("pdf_template_version_uq").on(t.templateId, t.version),
+    index("pdf_template_version_status_idx").on(t.templateId, t.status),
+    uniqueIndex("pdf_template_version_published_uq").on(t.templateId).where(sql`status = 'PUBLISHED'`),
+  ],
+);
+
+export const pdfFieldPositions = pgTable(
+  "pdf_field_positions",
+  {
+    id: uuid("id").defaultRandom().primaryKey(),
+    pdfTemplateVersionId: uuid("pdf_template_version_id")
+      .notNull()
+      .references(() => pdfTemplateVersions.id, { onDelete: "cascade" }),
+    placeholder: varchar("placeholder", { length: 255 }).notNull(),
+    pageNumber: integer("page_number").notNull(), // 1-based
+    x: doublePrecision("x").notNull(),
+    y: doublePrecision("y").notNull(),
+    width: doublePrecision("width").notNull(),
+    height: doublePrecision("height").notNull(),
+    type: varchar("type", { length: 24 }).notNull().default("TEXT"), // TEXT | MULTILINE_TEXT | DATE | NUMBER | CHECKBOX | RADIO_OPTION | SIGNATURE_TEXT | STATIC_TEXT | IMAGE
+    fontSize: doublePrecision("font_size").notNull().default(10),
+    minFontSize: doublePrecision("min_font_size"),
+    fontFamily: varchar("font_family", { length: 64 }),
+    align: varchar("align", { length: 8 }).notNull().default("left"), // left | center | right
+    valign: varchar("valign", { length: 8 }).notNull().default("top"), // top | middle | bottom
+    multiline: boolean("multiline").notNull().default(false),
+    maxLines: integer("max_lines"),
+    rotation: integer("rotation").notNull().default(0),
+    renderOrder: integer("render_order").notNull().default(0),
+    isRequired: boolean("is_required").notNull().default(false),
+    whiteout: boolean("whiteout").notNull().default(false),
+    checkboxStyle: varchar("checkbox_style", { length: 16 }), // SQUARE_X | SQUARE_TICK | SQUARE_FILLED | CIRCLE_DOT
+    optionValue: varchar("option_value", { length: 255 }),
+    sourceKey: varchar("source_key", { length: 255 }),
+    overflowPolicy: varchar("overflow_policy", { length: 16 }).notNull().default("FAIL"), // FAIL | ELLIPSIZE
+    staticText: text("static_text"),
+    metadata: jsonb("metadata").$type<Record<string, unknown>>().notNull().default({}),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+    updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [
+    uniqueIndex("pdf_field_position_uq").on(t.pdfTemplateVersionId, t.placeholder, t.pageNumber, t.x, t.y),
+    index("pdf_field_position_page_idx").on(t.pdfTemplateVersionId, t.pageNumber, t.renderOrder),
+  ],
+);
+
+export type PdfTemplateVersion = typeof pdfTemplateVersions.$inferSelect;
+export type PdfFieldPosition = typeof pdfFieldPositions.$inferSelect;
