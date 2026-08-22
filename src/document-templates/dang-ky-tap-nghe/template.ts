@@ -1,8 +1,8 @@
 /**
  * Dang_ky_Tap_nghe_Template — HTML print template.
  *
- * ⚠️ ĐÂY LÀ BẢN TÁI DỰNG LAYOUT (reconstruction) dùng đúng 51 canonical placeholder
- * của template gốc. Các đoạn văn bản pháp lý dài (Quy định tập nghề, Tờ khai thuế…)
+ * ⚠️ ĐÂY LÀ BẢN TÁI DỰNG LAYOUT (reconstruction) dùng đúng 49 canonical placeholder
+ * active của template gốc. Các đoạn văn bản pháp lý dài (Quy định tập nghề, Tờ khai thuế…)
  * là boilerplate chuẩn — CẦN ĐỐI CHIẾU VERBATIM với Google Doc gốc trong bước
  * Visual Verification (Phase 9 / mục 19) trước khi chuyển production batch sang
  * HTML_PDF. Layout/placeholder/checkbox đã đặt đúng vị trí để visual diff.
@@ -181,8 +181,6 @@ const html = `
     <tr><td style="width:35%">Năm tính thuế</td><td><<Nam_thue>></td></tr>
     <tr><td>Nguồn thu nhập</td><td><<Thu_nhap_Chi_DHF>> Chỉ tại DHF / <<Thu_nhap_Ngoai_DHF>> Ngoài DHF</td></tr>
     <tr><td>Đơn vị thu nhập khác</td><td><<Cong_ty_thu_nhap_khac>> — <<Dia_diem_thu_nhap_khac>></td></tr>
-    <tr><td>Số hợp đồng dịch vụ thuế</td><td><<So_hop_dong_dich_vu_thue>></td></tr>
-    <tr><td>Ngày hợp đồng dịch vụ thuế</td><td><<Ngay_hop_dong_dich_vu_thue>></td></tr>
   </table>
 
   <div class="right" style="margin-top:24pt">

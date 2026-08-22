@@ -71,8 +71,6 @@ export const SAMPLE_FIELD_VALUES: Record<string, string> = {
   Ngay_ky_month: "08",
   Ngay_ky_year: "2026",
   Code: "APP001928",
-  So_hop_dong_dich_vu_thue: "HD-TN-2026-001",
-  Ngay_hop_dong_dich_vu_thue: "17/08/2026",
 };
 
 /** Render tất cả trang PDF → PNG buffers (scale 1.0 ≈ 595×842 cho A4). */

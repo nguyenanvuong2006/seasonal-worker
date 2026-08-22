@@ -1,7 +1,7 @@
 /**
  * HTML print template engine — tests (Phase 2).
  * Kiểm tra: renderer + template Dang_ky_tap_nghe dùng đúng canonical placeholder,
- * render đủ 51 placeholder, @page A4, escape giá trị (chống XSS).
+ * render đủ 49 placeholder active, @page A4, escape giá trị (chống XSS).
  */
 
 import test, { describe, it } from "node:test";
@@ -10,7 +10,7 @@ import assert from "node:assert/strict";
 import { A4_PRINT_CSS, escapeHtml, renderApplicantHtml, wrapHtmlDocument } from "./html-renderer.ts";
 import { extractUniquePlaceholders } from "./placeholder-extractor.ts";
 import { dangKyTapNgheTemplate } from "../../document-templates/dang-ky-tap-nghe/template.ts";
-import { PLACEHOLDERS } from "../../document-templates/dang-ky-tap-nghe/schema.ts";
+import { PLACEHOLDERS, REJECTED_ORPHAN_PLACEHOLDERS } from "../../document-templates/dang-ky-tap-nghe/schema.ts";
 
 function allFieldValues(): Record<string, string> {
   const values: Record<string, string> = {};
@@ -44,14 +44,19 @@ describe("HTML renderer", () => {
 });
 
 describe("Dang_ky_tap_nghe template", () => {
-  it("chứa đủ 51 canonical placeholder", () => {
+  it("chứa đúng 49 placeholder active và loại 2 orphan hợp đồng dịch vụ thuế", () => {
     const found = extractUniquePlaceholders(dangKyTapNgheTemplate.html);
+    assert.equal(found.length, 49);
+    assert.equal(PLACEHOLDERS.length, 49);
     for (const p of PLACEHOLDERS) {
       assert.ok(found.includes(p), `thiếu placeholder ${p}`);
     }
-    // Không có placeholder lạ ngoài danh sách canonical.
     for (const f of found) {
       assert.ok((PLACEHOLDERS as readonly string[]).includes(f), `placeholder lạ ${f}`);
+    }
+    for (const orphan of REJECTED_ORPHAN_PLACEHOLDERS) {
+      assert.equal(found.includes(orphan), false, `orphan ${orphan} vẫn còn trong HTML`);
+      assert.equal((PLACEHOLDERS as readonly string[]).includes(orphan), false);
     }
   });
 
