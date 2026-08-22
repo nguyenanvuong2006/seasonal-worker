@@ -1,8 +1,8 @@
 /**
  * Dang_ky_Tap_nghe_Template — schema tài liệu (tài liệu tham khảo).
  *
- * ⚠️ Đây CHỈ là tài liệu mô tả cấu trúc 5 phần + danh sách 51 canonical placeholder
- * xuất hiện trong template gốc. Source of truth cho MAPPING (placeholder → data)
+ * ⚠️ Đây CHỈ là tài liệu mô tả cấu trúc 5 phần + danh sách 49 canonical placeholder
+ * active của template gốc. Source of truth cho MAPPING (placeholder → data)
  * nằm trong bảng merge_template_fields (Mapping Inspector), KHÔNG hardcode ở đây.
  *
  * Template HTML bên dưới dùng ĐÚNG các token `<<...>>` này; Data Resolver fill giá trị.
@@ -20,10 +20,16 @@ export const SECTIONS = [
 ] as const;
 
 /**
- * 51 placeholder được audit từ Google Doc thật (xem migration
- * 2026-08-16-first-vocational-registration-template.sql). Liệt kê để reference
- * trong lúc dựng layout — KHÔNG dùng để resolve dữ liệu.
+ * 49 placeholder active — khớp Google Doc live / merge_template_fields
+ * không orphan. Hai token hợp đồng dịch vụ thuế đã được operator chấp nhận
+ * orphan và KHÔNG còn trong HTML canonical:
+ *   So_hop_dong_dich_vu_thue, Ngay_hop_dong_dich_vu_thue
  */
+export const REJECTED_ORPHAN_PLACEHOLDERS = [
+  "So_hop_dong_dich_vu_thue",
+  "Ngay_hop_dong_dich_vu_thue",
+] as const;
+
 export const PLACEHOLDERS = [
   // Thông tin cá nhân
   "Ho_ten", "Ngay_sinh", "Dia_chi_thuong_tru", "Dia_chi_tam_tru", "So_dien_thoai",
@@ -47,5 +53,5 @@ export const PLACEHOLDERS = [
   "Ngay_nhan_viec", "Ngay_tiep_nhan", "Nguoi_tiep_nhan", "Dia_diem_ky",
   "Ngay_ky_day", "Ngay_ky_month", "Ngay_ky_year",
   // Thuế / khác
-  "Nam_thue", "Code", "So_hop_dong_dich_vu_thue", "Ngay_hop_dong_dich_vu_thue", "Email", "So_dinh_danh_cu",
+  "Nam_thue", "Code", "Email", "So_dinh_danh_cu",
 ] as const;
