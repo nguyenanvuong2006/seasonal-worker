@@ -124,7 +124,7 @@ export async function PATCH(req: Request, ctx: { params: Promise<{ id: string }>
     if (!(REQUEST_STATUSES as readonly string[]).includes(status)) {
       return NextResponse.json({ error: `Status phải là một trong: ${REQUEST_STATUSES.join(", ")}` }, { status: 400 });
     }
-    await batchUpdateStatus([id], status, guard.session.username);
+    await batchUpdateStatus([id], status, guard.session.username, scope);
     await writeAudit(guard.session, "UPDATE_RECRUITMENT_REQUEST_STATUS", "recruitment_requests", {
       id,
       requestCode: existing.requestCode,
@@ -243,7 +243,7 @@ export async function DELETE(req: Request, ctx: { params: Promise<{ id: string }
     return NextResponse.json({ error: "Không tìm thấy yêu cầu trong Data Scope được cấp." }, { status: 404 });
   }
 
-  await softDeleteRecruitmentRequests([id], guard.session.username);
+  await softDeleteRecruitmentRequests([id], guard.session.username, scope);
   await writeAudit(guard.session, "DELETE_RECRUITMENT_REQUEST", "recruitment_requests", { id, requestCode: existing.requestCode });
   return NextResponse.json({ success: true });
 }

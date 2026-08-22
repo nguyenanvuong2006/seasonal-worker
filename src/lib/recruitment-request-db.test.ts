@@ -83,6 +83,10 @@ function load(db: FakeDb) {
       "@/lib/recruitment-request-utils": utils,
       "@/lib/recruitment-request-columns": columns,
       "@/lib/recruitment-request-provisioning": provisioning,
+      "@/lib/data-scope": {
+        scopeAllowsDepartment: (scope: string[] | null, deptId: string | null | undefined) =>
+          scope === null || Boolean(deptId && scope.includes(deptId)),
+      },
       "drizzle-orm/pg-core": {},
     },
     fallback(spec) {
@@ -383,6 +387,61 @@ test("trùng Request Code: cập nhật thay vì tạo bản ghi thứ hai", asy
   assert.equal(inserts.length + fieldUpdates.length, 5);
 });
 
+test("IDOR fix: import trùng Request Code thuộc phòng ban NGOÀI Data Scope → ERROR, không ghi đè (dù dòng mới giải quyết về phòng ban trong scope)", async () => {
+  // matchHierarchy() (departments select) trả "dept-A" — phòng ban CỦA DÒNG ĐANG IMPORT, nằm
+  // trong scope. Nhưng record ĐÃ TỒN TẠI với Request Code này thuộc "dept-OTHER" — ngoài scope.
+  // Trước fix: route chỉ scope-check dept-A (dòng mới) rồi cho ghi đè thẳng lên record dept-OTHER.
+  const db = createFakeDb({
+    respond(call) {
+      if (call.root === "select" && call.table === "recruitment_requests") {
+        return [{ id: "existing-1", departmentId: "dept-OTHER" }];
+      }
+      if (call.root === "select" && call.table === "departments") return [{ id: "dept-A" }];
+      if (call.root === "insert") return [{ id: "new-1" }];
+      return undefined;
+    },
+  });
+  const mod = load(db);
+  const rows = makeRows(1);
+
+  const results = (await (mod.importRecruitmentRequests as (
+    r: unknown[],
+    by: string,
+    o?: unknown,
+    scope?: string[] | null,
+  ) => Promise<ImportResult[]>)(rows, "recruiter-1", { updateDuplicates: true }, ["dept-A"])) as ImportResult[];
+
+  assert.equal(results.length, 1);
+  assert.equal(results[0].status, "ERROR");
+  assert.match(results[0].message ?? "", /Data Scope/);
+  assert.equal(fieldUpdatesOf(db).length, 0, "KHÔNG được ghi đè record ngoài scope");
+});
+
+test("import trùng Request Code CÙNG phòng ban trong scope vẫn cập nhật bình thường (fix không phá hành vi hợp lệ)", async () => {
+  const db = createFakeDb({
+    respond(call) {
+      if (call.root === "select" && call.table === "recruitment_requests") {
+        return [{ id: "existing-1", departmentId: "dept-A" }];
+      }
+      if (call.root === "select" && call.table === "departments") return [{ id: "dept-A" }];
+      if (call.root === "insert") return [{ id: "new-1" }];
+      return undefined;
+    },
+  });
+  const mod = load(db);
+  const rows = makeRows(1);
+
+  const results = (await (mod.importRecruitmentRequests as (
+    r: unknown[],
+    by: string,
+    o?: unknown,
+    scope?: string[] | null,
+  ) => Promise<ImportResult[]>)(rows, "recruiter-1", { updateDuplicates: true }, ["dept-A"])) as ImportResult[];
+
+  assert.equal(results[0].status, "UPDATED");
+  assert.equal(fieldUpdatesOf(db).length, 1);
+});
+
 test("trùng Request Code với chế độ bỏ qua: không ghi đè dữ liệu cũ", async () => {
   const { db, mod } = importSetup(new Set(["RQ-2026-001", "RQ-2026-002"]));
   const rows = makeRows(5);
@@ -536,13 +595,43 @@ test("xoá yêu cầu là xoá mềm — lịch sử không bao giờ bị DELET
   const db = createFakeDb({ respond: () => ({ rowCount: 2 }) });
   const mod = load(db);
 
-  await (mod.softDeleteRecruitmentRequests as (ids: string[], by: string) => Promise<unknown>)(
+  await (mod.softDeleteRecruitmentRequests as (ids: string[], by: string, scope: string[] | null) => Promise<unknown>)(
     ["r1", "r2"],
     "admin-1",
+    null,
   );
 
   assert.equal(db.calls.filter((c) => c.root === "delete").length, 0, "không được dùng DELETE");
   const upd = db.writesTo("recruitment_requests").find((c) => c.root === "update") as QueryCall;
   const set = argOf(upd, "set") as { deletedAt?: unknown };
   assert.ok(set.deletedAt, "chỉ đánh dấu deleted_at");
+});
+
+test("xoá mềm hàng loạt CHỈ áp dụng cho id trong Data Scope — id ngoài scope không bị xoá (IDOR fix)", async () => {
+  const db = createFakeDb({ respond: () => ({ rowCount: 1 }) });
+  const mod = load(db);
+
+  await (mod.softDeleteRecruitmentRequests as (ids: string[], by: string, scope: string[] | null) => Promise<unknown>)(
+    ["r1", "r2"],
+    "manager-1",
+    ["dept-a"],
+  );
+
+  const upd = db.writesTo("recruitment_requests").find((c) => c.root === "update") as QueryCall;
+  assert.deepEqual(inArrayValues(upd, "recruitment_requests.departmentId"), ["dept-a"]);
+});
+
+test("batchUpdateStatus với scope=[] (chưa được gán bộ phận nào) → không update gì, không lỗi", async () => {
+  const db = createFakeDb({ respond: () => ({ rowCount: 0 }) });
+  const mod = load(db);
+
+  const count = await (mod.batchUpdateStatus as (
+    ids: string[],
+    status: string,
+    by: string,
+    scope: string[] | null,
+  ) => Promise<number>)(["r1"], "CANCELLED", "manager-1", []);
+
+  assert.equal(count, 0);
+  assert.equal(db.writesTo("recruitment_requests").filter((c) => c.root === "update").length, 0);
 });

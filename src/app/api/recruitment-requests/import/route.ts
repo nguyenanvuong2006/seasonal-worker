@@ -155,6 +155,7 @@ export async function POST(req: Request) {
     rowsToImport,
     guard.session.username,
     body.options ?? { skipDuplicates: false, updateDuplicates: true },
+    scope,
   );
 
   await writeAudit(guard.session, "IMPORT_RECRUITMENT_REQUESTS", "recruitment_requests", {

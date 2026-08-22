@@ -74,6 +74,19 @@ export class AsyncJobValidationError extends Error {
 
 export async function createAsyncMergeJob(input: CreateAsyncJobInput): Promise<CreateAsyncJobResult> {
   const engine = input.engine ?? getDocumentMergeEngine();
+
+  // HTML_PDF bị vô hiệu hoá VĨNH VIỄN cho việc tạo job — mẫu đơn chính thức
+  // (registry.ts chỉ có duy nhất "Đăng ký tập nghề") không được phép render
+  // bằng HTML/CSS tái tạo. Chặn NGAY tại nguồn tạo job (không tạo job QUEUED
+  // rồi để worker fail sau) — không silent fallback sang GOOGLE_DOCS, fail rõ
+  // ràng để operator biết cấu hình sai. Xem docs/PDF-COORDINATE-MAPPING-ENGINE-DESIGN.md.
+  if (engine === "HTML_PDF") {
+    throw new AsyncJobValidationError(
+      "Engine HTML_PDF đã bị vô hiệu hoá vĩnh viễn cho mẫu đơn chính thức — không được tái tạo bằng HTML/CSS. Dùng GOOGLE_DOCS (mặc định) hoặc PDF Overlay (khi được kích hoạt).",
+      409,
+    );
+  }
+
   const { entityType, recordIds } = input.records;
 
   if (!recordIds?.length) {

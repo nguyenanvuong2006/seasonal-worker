@@ -215,6 +215,12 @@ export async function PATCH(req: Request, ctx: { params: Promise<{ id: string }>
 
       // DIGITAL WORKER FILE (#10) — đồng bộ trạng thái/bộ phận/ngày bắt đầu sang employment_sessions
       // tương ứng, để hồ sơ điện tử của người lao động luôn phản ánh đúng đợt làm việc hiện tại.
+      // Tự động phân bổ vào Kế hoạch Tập nghề (Planning) khi APPROVED có deptId — tính TRƯỚC
+      // sessionPatch để dùng chung finalDeptId cho invariant check bên dưới.
+      const finalStatus = (patch.status as string) ?? existing.status;
+      const finalDeptId = (patch.deptId as string) ?? existing.deptId;
+      const finalStartingDate = (patch.startingDate as string) ?? existing.startingDate;
+
       const sessionPatch: Record<string, unknown> = {};
       if ("status" in patch) sessionPatch.status = patch.status;
       if ("deptId" in patch) sessionPatch.deptId = patch.deptId;
@@ -225,15 +231,19 @@ export async function PATCH(req: Request, ctx: { params: Promise<{ id: string }>
         // cùng vượt qua). Partial unique index là lưới chốt cuối.
         if (patch.status === "APPROVED") {
           await assertNoOtherActiveSession(tx, linkedSession.workerId, linkedSession.id);
+          // Invariant "ACTIVE ⇒ có bộ phận thật" — không cho phép session thành APPROVED
+          // (end_date IS NULL) mà dept_id vẫn NULL. Trước đây chỉ được auditEmploymentIntegrity()
+          // phát hiện SAU KHI xảy ra (activeWithoutDept) — nay chặn ngay tại nguồn ghi.
+          if (!finalDeptId) {
+            throw new EmploymentRuleError(
+              "Không thể duyệt (APPROVED) khi chưa có Bộ phận — chọn Bộ phận trước khi duyệt.",
+              "APPROVED_WITHOUT_DEPT",
+            );
+          }
           sessionPatch.startDateSource = "ASSIGNMENT";
         }
         await tx.update(employmentSessions).set(sessionPatch).where(eq(employmentSessions.id, linkedSession.id));
       }
-
-      // Tự động phân bổ vào Kế hoạch Tập nghề (Planning) khi APPROVED có deptId
-      const finalStatus = (patch.status as string) ?? existing.status;
-      const finalDeptId = (patch.deptId as string) ?? existing.deptId;
-      const finalStartingDate = (patch.startingDate as string) ?? existing.startingDate;
 
       if (linkedSession && finalStatus === "APPROVED" && finalDeptId) {
         await autoAllocateInternship(linkedSession.id, finalDeptId, finalStartingDate, guard.session.username, tx);

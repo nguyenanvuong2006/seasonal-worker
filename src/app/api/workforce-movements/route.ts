@@ -7,6 +7,7 @@ import { movementScopeVisibility } from "@/lib/data-scope";
 import { queueNotification } from "@/lib/notifications";
 import { todayStr } from "@/lib/helpers";
 import { normalizePersonName } from "@/lib/person-name";
+import { isValidDateStr } from "@/lib/analytics-core";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -98,6 +99,11 @@ export async function POST(req: Request) {
   if (!body.movementType || !body.workerId || !body.effectiveDate) {
     return NextResponse.json({ error: "Thiếu loại yêu cầu, lao động, hoặc ngày hiệu lực." }, { status: 400 });
   }
+  // B3 (Production Recovery audit) — effectiveDate trước đây nhận thẳng từ body, không kiểm tra
+  // định dạng, có thể ghi 1 chuỗi rác/invalid xuống DB hoặc lệch định dạng ngày.
+  if (!isValidDateStr(body.effectiveDate)) {
+    return NextResponse.json({ error: "Ngày hiệu lực không hợp lệ (định dạng YYYY-MM-DD)." }, { status: 400 });
+  }
   if (body.movementType === "transfer" && !body.toDeptId) {
     return NextResponse.json({ error: "Thuyên chuyển cần chọn Bộ phận mới." }, { status: 400 });
   }
@@ -118,46 +124,91 @@ export async function POST(req: Request) {
   // EMPLOYMENT LIFECYCLE (#4) — yêu cầu Nghỉ việc/Thuyên chuyển phải bám vào ĐÚNG Employment
   // Session ACTIVE (APPROVED + end_date IS NULL), không phải "session gần nhất theo regDate"
   // (session gần nhất có thể là 1 đăng ký PENDING mới của cùng người).
-  const [activeSession] = await db
-    .select({ id: employmentSessions.id, deptId: employmentSessions.deptId })
-    .from(employmentSessions)
-    .innerJoin(workerProfiles, and(eq(employmentSessions.workerId, workerProfiles.id), isNull(workerProfiles.deletedAt)))
-    .where(and(
-      eq(employmentSessions.workerId, body.workerId),
-      eq(employmentSessions.status, "APPROVED"),
-      isNull(employmentSessions.endDate),
-    ))
-    .orderBy(desc(employmentSessions.regDate), desc(employmentSessions.createdAt))
-    .limit(1);
-  if (!activeSession) {
-    return NextResponse.json({ error: "Lao động không có Employment Session active để tạo yêu cầu." }, { status: 400 });
-  }
-  const actualFromDeptId = activeSession.deptId;
-
+  //
+  // B2 (Production Recovery audit) — TRƯỚC ĐÂY select session + insert movement KHÔNG bọc trong
+  // transaction, KHÔNG lock, KHÔNG kiểm tra đã có yêu cầu PENDING_HR nào khác cho cùng session:
+  // 2 request đồng thời (double-click, hoặc 2 người thao tác) có thể cùng đọc fromDeptId=A rồi
+  // cùng tạo 2 movement PENDING_HR khác nhau — khi HR duyệt cả 2 lần lượt, lần duyệt thứ 2 dùng
+  // deptId HIỆN TẠI (đã đổi sau lần 1) làm from thật nhưng cột fromDeptId lưu lúc tạo vẫn là A cũ
+  // → lịch sử ghi sai "A → C" thay vì "A → B → C". Fix: lock session row (`for("update")`, cùng
+  // pattern với /api/employment/resignation-requests) + idempotent — đã có PENDING_HR cho session
+  // này (dù resignation hay transfer) thì KHÔNG tạo thêm, trả về yêu cầu đang chờ.
   // DYNAMIC RBAC V2 — bỏ proxy role === DEPT_MANAGER: user có Data Scope (scope != null) chỉ
-  // được tạo yêu cầu cho lao động thuộc bộ phận mình quản lý.
+  // được tạo yêu cầu cho lao động thuộc bộ phận mình quản lý. Lấy scope TRƯỚC transaction (không
+  // phụ thuộc dữ liệu trong transaction) để kiểm tra NGAY khi biết actualFromDeptId — TRƯỚC insert,
+  // không phải sau (insert-rồi-mới-check-authorization sẽ để lọt 1 row đã ghi xuống DB dù 403).
   const scope = await getUserScope(guard.session);
-  if (scope && !scope.includes(actualFromDeptId ?? "")) {
-    return NextResponse.json({ error: "Lao động này không thuộc bộ phận bạn quản lý." }, { status: 403 });
-  }
 
-  const [row] = await db
-    .insert(workforceMovements)
-    .values({
-      movementType: body.movementType,
-      workerId: body.workerId,
-      fromDeptId: actualFromDeptId,
-      toDeptId: body.movementType === "transfer" ? body.toDeptId : null,
-      // EMPLOYMENT LIFECYCLE — truy vết đủ: movement thuộc session nào + nguồn báo cáo.
-      employmentSessionId: activeSession.id,
-      source: "DEPT_REPORT",
-      effectiveDate: body.effectiveDate,
-      reason: body.reason || null,
-      note: body.note || null,
-      status: "PENDING_HR",
-      requestedBy: guard.session.username,
-    })
-    .returning();
+  const result = await db.transaction(async (tx) => {
+    const [activeSession] = await tx
+      .select({ id: employmentSessions.id, deptId: employmentSessions.deptId })
+      .from(employmentSessions)
+      .innerJoin(workerProfiles, and(eq(employmentSessions.workerId, workerProfiles.id), isNull(workerProfiles.deletedAt)))
+      .where(and(
+        eq(employmentSessions.workerId, body.workerId!),
+        eq(employmentSessions.status, "APPROVED"),
+        isNull(employmentSessions.endDate),
+      ))
+      .orderBy(desc(employmentSessions.regDate), desc(employmentSessions.createdAt))
+      .limit(1)
+      .for("update");
+    if (!activeSession) {
+      return { error: "Lao động không có Employment Session active để tạo yêu cầu.", status: 400 } as const;
+    }
+    const actualFromDeptId = activeSession.deptId;
+
+    // B1 (Production Recovery audit) — thuyên chuyển với đích trùng bộ phận hiện tại: vô nghĩa,
+    // gây "transfer" giả trong lịch sử/thống kê.
+    if (body.movementType === "transfer" && body.toDeptId === actualFromDeptId) {
+      return { error: "Bộ phận đích trùng bộ phận hiện tại — không phải thuyên chuyển.", status: 400 } as const;
+    }
+
+    if (scope && !scope.includes(actualFromDeptId ?? "")) {
+      return { error: "Lao động này không thuộc bộ phận bạn quản lý.", status: 403 } as const;
+    }
+
+    // Idempotent — session này đã có 1 yêu cầu PENDING_HR (resignation hoặc transfer) rồi thì
+    // không tạo thêm; 1 session ACTIVE chỉ nên có tối đa 1 yêu cầu đang chờ tại 1 thời điểm.
+    const [existingPending] = await tx
+      .select({ id: workforceMovements.id, movementType: workforceMovements.movementType })
+      .from(workforceMovements)
+      .where(and(
+        eq(workforceMovements.employmentSessionId, activeSession.id),
+        eq(workforceMovements.status, "PENDING_HR"),
+      ))
+      .limit(1);
+    if (existingPending) {
+      return {
+        error: `Lao động này đã có 1 yêu cầu (${existingPending.movementType}) đang chờ HR xử lý — không thể tạo thêm.`,
+        status: 409,
+      } as const;
+    }
+
+    const [row] = await tx
+      .insert(workforceMovements)
+      .values({
+        movementType: body.movementType!,
+        workerId: body.workerId!,
+        fromDeptId: actualFromDeptId,
+        toDeptId: body.movementType === "transfer" ? body.toDeptId : null,
+        // EMPLOYMENT LIFECYCLE — truy vết đủ: movement thuộc session nào + nguồn báo cáo.
+        employmentSessionId: activeSession.id,
+        source: "DEPT_REPORT",
+        effectiveDate: body.effectiveDate!,
+        reason: body.reason || null,
+        note: body.note || null,
+        status: "PENDING_HR",
+        requestedBy: guard.session.username,
+      })
+      .returning();
+
+    return { row, actualFromDeptId } as const;
+  });
+
+  if ("error" in result) {
+    return NextResponse.json({ error: result.error }, { status: result.status });
+  }
+  const { row } = result;
 
   await writeAudit(guard.session, "CREATE_WORKFORCE_MOVEMENT", "workforce_movements", { id: row.id, movementType: row.movementType });
 

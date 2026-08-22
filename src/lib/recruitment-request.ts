@@ -9,6 +9,7 @@ import {
   type NewRecruitmentRequest,
 } from "@/db/schema";
 import { SORTABLE_COLUMN_KEYS } from "@/lib/recruitment-request-columns";
+import { scopeAllowsDepartment } from "@/lib/data-scope";
 import {
   computeDateDeltas,
   computeRecruitedVsExpected,
@@ -63,6 +64,7 @@ export async function importRecruitmentRequests(
   rows: Record<string, string>[],
   createdBy: string,
   options?: { skipDuplicates?: boolean; updateDuplicates?: boolean },
+  scope: string[] | null = null,
 ): Promise<ImportRowResult[]> {
   const results: ImportRowResult[] = [];
   const skip = options?.skipDuplicates ?? false;
@@ -129,12 +131,27 @@ export async function importRecruitmentRequests(
 
       // Check for existing
       const existing = await tx
-        .select({ id: recruitmentRequests.id })
+        .select({ id: recruitmentRequests.id, departmentId: recruitmentRequests.departmentId })
         .from(recruitmentRequests)
         .where(and(eq(recruitmentRequests.requestCode, requestCode), isNull(recruitmentRequests.deletedAt)))
         .limit(1);
 
       if (existing.length > 0) {
+        // IDOR fix (Production Recovery audit) — TRƯỚC ĐÂY chỉ scope-check phòng ban CỦA DÒNG
+        // ĐANG IMPORT (route.ts), không re-check phòng ban của record ĐANG BỊ GHI ĐÈ. Request
+        // Code là mã nghiệp vụ dễ đoán/lộ (không phải UUID bí mật) — 1 tài khoản scope-hạn-chế
+        // có thể "chiếm" (ghi đè toàn bộ dữ liệu + đổi departmentId) 1 request thuộc phòng ban
+        // KHÁC chỉ bằng cách import 1 dòng trùng Request Code với Location/Dept giải quyết về
+        // phòng ban CỦA HỌ. Chặn tại đây — nguồn ghi duy nhất của cả import lẫn paste-import.
+        if (!scopeAllowsDepartment(scope, existing[0].departmentId)) {
+          results.push({
+            rowIndex: i + 1,
+            status: "ERROR",
+            requestCode,
+            message: "Request Code đã tồn tại thuộc phòng ban ngoài Data Scope được cấp — không thể ghi đè.",
+          });
+          continue;
+        }
         if (skip) {
           results.push({ rowIndex: i + 1, status: "SKIPPED", requestCode, message: "Request Code đã tồn tại, bỏ qua" });
           continue;
@@ -489,12 +506,21 @@ export async function getRecruitmentRequest(id: string): Promise<RecruitmentRequ
   return row ?? null;
 }
 
+/**
+ * Production Recovery audit (IDOR) — `scope` (từ getUserScope(), null = không giới hạn) BẮT BUỘC
+ * truyền và áp dụng trực tiếp vào WHERE, giống mọi route đơn lẻ (GET/PATCH/DELETE by id) đã làm.
+ * Trước đây route batch gọi getUserScope() nhưng KHÔNG truyền vào đây — 1 tài khoản bị giới hạn
+ * Data Scope có thể batch cancel/status/delete request của phòng ban khác (chỉ cần biết id).
+ * ids ngoài scope đơn giản không match WHERE — rowCount trả về phản ánh đúng số dòng đã áp dụng.
+ */
 export async function batchUpdateStatus(
   ids: string[],
   status: string,
   updatedBy: string,
+  scope: string[] | null,
 ): Promise<number> {
   if (ids.length === 0) return 0;
+  if (scope !== null && scope.length === 0) return 0;
   const result = await db
     .update(recruitmentRequests)
     .set({ status, updatedAt: new Date() })
@@ -502,6 +528,7 @@ export async function batchUpdateStatus(
       and(
         inArray(recruitmentRequests.id, ids),
         isNull(recruitmentRequests.deletedAt),
+        scope !== null ? inArray(recruitmentRequests.departmentId, scope) : undefined,
       ),
     );
   return result.rowCount ?? 0;
@@ -510,8 +537,10 @@ export async function batchUpdateStatus(
 export async function softDeleteRecruitmentRequests(
   ids: string[],
   deletedBy: string,
+  scope: string[] | null,
 ): Promise<number> {
   if (ids.length === 0) return 0;
+  if (scope !== null && scope.length === 0) return 0;
   const result = await db
     .update(recruitmentRequests)
     .set({ deletedAt: new Date(), deletedBy, updatedAt: new Date() })
@@ -519,6 +548,7 @@ export async function softDeleteRecruitmentRequests(
       and(
         inArray(recruitmentRequests.id, ids),
         isNull(recruitmentRequests.deletedAt),
+        scope !== null ? inArray(recruitmentRequests.departmentId, scope) : undefined,
       ),
     );
   return result.rowCount ?? 0;
