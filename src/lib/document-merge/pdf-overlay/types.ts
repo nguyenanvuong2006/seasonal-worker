@@ -98,7 +98,9 @@ export type PdfOverlayErrorCode =
   | "POSITION_OUT_OF_BOUNDS"
   | "MISSING_REQUIRED_FIELD"
   | "FIELD_OVERFLOW"
-  | "UNSUPPORTED_FIELD_TYPE";
+  | "UNSUPPORTED_FIELD_TYPE"
+  | "ACROFORM_NOT_FOUND"
+  | "ACROFORM_FIELD_NOT_FOUND";
 
 export interface PdfOverlayErrorDetail {
   placeholder?: string;
