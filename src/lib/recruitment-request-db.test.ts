@@ -6,6 +6,7 @@ import {
   makeTable,
   argOf,
   condsOf,
+  eqValue,
   inArrayValues,
   sqlTexts,
   type FakeDb,
@@ -420,6 +421,23 @@ test("IDOR fix: import trùng Request Code thuộc phòng ban NGOÀI Data Scope 
   assert.equal(results[0].status, "ERROR");
   assert.match(results[0].message ?? "", /Data Scope/);
   assert.equal(fieldUpdatesOf(db).length, 0, "KHÔNG được ghi đè record ngoài scope");
+});
+
+test("matchHierarchy: trim whitespace + Unicode NFC trước khi so khớp (import từ nguồn NFD/có khoảng trắng thừa vẫn khớp đúng)", async () => {
+  const db = createFakeDb({ respond: () => [{ id: "dept-A" }] });
+  const mod = load(db);
+
+  const nfdLocation = " Đà Lạt ".normalize("NFD"); // NFD + khoảng trắng thừa — mô phỏng dữ liệu import
+  await (mod.matchHierarchy as (
+    location?: string | null,
+    division?: string | null,
+    department?: string | null,
+    section?: string | null,
+    group?: string | null,
+  ) => Promise<{ deptId: string | null; matched: boolean }>)(nfdLocation, "Production", null, null, null);
+
+  const deptQuery = db.calls.find((c) => c.root === "select" && c.table === "departments") as QueryCall;
+  assert.equal(eqValue(deptQuery, "departments.location"), "Đà Lạt", "phải trim + NFC-normalize trước khi đưa vào điều kiện eq()");
 });
 
 test("import trùng Request Code CÙNG phòng ban trong scope vẫn cập nhật bình thường (fix không phá hành vi hợp lệ)", async () => {

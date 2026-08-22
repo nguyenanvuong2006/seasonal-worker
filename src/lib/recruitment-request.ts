@@ -648,6 +648,17 @@ export async function getRecruitmentStats(scope?: string[] | null): Promise<Recr
    HIERARCHY MATCH — Location → Division → Department → Section → Group
    Khớp với cấu trúc Dalat Hasfarm
    ============================================================ */
+/**
+ * Chuẩn hoá text trước khi so khớp: trim whitespace (rất hay gặp khi copy-paste từ Excel) +
+ * Unicode NFC (tiếng Việt import từ nguồn khác — PDF, tool khác — có thể ở dạng NFD/tổ hợp dấu
+ * rời; nhìn giống hệt nhưng so `eq()` chuỗi byte-for-byte sẽ KHÔNG khớp, khiến department_id âm
+ * thầm = null, mất Data Scope + loại khỏi mọi KPI theo phòng ban). Không đổi giá trị đã đúng NFC.
+ */
+function normalizeMatchText(v: string | null | undefined): string | null {
+  const t = (v ?? "").trim().normalize("NFC");
+  return t || null;
+}
+
 export async function matchHierarchy(
   location?: string | null,
   division?: string | null,
@@ -655,12 +666,18 @@ export async function matchHierarchy(
   section?: string | null,
   group?: string | null,
 ): Promise<{ deptId: string | null; matched: boolean }> {
+  const loc = normalizeMatchText(location);
+  const div = normalizeMatchText(division);
+  const dept_ = normalizeMatchText(department);
+  const sec = normalizeMatchText(section);
+  const grp = normalizeMatchText(group);
+
   const conditions: any[] = [isNull(departments.deletedAt)];
-  if (location) conditions.push(eq(departments.location, location));
-  if (division) conditions.push(eq(departments.division, division));
-  if (department) conditions.push(eq(departments.deptName, department));
-  if (section) conditions.push(eq(departments.section, section));
-  if (group) conditions.push(eq(departments.groupName, group));
+  if (loc) conditions.push(eq(departments.location, loc));
+  if (div) conditions.push(eq(departments.division, div));
+  if (dept_) conditions.push(eq(departments.deptName, dept_));
+  if (sec) conditions.push(eq(departments.section, sec));
+  if (grp) conditions.push(eq(departments.groupName, grp));
 
   if (conditions.length <= 1) return { deptId: null, matched: false };
 
