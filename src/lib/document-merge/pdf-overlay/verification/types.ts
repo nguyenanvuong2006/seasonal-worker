@@ -117,6 +117,8 @@ export type ReadinessGate =
   | "VISUAL_GATE_APPROVED"
   | "BENCHMARK_GATE_PENDING"
   | "BENCHMARK_GATE_APPROVED"
+  | "STAGING_E2E_1_RECORD"
+  | "STAGING_E2E_10_RECORD"
   | "ACTIVATION_ALLOWED";
 
 export interface ReadinessState {
@@ -131,6 +133,35 @@ export interface GateStatus {
   reason?: string;
   verifiedAt?: string;
   verifiedBy?: string;
+}
+
+/**
+ * Báo cáo máy đọc được (machine-readable evidence) của 1 lần staging E2E
+ * (PR5) — dùng để cập nhật gate STAGING_E2E_1_RECORD / STAGING_E2E_10_RECORD.
+ * KHÔNG bao giờ chứa secret / PII — chỉ jobId, counts, sha256, storage IDs,
+ * history counts, worker revision (public)...
+ */
+export interface StagingE2EReport {
+  generatedAt: string;
+  recordCount: 1 | 10;
+  status: "PASS" | "FAIL";
+  jobId: string;
+  itemCount: number;
+  completed: number;
+  failed: number;
+  retryCount: number;
+  renderDurationMs: number;
+  storageIds: string[];
+  sha256s: string[];
+  historyCount: number;
+  workerRevision: string | null;
+  outputUrls: string[];
+  productionIsolation: {
+    engineDefault: string;
+    activationAllowed: false;
+    productionMutated: false;
+    piiInFixtures: false;
+  };
 }
 
 /** Manifest của artifact (để tracking/review). */

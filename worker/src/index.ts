@@ -59,7 +59,8 @@ import { mergeJobs, mergeTemplateVersions } from "../../src/db/schema";
 import { eq } from "drizzle-orm";
 import { getDbIdentity } from "../../src/lib/document-merge/db-identity.ts";
 import { runClaimProbe, claimExistingJobItem } from "../../src/lib/document-merge/queue-diagnostics.ts";
-import { shouldBlockDiagnosticRequest } from "../../src/lib/document-merge/worker-diag-gate.ts";
+import { shouldBlockRestrictedWorkerRequest } from "../../src/lib/document-merge/worker-diag-gate.ts";
+import { runOverlayE2EJob } from "../../src/lib/document-merge/pdf-overlay/worker-overlay-e2e.ts";
 
 /**
  * App-level auth — LỚP RIÊNG, độc lập với Cloud Run IAM (IAM verify Google ID
@@ -528,16 +529,18 @@ const server = http.createServer(async (req, res) => {
     }
 
     // ---------------------------------------------------------------
-    // GET /diag/db-identity, POST /diag/claim-probe, POST /diag/claim-existing
-    // — CHỈ dùng cho điều tra CLAIM_STALLED trên STAGING. TẮT HOÀN TOÀN
-    // (404 — không tiết lộ cả sự tồn tại của path) khi WORKER_ENV=production,
-    // BẤT KỂ có auth đúng hay không — production worker không được phép có
-    // đường nào seed/xoá job+item thật, kể cả sau app secret. Xem
-    // worker-diag-gate.ts. Nếu KHÔNG set WORKER_ENV (staging hiện tại), giữ
-    // nguyên hành vi cũ: yêu cầu app-level auth như /run — xem
-    // src/lib/document-merge/db-identity.ts + queue-diagnostics.ts.
+    // GET /diag/db-identity, POST /diag/claim-probe, POST /diag/claim-existing,
+    // POST /run-overlay — CHỈ dùng trên STAGING (điều tra CLAIM_STALLED +
+    // controlled staging E2E cho PDF Overlay). TẮT HOÀN TOÀN (404 — không
+    // tiết lộ cả sự tồn tại của path) khi WORKER_ENV=production, BẤT KỂ có
+    // auth đúng hay không — production worker không được phép có đường nào
+    // seed/xoá job+item thật hay render overlay E2E, kể cả sau app secret.
+    // Xem worker-diag-gate.ts. Nếu KHÔNG set WORKER_ENV (staging hiện tại),
+    // giữ nguyên hành vi cũ: yêu cầu app-level auth như /run — xem
+    // src/lib/document-merge/db-identity.ts + queue-diagnostics.ts +
+    // pdf-overlay/worker-overlay-e2e.ts.
     // ---------------------------------------------------------------
-    if (shouldBlockDiagnosticRequest(url.pathname)) {
+    if (shouldBlockRestrictedWorkerRequest(url.pathname)) {
       return json(res, 404, { error: "not found" });
     }
 
@@ -593,6 +596,30 @@ const server = http.createServer(async (req, res) => {
         return json(res, 200, result);
       }
       const result = await runJob(jobId);
+      return json(res, 200, result);
+    }
+
+    // ---------------------------------------------------------------
+    // POST /run-overlay — controlled staging E2E cho PDF Overlay (PR5).
+    // Body: { jobId } — job phải có engine='PDF_OVERLAY' + metadata.e2e
+    // snapshot NON-PRODUCTION (xem staging-e2e.ts). Đi qua ĐÚNG queue/storage/
+    // history thật (staging). Bị chặn 404 hoàn toàn khi WORKER_ENV=production
+    // (xem shouldBlockRestrictedWorkerRequest ở trên) — KHÔNG tồn tại ở
+    // production worker, KHÔNG đụng production /run.
+    // ---------------------------------------------------------------
+    if (url.pathname === "/run-overlay" && req.method === "POST") {
+      if (!isAuthorized(req)) {
+        return json(res, 401, { error: "unauthorized" });
+      }
+      const body = await readBody(req);
+      const jobId = String(body.jobId ?? "").trim();
+      if (!jobId) {
+        return json(res, 400, { error: "Thiếu jobId." });
+      }
+      const result = await runOverlayE2EJob(jobId, {
+        storage: getStorageProvider(),
+        concurrency: CONCURRENCY,
+      });
       return json(res, 200, result);
     }
 

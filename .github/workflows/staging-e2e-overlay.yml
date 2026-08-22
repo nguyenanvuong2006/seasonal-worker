@@ -1,0 +1,141 @@
+name: Staging E2E — PDF Overlay (PR5)
+
+# Controlled staging E2E cho PDF Overlay renderer (PR5):
+#   queue → worker /run-overlay (staging) → renderer → storage staging
+#   → document_history → idempotency/retry/failure semantics.
+#
+# CHỈ chạy chống STAGING: environment 'staging' (secrets staging),
+# worker staging (Cloud Run seasonal-worker-pdf-staging), Drive staging root.
+# KHÔNG đụng production /run, KHÔNG đổi DOCUMENT_MERGE_ENGINE.
+#
+# Dùng workflow_dispatch với --ref <branch> để test code chưa merge (vd branch PR5).
+
+on:
+  workflow_dispatch:
+    inputs:
+      records:
+        description: 'Số hồ sơ giả (1 hoặc 10)'
+        required: true
+        default: '1'
+        type: choice
+        options:
+          - '1'
+          - '10'
+      dry_run:
+        description: 'Chỉ preflight (worker health + /run-overlay live), không ghi gì'
+        required: false
+        default: false
+        type: boolean
+
+permissions:
+  contents: read
+  id-token: write
+
+concurrency:
+  group: staging-e2e-overlay
+  cancel-in-progress: false
+
+env:
+  REGION: ${{ vars.GCP_REGION || 'asia-southeast1' }}
+  PROJECT_ID: ${{ vars.GCP_PROJECT_ID }}
+  SERVICE: ${{ vars.GCP_RUN_SERVICE || 'seasonal-worker-pdf-staging' }}
+
+jobs:
+  e2e:
+    runs-on: ubuntu-latest
+    environment: staging
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci --no-audit --no-fund
+
+      - name: Authenticate to Google Cloud
+        id: gcp-auth
+        uses: google-github-actions/auth@v2
+        with:
+          workload_identity_provider: ${{ secrets.GCP_WORKLOAD_IDENTITY_PROVIDER }}
+          service_account: ${{ secrets.GCP_SERVICE_ACCOUNT }}
+
+      - name: Setup gcloud
+        uses: google-github-actions/setup-gcloud@v2
+        with:
+          project_id: ${{ env.PROJECT_ID }}
+
+      - name: Lấy worker URL + staging secrets
+        id: staging-info
+        run: |
+          set -euo pipefail
+
+          URL=$(gcloud run services describe "${SERVICE}" \
+            --region "${REGION}" \
+            --project "${PROJECT_ID}" \
+            --format='value(status.url)')
+          echo "url=${URL}" >> "$GITHUB_OUTPUT"
+
+          # Ưu tiên GitHub Environment secrets (staging), fallback Google Secret
+          # Manager (tên secret khớp deploy-worker-staging.yml).
+          read_secret() {
+            local name="$1" gh_value="$2"
+            if [ -n "${gh_value}" ]; then
+              echo "${gh_value}"
+              return 0
+            fi
+            gcloud secrets versions access latest --secret="${name}"
+          }
+
+          echo "worker_secret=$(read_secret STAGING_MERGE_WORKER_SECRET "${{ secrets.STAGING_MERGE_WORKER_SECRET }}")" >> "$GITHUB_OUTPUT"
+          echo "drive_root=$(read_secret STAGING_GOOGLE_DRIVE_ROOT_FOLDER_ID "${{ secrets.STAGING_GOOGLE_DRIVE_ROOT_FOLDER_ID }}")" >> "$GITHUB_OUTPUT"
+          echo "g_client_id=$(read_secret STAGING_GOOGLE_CLIENT_ID "${{ secrets.STAGING_GOOGLE_CLIENT_ID }}")" >> "$GITHUB_OUTPUT"
+          echo "g_client_secret=$(read_secret STAGING_GOOGLE_CLIENT_SECRET "${{ secrets.STAGING_GOOGLE_CLIENT_SECRET }}")" >> "$GITHUB_OUTPUT"
+          echo "g_refresh=$(read_secret STAGING_GOOGLE_REFRESH_TOKEN "${{ secrets.STAGING_GOOGLE_REFRESH_TOKEN }}")" >> "$GITHUB_OUTPUT"
+
+      - name: ID token cho Cloud Run (nếu service yêu cầu IAM)
+        id: id-token
+        uses: google-github-actions/auth@v2
+        with:
+          workload_identity_provider: ${{ secrets.GCP_WORKLOAD_IDENTITY_PROVIDER }}
+          service_account: ${{ secrets.GCP_SERVICE_ACCOUNT }}
+          token_format: id_token
+          id_token_audience: ${{ steps.staging-info.outputs.url }}
+          id_token_include_email: true
+
+      - name: Chạy staging E2E (PDF Overlay)
+        env:
+          STAGING_E2E_CONFIRM: '1'
+          DATABASE_URL: ${{ secrets.STAGING_DATABASE_URL }}
+          MERGE_WORKER_URL: ${{ steps.staging-info.outputs.url }}
+          MERGE_WORKER_SECRET: ${{ steps.staging-info.outputs.worker_secret }}
+          STORAGE_PROVIDER: google_drive
+          GOOGLE_DRIVE_ROOT_FOLDER_ID: ${{ steps.staging-info.outputs.drive_root }}
+          GOOGLE_CLIENT_ID: ${{ steps.staging-info.outputs.g_client_id }}
+          GOOGLE_CLIENT_SECRET: ${{ steps.staging-info.outputs.g_client_secret }}
+          GOOGLE_REFRESH_TOKEN: ${{ steps.staging-info.outputs.g_refresh }}
+          STAGING_E2E_ID_TOKEN: ${{ steps.id-token.outputs.id_token }}
+        run: |
+          set -euo pipefail
+          RECORDS="${{ github.event.inputs.records }}"
+          DRY=""
+          if [ "${{ github.event.inputs.dry_run }}" = "true" ]; then DRY="--dry-run"; fi
+          node --import tsx scripts/staging-e2e-overlay.mjs \
+            --records "${RECORDS}" ${DRY} \
+            --json "evidence-overlay-${RECORDS}.json" 2>&1 | tee e2e.log
+          echo "EXIT_CODE=${PIPESTATUS[0]}" >> "$GITHUB_ENV"
+
+      - name: Upload evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: staging-e2e-overlay-${{ github.event.inputs.records }}-evidence
+          path: |
+            evidence-overlay-*.json
+            evidence-overlay-*.json.sha256
+            e2e.log
