@@ -13,7 +13,7 @@ import { NextResponse } from 'next/server';
 import { eq, and } from 'drizzle-orm';
 import { requirePermission } from '@/lib/auth';
 import { db } from '@/db';
-import { mergeTemplates, mergeTemplateFields } from '@/db/schema';
+import { mergeTemplates, mergeTemplateFields, mergeJobs, documentHistory } from '@/db/schema';
 import { extractUniquePlaceholders } from '@/lib/document-merge/placeholder-extractor';
 import { createGoogleDocsService } from '@/lib/document-merge/google-docs-service';
 import { autoMapAllPlaceholders } from '@/lib/document-merge/auto-mapping';
@@ -125,8 +125,37 @@ export async function DELETE(request: Request, context: RouteContext) {
     if (!template) {
       return NextResponse.json({ error: 'Template not found' }, { status: 404 });
     }
-    
-    // Xóa template (cascade xóa fields)
+
+    // Production Recovery audit — TRƯỚC ĐÂY hard-delete KHÔNG kiểm tra gì trước khi xoá.
+    // mergeTemplates.id có ON DELETE CASCADE tới merge_template_fields + merge_template_versions
+    // (nội dung HTML/CSS từng render) + pdf_template_versions (→ pdf_field_positions) — mất hết
+    // nếu template từng được dùng. document_history (bảng lưu trữ/tuân thủ, có retentionUntil)
+    // và merge_jobs lưu templateId/templateVersion dạng GIÁ TRỊ THƯỜNG (không FK) nên KHÔNG bị
+    // cascade xoá, nhưng sau khi template mất thì các bản ghi lịch sử đó trỏ vào "hư không" —
+    // không còn cách nào biết chính xác mapping/coordinate nào đã tạo ra 1 tài liệu đã ký trong
+    // quá khứ. Chặn hard-delete nếu template đã từng thực sự được dùng để tạo tài liệu — admin
+    // nên deactivate (POST .../activate, isActive=false) thay vì xoá vĩnh viễn.
+    const [everUsedInHistory] = await db
+      .select({ id: documentHistory.id })
+      .from(documentHistory)
+      .where(eq(documentHistory.templateId, id))
+      .limit(1);
+    const [everUsedInJobs] = await db
+      .select({ id: mergeJobs.id })
+      .from(mergeJobs)
+      .where(eq(mergeJobs.templateId, id))
+      .limit(1);
+    if (everUsedInHistory || everUsedInJobs) {
+      return NextResponse.json(
+        {
+          error:
+            'Template này đã từng được dùng để tạo tài liệu (có trong document_history/merge_jobs) — không thể xoá vĩnh viễn vì sẽ làm mất khả năng truy vết. Hãy Deactivate (ngừng hoạt động) thay vì Xoá.',
+        },
+        { status: 409 },
+      );
+    }
+
+    // Xóa template (cascade xóa fields) — chỉ chạy tới đây khi CHƯA từng dùng để tạo tài liệu nào.
     await db.delete(mergeTemplates).where(eq(mergeTemplates.id, id));
     
     // Audit

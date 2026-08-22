@@ -602,9 +602,11 @@ export const employmentSessions = pgTable(
   "employment_sessions",
   {
     id: uuid("id").defaultRandom().primaryKey(),
-    workerId: uuid("worker_id").notNull(),
+    // FK thật tạo trong migrations/2026-08-22-missing-foreign-keys.sql (ON DELETE RESTRICT,
+    // idempotent + tự bỏ qua nếu dữ liệu đang orphan — xem migration để biết chi tiết).
+    workerId: uuid("worker_id").notNull().references(() => workerProfiles.id, { onDelete: "restrict" }),
     dailyApplicationId: uuid("daily_application_id"), // liên kết bản ghi Daily Application gốc (nếu có)
-    deptId: uuid("dept_id"),
+    deptId: uuid("dept_id").references(() => departments.id, { onDelete: "restrict" }),
     regDate: date("reg_date").notNull(),
     status: varchar("status", { length: 40 }).notNull().default("PENDING"), // đồng bộ với workflow_stages.stageKey
     startingDate: date("starting_date"),
@@ -699,9 +701,10 @@ export const workforceMovements = pgTable(
   {
     id: uuid("id").defaultRandom().primaryKey(),
     movementType: varchar("movement_type", { length: 24 }).notNull(), // RESIGNATION | TRANSFER
-    workerId: uuid("worker_id").notNull(), // -> worker_profiles.id
-    fromDeptId: uuid("from_dept_id"),
-    toDeptId: uuid("to_dept_id"), // null nếu RESIGNATION
+    // FK thật tạo trong migrations/2026-08-22-missing-foreign-keys.sql (ON DELETE RESTRICT).
+    workerId: uuid("worker_id").notNull().references(() => workerProfiles.id, { onDelete: "restrict" }),
+    fromDeptId: uuid("from_dept_id").references(() => departments.id, { onDelete: "restrict" }),
+    toDeptId: uuid("to_dept_id").references(() => departments.id, { onDelete: "restrict" }), // null nếu RESIGNATION
     effectiveDate: date("effective_date").notNull(),
     reason: text("reason"),
     note: text("note"),
@@ -746,7 +749,8 @@ export const planningPeriods = pgTable(
   "planning_periods",
   {
     id: uuid("id").defaultRandom().primaryKey(),
-    departmentId: uuid("department_id").notNull(),
+    // FK thật tạo trong migrations/2026-08-22-missing-foreign-keys.sql (ON DELETE RESTRICT).
+    departmentId: uuid("department_id").notNull().references(() => departments.id, { onDelete: "restrict" }),
     section: varchar("section", { length: 120 }), // Section / groupName
     groupName: varchar("group_name", { length: 120 }),
     location: varchar("location", { length: 120 }),

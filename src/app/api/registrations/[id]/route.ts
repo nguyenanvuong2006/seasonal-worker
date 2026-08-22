@@ -1,7 +1,7 @@
 import { NextResponse } from "next/server";
 import { and, eq, isNull, ne } from "drizzle-orm";
 import { db } from "@/db";
-import { dailyApplications, employmentSessions, workerProfiles } from "@/db/schema";
+import { dailyApplications, departments, employmentSessions, workerProfiles } from "@/db/schema";
 import { getUserScope, hasPermission, requireRoleAndPermission, writeAudit } from "@/lib/auth";
 import { scopeAllowsDepartment } from "@/lib/data-scope";
 import { getWorkflowStages } from "@/lib/workflow";
@@ -76,6 +76,20 @@ export async function PATCH(req: Request, ctx: { params: Promise<{ id: string }>
     }
     if ("deptId" in patch && !scopeAllowsDepartment(scope, patch.deptId as string | null)) {
       return NextResponse.json({ error: "Bộ phận đích nằm ngoài Data Scope được cấp." }, { status: 403 });
+    }
+    // Production Recovery audit — TRƯỚC ĐÂY không kiểm tra bộ phận đích còn active hay không
+    // (khác /api/workforce-movements đã check eq(departments.isActive, true) khi thuyên chuyển).
+    // 1 user còn giữ user_department_scopes trỏ tới bộ phận đã deactivate (departments không bao
+    // giờ bị hard-delete) vẫn có thể gán/duyệt lao động vào bộ phận đó — worker "sống" ở 1 bộ
+    // phận không còn hoạt động, không ai để ý cho tới khi báo cáo lệch.
+    if (typeof patch.deptId === "string") {
+      const [targetDept] = await db
+        .select({ id: departments.id })
+        .from(departments)
+        .where(and(eq(departments.id, patch.deptId), eq(departments.isActive, true), isNull(departments.deletedAt)));
+      if (!targetDept) {
+        return NextResponse.json({ error: "Bộ phận đích không tồn tại hoặc đã ngừng hoạt động." }, { status: 400 });
+      }
     }
     if ("cccd" in patch) {
       if (!isValidCccd(patch.cccd)) {

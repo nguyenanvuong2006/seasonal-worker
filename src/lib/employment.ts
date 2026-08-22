@@ -279,6 +279,17 @@ export async function confirmResignationAndAssign(input: {
         }
       }
 
+      // Production Recovery audit — TRƯỚC ĐÂY newDeptId không được xác thực tồn tại/active ở đây
+      // (khác /api/workforce-movements đã check isActive khi thuyên chuyển) — có thể xếp việc
+      // vào 1 bộ phận đã deactivate (departments không bao giờ hard-delete) hoặc UUID không tồn tại.
+      const [targetDept] = await tx
+        .select({ id: departments.id })
+        .from(departments)
+        .where(and(eq(departments.id, input.newDeptId), eq(departments.isActive, true), isNull(departments.deletedAt)));
+      if (!targetDept) {
+        throw new EmploymentRuleError("Bộ phận đích không tồn tại hoặc đã ngừng hoạt động.", "DEPT_INACTIVE_OR_MISSING");
+      }
+
       // 1+2 — đóng session A + movement (dùng chung transaction).
       const { sessionId: endedSessionId, movementId } = await confirmResignation({
         workerId: input.workerId,
