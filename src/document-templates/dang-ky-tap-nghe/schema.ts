@@ -10,13 +10,13 @@
 
 export const GOOGLE_DOC_ID = "10D0tG71CbllIZe7DaosYNW3vK7QnP76Yq4UC9FMEiUE";
 
-/** 5 phần của bộ hồ sơ (≈6 trang A4). */
+/** 5 phần của bộ hồ sơ — tiêu đề khớp Google Doc golden source. */
 export const SECTIONS = [
-  { key: "dang_ky", title: "Giấy đăng ký tập nghề", page: 1 },
-  { key: "quy_dinh", title: "Quy định tập nghề", page: 2 },
-  { key: "cam_ket_thue", title: "Bản cam kết thuế", page: 3 },
-  { key: "uy_quyen", title: "Giấy ủy quyền", page: 4 },
-  { key: "to_khai_thue", title: "Tờ khai đăng ký thuế", page: 5 },
+  { key: "dang_ky", title: "GIẤY ĐĂNG KÝ TẬP NGHỀ", page: 1 },
+  { key: "quy_dinh", title: "QUY ĐỊNH VỀ TẬP NGHỀ", page: 2 },
+  { key: "cam_ket_thue", title: "BẢN CAM KẾT", page: 3 },
+  { key: "uy_quyen", title: "GIẤY ỦY QUYỀN", page: 4 },
+  { key: "to_khai_thue", title: "TỜ KHAI ĐĂNG KÝ THUẾ", page: 5 },
 ] as const;
 
 /**
