@@ -1,28 +1,35 @@
 name: Staging E2E — PDF Overlay (PR5)
 
 # Controlled staging E2E cho PDF Overlay renderer (PR5):
-#   queue → worker /run-overlay (staging) → renderer → storage staging
+#   queue → worker /run-overlay (staging) → renderer → staging storage
 #   → document_history → idempotency/retry/failure semantics.
 #
-# CHỈ chạy chống STAGING: environment 'staging' (secrets staging),
-# worker staging (Cloud Run seasonal-worker-pdf-staging), Drive staging root.
-# KHÔNG đụng production /run, KHÔNG đổi DOCUMENT_MERGE_ENGINE.
+# CHỈ chạy trên STAGING:
+#   - GitHub Environment: staging
+#   - Cloud Run staging worker
+#   - Staging database
+#   - Staging Google Drive root
 #
-# Dùng workflow_dispatch với --ref <branch> để test code chưa merge (vd branch PR5).
+# KHÔNG:
+#   - gọi Production /run
+#   - đổi DOCUMENT_MERGE_ENGINE
+#   - kích hoạt PDF Overlay ở Production
+#   - sử dụng Production candidate PII
 
 on:
   workflow_dispatch:
     inputs:
       records:
-        description: 'Số hồ sơ giả (1 hoặc 10)'
+        description: "Số hồ sơ giả (1 hoặc 10)"
         required: true
-        default: '1'
+        default: "1"
         type: choice
         options:
-          - '1'
-          - '10'
+          - "1"
+          - "10"
+
       dry_run:
-        description: 'Chỉ preflight (worker health + /run-overlay live), không ghi gì'
+        description: "Chỉ preflight, không thực hiện E2E ghi dữ liệu"
         required: false
         default: false
         type: boolean
@@ -42,13 +49,22 @@ env:
 
 jobs:
   e2e:
+    name: Controlled staging PDF Overlay E2E
     runs-on: ubuntu-latest
+
+    # Bắt buộc dùng GitHub Environment staging.
     environment: staging
 
     steps:
+      # ------------------------------------------------------------
+      # 1. Checkout
+      # ------------------------------------------------------------
       - name: Checkout
         uses: actions/checkout@v4
 
+      # ------------------------------------------------------------
+      # 2. Node
+      # ------------------------------------------------------------
       - name: Setup Node
         uses: actions/setup-node@v4
         with:
@@ -58,6 +74,9 @@ jobs:
       - name: Install dependencies
         run: npm ci --no-audit --no-fund
 
+      # ------------------------------------------------------------
+      # 3. Authenticate GCP bằng Workload Identity Federation
+      # ------------------------------------------------------------
       - name: Authenticate to Google Cloud
         id: gcp-auth
         uses: google-github-actions/auth@v2
@@ -70,35 +89,82 @@ jobs:
         with:
           project_id: ${{ env.PROJECT_ID }}
 
-      - name: Lấy worker URL + staging secrets
-        id: staging-info
+      # ------------------------------------------------------------
+      # 4. HARD SAFETY GATE
+      # ------------------------------------------------------------
+      - name: Verify staging isolation
+        shell: bash
         run: |
           set -euo pipefail
 
-          URL=$(gcloud run services describe "${SERVICE}" \
+          if [ -z "${PROJECT_ID}" ]; then
+            echo "❌ GCP_PROJECT_ID is empty."
+            exit 1
+          fi
+
+          if [ -z "${REGION}" ]; then
+            echo "❌ GCP_REGION is empty."
+            exit 1
+          fi
+
+          if [ -z "${SERVICE}" ]; then
+            echo "❌ GCP_RUN_SERVICE is empty."
+            exit 1
+          fi
+
+          case "${SERVICE}" in
+            *staging*)
+              echo "✅ Staging Cloud Run service confirmed: ${SERVICE}"
+              ;;
+            *)
+              echo "❌ REFUSED: Cloud Run service is not a staging service: ${SERVICE}"
+              exit 1
+              ;;
+          esac
+
+          case "${SERVICE}" in
+            *production*|*prod*)
+              echo "❌ REFUSED: Production-like service name detected."
+              exit 1
+              ;;
+          esac
+
+          echo "✅ Production isolation gate passed."
+          echo "✅ DOCUMENT_MERGE_ENGINE is not changed by this workflow."
+
+      # ------------------------------------------------------------
+      # 5. Resolve Cloud Run staging URL
+      #
+      # Chỉ URL đi qua GITHUB_OUTPUT.
+      # TUYỆT ĐỐI KHÔNG đưa secret qua GITHUB_OUTPUT.
+      # ------------------------------------------------------------
+      - name: Resolve staging worker URL
+        id: staging-info
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          URL="$(gcloud run services describe "${SERVICE}" \
             --region "${REGION}" \
             --project "${PROJECT_ID}" \
-            --format='value(status.url)')
-          echo "url=${URL}" >> "$GITHUB_OUTPUT"
+            --format='value(status.url)')"
 
-          # Ưu tiên GitHub Environment secrets (staging), fallback Google Secret
-          # Manager (tên secret khớp deploy-worker-staging.yml).
-          read_secret() {
-            local name="$1" gh_value="$2"
-            if [ -n "${gh_value}" ]; then
-              echo "${gh_value}"
-              return 0
-            fi
-            gcloud secrets versions access latest --secret="${name}"
-          }
+          if [ -z "${URL}" ]; then
+            echo "❌ Could not resolve staging Cloud Run URL."
+            exit 1
+          fi
 
-          echo "worker_secret=$(read_secret STAGING_MERGE_WORKER_SECRET "${{ secrets.STAGING_MERGE_WORKER_SECRET }}")" >> "$GITHUB_OUTPUT"
-          echo "drive_root=$(read_secret STAGING_GOOGLE_DRIVE_ROOT_FOLDER_ID "${{ secrets.STAGING_GOOGLE_DRIVE_ROOT_FOLDER_ID }}")" >> "$GITHUB_OUTPUT"
-          echo "g_client_id=$(read_secret STAGING_GOOGLE_CLIENT_ID "${{ secrets.STAGING_GOOGLE_CLIENT_ID }}")" >> "$GITHUB_OUTPUT"
-          echo "g_client_secret=$(read_secret STAGING_GOOGLE_CLIENT_SECRET "${{ secrets.STAGING_GOOGLE_CLIENT_SECRET }}")" >> "$GITHUB_OUTPUT"
-          echo "g_refresh=$(read_secret STAGING_GOOGLE_REFRESH_TOKEN "${{ secrets.STAGING_GOOGLE_REFRESH_TOKEN }}")" >> "$GITHUB_OUTPUT"
+          echo "url=${URL}" >> "${GITHUB_OUTPUT}"
 
-      - name: ID token cho Cloud Run (nếu service yêu cầu IAM)
+          echo "✅ Staging Cloud Run URL resolved."
+          echo "Worker service: ${SERVICE}"
+          echo "Region: ${REGION}"
+          echo "Project: ${PROJECT_ID}"
+
+      # ------------------------------------------------------------
+      # 6. ID token để gọi private Cloud Run staging
+      # ------------------------------------------------------------
+      - name: ID token for staging Cloud Run
         id: id-token
         uses: google-github-actions/auth@v2
         with:
@@ -108,28 +174,196 @@ jobs:
           id_token_audience: ${{ steps.staging-info.outputs.url }}
           id_token_include_email: true
 
-      - name: Chạy staging E2E (PDF Overlay)
+      # ------------------------------------------------------------
+      # 7. Controlled staging E2E
+      #
+      # Secrets được resolve TRỰC TIẾP trong cùng step.
+      # Không dùng steps.*.outputs cho secret.
+      #
+      # Ưu tiên GitHub secrets.
+      # Nếu trống → fallback Google Secret Manager.
+      # ------------------------------------------------------------
+      - name: Run staging E2E — PDF Overlay
+        shell: bash
+
         env:
-          STAGING_E2E_CONFIRM: '1'
+          STAGING_E2E_CONFIRM: "1"
+
           DATABASE_URL: ${{ secrets.STAGING_DATABASE_URL }}
+
           MERGE_WORKER_URL: ${{ steps.staging-info.outputs.url }}
-          MERGE_WORKER_SECRET: ${{ steps.staging-info.outputs.worker_secret }}
+
           STORAGE_PROVIDER: google_drive
-          GOOGLE_DRIVE_ROOT_FOLDER_ID: ${{ steps.staging-info.outputs.drive_root }}
-          GOOGLE_CLIENT_ID: ${{ steps.staging-info.outputs.g_client_id }}
-          GOOGLE_CLIENT_SECRET: ${{ steps.staging-info.outputs.g_client_secret }}
-          GOOGLE_REFRESH_TOKEN: ${{ steps.staging-info.outputs.g_refresh }}
+
           STAGING_E2E_ID_TOKEN: ${{ steps.id-token.outputs.id_token }}
+
+          # GitHub secret candidates.
+          GH_MERGE_WORKER_SECRET: ${{ secrets.STAGING_MERGE_WORKER_SECRET }}
+
+          GH_DRIVE_ROOT: ${{ secrets.STAGING_GOOGLE_DRIVE_ROOT_FOLDER_ID }}
+
+          # Hỗ trợ cả naming mới và naming OAuth cũ hiện có trong repository.
+          GH_GOOGLE_CLIENT_ID: ${{ secrets.STAGING_GOOGLE_CLIENT_ID || secrets.STAGING_GOOGLE_OAUTH_CLIENT_ID }}
+
+          GH_GOOGLE_CLIENT_SECRET: ${{ secrets.STAGING_GOOGLE_CLIENT_SECRET || secrets.STAGING_GOOGLE_OAUTH_CLIENT_SECRET }}
+
+          GH_GOOGLE_REFRESH_TOKEN: ${{ secrets.STAGING_GOOGLE_REFRESH_TOKEN }}
+
         run: |
           set -euo pipefail
-          RECORDS="${{ github.event.inputs.records }}"
-          DRY=""
-          if [ "${{ github.event.inputs.dry_run }}" = "true" ]; then DRY="--dry-run"; fi
-          node --import tsx scripts/staging-e2e-overlay.mjs \
-            --records "${RECORDS}" ${DRY} \
-            --json "evidence-overlay-${RECORDS}.json" 2>&1 | tee e2e.log
-          echo "EXIT_CODE=${PIPESTATUS[0]}" >> "$GITHUB_ENV"
 
+          # --------------------------------------------------------
+          # Helper:
+          # 1. dùng GitHub secret nếu có;
+          # 2. nếu không có thì đọc Google Secret Manager.
+          # --------------------------------------------------------
+          read_secret() {
+            local secret_name="$1"
+            local github_value="$2"
+
+            if [ -n "${github_value}" ]; then
+              printf '%s' "${github_value}"
+              return 0
+            fi
+
+            gcloud secrets versions access latest \
+              --secret="${secret_name}" \
+              --project="${PROJECT_ID}"
+          }
+
+          # --------------------------------------------------------
+          # Resolve secrets.
+          # Không echo giá trị ra log.
+          # --------------------------------------------------------
+          MERGE_WORKER_SECRET="$(
+            read_secret \
+              "STAGING_MERGE_WORKER_SECRET" \
+              "${GH_MERGE_WORKER_SECRET}"
+          )"
+
+          GOOGLE_DRIVE_ROOT_FOLDER_ID="$(
+            read_secret \
+              "STAGING_GOOGLE_DRIVE_ROOT_FOLDER_ID" \
+              "${GH_DRIVE_ROOT}"
+          )"
+
+          GOOGLE_CLIENT_ID="$(
+            read_secret \
+              "STAGING_GOOGLE_CLIENT_ID" \
+              "${GH_GOOGLE_CLIENT_ID}"
+          )"
+
+          GOOGLE_CLIENT_SECRET="$(
+            read_secret \
+              "STAGING_GOOGLE_CLIENT_SECRET" \
+              "${GH_GOOGLE_CLIENT_SECRET}"
+          )"
+
+          GOOGLE_REFRESH_TOKEN="$(
+            read_secret \
+              "STAGING_GOOGLE_REFRESH_TOKEN" \
+              "${GH_GOOGLE_REFRESH_TOKEN}"
+          )"
+
+          # --------------------------------------------------------
+          # Mask values defensively.
+          # --------------------------------------------------------
+          echo "::add-mask::${MERGE_WORKER_SECRET}"
+          echo "::add-mask::${GOOGLE_DRIVE_ROOT_FOLDER_ID}"
+          echo "::add-mask::${GOOGLE_CLIENT_ID}"
+          echo "::add-mask::${GOOGLE_CLIENT_SECRET}"
+          echo "::add-mask::${GOOGLE_REFRESH_TOKEN}"
+
+          # --------------------------------------------------------
+          # Export cho staging-e2e-overlay.mjs.
+          # --------------------------------------------------------
+          export MERGE_WORKER_SECRET
+          export GOOGLE_DRIVE_ROOT_FOLDER_ID
+          export GOOGLE_CLIENT_ID
+          export GOOGLE_CLIENT_SECRET
+          export GOOGLE_REFRESH_TOKEN
+
+          # --------------------------------------------------------
+          # Required configuration gate.
+          # --------------------------------------------------------
+          test_required() {
+            local variable_name="$1"
+            local variable_value="$2"
+
+            if [ -z "${variable_value}" ]; then
+              echo "❌ Missing required staging configuration: ${variable_name}"
+              exit 1
+            fi
+          }
+
+          test_required "DATABASE_URL" "${DATABASE_URL}"
+          test_required "MERGE_WORKER_URL" "${MERGE_WORKER_URL}"
+          test_required "MERGE_WORKER_SECRET" "${MERGE_WORKER_SECRET}"
+          test_required "GOOGLE_DRIVE_ROOT_FOLDER_ID" "${GOOGLE_DRIVE_ROOT_FOLDER_ID}"
+          test_required "GOOGLE_CLIENT_ID" "${GOOGLE_CLIENT_ID}"
+          test_required "GOOGLE_CLIENT_SECRET" "${GOOGLE_CLIENT_SECRET}"
+          test_required "GOOGLE_REFRESH_TOKEN" "${GOOGLE_REFRESH_TOKEN}"
+          test_required "STAGING_E2E_ID_TOKEN" "${STAGING_E2E_ID_TOKEN}"
+
+          echo "✅ All required staging credentials resolved."
+          echo "✅ Secret values are not printed."
+          echo "✅ STORAGE_PROVIDER=google_drive"
+          echo "✅ Worker=${SERVICE}"
+          echo "✅ records=${{ github.event.inputs.records }}"
+          echo "✅ dry_run=${{ github.event.inputs.dry_run }}"
+
+          # --------------------------------------------------------
+          # Input safety gate.
+          # --------------------------------------------------------
+          RECORDS="${{ github.event.inputs.records }}"
+
+          case "${RECORDS}" in
+            1|10)
+              ;;
+            *)
+              echo "❌ Invalid records value: ${RECORDS}"
+              exit 1
+              ;;
+          esac
+
+          DRY_ARGS=()
+
+          if [ "${{ github.event.inputs.dry_run }}" = "true" ]; then
+            DRY_ARGS+=(--dry-run)
+          fi
+
+          # --------------------------------------------------------
+          # Run E2E.
+          #
+          # Tắt exit-on-error tạm thời để capture exit code và vẫn
+          # upload được evidence/log ở step tiếp theo.
+          # --------------------------------------------------------
+          set +e
+
+          node --import tsx scripts/staging-e2e-overlay.mjs \
+            --records "${RECORDS}" \
+            "${DRY_ARGS[@]}" \
+            --json "evidence-overlay-${RECORDS}.json" \
+            2>&1 | tee e2e.log
+
+          E2E_EXIT_CODE="${PIPESTATUS[0]}"
+
+          set -e
+
+          echo "EXIT_CODE=${E2E_EXIT_CODE}" >> "${GITHUB_ENV}"
+
+          if [ "${E2E_EXIT_CODE}" -ne 0 ]; then
+            echo "❌ Staging E2E failed with exit code ${E2E_EXIT_CODE}."
+            exit "${E2E_EXIT_CODE}"
+          fi
+
+          echo "✅ Staging E2E completed successfully."
+
+      # ------------------------------------------------------------
+      # 8. Evidence
+      #
+      # Chạy cả khi E2E fail.
+      # ------------------------------------------------------------
       - name: Upload evidence
         if: always()
         uses: actions/upload-artifact@v4
@@ -139,3 +373,24 @@ jobs:
             evidence-overlay-*.json
             evidence-overlay-*.json.sha256
             e2e.log
+          if-no-files-found: warn
+          retention-days: 14
+
+      # ------------------------------------------------------------
+      # 9. Final summary
+      # ------------------------------------------------------------
+      - name: Staging E2E summary
+        if: always()
+        shell: bash
+        run: |
+          {
+            echo "## PDF Overlay — Controlled Staging E2E"
+            echo ""
+            echo "- Environment: staging"
+            echo "- Service: ${SERVICE}"
+            echo "- Records: ${{ github.event.inputs.records }}"
+            echo "- Dry run: ${{ github.event.inputs.dry_run }}"
+            echo "- E2E exit code: ${EXIT_CODE:-not-run}"
+            echo "- Production activation: NO"
+            echo "- DOCUMENT_MERGE_ENGINE changed: NO"
+          } >> "${GITHUB_STEP_SUMMARY}"
