@@ -9,7 +9,8 @@
  * toàn khi WORKER_ENV=production (worker-diag-gate.ts) → KHÔNG thể dùng ở
  * production, KHÔNG chạm production /run, KHÔNG merge job production.
  *
- * Khác biệt retry so với HTML runner (chủ ý, có test):
+ * Retry semantics — shared with the HTML runner via
+ * allRemainingItemsAwaitingRetry() in queue.ts (có test):
  *   - Item lỗi → failItem() → RETRY (backoff) như queue thường lệ.
  *   - Nếu sau khi xử lý xong vòng claim, toàn bộ item còn lại đang RETRY
  *     chờ backoff (retry_at > now) → worker KẾT THÚC vòng lặp mà KHÔNG fail
@@ -23,10 +24,11 @@
 import { eq } from "drizzle-orm";
 
 import { db } from "../../../db";
-import { mergeJobRecords, mergeJobs } from "../../../db/schema";
+import { mergeJobs } from "../../../db/schema";
 import type { StorageProvider } from "../../storage/index.ts";
 import { getStorageProvider } from "../../storage/index.ts";
 import {
+  allRemainingItemsAwaitingRetry,
   claimItems,
   completeItem,
   failAllNonTerminalItems,
@@ -52,6 +54,8 @@ import {
   renderStagingE2EItem,
   type OverlayE2ESnapshot,
 } from "./staging-e2e.ts";
+
+export { allRemainingItemsAwaitingRetry };
 
 export interface OverlayE2ERunOptions {
   /** Storage provider — mặc định getStorageProvider() (env staging). Test inject được. */
@@ -145,18 +149,6 @@ export async function processOverlayE2EItem(item: QueueItem, ctx: OverlayE2EItem
   await stage(ctx.jobId, item.id, "ITEM_COMPLETE", t, true);
 }
 
-/** Còn item chưa terminal nhưng TẤT CẢ đều đang RETRY chờ backoff (retry_at > now)? */
-export async function allRemainingItemsAwaitingRetry(jobId: string): Promise<boolean> {
-  const items = await db
-    .select({ status: mergeJobRecords.status, retryAt: mergeJobRecords.retryAt })
-    .from(mergeJobRecords)
-    .where(eq(mergeJobRecords.mergeJobId, jobId));
-  const pending = items.filter((i) => i.status === "QUEUED" || i.status === "RETRY");
-  if (pending.length === 0) return false;
-  const now = Date.now();
-  return pending.every((i) => i.retryAt !== null && i.retryAt.getTime() > now);
-}
-
 /**
  * Chạy 1 job overlay E2E tới terminal (hoặc defer khi item đang chờ retry
  * backoff). Trả {processed, failed}. Ném lỗi nếu job không tồn tại / không
@@ -208,9 +200,9 @@ export async function runOverlayE2EJob(
         }
 
         if (items.length === 0) {
-          // Retry semantics (khác HTML runner — chủ ý, xem header file):
+          // Shared retry semantics (queue.allRemainingItemsAwaitingRetry):
           // item đang RETRY chờ backoff → kết thúc vòng, job giữ PROCESSING,
-          // lần /run-overlay kế tiếp sẽ claim. KHÔNG fail job.
+          // lần /run-overlay kế tiếp sẽ claim. KHÔNG fail job, KHÔNG ghi đè error.
           if (await allRemainingItemsAwaitingRetry(jobId)) break;
 
           const errorMessage = `CLAIM_STALLED: còn ${check.queued} item QUEUED/RETRY nhưng claimItems() không claim được sau ${attempt} lần thử.`;

@@ -33,6 +33,7 @@ interface QueueSpies {
   markJobProcessing: { calls: number };
   recomputeJobProgress: { calls: number; results: unknown[] };
   recordJobStage: { calls: { args: unknown[] }[] };
+  allRemainingItemsAwaitingRetry: boolean;
 }
 
 function makeQueueSpies(): QueueSpies {
@@ -45,6 +46,7 @@ function makeQueueSpies(): QueueSpies {
     markJobProcessing: { calls: 0 },
     recomputeJobProgress: { calls: 0, results: [] },
     recordJobStage: { calls: [] },
+    allRemainingItemsAwaitingRetry: false,
   };
   spies.claimItems.impl = async () => {
     const idx = spies.claimItems.calls;
@@ -69,6 +71,7 @@ const QUEUE_STUB_NAMES = [
   "markJobProcessing",
   "recomputeJobProgress",
   "recordJobStage",
+  "allRemainingItemsAwaitingRetry",
 ];
 
 function buildQueueStub(spies: QueueSpies): Record<string, unknown> {
@@ -94,6 +97,8 @@ function buildQueueStub(spies: QueueSpies): Record<string, unknown> {
       };
     } else if (name === "recordJobStage") {
       stub[name] = async (...args: unknown[]) => { spies.recordJobStage.calls.push({ args }); };
+    } else if (name === "allRemainingItemsAwaitingRetry") {
+      stub[name] = async () => spies.allRemainingItemsAwaitingRetry;
     }
   }
   return stub;
@@ -268,14 +273,11 @@ test("worker-overlay-e2e: storage failure → failItem RENDER_FAILED, KHÔNG his
   const db = createFakeDb({
     respond: (call) => {
       if (call.root === "select" && call.table === "merge_jobs") return [jobRow({ metadata: { e2e: snapshot } })];
-      // allRemainingItemsAwaitingRetry: item đang RETRY chờ backoff → defer
-      if (call.root === "select" && call.table === "merge_job_records") {
-        return [{ status: "RETRY", retryAt: new Date(Date.now() + 60_000) }];
-      }
       return { rowCount: 1 };
     },
   });
   const spies = makeQueueSpies();
+  spies.allRemainingItemsAwaitingRetry = true;
   spies.claimItems.results = [
     [{ id: "item-1", mergeJobId: "job-1", sourceEntity: "staging_e2e_fixture", sourceRecordId: "22222222-2222-4222-8222-222222222222", templateId: null, sortOrder: 1, status: "QUEUED", attemptCount: 0 }],
   ];
@@ -312,13 +314,11 @@ test("worker-overlay-e2e: item RETRY chờ backoff → worker defer, KHÔNG fail
   const db = createFakeDb({
     respond: (call) => {
       if (call.root === "select" && call.table === "merge_jobs") return [jobRow({ metadata: { e2e: snapshot } })];
-      if (call.root === "select" && call.table === "merge_job_records") {
-        return [{ status: "RETRY", retryAt: new Date(Date.now() + 60_000) }];
-      }
       return { rowCount: 1 };
     },
   });
   const spies = makeQueueSpies();
+  spies.allRemainingItemsAwaitingRetry = true;
   spies.claimItems.results = [];
   spies.recomputeJobProgress.results = [
     { queued: 1, completed: 0, failed: 0, terminal: false },

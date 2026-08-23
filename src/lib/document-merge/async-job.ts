@@ -137,6 +137,7 @@ export async function createAsyncMergeJob(input: CreateAsyncJobInput): Promise<C
       id: dailyApplications.id,
       declaredType: dailyApplications.declaredType,
       dwMatch: dailyApplications.dwMatch,
+      permanentAddress: dailyApplications.permanentAddress,
     })
     .from(dailyApplications)
     .where(and(...conditions));
@@ -269,6 +270,27 @@ export async function createAsyncMergeJob(input: CreateAsyncJobInput): Promise<C
             422,
           );
         }
+      }
+    }
+
+    // Canonical trainee-registration HTML_PDF only: required permanentAddress
+    // (Địa chỉ thường trú) must be present before the job is queued. Do not
+    // fall back to residentialAddress — that field maps to Dia_chi_tam_tru.
+    // GOOGLE_DOCS and generic HTML templates are unchanged.
+    const traineeTemplateIds = new Set(
+      templateIds.filter((templateId) => {
+        const template = allTemplates.find((item) => item.id === templateId);
+        return getHtmlTemplateByGoogleDocId(template?.googleDocId)?.key === "dang-ky-tap-nghe";
+      }),
+    );
+    if (traineeTemplateIds.size > 0) {
+      const missingPermanentAddress = planned.some((item) => {
+        if (!traineeTemplateIds.has(item.templateId)) return false;
+        const address = byId.get(item.recordId)?.permanentAddress;
+        return !String(address ?? "").trim();
+      });
+      if (missingPermanentAddress) {
+        throw new AsyncJobValidationError("Thiếu Địa chỉ thường trú", 422);
       }
     }
   }
