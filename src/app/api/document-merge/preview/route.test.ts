@@ -136,6 +136,10 @@ type Options = {
   role?: string;
   versionRows?: ReturnType<typeof makeVersionRow>[];
   env?: Record<string, string>;
+  /** Engine reported by engine-config (default legacy GOOGLE_DOCS). */
+  engine?: "GOOGLE_DOCS" | "HTML_PDF";
+  /** PUBLISHED canonical row returned for the canonical preview branch. */
+  publishedRow?: ReturnType<typeof makeVersionRow> | null;
 };
 
 type Context = {
@@ -155,6 +159,11 @@ function makeContext(opts: Options = {}): Context {
       if (call.root === "select" && call.table === "merge_templates") return [TEMPLATE];
       if (call.root === "select" && call.table === "merge_template_versions") {
         const requested = eqValue(call, "merge_template_versions.version");
+        // Canonical published branch selects by status, not by version number.
+        if (requested === undefined) {
+          const published = opts.publishedRow === undefined ? null : opts.publishedRow;
+          return published ? [published] : [];
+        }
         return versionRows.filter((row) => row.version === requested);
       }
       if (call.root === "select" && call.table === "merge_template_fields") return [FIELD];
@@ -225,19 +234,66 @@ function makeContext(opts: Options = {}): Context {
           };
         case "@/lib/document-merge/applicant-record":
           return { buildApplicantMergeRecord: (sources: { application: { id: string; fullName: string } }) => sources.application };
-        case "@/lib/document-merge/html-pipeline":
+        case "@/lib/document-merge/engine-config":
+          return { getDocumentMergeEngine: () => opts.engine ?? "GOOGLE_DOCS" };
+        case "@/lib/document-merge/canonical-document":
           return {
-            renderApplicantDocumentFromVersion: (
-              version: ReturnType<typeof makeVersionRow>,
-              fields: unknown[],
+            CANONICAL_ACTION_VI: "ACTION",
+            countCanonicalPages: (html: string) =>
+              (html.match(/class="[^"]*\bpage\b[^"]*"/g) ?? []).length,
+            isCanonicalTemplateError: (e: unknown) =>
+              Boolean(e) && (e as { name?: string }).name === "CanonicalTemplateError",
+            buildCanonicalSnapshot: (input: {
+              templateId: string;
+              version: ReturnType<typeof makeVersionRow> | null;
+              mappings: unknown[];
+              formatting: Record<string, unknown>;
+              allowUnpublishedForVerification?: boolean;
+            }) => {
+              if (!input.version?.htmlBody) {
+                const err = new Error("CANONICAL_TEMPLATE_NOT_PUBLISHED");
+                err.name = "CanonicalTemplateError";
+                Object.assign(err, {
+                  code: "CANONICAL_TEMPLATE_NOT_PUBLISHED",
+                  operatorMessage: "Chưa có phiên bản canonical được xuất bản.",
+                  action: "ACTION",
+                  templateId: input.templateId,
+                });
+                throw err;
+              }
+              return {
+                templateId: input.templateId,
+                templateVersion: input.version.version,
+                htmlBody: input.version.htmlBody,
+                printCss: input.version.printCss,
+                mappings: input.mappings,
+                formatting: input.formatting,
+                sourceStatus: input.version.status,
+                allowUnpublished: Boolean(input.allowUnpublishedForVerification),
+              };
+            },
+            renderCanonicalDocument: (
+              snapshot: { htmlBody: string; templateId: string; templateVersion: number; printCss: string | null },
               recordData: Record<string, unknown>,
             ) => {
-              renderCalls.push({ version, fields, recordData });
+              renderCalls.push({
+                version: {
+                  ...snapshot,
+                  version: snapshot.templateVersion,
+                  // Real version status the operator asked to verify.
+                  status: (snapshot as { sourceStatus?: string }).sourceStatus,
+                } as never,
+                fields: snapshot as never,
+                recordData,
+              });
               return {
-                html: `<!DOCTYPE html><html><body>${version.htmlBody ?? ""}</body></html>`,
+                html: `<!DOCTYPE html><html><body>${snapshot.htmlBody}</body></html>`,
                 unreplaced: [],
                 missingFields: [],
                 valid: true,
+                templateId: snapshot.templateId,
+                templateVersion: snapshot.templateVersion,
+                printCss: snapshot.printCss,
               };
             },
           };
@@ -488,23 +544,32 @@ test("preview: DOCUMENT_MERGE_ENGINE=GOOGLE_DOCS → htmlVersion preview vẫn h
 });
 
 // O. Route dùng đúng module shared mà worker HTML_PDF dùng.
-test("preview: renderer = renderApplicantDocumentFromVersion từ @/lib/document-merge/html-pipeline (module worker dùng)", () => {
-  assert.match(routeSource, /from "@\/lib\/document-merge\/html-pipeline"/);
-  assert.match(routeSource, /renderApplicantDocumentFromVersion/);
+test("preview: renderer = renderCanonicalDocument — CÙNG hàm mà worker HTML_PDF dùng", () => {
+  assert.match(routeSource, /from "@\/lib\/document-merge\/canonical-document"/);
+  assert.match(routeSource, /renderCanonicalDocument/);
 
   const workerSource = readFileSync(new URL("../../../../../worker/src/index.ts", import.meta.url), "utf8");
   assert.match(
     workerSource,
-    /renderApplicantDocumentFromParts.*from "\.\.\/\.\.\/src\/lib\/document-merge\/html-pipeline\.ts"/,
-    "worker phải import từ CÙNG html-pipeline.ts",
+    /renderCanonicalDocument[\s\S]*from "\.\.\/\.\.\/src\/lib\/document-merge\/canonical-document\.ts"/,
+    "worker phải import CÙNG renderCanonicalDocument",
   );
 
-  const pipelineSource = readFileSync(new URL("../../../../lib/document-merge/html-pipeline.ts", import.meta.url), "utf8");
-  assert.match(
-    pipelineSource,
-    /renderApplicantDocumentFromVersion[\s\S]*renderApplicantDocumentFromParts/,
-    "renderApplicantDocumentFromVersion phải delegate tới renderApplicantDocumentFromParts (worker path)",
+  // Preview và worker phải dùng CHUNG một hàm render — không tự dựng lại tài liệu.
+  const canonicalSource = readFileSync(
+    new URL("../../../../lib/document-merge/canonical-document.ts", import.meta.url),
+    "utf8",
   );
+  assert.match(
+    canonicalSource,
+    /export function renderCanonicalDocument[\s\S]*renderApplicantDocumentFromParts/,
+    "renderCanonicalDocument phải delegate tới renderApplicantDocumentFromParts",
+  );
+
+  // Không còn đường render tài liệu tĩnh trong runtime.
+  const pipelineSource = readFileSync(new URL("../../../../lib/document-merge/html-pipeline.ts", import.meta.url), "utf8");
+  assert.doesNotMatch(pipelineSource, /getHtmlTemplateByGoogleDocId/);
+  assert.doesNotMatch(pipelineSource, /export function renderApplicantDocument\b/);
 });
 
 // P. DRAFT chỉ được phép trong nhánh htmlVersion; flow sản xuất (không htmlVersion) không đụng version/renderer.

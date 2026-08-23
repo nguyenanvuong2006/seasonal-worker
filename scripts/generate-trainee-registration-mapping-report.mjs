@@ -1,19 +1,41 @@
 #!/usr/bin/env node
 /** Generate the reviewable canonical field inventory; run with `node --import tsx`. */
 
-import { writeFileSync } from "node:fs";
+import { readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { DANG_KY_TAP_NGHE_FIELD_CONTRACT } from "../src/document-templates/dang-ky-tap-nghe/schema.ts";
-import {
-  CANONICAL_TRAINEE_REGISTRATION_HTML,
-  CANONICAL_TRAINEE_REGISTRATION_LOGICAL_PAGE_COUNT,
-  CANONICAL_TRAINEE_REGISTRATION_SOURCE_PATH,
-  CANONICAL_TRAINEE_REGISTRATION_SOURCE_SHA256,
-} from "../src/document-templates/dang-ky-tap-nghe/canonical-template.generated.ts";
 import { extractUniquePlaceholders } from "../src/lib/document-merge/placeholder-extractor.ts";
 
 const ROOT = join(fileURLToPath(new URL(".", import.meta.url)), "..");
+
+/**
+ * Canonical body/CSS come from the DRAFT migration (the exact payload that
+ * lands in merge_template_versions). No runtime module contains a body.
+ */
+function readCanonicalVersionParts(root) {
+  const sql = readFileSync(
+    join(root, "migrations", "2026-08-23-trainee-registration-canonical-html-draft.sql"),
+    "utf8",
+  );
+  const pick = (tag) => {
+    const open = `$${tag}$`;
+    const start = sql.indexOf(open);
+    const bodyStart = start + open.length;
+    const end = sql.indexOf(open, bodyStart);
+    if (start < 0 || end < 0) throw new Error(`canonical migration missing ${open}`);
+    return sql.slice(bodyStart, end);
+  };
+  return { htmlBody: pick("canonical_html"), printCss: pick("canonical_css") };
+}
+
+const manifest = JSON.parse(
+  readFileSync(join(ROOT, "templates/document-merge/trainee-registration/canonical-source.manifest.json"), "utf8"),
+);
+const CANONICAL_TRAINEE_REGISTRATION_HTML = readCanonicalVersionParts(ROOT).htmlBody;
+const CANONICAL_TRAINEE_REGISTRATION_LOGICAL_PAGE_COUNT = manifest.logicalPageCount;
+const CANONICAL_TRAINEE_REGISTRATION_SOURCE_PATH = manifest.sourcePath;
+const CANONICAL_TRAINEE_REGISTRATION_SOURCE_SHA256 = manifest.sourceSha256;
 const output = join(ROOT, "docs", "TRAINEE_REGISTRATION_FIELD_MAPPING_REPORT.md");
 const fields = DANG_KY_TAP_NGHE_FIELD_CONTRACT.fields;
 const found = extractUniquePlaceholders(CANONICAL_TRAINEE_REGISTRATION_HTML);

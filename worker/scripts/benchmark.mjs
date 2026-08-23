@@ -15,16 +15,36 @@
  * Batch thật (500) cần thêm network + storage; ước tính từ các mốc này.
  */
 
-import { mkdirSync, writeFileSync } from "node:fs";
+import { mkdirSync, writeFileSync, readFileSync } from "node:fs";
 import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 import { chromium } from "playwright";
 import { PDFDocument } from "pdf-lib";
-import { dangKyTapNgheTemplate } from "../../src/document-templates/dang-ky-tap-nghe/template.ts";
 import { renderApplicantHtmlFromParts } from "../../src/lib/document-merge/html-renderer.ts";
 import { SAMPLE_FIELD_VALUES } from "./generate-template-sample.mjs";
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), "..", "..");
+
+/**
+ * Canonical body/CSS come from the DRAFT migration (the exact payload that
+ * lands in merge_template_versions). No runtime module contains a body.
+ */
+function readCanonicalVersionParts(root) {
+  const sql = readFileSync(
+    join(root, "migrations", "2026-08-23-trainee-registration-canonical-html-draft.sql"),
+    "utf8",
+  );
+  const pick = (tag) => {
+    const open = `$${tag}$`;
+    const start = sql.indexOf(open);
+    const bodyStart = start + open.length;
+    const end = sql.indexOf(open, bodyStart);
+    if (start < 0 || end < 0) throw new Error(`canonical migration missing ${open}`);
+    return sql.slice(bodyStart, end);
+  };
+  return { htmlBody: pick("canonical_html"), printCss: pick("canonical_css") };
+}
+
 const MAX = Number(process.argv[2] ?? 100);
 const CONCURRENCY = Math.max(1, Number(process.env.PDF_RENDER_CONCURRENCY ?? 4));
 
@@ -34,9 +54,10 @@ function percentile(sorted, p) {
   return sorted[idx];
 }
 
+const canonical = readCanonicalVersionParts(ROOT);
 const { html } = renderApplicantHtmlFromParts(
-  dangKyTapNgheTemplate.html,
-  dangKyTapNgheTemplate.css,
+  canonical.htmlBody,
+  canonical.printCss,
   SAMPLE_FIELD_VALUES,
 );
 

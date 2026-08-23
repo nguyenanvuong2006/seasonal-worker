@@ -4,10 +4,14 @@
  * Data flow: normalized record → semantic merge fields → escaped HTML →
  * Playwright PDF.  The renderer intentionally has no PDF-coordinate knowledge;
  * positioning, tables, checkboxes and pagination stay in ordinary HTML/CSS.
+ *
+ * ⚠️ This module holds NO document body and exposes no "render a registered
+ * template" entry point. It renders only a body handed to it by the canonical
+ * pipeline (see canonical-document.ts). Pagination follows whatever the
+ * canonical body defines — no page count is assumed anywhere.
  */
 
 import { extractUniquePlaceholders, replaceMultiplePlaceholders } from "./placeholder-extractor.ts";
-import type { TemplateContract } from "./template-contract.ts";
 
 /** HTML-escape all merge values before inserting them into a trusted template. */
 export function escapeHtml(value: string): string {
@@ -52,20 +56,6 @@ export function stripPreviewOnlyMarkup(html: string): string {
     .replace(/<([a-z][\w:-]*)\b[^>]*\b(?:data-preview-only|data-template-code)\b[^>]*>[\s\S]*?<\/\1\s*>/gi, "")
     .replace(new RegExp(`<([a-z][\\w:-]*)\\b[^>]*\\bclass=(?:"[^"]*\\b(?:${previewClasses})\\b[^"]*"|'[^']*\\b(?:${previewClasses})\\b[^']*')[^>]*>[\\s\\S]*?<\\/\\1\\s*>`, "gi"), "");
   return stripInlineEventHandlers(withoutPreviewMarkup);
-}
-
-export interface HtmlTemplate {
-  /** Stable registry key, e.g. "dang-ky-tap-nghe". */
-  key: string;
-  name: string;
-  /** Legacy source identifier used only to register a first-party template. */
-  googleDocIds: string[];
-  /** Body HTML only; no html/head wrapper and no candidate values. */
-  html: string;
-  /** Additional print CSS, injected after the shared A4 base CSS. */
-  css: string;
-  /** Reviewable semantic field contract for a first-party template. */
-  fieldContract?: TemplateContract;
 }
 
 /**
@@ -192,9 +182,4 @@ export function renderApplicantHtmlFromParts(
   const body = replaceMultiplePlaceholders(stripPreviewOnlyMarkup(bodyHtml), escaped);
   const unreplaced = extractUniquePlaceholders(body);
   return { html: wrapHtmlDocument(body, css ?? ""), unreplaced };
-}
-
-/** Render a registered first-party template using the same production path. */
-export function renderApplicantHtml(template: HtmlTemplate, fieldValues: Record<string, string>): RenderResult {
-  return renderApplicantHtmlFromParts(template.html, template.css, fieldValues);
 }

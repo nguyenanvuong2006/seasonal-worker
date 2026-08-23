@@ -14,6 +14,12 @@ export const PAGE_BREAK_TEXT = "\n\n--- DOCUMENT_MERGE_PAGE_BREAK ---\n\n";
 
 export interface GoogleDocsService {
   getDocumentContent(docId: string): Promise<string>;
+  /**
+   * Export as structured HTML (Drive mimeType=text/html). Used ONLY by the
+   * explicit admin action "Đồng bộ Google Doc → phiên bản HTML mới" to create a
+   * DRAFT canonical version. Never used at render time.
+   */
+  exportDocumentHtml(docId: string): Promise<string>;
   copyDocument(docId: string, folderId?: string, title?: string): Promise<string>;
   updateDocumentContent(docId: string, content: string): Promise<void>;
   replacePlaceholders(docId: string, replacements: PlaceholderReplacement[]): Promise<void>;
@@ -275,6 +281,14 @@ export class MockGoogleDocsService implements GoogleDocsService {
     ].join("\n");
   }
 
+  async exportDocumentHtml(docId: string): Promise<string> {
+    const doc = this.documents.get(docId);
+    const body = doc
+      ? `<p>${doc.content.replace(/\n/g, "</p><p>")}</p>`
+      : '<div class="page"><h1>MOCK</h1><p>{{Ho_ten}}</p></div>';
+    return `<!DOCTYPE html><html><head><style>.page{width:210mm}</style></head><body>${body}</body></html>`;
+  }
+
   async copyDocument(docId: string, _folderId?: string, title?: string): Promise<string> {
     const sourceDoc = await this.getDocumentContent(docId);
     const newId = `mock_copy_${Date.now()}_${Math.random().toString(36).slice(2, 9)}`;
@@ -384,6 +398,20 @@ export class RealGoogleDocsService implements GoogleDocsService {
     const content = await response.text();
     rememberTemplateSnapshot(docId, content);
     return content;
+  }
+
+  /**
+   * Structured HTML export. Read-only; does not modify the Google Doc and is
+   * never called on the render path.
+   */
+  async exportDocumentHtml(docId: string): Promise<string> {
+    const url = `${this.driveUrl}/files/${encodeURIComponent(docId)}/export?mimeType=${encodeURIComponent("text/html")}&supportsAllDrives=true`;
+    const response = await fetch(url, { headers: await this.authHeader() });
+    if (!response.ok) {
+      const detail = await response.text();
+      throw new Error(`Không xuất được Google Docs sang HTML (${response.status}): ${detail.slice(0, 500)}`);
+    }
+    return response.text();
   }
 
   async copyDocument(docId: string, folderId?: string, title?: string): Promise<string> {

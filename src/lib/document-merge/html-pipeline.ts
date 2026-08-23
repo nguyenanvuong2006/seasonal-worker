@@ -1,16 +1,21 @@
 /**
  * HTML merge pipeline: normalized data → semantic fields → HTML → worker PDF.
  *
- * The worker and the read-only HTML preview call this same pipeline.  It has no
- * coordinate-overlay dependency and relies on the existing Data Resolver,
- * template-version snapshots, authorization and queue lifecycle.
+ * ⚠️ This module contains NO document body and can never supply one. It only
+ * renders a body it is handed. The single runtime body source is the
+ * explicitly PUBLISHED canonical version snapshotted onto a job — see
+ * `canonical-document.ts` (`renderCanonicalDocument`), which both Preview and
+ * the Cloud Run HTML_PDF worker call.
+ *
+ * There is intentionally no "render a registered first-party template"
+ * entry point any more: that was a static-HTML runtime path that allowed an
+ * obsolete template to be rendered.
  */
 
 import type { MergeTemplateField } from "../../db/schema";
 import { resolveAllFields, validateRequiredFields, type MergeContext, type RecordData } from "./data-resolver.ts";
 import { applyFallbackPlaceholders } from "./preview-merge.ts";
 import { renderApplicantHtmlFromParts } from "./html-renderer.ts";
-import { getHtmlTemplateByGoogleDocId } from "../../document-templates/registry.ts";
 import type { TemplateContract } from "./template-contract.ts";
 import { validateContractRequiredValues } from "./template-contract.ts";
 
@@ -33,25 +38,6 @@ export interface RenderApplicantDocumentResult {
 export interface HtmlRenderOptions {
   /** Optional first-party contract. Generic versioned templates rely on DB mappings only. */
   contract?: TemplateContract | null;
-}
-
-/**
- * Render a registered first-party template. This route is useful for local
- * verification; production jobs render their immutable version snapshot below.
- */
-export function renderApplicantDocument(
-  googleDocId: string,
-  fields: MergeTemplateField[],
-  recordData: RecordData,
-  context: MergeContext,
-): RenderApplicantDocumentResult {
-  const template = getHtmlTemplateByGoogleDocId(googleDocId);
-  if (!template) {
-    throw new Error(`HTML_TEMPLATE_MISSING: chưa có HTML template cho Google Doc ${googleDocId}.`);
-  }
-  return renderApplicantDocumentFromParts(template.html, template.css, fields, recordData, context, {
-    contract: template.fieldContract,
-  });
 }
 
 /**

@@ -7,6 +7,7 @@
 import { NextResponse } from "next/server";
 import { and, eq, isNull } from "drizzle-orm";
 import { requirePermission } from "@/lib/auth";
+import { getDocumentMergeEngine } from "@/lib/document-merge/engine-config";
 import { db } from "@/db";
 import {
   dailyApplications,
@@ -21,9 +22,16 @@ import { createGoogleDocsService } from "@/lib/document-merge/google-docs-servic
 import { resolveAllFields, validateRequiredFields, type MergeContext } from "@/lib/document-merge/data-resolver";
 import { applyFallbackPlaceholders, buildPreviewContent } from "@/lib/document-merge/preview-merge";
 import { buildApplicantMergeRecord } from "@/lib/document-merge/applicant-record";
-import { renderApplicantDocumentFromVersion } from "@/lib/document-merge/html-pipeline";
 import { loadDailyApplicationRecords } from "@/lib/document-merge/record-loader";
 import { getHtmlTemplateContractByGoogleDocId } from "@/document-templates/registry";
+import {
+  buildCanonicalSnapshot,
+  CANONICAL_ACTION_VI,
+  countCanonicalPages,
+  isCanonicalTemplateError,
+  renderCanonicalDocument,
+  type CanonicalMapping,
+} from "@/lib/document-merge/canonical-document";
 import {
   documentKindLabel,
   resolveDocumentKind,
@@ -244,10 +252,32 @@ async function handleHtmlVersionPreview(input: {
     mergeCount: 1,
   };
 
-  const rendered = renderApplicantDocumentFromVersion(version, fields, recordData, context, {
+  // Build the SAME immutable snapshot shape a job freezes, then render it with
+  // the SAME canonical renderer the Cloud Run worker uses. Preview never
+  // reconstructs the document independently.
+  //
+  // A DRAFT/ARCHIVED version is allowed HERE ONLY — this is the read-only
+  // verification path required before Publish (Phase 7). It cannot create a
+  // job and cannot make an unpublished body reachable by production rendering.
+  const snapshot = buildCanonicalSnapshot({
+    templateId: template.id,
+    version,
+    // Read-only verification of a candidate version before Publish (Phase 7).
+    // Production job creation and the worker never set this flag.
+    allowUnpublishedForVerification: true,
+    mappings: fields as unknown as CanonicalMapping[],
+    formatting: {
+      contractKey: template.googleDocId,
+      retentionYears: version.retentionYears ?? null,
+      documentKind: template.documentKind,
+      templateName: template.name,
+    },
+  });
+
+  const rendered = renderCanonicalDocument(snapshot, recordData, context, {
     contract: getHtmlTemplateContractByGoogleDocId(template.googleDocId),
   });
-  const pageCount = (rendered.html.match(/class="[^"]*\bpage\b[^"]*"/g) ?? []).length;
+  const pageCount = countCanonicalPages(rendered.html);
   const sectionCount = (rendered.html.match(/<section\b/gi) ?? []).length;
 
   return NextResponse.json({
@@ -255,9 +285,13 @@ async function handleHtmlVersionPreview(input: {
     renderedHtml: rendered.html,
     version: version.version,
     versionStatus: version.status,
+    isPublishedCanonical: version.status === "PUBLISHED",
     templateId: template.id,
     templateName: template.name,
     templateKind: template.documentKind,
+    templateVersion: rendered.templateVersion,
+    printCss: snapshot.printCss,
+    engine: "HTML_PDF",
     recordId: input.applicationId,
     applicationId: input.applicationId,
     fullName: typeof recordData.fullName === "string" ? recordData.fullName : undefined,
@@ -266,7 +300,77 @@ async function handleHtmlVersionPreview(input: {
     valid: rendered.valid,
     pageCount,
     sectionCount,
-    renderer: "renderApplicantDocumentFromVersion (shared HTML_PDF renderer)",
+    renderer: "renderCanonicalDocument (shared Preview + HTML_PDF worker renderer)",
+    note:
+      version.status === "PUBLISHED"
+        ? "Đang xem phiên bản canonical ĐÃ XUẤT BẢN — đúng nội dung mà worker HTML_PDF sẽ in."
+        : `Đang xem bản nháp (${version.status}) để kiểm tra trước khi Xuất bản. Job production chỉ dùng phiên bản đã XUẤT BẢN.`,
+  });
+}
+
+/**
+ * CANONICAL PUBLISHED PREVIEW — what an operator sees for a normal merge
+ * preview once the HTML_PDF engine is active.
+ *
+ * Renders the current explicitly PUBLISHED canonical version through
+ * renderCanonicalDocument, i.e. byte-identical to the worker. Fails closed
+ * with CANONICAL_TEMPLATE_NOT_PUBLISHED when nothing is published — it does
+ * NOT fall back to Google Docs, static HTML or an older version.
+ */
+async function renderCanonicalPublishedPreview(input: {
+  template: typeof mergeTemplates.$inferSelect;
+  fields: (typeof mergeTemplateFields.$inferSelect)[];
+  recordData: Awaited<ReturnType<typeof loadDailyApplicationRecords>> extends Map<string, infer R> ? R : never;
+  context: MergeContext;
+  applicationId: string;
+}): Promise<Response> {
+  const [published] = await db
+    .select()
+    .from(mergeTemplateVersions)
+    .where(
+      and(
+        eq(mergeTemplateVersions.templateId, input.template.id),
+        eq(mergeTemplateVersions.status, "PUBLISHED"),
+      ),
+    )
+    .limit(1);
+
+  const snapshot = buildCanonicalSnapshot({
+    templateId: input.template.id,
+    version: published ?? null,
+    mappings: input.fields as unknown as CanonicalMapping[],
+    formatting: {
+      contractKey: input.template.googleDocId,
+      retentionYears: published?.retentionYears ?? null,
+      documentKind: input.template.documentKind,
+      templateName: input.template.name,
+    },
+  });
+
+  const rendered = renderCanonicalDocument(snapshot, input.recordData, input.context, {
+    contract: getHtmlTemplateContractByGoogleDocId(input.template.googleDocId),
+  });
+
+  return NextResponse.json({
+    mode: "CANONICAL_PUBLISHED_PREVIEW",
+    renderedHtml: rendered.html,
+    templateId: input.template.id,
+    templateName: input.template.name,
+    templateKind: input.template.documentKind,
+    templateVersion: rendered.templateVersion,
+    version: rendered.templateVersion,
+    versionStatus: "PUBLISHED",
+    isPublishedCanonical: true,
+    printCss: rendered.printCss,
+    engine: "HTML_PDF",
+    applicationId: input.applicationId,
+    recordId: input.applicationId,
+    fullName: typeof input.recordData.fullName === "string" ? input.recordData.fullName : undefined,
+    unresolved: rendered.unreplaced,
+    missingFields: rendered.missingFields,
+    valid: rendered.valid,
+    pageCount: countCanonicalPages(rendered.html),
+    renderer: "renderCanonicalDocument (shared Preview + HTML_PDF worker renderer)",
   });
 }
 
@@ -450,6 +554,31 @@ export async function POST(request: Request) {
       mergeCount: 1,
     };
 
+    // When the HTML/PDF engine is active, Preview MUST show the same canonical
+    // published document the worker will print. Google Docs preview stays for
+    // the legacy GOOGLE_DOCS engine only.
+    if (getDocumentMergeEngine() === "HTML_PDF") {
+      const records = await loadDailyApplicationRecords([applicationId]);
+      const canonicalRecord = records.get(applicationId);
+      if (!canonicalRecord) {
+        return NextResponse.json(
+          {
+            code: "APPLICATION_NOT_FOUND",
+            error: "Không tìm thấy hồ sơ ứng viên.",
+            action: "Tải lại danh sách và chọn lại ứng viên.",
+          },
+          { status: 404 },
+        );
+      }
+      return await renderCanonicalPublishedPreview({
+        template,
+        fields,
+        recordData: canonicalRecord,
+        context,
+        applicationId,
+      });
+    }
+
     const mapped = resolveAllFields(fields, recordData, context);
     const fieldValues = applyFallbackPlaceholders(recordData, mapped);
     const validation = validateRequiredFields(fields, fieldValues);
@@ -484,6 +613,20 @@ export async function POST(request: Request) {
       valid: validation.valid && preview.unreplaced.length === 0,
     });
   } catch (error) {
+    // FAIL CLOSED: a missing published canonical version is a configuration
+    // error with a clear operator message — never a silent fallback.
+    if (isCanonicalTemplateError(error)) {
+      return NextResponse.json(
+        {
+          code: error.code,
+          error: error.operatorMessage,
+          action: error.action ?? CANONICAL_ACTION_VI,
+          templateId: error.templateId,
+          engine: "HTML_PDF",
+        },
+        { status: 422 },
+      );
+    }
     console.error("[document-merge/preview] POST error:", error);
     const diagnostic = diagnosePreviewError(error);
     return NextResponse.json(diagnostic, { status: 500 });

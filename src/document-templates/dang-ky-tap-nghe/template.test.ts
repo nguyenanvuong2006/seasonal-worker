@@ -1,20 +1,24 @@
 /**
- * Canonical HTML must match the 49 active mappings and retain the six-page
- * layout from templates/document-merge/trainee-registration/test.html.
+ * CANONICAL DOCUMENT BODY CHECKS.
+ *
+ * The body is read from the canonical DRAFT migration (the exact payload that
+ * lands in merge_template_versions), NOT from a runtime TypeScript module —
+ * no runtime module is allowed to contain a document body any more.
+ *
+ * Page count is DERIVED from the canonical source manifest and never
+ * hard-coded as a business rule.
  */
 import test from "node:test";
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
-import { readFileSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { extractUniquePlaceholders } from "../../lib/document-merge/placeholder-extractor.ts";
 import { stripPreviewOnlyMarkup } from "../../lib/document-merge/html-renderer.ts";
-import { dangKyTapNgheTemplate } from "./template.ts";
 import {
-  CANONICAL_TRAINEE_REGISTRATION_LOGICAL_PAGE_COUNT,
-  CANONICAL_TRAINEE_REGISTRATION_SOURCE_PATH,
-  CANONICAL_TRAINEE_REGISTRATION_SOURCE_SHA256,
-} from "./canonical-template.generated.ts";
+  readCanonicalManifest,
+  readCanonicalVersionParts,
+} from "../../lib/test-support/canonical-fixture.ts";
 import {
   CHECKBOX_PLACEHOLDERS,
   CONTRACT_PLACEHOLDERS,
@@ -26,8 +30,13 @@ import {
 } from "./schema.ts";
 import { validateTemplateContract } from "../../lib/document-merge/template-contract.ts";
 
-const html = dangKyTapNgheTemplate.html;
-const canonicalSource = readFileSync(join(process.cwd(), CANONICAL_TRAINEE_REGISTRATION_SOURCE_PATH), "utf8");
+const manifest = readCanonicalManifest();
+const canonicalParts = readCanonicalVersionParts();
+const html = canonicalParts.htmlBody;
+const canonicalCss = canonicalParts.printCss;
+const canonicalSource = readFileSync(join(process.cwd(), manifest.sourcePath), "utf8");
+/** Derived from the canonical body itself — never a hard-coded business rule. */
+const EXPECTED_PAGES = manifest.logicalPageCount;
 const canonicalDraftMigration = readFileSync(
   join(process.cwd(), "migrations", "2026-08-23-trainee-registration-canonical-html-draft.sql"),
   "utf8",
@@ -45,13 +54,31 @@ function sectionAfter(title: string): string {
   return html.slice(start, end);
 }
 
-test("generated production template is synchronized with the checked-in canonical test.html", () => {
+test("canonical DB draft is synchronized with the checked-in canonical source", () => {
   const hash = createHash("sha256").update(canonicalSource).digest("hex");
-  assert.equal(CANONICAL_TRAINEE_REGISTRATION_SOURCE_PATH, "templates/document-merge/trainee-registration/test.html");
-  assert.equal(hash, CANONICAL_TRAINEE_REGISTRATION_SOURCE_SHA256, "run npm run sync:trainee-template after editing the canonical source");
-  assert.equal(CANONICAL_TRAINEE_REGISTRATION_LOGICAL_PAGE_COUNT, 6);
-  assert.equal((canonicalSource.match(/<div\b[^>]*\bclass="[^"]*\bpage\b[^"]*"[^>]*>/g) ?? []).length, 6);
-  assert.equal((html.match(/<div\b[^>]*\bclass="[^"]*\bpage\b[^"]*"[^>]*>/g) ?? []).length, 6);
+  assert.equal(manifest.sourcePath, "templates/document-merge/trainee-registration/canonical-source.html");
+  assert.equal(hash, manifest.sourceSha256, "run npm run sync:trainee-template after editing the canonical source");
+  assert.equal(
+    createHash("sha256").update(html).digest("hex"),
+    manifest.canonicalBodySha256,
+    "the migration body must match the manifest checksum",
+  );
+  // The source and the DB body must agree on section count; the NUMBER itself
+  // is whatever the approved document defines.
+  assert.equal((canonicalSource.match(/<div\b[^>]*\bclass="[^"]*\bpage\b[^"]*"[^>]*>/g) ?? []).length, EXPECTED_PAGES);
+  assert.equal((html.match(/<div\b[^>]*\bclass="[^"]*\bpage\b[^"]*"[^>]*>/g) ?? []).length, EXPECTED_PAGES);
+});
+
+test("no runtime module may contain a document body", () => {
+  for (const removed of [
+    "src/document-templates/dang-ky-tap-nghe/template.ts",
+    "src/document-templates/dang-ky-tap-nghe/canonical-template.generated.ts",
+  ]) {
+    assert.equal(existsSync(join(process.cwd(), removed)), false, `${removed} must stay deleted`);
+  }
+  const registry = readFileSync(join(process.cwd(), "src/document-templates/registry.ts"), "utf8");
+  assert.doesNotMatch(registry, /GIẤY ĐĂNG KÝ TẬP NGHỀ|<div class="page"/);
+  assert.doesNotMatch(registry, /\bhtml\s*:/, "catalog entries must not carry an html body");
 });
 
 test("production canonical body removes preview/editor controls and placeholder highlighting", () => {
@@ -67,13 +94,12 @@ test("production canonical body removes preview/editor controls and placeholder 
   assert.doesNotMatch(html, /class="(?:toolbar|code-panel|nav-tabs|page-label)"/);
   assert.doesNotMatch(html, /<script\b|<button\b|onclick=/);
   assert.doesNotMatch(html, /class="f"/);
-  assert.match(dangKyTapNgheTemplate.css, /\.merge-value/);
-  assert.match(dangKyTapNgheTemplate.css, /height: auto/);
+  assert.match(canonicalCss, /\.merge-value/);
 });
 
 test("canonical database version migration is DRAFT-only and never activates HTML/PDF", () => {
   assert.match(canonicalDraftMigration, /'DRAFT'/);
-  assert.match(canonicalDraftMigration, /trainee-registration\/test\.html/);
+  assert.match(canonicalDraftMigration, /trainee-registration\/canonical-source\.html/);
   assert.doesNotMatch(canonicalDraftMigration, /current_published_version\s*=/i);
   assert.doesNotMatch(canonicalDraftMigration, /html_enabled\s*=/i);
   assert.doesNotMatch(canonicalDraftMigration, /'PUBLISHED'\s*,\s*\$canonical_html\$/i);

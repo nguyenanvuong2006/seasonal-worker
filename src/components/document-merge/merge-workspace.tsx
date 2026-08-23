@@ -66,6 +66,15 @@ type PreviewResult = {
   unreplaced: string[];
   valid: boolean;
   mappingSummary?: { total: number; mapped: number; required: number; suggested: number };
+  // Canonical provenance — an operator must always know exactly WHAT is previewed.
+  mode?: string;
+  renderedHtml?: string;
+  templateVersion?: number | null;
+  versionStatus?: string | null;
+  isPublishedCanonical?: boolean;
+  engine?: string | null;
+  pageCount?: number | null;
+  renderer?: string | null;
 };
 
 type Diagnostic = {
@@ -987,8 +996,53 @@ export function MergeWorkspace({
                   {autoRoute && <p className="mt-1 text-[11px] text-emerald-800">{preview.dwClassification === "OLD" ? "DW Cũ" : "DW Mới"} → {preview.documentKindLabel}</p>}
                   <p className="text-[11px] text-slate-500">{autoRoute ? "Mẫu được route" : "Mẫu cố định"}: {preview.templateName}</p>
                   {preview.mappingSummary && <p className="mt-1 text-[10px] text-slate-400">Mapping: {preview.mappingSummary.mapped}/{preview.mappingSummary.total} · Required: {preview.mappingSummary.required}</p>}
+
+                  {/* Template / Version / Status / Engine — bắt buộc hiển thị để
+                      operator biết CHÍNH XÁC đang xem tài liệu nào. */}
+                  <dl className="mt-2 grid grid-cols-2 gap-x-3 gap-y-1 border-t border-slate-100 pt-2 text-[10px]">
+                    <dt className="text-slate-400">Template</dt>
+                    <dd className="truncate font-medium text-slate-700">{preview.templateName}</dd>
+                    <dt className="text-slate-400">Version</dt>
+                    <dd className="font-medium text-slate-700">
+                      {preview.templateVersion != null ? `v${preview.templateVersion}` : "—"}
+                    </dd>
+                    <dt className="text-slate-400">Status</dt>
+                    <dd>
+                      <span
+                        className={
+                          preview.isPublishedCanonical
+                            ? "rounded bg-emerald-100 px-1.5 py-0.5 font-semibold text-emerald-800"
+                            : "rounded bg-amber-100 px-1.5 py-0.5 font-semibold text-amber-800"
+                        }
+                      >
+                        {preview.versionStatus ?? "GOOGLE_DOCS"}
+                      </span>
+                    </dd>
+                    <dt className="text-slate-400">Engine</dt>
+                    <dd className="font-medium text-slate-700">{preview.engine ?? "GOOGLE_DOCS"}</dd>
+                    {preview.pageCount != null && (
+                      <>
+                        <dt className="text-slate-400">Số trang</dt>
+                        <dd className="font-medium text-slate-700">{preview.pageCount}</dd>
+                      </>
+                    )}
+                  </dl>
+                  {preview.versionStatus && !preview.isPublishedCanonical && (
+                    <p className="mt-2 rounded bg-amber-50 p-1.5 text-[10px] text-amber-800">
+                      Đây là bản nháp để kiểm tra. Job production chỉ dùng phiên bản đã XUẤT BẢN.
+                    </p>
+                  )}
                 </div>
-                <pre className="whitespace-pre-wrap font-sans text-[12px] text-slate-800">{preview.content}</pre>
+                {preview.renderedHtml ? (
+                  <iframe
+                    title="Canonical document preview"
+                    className="h-[520px] w-full rounded-lg border border-slate-200 bg-white"
+                    sandbox=""
+                    srcDoc={preview.renderedHtml}
+                  />
+                ) : (
+                  <pre className="whitespace-pre-wrap font-sans text-[12px] text-slate-800">{preview.content}</pre>
+                )}
                 {(preview.missingFields.length > 0 || preview.unreplaced.length > 0) && (
                   <p className="rounded-lg bg-amber-50 p-2 text-[11px] text-amber-800">Trường thiếu / chưa thay: {[...preview.missingFields, ...preview.unreplaced].join(", ")}</p>
                 )}

@@ -42,7 +42,12 @@ const DOCUMENT_MERGE_MIGRATIONS = [
   "2026-08-17-document-merge-async-phase2.sql",
   "2026-08-17-document-merge-template-versions.sql",
   "2026-08-20-document-merge-async-pdf.sql",
+  // Tombstone: obsolete 5-trang HTML seed đã bị gỡ khỏi migration này (chỉ còn
+  // set html_enabled). KHÔNG seed document body nào.
   "2026-08-21-dang-ky-tap-nghe-html-draft.sql",
+  // Canonical HTML hiện hành — tạo DRAFT mới, KHÔNG publish. Operator phải
+  // Preview rồi bấm Xuất bản thì HTML_PDF mới dùng được.
+  "2026-08-23-trainee-registration-canonical-html-draft.sql",
 ];
 
 const client = new pg.Client({ connectionString: DATABASE_URL, ssl: { rejectUnauthorized: false } });

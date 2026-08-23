@@ -1,16 +1,19 @@
 /**
- * createAsyncMergeJob — must snapshot htmlBody/printCss (not just the version
- * number) from the PUBLISHED merge_template_versions row into
- * merge_jobs.metadata.templates[tid], because the worker's HTML_PDF engine
- * renders directly from that snapshot (see worker/src/index.ts processItem) —
- * it no longer looks up a hardcoded template registry by googleDocId. Without
- * this snapshot, every HTML_PDF job would fail at TEMPLATE_LOADING regardless
- * of how correctly the template was published.
+ * createAsyncMergeJob — must freeze the IMMUTABLE CANONICAL SNAPSHOT
+ * (templateId/templateVersion/htmlBody/printCss/mappings/formatting) from the
+ * explicitly PUBLISHED merge_template_versions row into
+ * merge_jobs.metadata.templates[tid]. The worker renders directly from that
+ * snapshot via renderCanonicalDocument(); it never consults a static template
+ * registry, Google Docs, or another version.
+ *
+ * Without a PUBLISHED canonical version the job must FAIL CLOSED at creation
+ * with CANONICAL_TEMPLATE_NOT_PUBLISHED — never queue with a fallback body.
  */
 import test from "node:test";
 import assert from "node:assert/strict";
 import { createFakeDb, drizzleStub, makeTable, argOf, type FakeDb, type QueryCall } from "../test-support/fake-drizzle.ts";
 import { loadModule, serverOnlyStub } from "../test-support/load-module.ts";
+import * as canonicalDocument from "./canonical-document.ts";
 
 const schemaStub = {
   dailyApplications: makeTable("daily_applications"),
@@ -28,7 +31,7 @@ type AsyncJobModule = {
 async function load(
   db: FakeDb,
   registry: {
-    getHtmlTemplateByGoogleDocId?: (id: string | null | undefined) => { key: string } | null;
+    getRegisteredContractKeyByGoogleDocId?: (id: string | null | undefined) => string | null;
     getHtmlTemplateContractByGoogleDocId?: () => null;
   } = {},
   /**
@@ -53,9 +56,12 @@ async function load(
         JOB_STATUS: { QUEUED: "QUEUED" },
       },
       "../../document-templates/registry.ts": {
-        getHtmlTemplateByGoogleDocId: registry.getHtmlTemplateByGoogleDocId ?? (() => null),
+        getRegisteredContractKeyByGoogleDocId: registry.getRegisteredContractKeyByGoogleDocId ?? (() => null),
         getHtmlTemplateContractByGoogleDocId: registry.getHtmlTemplateContractByGoogleDocId ?? (() => null),
       },
+      // Real canonical module — pure logic, and the fail-closed behaviour under
+      // test must be the production behaviour, not a stub.
+      "./canonical-document.ts": canonicalDocument,
       "./template-contract.ts": {
         validateContractRequiredMappings: () => [],
         validateTemplateContract: () => ({ valid: true, missingFromHtml: [], unknownInHtml: [], duplicateKeys: [] }),
@@ -100,6 +106,7 @@ const TEMPLATE_ROW = { id: "tpl-1", isActive: true, htmlEnabled: true, name: "Đ
 const PUBLISHED_VERSION_ROW = {
   templateId: "tpl-1",
   version: 2,
+  status: "PUBLISHED",
   retentionYears: 3,
   htmlBody: "<p><<Ho_ten>></p>",
   printCss: "p{color:red}",
@@ -265,8 +272,9 @@ test("createAsyncMergeJob: HTML_PDF rejects an unmapped HTML token before it can
 });
 
 const traineeRegistry = {
-  getHtmlTemplateByGoogleDocId: (id: string | null | undefined) =>
-    id === "gdoc-1" ? { key: "dang-ky-tap-nghe" } : null,
+  // Metadata-only catalog lookup: returns a stable CONTRACT KEY, never a body.
+  getRegisteredContractKeyByGoogleDocId: (id: string | null | undefined) =>
+    id === "gdoc-1" ? "dang-ky-tap-nghe" : null,
 };
 
 /**
@@ -407,7 +415,7 @@ test("createAsyncMergeJob: HTML_PDF refuses a template without a PUBLISHED HTML 
       scopeDeptIds: null,
       engine: "HTML_PDF",
     }),
-    /HTML PUBLISHED/,
+    /CANONICAL_TEMPLATE_NOT_PUBLISHED/,
   );
   assert.equal(db.calls.some((c) => c.root === "insert" && c.table === "merge_jobs"), false);
 });
