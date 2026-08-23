@@ -292,6 +292,15 @@ const contract = DANG_KY_TAP_NGHE_FIELD_CONTRACT;
  * operation) while `sourcePath` names the date column it reads, so both must
  * be modelled or the field silently resolves blank.
  */
+const PRODUCTION_MAPPING_OVERRIDE = {
+  // Read-only Production evidence (previous audit): both address placeholders
+  // are is_required=false. Runtime authority is merge_template_fields, NOT the
+  // static catalog, so the harness models the DB truth.
+  Dia_chi_thuong_tru: { sourcePath: "permanentAddress", isRequired: false },
+  Dia_chi_tam_tru: { sourcePath: "residentialAddress", isRequired: false },
+  dia_chi_cu_tru: { sourcePath: "residentialAddress", isRequired: false },
+};
+
 const COMPUTED_OPERATION = {
   Ngay_ky_day: "DATE_DAY",
   Ngay_ky_month: "DATE_MONTH",
@@ -312,17 +321,18 @@ const mappingRows = contract.fields.map((f) => {
           : f.sourcePath?.startsWith("customAnswers.")
             ? "DYNAMIC_ANSWER"
             : "CORE_FIELD";
+  const override = PRODUCTION_MAPPING_OVERRIDE[f.key];
   return {
     placeholder: f.key,
     sourceType,
     sourceEntity: null,
     // COMPUTED/SYSTEM rows carry the operation here; data rows leave it null.
     sourceField: operation,
-    sourcePath: f.sourcePath ?? null,
+    sourcePath: override?.sourcePath ?? f.sourcePath ?? null,
     optionValue: f.optionValue ?? null,
     formatType: null,
     fallbackValue: null,
-    isRequired: Boolean(f.required),
+    isRequired: override ? override.isRequired : Boolean(f.required),
   };
 });
 
@@ -386,11 +396,16 @@ const addressAudit = {
 const previewMergeSrc = read("src/lib/document-merge/preview-merge.ts");
 const aliasLine = previewMergeSrc.match(/Dia_chi_thuong_tru:\s*"([^"]+)"/);
 const cuTruAlias = previewMergeSrc.match(/dia_chi_cu_tru:\s*"([^"]+)"/);
+const tamTruAlias = previewMergeSrc.match(/Dia_chi_tam_tru:\s*"([^"]+)"/);
 addressAudit.fallbackMapPermanentToResidential = {
   Dia_chi_thuong_tru_alias: aliasLine?.[1] ?? null,
   dia_chi_cu_tru_alias: cuTruAlias?.[1] ?? null,
-  aliasRedirectsToResidential:
-    aliasLine?.[1] === "residentialAddress" || cuTruAlias?.[1] === "residentialAddress",
+  Dia_chi_tam_tru_alias: tamTruAlias?.[1] ?? null,
+  // A permanent-address placeholder reading residentialAddress is the defect.
+  PERMANENT_TO_RESIDENTIAL_FALLBACK: aliasLine?.[1] === "residentialAddress",
+  // A residence placeholder reading permanentAddress is the other direction.
+  RESIDENTIAL_TO_PERMANENT_FALLBACK:
+    cuTruAlias?.[1] === "permanentAddress" || tamTruAlias?.[1] === "permanentAddress",
 };
 
 results.gate2 = {
@@ -427,8 +442,10 @@ const candidateFixture = {
   dateOfIssue: "2022-01-10",
   placeOfIssue: "Cục CSQLHC về TTXH",
   phone: "0900000000",
-  permanentAddress: "Số 1, Phường 1, TP Đà Lạt, Lâm Đồng",
-  residentialAddress: "Số 2, Phường 2, TP Đà Lạt, Lâm Đồng",
+  // Incident-shaped address state (mirrors the known Production fixture
+  // 08f9dcf5-…: permanent_address NULL, residential_address "Đơn Dương").
+  permanentAddress: null,
+  residentialAddress: "Đơn Dương",
   startingDate: "2026-09-01",
   regDate: "2026-08-20",
   declaredType: "NEW",
@@ -589,6 +606,24 @@ const versionParity =
 const mappingParity =
   JSON.stringify(snapshot.mappings) === JSON.stringify(workerSnapshot.mappings);
 
+// Address semantics in the rendered canonical document.
+function slotValue(html, label) {
+  const re = new RegExp(`${label}\\s*:\\s*<span class="merge-value">([^<]*)</span>`);
+  return html.match(re)?.[1] ?? null;
+}
+const permSlot = slotValue(previewRender.html, "Địa chỉ thường trú");
+const tamSlot = slotValue(previewRender.html, "Địa chỉ tạm trú");
+const cuTruSlot = slotValue(previewRender.html, "Địa chỉ cư trú");
+
+results.gate6Address = {
+  PERMANENT_SLOT_BLANK: permSlot !== null && permSlot.trim() === "",
+  PERMANENT_SLOT_RAW: permSlot,
+  TAM_TRU_SLOT: tamSlot,
+  CU_TRU_SLOT: cuTruSlot,
+  RESIDENTIAL_LEAKED_INTO_PERMANENT: permSlot !== null && permSlot.includes("Đơn Dương"),
+  RESIDENTIAL_PRESENT: [tamSlot, cuTruSlot].some((v) => (v ?? "").includes("Đơn Dương")),
+};
+
 results.gate5 = {
   HTML_PARITY: htmlParity,
   CSS_PARITY: cssParity,
@@ -736,7 +771,12 @@ const g1ok =
   pageDiffs.length === 0 &&
   results.gate1.SOURCE_SHA256_MATCHES_MANIFEST &&
   results.gate1.BODY_SHA256_MATCHES_MANIFEST;
-const g2ok = unmapped.length === 0 && !addressAudit.fallbackMapPermanentToResidential.aliasRedirectsToResidential;
+const g2ok =
+  unmapped.length === 0 &&
+  !addressAudit.fallbackMapPermanentToResidential.PERMANENT_TO_RESIDENTIAL_FALLBACK &&
+  !addressAudit.fallbackMapPermanentToResidential.RESIDENTIAL_TO_PERMANENT_FALLBACK &&
+  addressAudit.Dia_chi_thuong_tru.sourcePath === "permanentAddress" &&
+  addressAudit.dia_chi_cu_tru.sourcePath === "residentialAddress";
 const g3ok = requiredBlank.length === 0;
 const g4ok = results.gate4.CANONICAL_RENDER_OK && !results.gate4.MOJIBAKE_PRESENT;
 const g5ok = htmlParity && cssParity && versionParity && mappingParity;
