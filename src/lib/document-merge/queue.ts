@@ -226,8 +226,11 @@ export async function failAllNonTerminalItems(
     .update(mergeJobRecords)
     .set({
       status: ITEM_STATUS.FAILED,
-      errorCode: info.errorCode,
-      errorMessage: info.errorMessage,
+      // Preserve a more specific item error already written by failItem()
+      // (e.g. INCOMPLETE from DATA_RESOLUTION). Job-level CLAIM_STALLED must
+      // not erase the original reason if a stall path is reached after retry.
+      errorCode: sql`COALESCE(${mergeJobRecords.errorCode}, ${info.errorCode})`,
+      errorMessage: sql`COALESCE(${mergeJobRecords.errorMessage}, ${info.errorMessage})`,
       leasedUntil: null,
       retryAt: null,
       completedAt: new Date(),
@@ -376,6 +379,25 @@ export async function hasPendingItems(jobId: string): Promise<boolean> {
     .from(mergeJobRecords)
     .where(eq(mergeJobRecords.mergeJobId, jobId));
   return items.some((item) => !isTerminalItemStatus(item.status as ItemStatus));
+}
+
+/**
+ * Còn item chưa terminal nhưng TẤT CẢ đều đang RETRY chờ backoff (retry_at > now)?
+ *
+ * Shared by the HTML_PDF worker and the PDF Overlay runner. A future retry_at
+ * is expected after failItem() — it is NOT a claim stall. Callers must defer
+ * (leave the job PROCESSING) instead of failAllNonTerminalItems(CLAIM_STALLED),
+ * which would overwrite the original item error (e.g. INCOMPLETE).
+ */
+export async function allRemainingItemsAwaitingRetry(jobId: string): Promise<boolean> {
+  const items = await db
+    .select({ status: mergeJobRecords.status, retryAt: mergeJobRecords.retryAt })
+    .from(mergeJobRecords)
+    .where(eq(mergeJobRecords.mergeJobId, jobId));
+  const pending = items.filter((item) => item.status === ITEM_STATUS.QUEUED || item.status === ITEM_STATUS.RETRY);
+  if (pending.length === 0) return false;
+  const now = Date.now();
+  return pending.every((item) => item.retryAt !== null && item.retryAt.getTime() > now);
 }
 
 /** Reset failed-only items về RETRY (nút "Retry lỗi"). */

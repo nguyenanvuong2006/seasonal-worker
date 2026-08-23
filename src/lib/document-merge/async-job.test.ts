@@ -25,7 +25,13 @@ type AsyncJobModule = {
   createAsyncMergeJob: (input: Record<string, unknown>) => Promise<{ jobId: string; status: string; total: number; engine: string }>;
 };
 
-async function load(db: FakeDb): Promise<AsyncJobModule> {
+async function load(
+  db: FakeDb,
+  registry: {
+    getHtmlTemplateByGoogleDocId?: (id: string | null | undefined) => { key: string } | null;
+    getHtmlTemplateContractByGoogleDocId?: () => null;
+  } = {},
+): Promise<AsyncJobModule> {
   const mod = await loadModule(new URL("./async-job.ts", import.meta.url), {
     stubs: {
       "server-only": serverOnlyStub,
@@ -42,8 +48,8 @@ async function load(db: FakeDb): Promise<AsyncJobModule> {
         JOB_STATUS: { QUEUED: "QUEUED" },
       },
       "../../document-templates/registry.ts": {
-        getHtmlTemplateByGoogleDocId: () => null,
-        getHtmlTemplateContractByGoogleDocId: () => null,
+        getHtmlTemplateByGoogleDocId: registry.getHtmlTemplateByGoogleDocId ?? (() => null),
+        getHtmlTemplateContractByGoogleDocId: registry.getHtmlTemplateContractByGoogleDocId ?? (() => null),
       },
       "./template-contract.ts": {
         validateContractRequiredMappings: () => [],
@@ -68,11 +74,22 @@ const PUBLISHED_VERSION_ROW = {
   printCss: "p{color:red}",
 };
 
-function fixtureDb(publishedVersion: typeof PUBLISHED_VERSION_ROW | null): FakeDb {
+function fixtureDb(
+  publishedVersion: typeof PUBLISHED_VERSION_ROW | null,
+  application: { permanentAddress?: string | null; residentialAddress?: string | null } = {},
+): FakeDb {
   return createFakeDb({
     respond: (call: QueryCall) => {
       if (call.root === "select" && call.table === "merge_templates") return [TEMPLATE_ROW];
-      if (call.root === "select" && call.table === "daily_applications") return [{ id: "app-1", declaredType: "NEW", dwMatch: "NO_MATCH" }];
+      if (call.root === "select" && call.table === "daily_applications") {
+        return [{
+          id: "app-1",
+          declaredType: "NEW",
+          dwMatch: "NO_MATCH",
+          permanentAddress: application.permanentAddress ?? null,
+          residentialAddress: application.residentialAddress ?? null,
+        }];
+      }
       if (call.root === "select" && call.table === "merge_template_fields") {
         return [{ templateId: "tpl-1", placeholder: "Ho_ten", sourceType: "CORE_FIELD", sourceEntity: null, sourceField: null, sourcePath: "fullName", optionValue: null, formatType: "RAW", fallbackValue: null, isRequired: false }];
       }
@@ -184,6 +201,68 @@ test("createAsyncMergeJob: HTML_PDF rejects an unmapped HTML token before it can
     /placeholder chưa mapping: Khong_co_mapping/,
   );
   assert.equal(db.calls.some((c) => c.root === "insert" && c.table === "merge_jobs"), false);
+});
+
+const traineeRegistry = {
+  getHtmlTemplateByGoogleDocId: (id: string | null | undefined) =>
+    id === "gdoc-1" ? { key: "dang-ky-tap-nghe" } : null,
+};
+
+test("createAsyncMergeJob: HTML_PDF trainee registration rejects missing permanentAddress with 422", async () => {
+  const db = fixtureDb(PUBLISHED_VERSION_ROW, { permanentAddress: "   ", residentialAddress: "Tạm trú có giá trị" });
+  const mod = await load(db, traineeRegistry);
+
+  await assert.rejects(
+    () => mod.createAsyncMergeJob({
+      templateId: "tpl-1",
+      autoRoute: false,
+      records: { entityType: "daily_applications", recordIds: ["app-1"] },
+      createdBy: "admin",
+      scopeDeptIds: null,
+      engine: "HTML_PDF",
+    }),
+    (error: unknown) => {
+      assert.ok(error instanceof Error);
+      assert.equal(error.message, "Thiếu Địa chỉ thường trú");
+      assert.equal((error as { status?: number }).status, 422);
+      return true;
+    },
+  );
+  assert.equal(db.calls.some((c) => c.root === "insert" && c.table === "merge_jobs"), false);
+});
+
+test("createAsyncMergeJob: HTML_PDF trainee registration accepts a real permanentAddress and does not use residentialAddress", async () => {
+  const db = fixtureDb(PUBLISHED_VERSION_ROW, { permanentAddress: "12 Trần Phú, Đà Lạt", residentialAddress: null });
+  const mod = await load(db, traineeRegistry);
+
+  const result = await mod.createAsyncMergeJob({
+    templateId: "tpl-1",
+    autoRoute: false,
+    records: { entityType: "daily_applications", recordIds: ["app-1"] },
+    createdBy: "admin",
+    scopeDeptIds: null,
+    engine: "HTML_PDF",
+  });
+
+  assert.equal(result.engine, "HTML_PDF");
+  assert.equal(db.calls.some((c) => c.root === "insert" && c.table === "merge_jobs"), true);
+});
+
+test("createAsyncMergeJob: GOOGLE_DOCS still queues when permanentAddress is empty", async () => {
+  const db = fixtureDb(PUBLISHED_VERSION_ROW, { permanentAddress: null, residentialAddress: null });
+  const mod = await load(db, traineeRegistry);
+
+  const result = await mod.createAsyncMergeJob({
+    templateId: "tpl-1",
+    autoRoute: false,
+    records: { entityType: "daily_applications", recordIds: ["app-1"] },
+    createdBy: "admin",
+    scopeDeptIds: null,
+    engine: "GOOGLE_DOCS",
+  });
+
+  assert.equal(result.engine, "GOOGLE_DOCS");
+  assert.equal(db.calls.some((c) => c.root === "insert" && c.table === "merge_jobs"), true);
 });
 
 test("createAsyncMergeJob: HTML_PDF refuses a template without a PUBLISHED HTML version", async () => {

@@ -33,6 +33,7 @@ import http from "node:http";
 import { chromium, type Browser, type Page } from "playwright";
 import type { MergeTemplateField } from "../../src/db/schema";
 import {
+  allRemainingItemsAwaitingRetry,
   claimItems,
   completeItem,
   failAllNonTerminalItems,
@@ -397,7 +398,7 @@ async function sha256Hex(bytes: Uint8Array): Promise<string> {
 // ---------------------------------------------------------------
 // Process loop cho 1 job
 // ---------------------------------------------------------------
-async function runJob(jobId: string): Promise<{ processed: number; failed: number }> {
+export async function runJob(jobId: string): Promise<{ processed: number; failed: number }> {
   const [job] = await db.select().from(mergeJobs).where(eq(mergeJobs.id, jobId)).limit(1);
   if (!job) throw new Error("job not found");
 
@@ -456,11 +457,16 @@ async function runJob(jobId: string): Promise<{ processed: number; failed: numbe
         }
 
         if (items.length === 0) {
+          // failItem() đã schedule RETRY + retry_at tương lai. Đó không phải
+          // CLAIM_STALLED — defer, giữ job PROCESSING, giữ nguyên INCOMPLETE
+          // (hoặc error gốc khác). Lần /run kế tiếp sẽ claim khi đến giờ.
+          if (await allRemainingItemsAwaitingRetry(jobId)) break;
+
           // Vẫn còn item QUEUED/RETRY nhưng claimItems() không claim được sau
-          // nhiều lần thử — đây là lỗi thật (không phải "hết việc"). KHÔNG để
-          // job kẹt PROCESSING mãi mãi — fail rõ ràng kèm chẩn đoán, VÀ đánh
-          // dấu item liên quan FAILED (không để lại "job FAILED nhưng item
-          // vẫn QUEUED mãi mãi" — trạng thái mơ hồ 0 completed/0 failed).
+          // nhiều lần thử VÀ không phải đang chờ backoff — đây là lỗi thật
+          // (không phải "hết việc"). KHÔNG để job kẹt PROCESSING mãi mãi —
+          // fail rõ ràng kèm chẩn đoán, VÀ đánh dấu item liên quan FAILED
+          // (không để lại "job FAILED nhưng item vẫn QUEUED mãi mãi").
           const errorMessage = `CLAIM_STALLED: còn ${check.queued} item QUEUED/RETRY nhưng claimItems() không claim được sau ${attempt} lần thử.`;
           await stage(jobId, "", "JOB_CLAIMED", Date.now(), false, "CLAIM_STALLED");
           const failedItemCount = await failAllNonTerminalItems(jobId, { errorCode: "CLAIM_STALLED", errorMessage });
