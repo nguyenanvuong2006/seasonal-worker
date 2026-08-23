@@ -17,7 +17,7 @@ import { requirePermission, writeAudit, getUserScope } from "@/lib/auth";
 import { db } from "@/db";
 import { mergeJobs } from "@/db/schema";
 import { createAsyncMergeJob, AsyncJobValidationError } from "@/lib/document-merge/async-job";
-import { getDocumentMergeEngine } from "@/lib/document-merge/engine-config";
+import { triggerPdfWorker } from "@/lib/document-merge/worker-trigger";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -60,9 +60,12 @@ export async function POST(request: Request) {
       autoRoute: Boolean(autoRoute),
     });
 
-    // HTML_PDF bị từ chối vĩnh viễn trong createAsyncMergeJob (throw trước khi
-    // tạo job) — result.engine không bao giờ là "HTML_PDF" ở đây, nên không
-    // còn nhánh trigger Cloud Run worker nào để enqueue tại route này.
+    // HTML/PDF jobs reuse the durable merge_jobs/merge_job_records queue and
+    // the existing authenticated Cloud Run trigger. GOOGLE_DOCS jobs retain
+    // their legacy execution path and are never claimed by this worker.
+    if (result.engine === "HTML_PDF") {
+      triggerPdfWorker(result.jobId, request);
+    }
 
     return NextResponse.json(result, { status: 202 });
   } catch (error) {

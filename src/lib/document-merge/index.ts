@@ -27,6 +27,16 @@ export {
   isValidNumber,
 } from './vietnamese-number-words.ts';
 
+// Canonical HTML template contracts
+export {
+  validateTemplateContract,
+  validateContractRequiredValues,
+  validateContractRequiredMappings,
+  type TemplateContract,
+  type TemplateFieldContract,
+  type TemplateFieldValueKind,
+} from './template-contract.ts';
+
 // Checkbox engine
 export {
   DEFAULT_CHECKBOX_SYMBOLS,

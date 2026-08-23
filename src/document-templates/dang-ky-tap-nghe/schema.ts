@@ -1,22 +1,26 @@
 /**
  * Dang_ky_Tap_nghe_Template — schema tài liệu (tài liệu tham khảo).
  *
- * ⚠️ Đây CHỈ là tài liệu mô tả cấu trúc 5 phần + danh sách 49 canonical placeholder
- * active của template gốc. Source of truth cho MAPPING (placeholder → data)
+ * ⚠️ Đây CHỈ là tài liệu mô tả cấu trúc 6 trang logic + danh sách 49 canonical
+ * placeholder active của template gốc. Source of truth cho MAPPING (placeholder → data)
  * nằm trong bảng merge_template_fields (Mapping Inspector), KHÔNG hardcode ở đây.
  *
- * Template HTML bên dưới dùng ĐÚNG các token `<<...>>` này; Data Resolver fill giá trị.
+ * Template HTML dùng các token semantic `{{...}}`; renderer vẫn hiểu `<<...>>`
+ * của các phiên bản Google Docs cũ để không làm hỏng lịch sử.
  */
+
+import type { TemplateContract } from "../../lib/document-merge/template-contract.ts";
 
 export const GOOGLE_DOC_ID = "10D0tG71CbllIZe7DaosYNW3vK7QnP76Yq4UC9FMEiUE";
 
-/** 5 phần của bộ hồ sơ — tiêu đề khớp Google Doc golden source. */
+/** Sáu trang logic của nguồn HTML canonical — tiêu đề/cấu trúc giữ nguyên nguồn. */
 export const SECTIONS = [
   { key: "dang_ky", title: "GIẤY ĐĂNG KÝ TẬP NGHỀ", page: 1 },
-  { key: "quy_dinh", title: "QUY ĐỊNH VỀ TẬP NGHỀ", page: 2 },
-  { key: "cam_ket_thue", title: "BẢN CAM KẾT", page: 3 },
-  { key: "uy_quyen", title: "GIẤY ỦY QUYỀN", page: 4 },
-  { key: "to_khai_thue", title: "TỜ KHAI ĐĂNG KÝ THUẾ", page: 5 },
+  { key: "ghi_nhan_quy_dinh_1", title: "GHI NHẬN CỦA PHÒNG NHÂN SỰ", page: 2 },
+  { key: "quy_dinh_2", title: "7. QUY ĐỊNH KHI TẬP NGHỀ TẠI CÔNG TY", page: 3 },
+  { key: "cam_ket_thue", title: "BẢN CAM KẾT", page: 4 },
+  { key: "uy_quyen", title: "GIẤY ỦY QUYỀN", page: 5 },
+  { key: "to_khai_thue", title: "TỜ KHAI ĐĂNG KÝ THUẾ", page: 6 },
 ] as const;
 
 /**
@@ -55,3 +59,88 @@ export const PLACEHOLDERS = [
   // Thuế / khác
   "Nam_thue", "Code", "Email", "So_dinh_danh_cu",
 ] as const;
+
+/**
+ * Canonical semantic field contract for the HTML template.  This is a
+ * reviewable description of the normalized merge-data shape, not a second
+ * resolver and not a set of sample applicant values.  The corresponding live
+ * mappings are stored in merge_template_fields and snapshotted into each job.
+ */
+const checkboxField = (key: string, label: string, sourcePath: string, optionValue: string) => ({
+  key,
+  label,
+  valueKind: "checkbox" as const,
+  required: false,
+  sourcePath,
+  optionValue,
+});
+
+export const DANG_KY_TAP_NGHE_FIELD_CONTRACT: TemplateContract = {
+  key: "dang-ky-tap-nghe",
+  name: "Giấy đăng ký tập nghề + Quy định + Hồ sơ thuế",
+  logicalPageCount: 6,
+  fields: [
+    { key: "Ho_ten", label: "Họ và tên", valueKind: "text", required: true, sourcePath: "fullName" },
+    { key: "Ngay_sinh", label: "Ngày sinh", valueKind: "date", required: true, sourcePath: "dob" },
+    { key: "Dia_chi_thuong_tru", label: "Địa chỉ thường trú", valueKind: "text", required: true, sourcePath: "permanentAddress" },
+    { key: "Dia_chi_tam_tru", label: "Địa chỉ tạm trú", valueKind: "text", required: true, sourcePath: "residentialAddress" },
+    { key: "So_dien_thoai", label: "Số điện thoại", valueKind: "text", required: true, sourcePath: "phone" },
+    { key: "So_CCCD", label: "Số CCCD", valueKind: "text", required: true, sourcePath: "cccd" },
+    { key: "Ngay_cap_CCCD", label: "Ngày cấp CCCD", valueKind: "date", required: false, sourcePath: "dateOfIssue" },
+    { key: "Noi_cap_CCCD", label: "Nơi cấp CCCD", valueKind: "text", required: false, sourcePath: "placeOfIssue" },
+    { key: "dia_chi_cu_tru", label: "Địa chỉ cư trú", valueKind: "text", required: false, sourcePath: "permanentAddress" },
+
+    checkboxField("Tien_an_tien_su_Khong", "Tiền án, tiền sự: Không", "customAnswers.tien_an_tien_su", "Không"),
+    checkboxField("Tien_an_tien_su_Co", "Tiền án, tiền sự: Có", "customAnswers.tien_an_tien_su", "Có"),
+    checkboxField("Da_tung_lam_DHF_Khong", "Đã từng làm DHF: Không", "declaredType", "NEW"),
+    checkboxField("Da_tung_lam_DHF_Co", "Đã từng làm DHF: Có", "declaredType", "OLD"),
+    checkboxField("Loai_cong_viec_Nhan_vien", "Loại công việc: Nhân viên", "customAnswers.loai_cong_viec_truoc_day", "Nhân viên"),
+    checkboxField("Loai_cong_viec_Cong_nhan", "Loại công việc: Công nhân", "customAnswers.loai_cong_viec_truoc_day", "Công nhân"),
+    checkboxField("Loai_cong_viec_Lao_dong_tap_nghe", "Loại công việc: Lao động tập nghề", "customAnswers.loai_cong_viec_truoc_day", "Lao động tập nghề"),
+    checkboxField("Khu_vuc_Da_Lat", "Khu vực: Đà Lạt", "customAnswers.khu_vuc_lam_viec_truoc_day", "Đà Lạt"),
+    checkboxField("Khu_vuc_Da_Quy", "Khu vực: Đa Quý", "customAnswers.khu_vuc_lam_viec_truoc_day", "Đa Quý"),
+    checkboxField("Khu_vuc_Da_Ron", "Khu vực: Đạ Ròn", "customAnswers.khu_vuc_lam_viec_truoc_day", "Đạ Ròn"),
+    checkboxField("Khu_vuc_Lam_Ha", "Khu vực: Lâm Hà", "customAnswers.khu_vuc_lam_viec_truoc_day", "Lâm Hà"),
+    checkboxField("Khu_vuc_Khac", "Khu vực: Khác", "customAnswers.khu_vuc_lam_viec_truoc_day", "Khác"),
+    checkboxField("Cong_viec_hien_tai_Sinh_vien", "Công việc hiện tại: Sinh viên", "customAnswers.cong_viec_hien_tai", "Sinh viên"),
+    checkboxField("Cong_viec_hien_tai_Khac", "Công việc hiện tại: Khác", "customAnswers.cong_viec_hien_tai", "Khác"),
+    { key: "Cong_viec_hien_tai_khac", label: "Công việc hiện tại khác", valueKind: "text", required: false, sourcePath: "customAnswers.cong_viec_hien_tai_khac" },
+    { key: "Ten_truong", label: "Tên trường", valueKind: "text", required: false, sourcePath: "customAnswers.ten_truong" },
+    checkboxField("TKNH_Da_co", "Tài khoản ngân hàng: Đã có", "customAnswers.tinh_trang_tknh", "Đã có"),
+    checkboxField("TKNH_Chua_co", "Tài khoản ngân hàng: Chưa có", "customAnswers.tinh_trang_tknh", "Chưa có"),
+    { key: "So_tai_khoan", label: "Số tài khoản", valueKind: "text", required: false, sourcePath: "customAnswers.so_tai_khoan" },
+    { key: "Ten_ngan_hang", label: "Tên ngân hàng", valueKind: "text", required: false, sourcePath: "customAnswers.ten_ngan_hang" },
+    checkboxField("Thu_nhap_Chi_DHF", "Nguồn thu nhập: Chỉ DHF", "customAnswers.nguon_thu_nhap", "Chỉ phát sinh tại Dalat Hasfarm"),
+    checkboxField("Thu_nhap_Ngoai_DHF", "Nguồn thu nhập: Ngoài DHF", "customAnswers.nguon_thu_nhap", "Phát sinh ngoài Dalat Hasfarm"),
+    { key: "Cong_ty_thu_nhap_khac", label: "Đơn vị thu nhập khác", valueKind: "text", required: false, sourcePath: "customAnswers.cong_ty_thu_nhap_khac" },
+    { key: "Dia_diem_thu_nhap_khac", label: "Địa điểm thu nhập khác", valueKind: "text", required: false, sourcePath: "customAnswers.dia_diem_thu_nhap_khac" },
+    checkboxField("Tap_nghe_Trong_cham_soc_thu_hoach", "Nguyện vọng: Trồng/chăm sóc/thu hoạch", "customAnswers.tap_nghe_nguyen_vong", "Trồng, chăm sóc, thu hoạch"),
+    checkboxField("Tap_nghe_Ban_hang", "Nguyện vọng: Bán hàng", "customAnswers.tap_nghe_nguyen_vong", "Bán hàng"),
+    checkboxField("Tap_nghe_Dong_goi", "Nguyện vọng: Đóng gói", "customAnswers.tap_nghe_nguyen_vong", "Đóng gói"),
+    checkboxField("Tap_nghe_Khac", "Nguyện vọng: Khác", "customAnswers.tap_nghe_nguyen_vong", "Khác"),
+    { key: "Cong_viec_khac", label: "Công việc tập nghề khác", valueKind: "text", required: false, sourcePath: "customAnswers.cong_viec_khac" },
+
+    { key: "Ngay_nhan_viec", label: "Ngày nhận việc", valueKind: "date", required: true, sourcePath: "startingDate" },
+    { key: "Ngay_tiep_nhan", label: "Ngày tiếp nhận", valueKind: "date", required: false, sourcePath: "startingDate" },
+    { key: "Nguoi_tiep_nhan", label: "Người tiếp nhận", valueKind: "computed", required: false, sourcePath: "CURRENT_USER_NAME" },
+    { key: "Dia_diem_ky", label: "Địa điểm ký", valueKind: "text", required: false, sourcePath: "location" },
+    { key: "Ngay_ky_day", label: "Ngày ký", valueKind: "computed", required: false, sourcePath: "startingDate" },
+    { key: "Ngay_ky_month", label: "Tháng ký", valueKind: "computed", required: false, sourcePath: "startingDate" },
+    { key: "Ngay_ky_year", label: "Năm ký", valueKind: "computed", required: false, sourcePath: "startingDate" },
+    { key: "Nam_thue", label: "Năm thuế", valueKind: "computed", required: false, sourcePath: "startingDate" },
+    { key: "Code", label: "Mã hồ sơ", valueKind: "text", required: false, sourcePath: "code" },
+    { key: "Email", label: "Email", valueKind: "text", required: false, sourcePath: "customAnswers.email" },
+    { key: "So_dinh_danh_cu", label: "Số định danh cũ", valueKind: "text", required: false, sourcePath: "customAnswers.so_dinh_danh_cu" },
+  ],
+};
+
+/** Fails fast in tests if the hand-reviewed contract ever drifts from the token tuple. */
+export const CONTRACT_PLACEHOLDERS = DANG_KY_TAP_NGHE_FIELD_CONTRACT.fields.map((field) => field.key).sort();
+export const REQUIRED_PLACEHOLDERS = DANG_KY_TAP_NGHE_FIELD_CONTRACT.fields
+  .filter((field) => field.required)
+  .map((field) => field.key)
+  .sort();
+export const CHECKBOX_PLACEHOLDERS = DANG_KY_TAP_NGHE_FIELD_CONTRACT.fields
+  .filter((field) => field.valueKind === "checkbox")
+  .map((field) => field.key)
+  .sort();

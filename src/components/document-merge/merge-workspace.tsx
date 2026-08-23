@@ -571,7 +571,13 @@ export function MergeWorkspace({
     ? templates.find((item) => item.isActive && item.documentKind === selectedKind)
     : undefined;
   const effectiveTemplate = autoRoute ? routedTemplate : selectedTemplate;
-  const templateReady = autoRoute || Boolean(selectedTemplate);
+  // HTML/PDF uses an immutable published version of the template the operator
+  // selected. Do not silently auto-route a legal PDF to a different version.
+  const templateReady = engine === "HTML_PDF" ? Boolean(selectedTemplate) : autoRoute || Boolean(selectedTemplate);
+
+  useEffect(() => {
+    if (engine === "HTML_PDF" && autoRoute) setAutoRoute(false);
+  }, [engine, autoRoute]);
 
   const toggleAll = () => {
     if (selectedIds.size === filtered.length && filtered.length > 0) {
@@ -848,10 +854,20 @@ export function MergeWorkspace({
           </div>
 
           <label className="flex items-start gap-2 rounded-lg border border-emerald-200 bg-emerald-50/60 p-3 text-xs">
-            <input type="checkbox" checked={autoRoute} onChange={(e) => setAutoRoute(e.target.checked)} className="mt-0.5" />
+            <input
+              type="checkbox"
+              checked={autoRoute}
+              disabled={engine === "HTML_PDF"}
+              onChange={(e) => setAutoRoute(e.target.checked)}
+              className="mt-0.5 disabled:cursor-not-allowed"
+            />
             <span>
               <b>Auto Route theo phân loại DW (tùy chọn)</b>
-              <span className="mt-0.5 block text-[11px] text-slate-500">Tắt mặc định: dùng đúng template bạn chọn. Bật: DW Cũ → Tài liệu A, DW Mới → Tài liệu B.</span>
+              <span className="mt-0.5 block text-[11px] text-slate-500">
+                {engine === "HTML_PDF"
+                  ? "HTML/PDF yêu cầu mẫu cố định được chọn rõ ràng để snapshot đúng phiên bản và contract."
+                  : "Tắt mặc định: dùng đúng template bạn chọn. Bật: DW Cũ → Tài liệu A, DW Mới → Tài liệu B."}
+              </span>
             </span>
           </label>
 

@@ -9,6 +9,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { renderApplicantDocumentFromParts, renderApplicantDocumentFromVersion } from "./html-pipeline.ts";
 import type { MergeTemplateField } from "../../db/schema.ts";
+import type { TemplateContract } from "./template-contract.ts";
 
 function field(overrides: Partial<MergeTemplateField>): MergeTemplateField {
   return {
@@ -87,6 +88,34 @@ test("renderApplicantDocumentFromVersion: version chưa có HTML → throw rõ r
     () => renderApplicantDocumentFromVersion({ htmlBody: null, printCss: null }, [], {}, {}),
     /HTML_TEMPLATE_EMPTY/,
   );
+});
+
+test("renderApplicantDocumentFromParts: canonical contract catches required data before a worker can render PDF", () => {
+  const contract: TemplateContract = {
+    key: "test",
+    name: "Test",
+    logicalPageCount: 1,
+    fields: [
+      { key: "Ho_ten", label: "Họ tên", valueKind: "text", required: true, sourcePath: "fullName" },
+      { key: "Lua_chon_Co", label: "Có", valueKind: "checkbox", required: true, sourcePath: "choice", optionValue: "Có" },
+    ],
+  };
+  const result = renderApplicantDocumentFromParts(
+    "<p>{{Ho_ten}} <span class=\"chk\">{{Lua_chon_Co}}</span></p>",
+    null,
+    [
+      field({ placeholder: "Ho_ten", sourcePath: "fullName", isRequired: false }),
+      field({ placeholder: "Lua_chon_Co", sourceType: "CHECKBOX_OPTION", sourcePath: "choice", optionValue: "Có", isRequired: false }),
+    ],
+    { choice: "Không" },
+    {},
+    { contract },
+  );
+
+  assert.equal(result.valid, false);
+  assert.deepEqual(result.missingFields, ["Ho_ten"]);
+  assert.match(result.html, /☐/);
+  assert.equal(result.unreplaced.length, 0);
 });
 
 test("renderApplicantDocumentFromVersion DELEGATE tới đúng renderApplicantDocumentFromParts (worker HTML_PDF path)", () => {

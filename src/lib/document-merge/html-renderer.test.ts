@@ -7,7 +7,14 @@
 import test, { describe, it } from "node:test";
 import assert from "node:assert/strict";
 
-import { A4_PRINT_CSS, escapeHtml, renderApplicantHtml, wrapHtmlDocument } from "./html-renderer.ts";
+import {
+  A4_PRINT_CSS,
+  escapeHtml,
+  renderApplicantHtml,
+  renderApplicantHtmlFromParts,
+  stripPreviewOnlyMarkup,
+  wrapHtmlDocument,
+} from "./html-renderer.ts";
 import { extractUniquePlaceholders } from "./placeholder-extractor.ts";
 import { dangKyTapNgheTemplate } from "../../document-templates/dang-ky-tap-nghe/template.ts";
 import { PLACEHOLDERS, REJECTED_ORPHAN_PLACEHOLDERS } from "../../document-templates/dang-ky-tap-nghe/schema.ts";
@@ -40,6 +47,44 @@ describe("HTML renderer", () => {
     const result = renderApplicantHtml(dangKyTapNgheTemplate, { ...allFieldValues(), Ho_ten: "A <b>& C" });
     assert.match(result.html, /A &lt;b&gt;&amp; C/);
     assert.doesNotMatch(result.html, /A <b>& C/);
+  });
+
+  it("renders both {{semantic}} and legacy <<semantic>> placeholders without candidate markup", () => {
+    const result = renderApplicantHtmlFromParts(
+      "<p>{{Ho_ten}} / <<Dia_chi_thuong_tru>></p>",
+      "",
+      { Ho_ten: "Nguyễn <img src=x onerror=alert(1)>", Dia_chi_thuong_tru: "Đà Lạt" },
+    );
+    assert.equal(result.unreplaced.length, 0);
+    assert.match(result.html, /Nguyễn &lt;img src=x onerror=alert\(1\)&gt;/);
+    assert.match(result.html, /Đà Lạt/);
+  });
+
+  it("strips preview/navigation/code UI and retains only print document content", () => {
+    const source = [
+      "<div class=\"toolbar\"><button onclick=\"window.print()\">Print</button></div>",
+      "<div class=\"code-panel\"><pre>{{debug_only}}</pre></div>",
+      "<div class=\"nav-tabs\"><button>Tabs</button></div>",
+      "<div class=\"page-label\">Trang 1</div>",
+      "<nav>Navigation</nav><aside class=\"template-code\">code</aside>",
+      "<p data-preview-only>highlight</p><p onclick=\"alert(1)\">Giấy tờ</p><script>evil()</script>",
+    ].join("");
+    assert.equal(stripPreviewOnlyMarkup(source), "<p>Giấy tờ</p>");
+    const rendered = renderApplicantHtmlFromParts(source, "", {});
+    assert.match(rendered.html, /Giấy tờ/);
+    assert.doesNotMatch(rendered.html, /toolbar|code-panel|nav-tabs|page-label|<nav\b|<button\b|debug_only|onclick=|<script\b/);
+  });
+
+  it("A4 print CSS uses logical section breaks and safe wrapping for long Vietnamese text", () => {
+    assert.match(A4_PRINT_CSS, /size: A4/);
+    assert.match(A4_PRINT_CSS, /\.page \+ \.page/);
+    assert.match(A4_PRINT_CSS, /break-before: page/);
+    assert.match(A4_PRINT_CSS, /overflow-wrap: anywhere/);
+    const longAddress = "Tổ dân phố Hòa Bình, phường Trường An, thành phố Huế, tỉnh Thừa Thiên Huế ".repeat(8);
+    const result = renderApplicantHtmlFromParts("<table><tr><td>{{Dia_chi_thuong_tru}}</td></tr></table>", "", { Dia_chi_thuong_tru: longAddress });
+    assert.equal(result.unreplaced.length, 0);
+    assert.match(result.html, /Tổ dân phố Hòa Bình/);
+    assert.match(result.html, /table-layout: fixed/);
   });
 });
 

@@ -7,6 +7,7 @@
   "scripts": {
     "start": "node --import tsx src/index.ts",
     "typecheck": "tsc --noEmit -p tsconfig.json",
+    "test": "node --import tsx --test $(find src -name '*.test.ts')",
     "generate:sample": "node scripts/generate-template-sample.mjs",
     "verify:visual": "node scripts/visual-verify.mjs",
     "benchmark": "node scripts/benchmark.mjs",
@@ -21,7 +22,7 @@
     "pdfjs-dist": "^6.2.108",
     "pg": "8.20.0",
     "pixelmatch": "^7.2.0",
-    "playwright": "^1.49.0",
+    "playwright": "1.62.1",
     "tsx": "^4.19.2",
     "yazl": "3.3.1"
   },

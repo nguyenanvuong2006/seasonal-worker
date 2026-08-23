@@ -1,12 +1,14 @@
 # Document Merge PDF Worker — production Dockerfile
 # Base image Playwright đã kèm Chromium + system deps → không cần npx playwright install.
 
-FROM mcr.microsoft.com/playwright:v1.49.0-noble AS deps
+# Keep the image browser revision aligned with the locked `playwright` package.
+# playwright@1.62.1 expects Chromium revision 1234.
+FROM mcr.microsoft.com/playwright:v1.62.1-noble AS deps
 WORKDIR /app
 COPY worker/package.json worker/package-lock.json ./
 RUN npm ci --no-audit --no-fund
 
-FROM mcr.microsoft.com/playwright:v1.49.0-noble
+FROM mcr.microsoft.com/playwright:v1.62.1-noble
 WORKDIR /app
 
 # node_modules (playwright + drizzle + pg + tsx)

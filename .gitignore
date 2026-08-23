@@ -29,3 +29,7 @@ yarn-error.log*
 
 # local object-storage (dev/test) — production dùng GCS/S3
 .storage/
+
+# Local HTML/PDF visual-verification evidence (PDFs and screenshots are retained
+# in the operator/CI artifact store, never committed to application source).
+/artifacts/

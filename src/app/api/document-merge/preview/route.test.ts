@@ -241,6 +241,8 @@ function makeContext(opts: Options = {}): Context {
               };
             },
           };
+        case "@/document-templates/registry":
+          return { getHtmlTemplateContractByGoogleDocId: () => null };
         case "@/lib/document-merge/record-loader":
           return {
             loadDailyApplicationRecords: async (ids: string[]) => {
