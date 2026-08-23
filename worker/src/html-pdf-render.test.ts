@@ -9,8 +9,11 @@ import { existsSync } from "node:fs";
 import { chromium } from "playwright";
 import { PDFDocument } from "pdf-lib";
 import { renderApplicantHtmlFromParts } from "../../src/lib/document-merge/html-renderer.ts";
-import { dangKyTapNgheTemplate } from "../../src/document-templates/dang-ky-tap-nghe/template.ts";
 import { CHECKBOX_PLACEHOLDERS, PLACEHOLDERS } from "../../src/document-templates/dang-ky-tap-nghe/schema.ts";
+import {
+  readCanonicalManifest,
+  readCanonicalVersionParts,
+} from "../../src/lib/test-support/canonical-fixture.ts";
 
 const executablePath = chromium.executablePath();
 const chromiumAvailable = existsSync(executablePath);
@@ -86,11 +89,16 @@ function canonicalFieldValues(): Record<string, string> {
   return values;
 }
 
-test("canonical trainee-registration HTML → Playwright PDF: exactly six A4 pages with no preview UI", { skip: !chromiumAvailable }, async () => {
+test("canonical trainee-registration HTML → Playwright PDF: page count follows the published canonical body", { skip: !chromiumAvailable }, async () => {
   const values = canonicalFieldValues();
+  // Body/CSS come from the canonical DB version payload — never from a static
+  // TypeScript module. Expected page count is DERIVED from that same body.
+  const manifest = readCanonicalManifest();
+  const canonical = readCanonicalVersionParts();
+  const expectedPages = manifest.logicalPageCount;
   const { html, unreplaced } = renderApplicantHtmlFromParts(
-    dangKyTapNgheTemplate.html,
-    dangKyTapNgheTemplate.css,
+    canonical.htmlBody,
+    canonical.printCss,
     values,
   );
   assert.deepEqual(unreplaced, []);
@@ -112,7 +120,7 @@ test("canonical trainee-registration HTML → Playwright PDF: exactly six A4 pag
         checkboxes: document.querySelectorAll(".chk").length,
       };
     });
-    assert.equal(browserChecks.logicalPages, 6);
+    assert.equal(browserChecks.logicalPages, expectedPages);
     assert.equal(browserChecks.previewUi, 0);
     assert.ok(browserChecks.horizontalOverflow <= 1, `horizontal overflow: ${browserChecks.horizontalOverflow}px`);
     assert.equal(browserChecks.mergeValuesFit, true, "long Vietnamese merge text must wrap inside its containing line");
@@ -120,7 +128,11 @@ test("canonical trainee-registration HTML → Playwright PDF: exactly six A4 pag
 
     const bytes = await page.pdf({ format: "A4", printBackground: true, preferCSSPageSize: true });
     const pdf = await PDFDocument.load(bytes);
-    assert.equal(pdf.getPageCount(), 6, "canonical six-page document must not gain a blank/partial page");
+    assert.equal(
+      pdf.getPageCount(),
+      expectedPages,
+      "rendered page count must equal the canonical body's own section count — never a hard-coded number",
+    );
     for (const pdfPage of pdf.getPages()) {
       assert.ok(Math.abs(pdfPage.getWidth() - 595.28) < 1, `A4 width: ${pdfPage.getWidth()}`);
       assert.ok(Math.abs(pdfPage.getHeight() - 841.89) < 1, `A4 height: ${pdfPage.getHeight()}`);

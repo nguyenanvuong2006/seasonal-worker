@@ -46,7 +46,14 @@ import {
   type QueueItem,
 } from "../../src/lib/document-merge/queue.ts";
 import { shouldRetryClaim, claimRetryDelayMs, type WorkerStage } from "../../src/lib/document-merge/queue-types.ts";
-import { renderApplicantDocumentFromParts } from "../../src/lib/document-merge/html-pipeline.ts";
+import {
+  CANONICAL_ERROR,
+  CANONICAL_ERROR_MESSAGE_VI,
+  isCanonicalTemplateError,
+  parseCanonicalSnapshot,
+  renderCanonicalDocument,
+  type CanonicalMapping,
+} from "../../src/lib/document-merge/canonical-document.ts";
 import { getStorageProvider } from "../../src/lib/storage/index.ts";
 import {
   buildIndividualPdfFilename,
@@ -197,38 +204,34 @@ interface FieldSnapshotRow {
   isRequired: boolean;
 }
 
+/**
+ * Immutable canonical snapshot frozen onto the job at creation time.
+ *
+ * This is the worker's ONLY document source. The worker never reads
+ * merge_template_versions at render time, never consults a static TypeScript
+ * template, and never falls back to Google Docs or to an older version.
+ */
 interface TemplateSnapshot {
   name?: string;
   documentKind?: string;
   googleDocId?: string;
-  /** Registered first-party contract key, null for generic DB-authored templates. */
+  /** Registered first-party contract key — validation metadata only, never a body. */
   contractKey?: string | null;
   version?: number | null;
   retentionYears?: number | null;
   fields?: FieldSnapshotRow[];
-  /** HTML/CSS của version PUBLISHED lúc tạo job — nguồn render DUY NHẤT (xem processItem). */
+  /** Canonical snapshot payload (see src/lib/document-merge/canonical-document.ts). */
+  templateId?: string | null;
+  templateVersion?: number | null;
   htmlBody?: string | null;
   printCss?: string | null;
-}
-
-function toRenderFields(rows: FieldSnapshotRow[] = []): MergeTemplateField[] {
-  return rows.map((r) => ({
-    id: "",
-    templateId: "",
-    placeholder: r.placeholder,
-    sourceType: r.sourceType,
-    sourceEntity: r.sourceEntity,
-    sourceField: r.sourceField,
-    sourcePath: r.sourcePath,
-    optionValue: r.optionValue,
-    formatType: r.formatType,
-    fallbackValue: r.fallbackValue,
-    isRequired: r.isRequired,
-    isOrphaned: false,
-    isSuggested: false,
-    createdAt: new Date(),
-    updatedAt: new Date(),
-  }));
+  mappings?: CanonicalMapping[];
+  formatting?: {
+    contractKey?: string | null;
+    retentionYears?: number | null;
+    documentKind?: string;
+    templateName?: string;
+  };
 }
 
 // ---------------------------------------------------------------
@@ -258,17 +261,29 @@ async function processItem(item: QueueItem, jobCtx: JobContext): Promise<void> {
   const snap = jobCtx.templates[templateId] ?? Object.values(jobCtx.templates)[0];
 
   let t = Date.now();
-  await stage(jobCtx.jobId, item.id, "TEMPLATE_LOADING", t, Boolean(snap?.htmlBody));
-  if (!snap?.htmlBody) {
-    // htmlBody null = template CHƯA có version PUBLISHED lúc tạo job (worker
-    // render TRỰC TIẾP từ snapshot — không tra cứu registry cứng nào khác).
+
+  // FAIL CLOSED: the immutable canonical snapshot is the only document source.
+  // A missing/empty snapshot is a CONFIGURATION error, not a transient one —
+  // it is marked non-retryable so the queue cannot spin, and the worker does
+  // NOT substitute Google Docs, static TypeScript HTML, generated legacy HTML,
+  // or an older template version.
+  let snapshot;
+  try {
+    snapshot = parseCanonicalSnapshot(snap, templateId);
+  } catch (error) {
+    const code = isCanonicalTemplateError(error) ? error.code : CANONICAL_ERROR.SNAPSHOT_EMPTY;
+    const message = isCanonicalTemplateError(error)
+      ? error.operatorMessage
+      : CANONICAL_ERROR_MESSAGE_VI[CANONICAL_ERROR.SNAPSHOT_EMPTY];
+    await stage(jobCtx.jobId, item.id, "TEMPLATE_LOADING", t, false, code);
     await failItem(
       item.id,
-      { errorCode: "TEMPLATE_NOT_PUBLISHED", errorMessage: "Template chưa có version PUBLISHED (HTML) lúc tạo job — vào Template Builder → Xuất bản phiên bản rồi tạo job lại." },
-      { attemptCount: item.attemptCount },
+      { errorCode: code, errorMessage: message },
+      { attemptCount: item.attemptCount, retryable: false },
     );
     return;
   }
+  await stage(jobCtx.jobId, item.id, "TEMPLATE_LOADING", t, true);
 
   t = Date.now();
   const records = await loadDailyApplicationRecords([item.sourceRecordId]);
@@ -286,14 +301,11 @@ async function processItem(item: QueueItem, jobCtx: JobContext): Promise<void> {
     mergeIndex: item.sortOrder,
     mergeCount: jobCtx.recordCount,
   };
-  const rendered = renderApplicantDocumentFromParts(
-    snap.htmlBody,
-    snap.printCss,
-    toRenderFields(snap.fields),
-    recordData,
-    context,
-    { contract: getHtmlTemplateContractByKey(snap.contractKey) },
-  );
+  // THE canonical render function — byte-identical to what Preview produces
+  // for the same snapshot + same candidate.
+  const rendered = renderCanonicalDocument(snapshot, recordData, context, {
+    contract: getHtmlTemplateContractByKey(snapshot.formatting.contractKey),
+  });
   const missingPlaceholders = [...rendered.missingFields, ...rendered.unreplaced].slice(0, 20);
   await stage(jobCtx.jobId, item.id, "DATA_RESOLUTION", t, rendered.valid, rendered.valid ? undefined : "INCOMPLETE");
   if (!rendered.valid) {
@@ -333,9 +345,9 @@ async function processItem(item: QueueItem, jobCtx: JobContext): Promise<void> {
 
   const fullName = String(recordData.fullName ?? "ung-vien");
   const applicationId = String(recordData.id ?? item.sourceRecordId ?? "ung-vien");
-  const documentType = snap.documentKind === "B" ? "Dang-ky-tap-nghe" : "Tai-lieu-merge";
-  const templateVersion = snap.version ?? null;
-  const retentionYears = snap.retentionYears ?? undefined;
+  const documentType = snapshot.formatting.documentKind === "B" ? "Dang-ky-tap-nghe" : "Tai-lieu-merge";
+  const templateVersion = snapshot.templateVersion;
+  const retentionYears = snapshot.formatting.retentionYears ?? undefined;
   const now = new Date();
   const filename = buildIndividualPdfFilename(now, fullName, documentType, applicationId);
   const storageKey = buildIndividualStorageKey(now, filename);

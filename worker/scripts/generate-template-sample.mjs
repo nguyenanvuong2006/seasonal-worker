@@ -5,17 +5,38 @@
  * Output: artifacts/document-merge/trainee-registration/rendered-sample.html
  *
  * Mở file trong trình duyệt → Print → Save as PDF → so sánh với nguồn canonical
- * export từ Google Docs gốc (reference). KHÔNG fake — đây là bản render
- * thật từ ĐÚNG template.ts + ĐÚNG renderer production (html-renderer).
+ * export từ Google Docs gốc (reference). KHÔNG fake — đây là bản render thật
+ * từ ĐÚNG canonical body (payload của migration DRAFT) + ĐÚNG renderer
+ * production (html-renderer).
  */
 
-import { writeFileSync, mkdirSync } from "node:fs";
+import { writeFileSync, mkdirSync, readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { dangKyTapNgheTemplate } from "../../src/document-templates/dang-ky-tap-nghe/template.ts";
 import { renderApplicantHtmlFromParts } from "../../src/lib/document-merge/html-renderer.ts";
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), "..", "..");
+
+/**
+ * Canonical body/CSS come from the DRAFT migration (the exact payload that
+ * lands in merge_template_versions). No runtime module contains a body.
+ */
+function readCanonicalVersionParts(root) {
+  const sql = readFileSync(
+    join(root, "migrations", "2026-08-23-trainee-registration-canonical-html-draft.sql"),
+    "utf8",
+  );
+  const pick = (tag) => {
+    const open = `$${tag}$`;
+    const start = sql.indexOf(open);
+    const bodyStart = start + open.length;
+    const end = sql.indexOf(open, bodyStart);
+    if (start < 0 || end < 0) throw new Error(`canonical migration missing ${open}`);
+    return sql.slice(bodyStart, end);
+  };
+  return { htmlBody: pick("canonical_html"), printCss: pick("canonical_css") };
+}
+
 
 /** Dữ liệu mẫu deterministic — 1 ứng viên (không phải dữ liệu thật). */
 export const SAMPLE_FIELD_VALUES = {
@@ -71,9 +92,10 @@ export const SAMPLE_FIELD_VALUES = {
   Code: "APP001928",
 };
 
+const canonical = readCanonicalVersionParts(ROOT);
 const { html } = renderApplicantHtmlFromParts(
-  dangKyTapNgheTemplate.html,
-  dangKyTapNgheTemplate.css,
+  canonical.htmlBody,
+  canonical.printCss,
   SAMPLE_FIELD_VALUES,
 );
 
@@ -84,6 +106,6 @@ writeFileSync(outFile, html, "utf8");
 
 const unreplaced = [...html.matchAll(/(?:<<\s*([^>]+?)\s*>>|\{\{\s*([^{}]+?)\s*\}\})/g)].map((m) => m[1] ?? m[2]);
 console.log(`✅ Sample HTML: ${outFile}`);
-console.log(`   Template: ${dangKyTapNgheTemplate.name}`);
+console.log("   Template: canonical trainee-registration (from DRAFT migration payload)");
 console.log(`   Placeholder chưa fill: ${unreplaced.length > 0 ? unreplaced.join(", ") : "KHÔNG (tất cả đã fill)"}`);
 console.log("   Mở file trong trình duyệt → Print (A4, margins default) → Save as PDF → so với reference.");

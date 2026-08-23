@@ -10,14 +10,21 @@ import assert from "node:assert/strict";
 import {
   A4_PRINT_CSS,
   escapeHtml,
-  renderApplicantHtml,
   renderApplicantHtmlFromParts,
   stripPreviewOnlyMarkup,
   wrapHtmlDocument,
 } from "./html-renderer.ts";
 import { extractUniquePlaceholders } from "./placeholder-extractor.ts";
-import { dangKyTapNgheTemplate } from "../../document-templates/dang-ky-tap-nghe/template.ts";
 import { PLACEHOLDERS, REJECTED_ORPHAN_PLACEHOLDERS } from "../../document-templates/dang-ky-tap-nghe/schema.ts";
+import { readCanonicalVersionParts } from "../test-support/canonical-fixture.ts";
+
+/** Canonical body/CSS come from the DB payload, never from a runtime module. */
+const canonical = readCanonicalVersionParts();
+
+/** Render the canonical body exactly the way production does. */
+function renderCanonical(values: Record<string, string>) {
+  return renderApplicantHtmlFromParts(canonical.htmlBody, canonical.printCss, values);
+}
 
 function allFieldValues(): Record<string, string> {
   const values: Record<string, string> = {};
@@ -44,7 +51,7 @@ describe("HTML renderer", () => {
   });
 
   it("giá trị có ký tự HTML được escape trong output", () => {
-    const result = renderApplicantHtml(dangKyTapNgheTemplate, { ...allFieldValues(), Ho_ten: "A <b>& C" });
+    const result = renderCanonical({ ...allFieldValues(), Ho_ten: "A <b>& C" });
     assert.match(result.html, /A &lt;b&gt;&amp; C/);
     assert.doesNotMatch(result.html, /A <b>& C/);
   });
@@ -90,7 +97,7 @@ describe("HTML renderer", () => {
 
 describe("Dang_ky_tap_nghe template", () => {
   it("chứa đúng 49 placeholder active và loại 2 orphan hợp đồng dịch vụ thuế", () => {
-    const found = extractUniquePlaceholders(dangKyTapNgheTemplate.html);
+    const found = extractUniquePlaceholders(canonical.htmlBody);
     assert.equal(found.length, 49);
     assert.equal(PLACEHOLDERS.length, 49);
     for (const p of PLACEHOLDERS) {
@@ -106,7 +113,7 @@ describe("Dang_ky_tap_nghe template", () => {
   });
 
   it("render đầy đủ → không còn placeholder, có @page A4", () => {
-    const result = renderApplicantHtml(dangKyTapNgheTemplate, allFieldValues());
+    const result = renderCanonical(allFieldValues());
     assert.equal(result.unreplaced.length, 0, `còn placeholder: ${result.unreplaced.join(", ")}`);
     assert.match(result.html, /size: A4/);
     assert.match(result.html, /GIẤY ĐĂNG KÝ TẬP NGHỀ/);
@@ -115,7 +122,7 @@ describe("Dang_ky_tap_nghe template", () => {
   it("render thiếu giá trị → phát hiện unreplaced (mapping thiếu)", () => {
     const partial = allFieldValues();
     delete partial.Ho_ten;
-    const result = renderApplicantHtml(dangKyTapNgheTemplate, partial);
+    const result = renderCanonical(partial);
     assert.ok(result.unreplaced.includes("Ho_ten"));
   });
 });

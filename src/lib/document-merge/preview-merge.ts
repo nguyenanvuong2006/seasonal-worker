@@ -31,12 +31,25 @@ export const FALLBACK_PLACEHOLDER_MAP: Record<string, string> = {
   SoDienThoai: "phone",
   Dien_thoai: "phone",
   phone: "phone",
+  // ADDRESS SEMANTICS — permanentAddress and residentialAddress are two
+  // DIFFERENT business fields and must never alias into one another.
+  //
+  //   Địa chỉ thường trú  (permanent / hộ khẩu)  -> permanentAddress
+  //   Địa chỉ cư trú      (current residence)    -> residentialAddress
+  //   Địa chỉ tạm trú     (temporary residence)  -> residentialAddress
+  //
+  // Equal values are allowed when a worker genuinely lives at their permanent
+  // address, but a BLANK field must stay blank — it may never be filled from
+  // the other one. `dia_chi_cu_tru` previously pointed at permanentAddress,
+  // which printed the wrong address (e.g. "Quảng Ngãi" instead of the actual
+  // residence "Đơn Dương") into the tax-registration page.
   Dia_chi: "residentialAddress",
   DiaChi: "residentialAddress",
   Dia_chi_hien_tai: "residentialAddress",
   residentialAddress: "residentialAddress",
   Dia_chi_thuong_tru: "permanentAddress",
-  dia_chi_cu_tru: "permanentAddress",
+  dia_chi_cu_tru: "residentialAddress",
+  Dia_chi_tam_tru: "residentialAddress",
   permanentAddress: "permanentAddress",
   Ngay_cap_CCCD: "dateOfIssue",
   Noi_cap_CCCD: "placeOfIssue",

@@ -21,9 +21,16 @@ import { getDocumentMergeEngine, type DocumentMergeEngine } from "./engine-confi
 import { selectTemplateForApplicant, documentKindLabel } from "./template-routing.ts";
 import { ITEM_STATUS, JOB_STATUS } from "./queue-types.ts";
 import {
-  getHtmlTemplateByGoogleDocId,
+  getRegisteredContractKeyByGoogleDocId,
   getHtmlTemplateContractByGoogleDocId,
 } from "../../document-templates/registry.ts";
+import {
+  buildCanonicalSnapshot,
+  CANONICAL_ERROR,
+  CANONICAL_ERROR_MESSAGE_VI,
+  type CanonicalFormatting,
+  type CanonicalMapping,
+} from "./canonical-document.ts";
 import {
   validateContractRequiredMappings,
   validateTemplateContract,
@@ -220,6 +227,9 @@ export async function createAsyncMergeJob(input: CreateAsyncJobInput): Promise<C
     .select({
       templateId: mergeTemplateVersions.templateId,
       version: mergeTemplateVersions.version,
+      // Selected explicitly so the canonical snapshot can re-assert that this
+      // row really is the PUBLISHED version (defence in depth, fail closed).
+      status: mergeTemplateVersions.status,
       retentionYears: mergeTemplateVersions.retentionYears,
       htmlBody: mergeTemplateVersions.htmlBody,
       printCss: mergeTemplateVersions.printCss,
@@ -233,16 +243,17 @@ export async function createAsyncMergeJob(input: CreateAsyncJobInput): Promise<C
     );
   const versionByTemplate = new Map(publishedVersions.map((v) => [v.templateId, v]));
 
-  // Fail before queuing when the requested HTML mode cannot possibly render.
-  // This reuses the existing version/mapping tables rather than allowing the
-  // worker to discover a missing version after an item has been claimed.
+  // Fail CLOSED before queuing when there is no explicitly PUBLISHED canonical
+  // version. There is no fallback to Google Docs, to static TypeScript HTML,
+  // to a generated legacy body, or to an older version — the operator must
+  // publish a canonical version explicitly.
   if (engine === "HTML_PDF") {
     for (const templateId of templateIds) {
       const template = allTemplates.find((item) => item.id === templateId);
       const version = versionByTemplate.get(templateId);
       if (!template || !version?.htmlBody?.trim()) {
         throw new AsyncJobValidationError(
-          "Template chưa có phiên bản HTML PUBLISHED. Hãy Preview và Xuất bản phiên bản trước khi tạo job.",
+          `${CANONICAL_ERROR.NOT_PUBLISHED}: ${CANONICAL_ERROR_MESSAGE_VI[CANONICAL_ERROR.NOT_PUBLISHED]}`,
           422,
         );
       }
@@ -256,9 +267,8 @@ export async function createAsyncMergeJob(input: CreateAsyncJobInput): Promise<C
         );
       }
 
-      const registered = getHtmlTemplateByGoogleDocId(template.googleDocId);
       const contract = getHtmlTemplateContractByGoogleDocId(template.googleDocId);
-      if (registered && contract) {
+      if (contract) {
         const contractResult = validateTemplateContract(version.htmlBody, contract);
         if (!contractResult.valid) {
           throw new AsyncJobValidationError(
@@ -358,29 +368,69 @@ export async function createAsyncMergeJob(input: CreateAsyncJobInput): Promise<C
         // Freeze the merge clock as well as HTML/CSS/mappings. A retry cannot
         // change signature/computed dates or pagination after the job exists.
         renderedAt: new Date().toISOString(),
+        // IMMUTABLE CANONICAL SNAPSHOT — the single document definition this
+        // job will ever render. Both Preview and the Cloud Run HTML_PDF worker
+        // read exactly this object via renderCanonicalDocument(); neither may
+        // reconstruct the document from Google Docs, static TypeScript HTML or
+        // a later/earlier template version.
         templates: Object.fromEntries(
           templateIds.map((tid) => {
             const t = allTemplates.find((x) => x.id === tid);
+            const version = versionByTemplate.get(tid);
+            const formatting: CanonicalFormatting = {
+              // Registered first-party contract key — validation metadata only,
+              // never a document-body source.
+              contractKey: getRegisteredContractKeyByGoogleDocId(t?.googleDocId) ?? null,
+              retentionYears: version?.retentionYears ?? null,
+              documentKind: t?.documentKind ?? "GENERIC",
+              templateName: t?.name ?? "",
+            };
+            const mappings = (fieldsByTemplate.get(tid) ?? []) as CanonicalMapping[];
+
+            // GOOGLE_DOCS keeps its legacy metadata shape untouched (it has its
+            // own synchronous render path and never uses the canonical body).
+            // HTML_PDF is ALWAYS a fail-closed canonical snapshot.
+            if (engine !== "HTML_PDF") {
+              return [
+                tid,
+                {
+                  name: formatting.templateName,
+                  documentKind: formatting.documentKind,
+                  googleDocId: t?.googleDocId ?? "",
+                  contractKey: formatting.contractKey,
+                  version: version?.version ?? t?.currentPublishedVersion ?? null,
+                  retentionYears: formatting.retentionYears,
+                  fields: mappings,
+                  htmlBody: version?.htmlBody ?? null,
+                  printCss: version?.printCss ?? null,
+                },
+              ];
+            }
+
+            const snapshot = buildCanonicalSnapshot({
+              templateId: tid,
+              version,
+              mappings,
+              formatting,
+            });
             return [
               tid,
               {
-                name: t?.name ?? "",
-                documentKind: t?.documentKind ?? "GENERIC",
+                // Canonical snapshot fields (read by renderCanonicalDocument).
+                templateId: snapshot.templateId,
+                templateVersion: snapshot.templateVersion,
+                htmlBody: snapshot.htmlBody,
+                printCss: snapshot.printCss,
+                mappings: snapshot.mappings,
+                formatting: snapshot.formatting,
+                // Denormalised copies kept for existing history/filename code.
+                name: formatting.templateName,
+                documentKind: formatting.documentKind,
                 googleDocId: t?.googleDocId ?? "",
-                // First-party contracts are registered by stable key. Generic
-                // customer templates have no code contract and rely on their
-                // DB mapping snapshot only.
-                contractKey: getHtmlTemplateByGoogleDocId(t?.googleDocId)?.key ?? null,
-                // Snapshot template version lúc tạo job — PDF cũ không regenerate
-                // bằng template mới (spec E: mỗi PDF snapshot template_version).
-                version: versionByTemplate.get(tid)?.version ?? t?.currentPublishedVersion ?? null,
-                retentionYears: versionByTemplate.get(tid)?.retentionYears ?? null,
-                fields: fieldsByTemplate.get(tid) ?? [],
-                // Engine HTML_PDF render TRỰC TIẾP từ đây (xem worker processItem) —
-                // null khi template chưa có version PUBLISHED (worker sẽ fail rõ
-                // ràng thay vì thử registry cứng không còn đồng bộ với DB).
-                htmlBody: versionByTemplate.get(tid)?.htmlBody ?? null,
-                printCss: versionByTemplate.get(tid)?.printCss ?? null,
+                contractKey: formatting.contractKey,
+                version: snapshot.templateVersion,
+                retentionYears: formatting.retentionYears,
+                fields: snapshot.mappings,
               },
             ];
           }),

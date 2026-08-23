@@ -137,6 +137,10 @@ export const NON_RETRYABLE_ERROR_CODES = [
   "RECORD_NOT_FOUND",
   "HTML_TEMPLATE_EMPTY",
   "HTML_TEMPLATE_MISSING",
+  // Canonical pipeline configuration errors: retrying cannot publish a
+  // template, so these must fail immediately instead of consuming attempts.
+  "CANONICAL_TEMPLATE_NOT_PUBLISHED",
+  "CANONICAL_SNAPSHOT_EMPTY",
 ] as const;
 
 export type NonRetryableErrorCode = (typeof NON_RETRYABLE_ERROR_CODES)[number];

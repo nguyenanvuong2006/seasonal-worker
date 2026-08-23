@@ -1,6 +1,6 @@
 # Trainee-registration canonical field-mapping report
 
-**Canonical source:** `templates/document-merge/trainee-registration/test.html`  
+**Canonical source:** `templates/document-merge/trainee-registration/canonical-source.html`  
 **Canonical source SHA-256:** `22e987f76ff0100f8a7a3f9c6fcda72f1465bbf353f909664d923eed41343bd2`  
 **Logical document pages:** 6  
 **Production template syntax:** semantic `{{Field}}`; candidate values are escaped by the HTML renderer.

@@ -88,7 +88,10 @@ export const DANG_KY_TAP_NGHE_FIELD_CONTRACT: TemplateContract = {
     { key: "So_CCCD", label: "Số CCCD", valueKind: "text", required: true, sourcePath: "cccd" },
     { key: "Ngay_cap_CCCD", label: "Ngày cấp CCCD", valueKind: "date", required: false, sourcePath: "dateOfIssue" },
     { key: "Noi_cap_CCCD", label: "Nơi cấp CCCD", valueKind: "text", required: false, sourcePath: "placeOfIssue" },
-    { key: "dia_chi_cu_tru", label: "Địa chỉ cư trú", valueKind: "text", required: false, sourcePath: "permanentAddress" },
+    // "Địa chỉ cư trú" = CURRENT RESIDENCE, not the permanent/hộ khẩu address.
+    // It must read residentialAddress; aliasing it to permanentAddress printed
+    // the wrong address on the tax-registration page.
+    { key: "dia_chi_cu_tru", label: "Địa chỉ cư trú", valueKind: "text", required: false, sourcePath: "residentialAddress" },
 
     checkboxField("Tien_an_tien_su_Khong", "Tiền án, tiền sự: Không", "customAnswers.tien_an_tien_su", "Không"),
     checkboxField("Tien_an_tien_su_Co", "Tiền án, tiền sự: Có", "customAnswers.tien_an_tien_su", "Có"),

@@ -92,8 +92,30 @@ async function loadWorker(db: FakeDb, spies: QueueSpies): Promise<WorkerModule> 
         shouldRetryClaim: (attempt: number, maxAttempts = 3) => attempt < maxAttempts,
         claimRetryDelayMs: () => 0,
       },
-      "../../src/lib/document-merge/html-pipeline.ts": {
-        renderApplicantDocumentFromParts: () => ({ valid: true, html: "", missingFields: [], unreplaced: [] }),
+      "../../src/lib/document-merge/canonical-document.ts": {
+        CANONICAL_ERROR: {
+          NOT_PUBLISHED: "CANONICAL_TEMPLATE_NOT_PUBLISHED",
+          SNAPSHOT_EMPTY: "CANONICAL_SNAPSHOT_EMPTY",
+        },
+        CANONICAL_ERROR_MESSAGE_VI: {
+          CANONICAL_TEMPLATE_NOT_PUBLISHED: "Chưa xuất bản phiên bản canonical.",
+          CANONICAL_SNAPSHOT_EMPTY: "Snapshot không có nội dung HTML.",
+        },
+        isCanonicalTemplateError: (e: unknown) =>
+          Boolean(e) && (e as { name?: string }).name === "CanonicalTemplateError",
+        parseCanonicalSnapshot: (raw: { htmlBody?: string | null; templateVersion?: number } | null) => {
+          if (!raw?.htmlBody || typeof raw.templateVersion !== "number") {
+            const err = new Error("CANONICAL_SNAPSHOT_EMPTY");
+            err.name = "CanonicalTemplateError";
+            Object.assign(err, {
+              code: "CANONICAL_SNAPSHOT_EMPTY",
+              operatorMessage: "Snapshot không có nội dung HTML.",
+            });
+            throw err;
+          }
+          return { ...raw, mappings: [], formatting: {} };
+        },
+        renderCanonicalDocument: () => ({ valid: true, html: "", missingFields: [], unreplaced: [] }),
       },
       "../../src/lib/storage/index.ts": { getStorageProvider: () => ({ name: "local", put: async () => ({ key: "k", url: "u" }) }) },
       "../../src/lib/document-merge/filename.ts": {

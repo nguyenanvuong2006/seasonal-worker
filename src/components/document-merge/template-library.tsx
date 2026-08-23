@@ -125,6 +125,7 @@ export function TemplateLibrary({ onSelectForMerge }: { onSelectForMerge: (templ
   const [versions, setVersions] = useState<TemplateVersion[]>([]);
   const [versionsLoading, setVersionsLoading] = useState(false);
   const [versionAction, setVersionAction] = useState<string | null>(null);
+  const [syncingGoogleDoc, setSyncingGoogleDoc] = useState(false);
   const [draftHtml, setDraftHtml] = useState("");
   const [draftCss, setDraftCss] = useState("");
   const [draftRetention, setDraftRetention] = useState<string>("3");
@@ -266,6 +267,49 @@ export function TemplateLibrary({ onSelectForMerge }: { onSelectForMerge: (templ
     } finally {
       setDocxImporting(false);
       if (docxInputRef.current) docxInputRef.current.value = "";
+    }
+  };
+
+  /**
+   * "Đồng bộ Google Doc → phiên bản HTML mới".
+   * Tạo DRAFT mới — KHÔNG tự publish, KHÔNG ghi đè phiên bản cũ.
+   */
+  const syncFromGoogleDoc = async () => {
+    if (!editing) return;
+    if (
+      !window.confirm(
+        `Đồng bộ Google Doc của "${editing.name}" thành MỘT PHIÊN BẢN HTML MỚI (DRAFT)?\n\n` +
+          "• KHÔNG tự động xuất bản.\n" +
+          "• KHÔNG ghi đè phiên bản cũ.\n" +
+          "• Bạn phải Preview kiểm tra rồi bấm Xuất bản.",
+      )
+    ) {
+      return;
+    }
+    setSyncingGoogleDoc(true);
+    try {
+      const res = await fetch(`/api/document-merge/templates/${editing.id}/sync-google-doc`, {
+        method: "POST",
+      });
+      const data = await res.json();
+      if (!res.ok) {
+        const limitations = Array.isArray(data.limitations) && data.limitations.length > 0
+          ? `\n\nGiới hạn:\n- ${data.limitations.join("\n- ")}`
+          : "";
+        throw new Error(`${data.error || "Không đồng bộ được Google Doc."}${limitations}`);
+      }
+      await loadVersions(editing.id);
+      const warnings = Array.isArray(data.warnings) && data.warnings.length > 0
+        ? `\n\nCảnh báo cần kiểm tra:\n- ${data.warnings.join("\n- ")}`
+        : "";
+      alert(
+        `Đã tạo phiên bản ${data.version.version} (DRAFT) từ Google Doc — ${data.logicalPageCount} trang, ` +
+          `${data.placeholders?.length ?? 0} placeholder.\n\nHãy Preview bản nháp rồi bấm Xuất bản.${warnings}`,
+      );
+    } catch (err) {
+      alert(err instanceof Error ? err.message : "Không đồng bộ được Google Doc.");
+    } finally {
+      setSyncingGoogleDoc(false);
     }
   };
 
@@ -570,6 +614,15 @@ export function TemplateLibrary({ onSelectForMerge }: { onSelectForMerge: (templ
                         &quot;bắt buộc&quot; của từng placeholder.
                       </p>
                     </div>
+                    <button
+                      type="button"
+                      onClick={() => void syncFromGoogleDoc()}
+                      disabled={syncingGoogleDoc || versionAction !== null}
+                      className="shrink-0 rounded-lg border border-emerald-300 bg-emerald-50 px-3 py-2 text-xs font-semibold text-emerald-800 hover:bg-emerald-100 disabled:opacity-50"
+                      title="Đọc Google Doc hiện tại và tạo một phiên bản HTML DRAFT mới. Không tự xuất bản."
+                    >
+                      {syncingGoogleDoc ? "Đang đồng bộ..." : "Đồng bộ Google Doc → phiên bản HTML mới"}
+                    </button>
                   </div>
 
                   {versionsLoading ? (

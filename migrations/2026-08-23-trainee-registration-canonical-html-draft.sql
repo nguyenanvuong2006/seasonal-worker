@@ -1,12 +1,18 @@
 -- ============================================================
 -- CANONICAL TRAINEE-REGISTRATION HTML — DRAFT ONLY
 -- ------------------------------------------------------------
--- Source: templates/document-merge/trainee-registration/test.html
+-- Source: templates/document-merge/trainee-registration/canonical-source.html
 -- Source SHA-256: 22e987f76ff0100f8a7a3f9c6fcda72f1465bbf353f909664d923eed41343bd2
+-- Canonical body SHA-256: 7fa929541c05100e51c76c20da72dc863e3dfdfac3b95f2c90d662be9115ae7f
+-- Logical .page sections: 6 (derived from the source, not enforced)
 --
 -- This migration is idempotent and non-destructive. It adds one new DRAFT
 -- version only; it does not publish, set current_published_version, change
 -- html_enabled, create jobs, or activate HTML_PDF in any environment.
+--
+-- Historical versions are preserved for audit/rollback and are never updated
+-- or deleted here. Runtime NEVER falls back to a historical version: the
+-- render pipeline requires an explicitly PUBLISHED canonical version.
 -- ============================================================
 WITH target_template AS (
   SELECT id
@@ -607,18 +613,60 @@ body {
   @page { size: A4 portrait; margin: 0; }
 }
 
-/* Production merge normalisation: no editor highlighting and safe long-value wrapping. */
+/* Production merge normalisation: no editor styling, safe long-value wrapping. */
 @media print {
   .page {
+    box-shadow: none;
+    margin: 0;
+    width: 210mm;
     min-height: 297mm;
-    height: auto;
+    padding: 8mm 14mm;
     overflow: visible;
+    break-after: page;
+    page-break-after: always;
+    break-inside: avoid;
+    page-break-inside: avoid;
+    font-size: 10.5pt;
+    line-height: 1.15;
   }
+
+  .page:last-child {
+    break-after: auto;
+    page-break-after: auto;
+  }
+
+  /* Preserve visual hierarchy while removing preview-style vertical slack. */
+  .doc-header { margin-bottom: 3mm; }
+  .doc-header .hd-left { padding-top: 2mm; padding-bottom: 2mm; }
+  .doc-header .hd-right { padding-top: 2.2mm; padding-bottom: 2.2mm; }
+
+  .line { margin-bottom: 1.1mm; }
+  .tight { margin-bottom: 0.35mm; }
+  .sec { margin: 1.2mm 0 0.7mm; }
+
+  .mt2 { margin-top: 1mm; }
+  .mt4 { margin-top: 2mm; }
+  .mt6 { margin-top: 3mm; }
+  .mt8 { margin-top: 4mm; }
+  .mt10 { margin-top: 5mm; }
+  .mt14 { margin-top: 7mm; }
+  .mt20 { margin-top: 10mm; }
+
+  .attach-box {
+    padding: 1.4mm 3mm;
+    margin: 2mm 0 4mm;
+  }
+  .attach-box td { padding: 0.25mm 0; }
+
+  .sign-3-table { margin-top: 2mm; }
+  .sign-gap { height: 11mm; }
+
   .photo-wrap .body-col { min-width: 0; }
   .merge-value {
     overflow-wrap: anywhere;
     word-break: normal;
   }
+
   .attach-box,
   .sign-single,
   .sign-3-table {
@@ -626,7 +674,7 @@ body {
     page-break-inside: avoid;
   }
 }$canonical_css$,
-  'trainee-registration/test.html (canonical six-page HTML; preview UI stripped)',
+  'trainee-registration/canonical-source.html (canonical HTML; preview UI stripped)',
   3,
   '[]'::jsonb,
   'system',
@@ -637,10 +685,10 @@ WHERE NOT EXISTS (
   SELECT 1
   FROM merge_template_versions existing
   WHERE existing.template_id = n.template_id
-    AND existing.source_docx_name = 'trainee-registration/test.html (canonical six-page HTML; preview UI stripped)'
+    AND existing.source_docx_name = 'trainee-registration/canonical-source.html (canonical HTML; preview UI stripped)'
 );
 
 -- Post-apply verification (read-only): must report one DRAFT, zero PUBLISHED.
 SELECT version, status, source_docx_name
 FROM merge_template_versions
-WHERE source_docx_name = 'trainee-registration/test.html (canonical six-page HTML; preview UI stripped)';
+WHERE source_docx_name = 'trainee-registration/canonical-source.html (canonical HTML; preview UI stripped)';
