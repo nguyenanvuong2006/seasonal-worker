@@ -293,11 +293,12 @@ const contract = DANG_KY_TAP_NGHE_FIELD_CONTRACT;
  * be modelled or the field silently resolves blank.
  */
 const PRODUCTION_MAPPING_OVERRIDE = {
-  // Read-only Production evidence (previous audit): both address placeholders
-  // are is_required=false. Runtime authority is merge_template_fields, NOT the
-  // static catalog, so the harness models the DB truth.
+  // Operator-confirmed authoritative Production mapping. Runtime authority is
+  // merge_template_fields, NOT the static catalog, so the harness models the
+  // DB truth (which deliberately differs from the catalog for these keys).
   Dia_chi_thuong_tru: { sourcePath: "permanentAddress", isRequired: false },
-  Dia_chi_tam_tru: { sourcePath: "residentialAddress", isRequired: false },
+  // Operator-confirmed Production value: Dia_chi_tam_tru IS required.
+  Dia_chi_tam_tru: { sourcePath: "residentialAddress", isRequired: true },
   dia_chi_cu_tru: { sourcePath: "residentialAddress", isRequired: false },
 };
 

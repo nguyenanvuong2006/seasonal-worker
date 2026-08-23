@@ -23,6 +23,7 @@ import type { MergeTemplateField } from "../../db/schema.ts";
 import { resolveAllFields, validateRequiredFields } from "./data-resolver.ts";
 import { applyFallbackPlaceholders, FALLBACK_PLACEHOLDER_MAP } from "./preview-merge.ts";
 import { renderCanonicalDocument, type CanonicalMapping } from "./canonical-document.ts";
+import { DEFAULT_MAX_ATTEMPTS, isRetryableItemError, shouldRetry } from "./queue-types.ts";
 
 const PERMANENT_TEST_VALUE = "PERMANENT_TEST_VALUE";
 const RESIDENTIAL_TEST_VALUE = "RESIDENTIAL_TEST_VALUE";
@@ -34,9 +35,18 @@ const CONTEXT = {
   mergeCount: 1,
 };
 
-/** Mirrors real Production mapping: both address placeholders are OPTIONAL. */
+/**
+ * AUTHORITATIVE PRODUCTION MAPPING (operator-verified in merge_template_fields):
+ *
+ *   Dia_chi_thuong_tru -> permanentAddress   is_required = false
+ *   dia_chi_cu_tru     -> residentialAddress is_required = false
+ *   Dia_chi_tam_tru    -> residentialAddress is_required = true
+ *
+ * The static catalog marks Dia_chi_thuong_tru required=true; the mapping
+ * snapshot must win at runtime.
+ */
 function addressMappings(): CanonicalMapping[] {
-  const row = (placeholder: string, sourcePath: string): CanonicalMapping => ({
+  const row = (placeholder: string, sourcePath: string, isRequired: boolean): CanonicalMapping => ({
     placeholder,
     sourceType: "CORE_FIELD",
     sourceEntity: null,
@@ -45,12 +55,12 @@ function addressMappings(): CanonicalMapping[] {
     optionValue: null,
     formatType: null,
     fallbackValue: null,
-    isRequired: false,
+    isRequired,
   });
   return [
-    row("Dia_chi_thuong_tru", "permanentAddress"),
-    row("dia_chi_cu_tru", "residentialAddress"),
-    row("Dia_chi_tam_tru", "residentialAddress"),
+    row("Dia_chi_thuong_tru", "permanentAddress", false),
+    row("dia_chi_cu_tru", "residentialAddress", false),
+    row("Dia_chi_tam_tru", "residentialAddress", true),
   ];
 }
 
@@ -143,6 +153,37 @@ test("BLANK_RESIDENTIAL_TEST: blank residence stays blank, permanent keeps its v
   assert.ok(blank(values.dia_chi_cu_tru), `expected blank, got ${JSON.stringify(values.dia_chi_cu_tru)}`);
   assert.ok(blank(values.Dia_chi_tam_tru), `expected blank, got ${JSON.stringify(values.Dia_chi_tam_tru)}`);
   assert.notEqual(values.dia_chi_cu_tru, PERMANENT_TEST_VALUE);
+});
+
+test("CASE C: blank residence fails validation for Dia_chi_tam_tru ONLY (required in Production)", () => {
+  // Dia_chi_tam_tru is is_required=true in the authoritative mapping, so a
+  // blank residentialAddress is a deterministic validation failure — but it
+  // must NOT be repaired by copying the permanent address, and the optional
+  // placeholders must not be reported.
+  const mappings = addressMappings();
+  const fields = asFields(mappings);
+  const values = resolve(
+    { id: "c2", permanentAddress: PERMANENT_TEST_VALUE, residentialAddress: null, customAnswers: {} },
+    mappings,
+  );
+
+  const missing: string[] = [...validateRequiredFields(fields, values).missingFields];
+  assert.deepEqual(missing, ["Dia_chi_tam_tru"]);
+
+  // No silent repair from the permanent address.
+  assert.ok(blank(values.Dia_chi_tam_tru));
+  assert.ok(blank(values.dia_chi_cu_tru));
+  assert.notEqual(values.Dia_chi_tam_tru, PERMANENT_TEST_VALUE);
+});
+
+test("CASE C: required-blank is a NON-RETRYABLE terminal failure, transient stays retryable", () => {
+  // A required blank surfaces as INCOMPLETE, which must fail immediately
+  // (retry cannot supply missing data) while infrastructure errors still retry.
+  assert.equal(isRetryableItemError("INCOMPLETE"), false);
+  assert.equal(isRetryableItemError("INCOMPLETE") && shouldRetry(1, DEFAULT_MAX_ATTEMPTS), false);
+  for (const transient of ["CHROMIUM_LAUNCH_FAILED", "PDF_RENDER_TIMEOUT", "STORAGE_UPLOAD_FAILED"]) {
+    assert.equal(isRetryableItemError(transient), true, `${transient} must remain retryable`);
+  }
 });
 
 test("equal permanent and residential values are allowed (not treated as an error)", () => {
