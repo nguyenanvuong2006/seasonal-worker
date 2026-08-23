@@ -1034,7 +1034,7 @@ ALTER TABLE merge_job_records ADD COLUMN IF NOT EXISTS document_history_id uuid;
 
 CREATE TABLE IF NOT EXISTS merge_template_versions (
   id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
-  template_id uuid NOT NULL REFERENCES merge_templates(id) ON DELETE CASCADE,
+  template_id uuid REFERENCES merge_templates(id) ON DELETE CASCADE,
   version integer NOT NULL,
   status varchar(16) NOT NULL DEFAULT 'DRAFT',
   html_body text,
@@ -1113,3 +1113,5 @@ ALTER TABLE merge_templates ADD COLUMN IF NOT EXISTS current_published_version i
 -- DOCUMENT MERGE — SEED: Dang_ky_Tap_nghe HTML version v1 (DRAFT)
 -- (khớp migrations/2026-08-21-dang-ky-tap-nghe-html-draft.sql)
 -- ============================================================
+
+ALTER TABLE merge_jobs ALTER COLUMN template_id DROP NOT NULL;
