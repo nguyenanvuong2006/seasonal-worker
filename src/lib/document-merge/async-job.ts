@@ -29,6 +29,10 @@ import {
   validateTemplateContract,
 } from "./template-contract.ts";
 import { extractUniquePlaceholders } from "./placeholder-extractor.ts";
+import { loadDailyApplicationRecords } from "./record-loader.ts";
+import { resolveHtmlFieldValues } from "./html-pipeline.ts";
+import { validateRequiredFields, type MergeContext } from "./data-resolver.ts";
+import type { MergeTemplateField } from "@/db/schema";
 
 export interface AsyncJobRecordsInput {
   entityType: string;
@@ -137,7 +141,6 @@ export async function createAsyncMergeJob(input: CreateAsyncJobInput): Promise<C
       id: dailyApplications.id,
       declaredType: dailyApplications.declaredType,
       dwMatch: dailyApplications.dwMatch,
-      permanentAddress: dailyApplications.permanentAddress,
     })
     .from(dailyApplications)
     .where(and(...conditions));
@@ -273,24 +276,54 @@ export async function createAsyncMergeJob(input: CreateAsyncJobInput): Promise<C
       }
     }
 
-    // Canonical trainee-registration HTML_PDF only: required permanentAddress
-    // (Địa chỉ thường trú) must be present before the job is queued. Do not
-    // fall back to residentialAddress — that field maps to Dia_chi_tam_tru.
-    // GOOGLE_DOCS and generic HTML templates are unchanged.
-    const traineeTemplateIds = new Set(
-      templateIds.filter((templateId) => {
-        const template = allTemplates.find((item) => item.id === templateId);
-        return getHtmlTemplateByGoogleDocId(template?.googleDocId)?.key === "dang-ky-tap-nghe";
-      }),
-    );
-    if (traineeTemplateIds.size > 0) {
-      const missingPermanentAddress = planned.some((item) => {
-        if (!traineeTemplateIds.has(item.templateId)) return false;
-        const address = byId.get(item.recordId)?.permanentAddress;
-        return !String(address ?? "").trim();
-      });
-      if (missingPermanentAddress) {
-        throw new AsyncJobValidationError("Thiếu Địa chỉ thường trú", 422);
+    // Required-field gate for HTML_PDF. The ONLY runtime source of truth is
+    // merge_template_fields.isRequired (snapshotted above). There is no
+    // hard-coded per-template rule: a placeholder blocks the job when — and
+    // only when — its mapping is marked required and the record resolves it
+    // to an empty value. A mapping left optional queues normally even when the
+    // underlying column is blank, and no placeholder silently falls back to a
+    // different column (e.g. Dia_chi_thuong_tru never reads residentialAddress).
+    //
+    // This mirrors exactly what the worker does at render time
+    // (renderApplicantDocumentFromParts → validateRequiredFields), so a job
+    // that could only fail during rendering is rejected up-front with 422
+    // instead of being queued and failing after an item is claimed.
+    // GOOGLE_DOCS is untouched — this whole block is HTML_PDF only.
+    const requiredByTemplate = new Map<string, FieldSnapshot[]>();
+    for (const templateId of templateIds) {
+      const required = (fieldsByTemplate.get(templateId) ?? []).filter((field) => field.isRequired);
+      if (required.length > 0) requiredByTemplate.set(templateId, required);
+    }
+
+    if (requiredByTemplate.size > 0) {
+      const recordsNeedingCheck = planned
+        .filter((item) => requiredByTemplate.has(item.templateId))
+        .map((item) => item.recordId);
+      const recordData = await loadDailyApplicationRecords([...new Set(recordsNeedingCheck)]);
+      const context: MergeContext = { currentUserId: input.createdBy, currentDate: new Date() };
+
+      const missingByPlaceholder = new Map<string, number>();
+      for (const item of planned) {
+        const required = requiredByTemplate.get(item.templateId);
+        if (!required) continue;
+        const data = recordData.get(item.recordId);
+        if (!data) continue;
+        const values = resolveHtmlFieldValues(required as unknown as MergeTemplateField[], data, context);
+        const { missingFields } = validateRequiredFields(required as unknown as MergeTemplateField[], values);
+        for (const placeholder of missingFields) {
+          missingByPlaceholder.set(placeholder, (missingByPlaceholder.get(placeholder) ?? 0) + 1);
+        }
+      }
+
+      if (missingByPlaceholder.size > 0) {
+        const detail = [...missingByPlaceholder.entries()]
+          .sort(([a], [b]) => a.localeCompare(b))
+          .map(([placeholder, count]) => `${placeholder} (${count} hồ sơ)`)
+          .join(", ");
+        throw new AsyncJobValidationError(
+          `Thiếu dữ liệu cho trường bắt buộc theo mapping: ${detail}.`,
+          422,
+        );
       }
     }
   }
