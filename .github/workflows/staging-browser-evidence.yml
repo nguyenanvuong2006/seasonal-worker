@@ -29,8 +29,10 @@ jobs:
     # This environment is intentionally staging-only. Environment protection,
     # if configured, requires a staging approver before the browser can run.
     environment: staging
+
     container:
       image: mcr.microsoft.com/playwright:v1.62.1-noble
+
     env:
       PLAYWRIGHT_BROWSERS_PATH: /ms-playwright
       EVIDENCE_ROOT: artifacts/document-merge/trainee-registration
@@ -62,7 +64,7 @@ jobs:
           npm ci --no-audit --no-fund
           npm --prefix worker ci --no-audit --no-fund
 
-           - name: Generate merged canonical HTML via production renderer
+      - name: Generate merged canonical HTML via production renderer
         shell: bash
         run: |
           set -euo pipefail
@@ -89,17 +91,67 @@ jobs:
           const report = JSON.parse(readFileSync(reportPath, "utf8"));
           const failures = [];
 
-          if (report.pass !== true) failures.push("report.pass is not true");
-          if (report.checks.realPdfPageCount !== 6) failures.push(`PDF pages=${report.checks.realPdfPageCount}, expected 6`);
-          if (report.checks.logicalSectionCount !== 6) failures.push(`logical sections=${report.checks.logicalSectionCount}, expected 6`);
-          if (report.checks.unresolvedPlaceholderCount !== 0) failures.push(`unresolved placeholders=${report.checks.unresolvedPlaceholderCount}`);
-          if (report.checks.horizontalOverflowPx > 1) failures.push(`horizontal overflow=${report.checks.horizontalOverflowPx}px`);
-          if (report.checks.blankPages.length !== 0) failures.push(`blank pages=${JSON.stringify(report.checks.blankPages)}`);
-          if (report.checks.paginationWarnings.length !== 0) failures.push(`pagination warnings=${JSON.stringify(report.checks.paginationWarnings)}`);
-          if (!/^[a-f0-9]{64}$/.test(report.pdf.sha256 ?? "")) failures.push("PDF SHA-256 is missing or invalid");
-          if (report.evidence.screenshots.length !== 6) failures.push(`screenshots=${report.evidence.screenshots.length}, expected 6`);
-          if (report.browser.playwright !== "1.62.1") failures.push(`Playwright revision=${report.browser.playwright}, expected 1.62.1`);
-          if (!report.browser.chromium) failures.push("Chromium revision is missing");
+          if (report.pass !== true) {
+            failures.push("report.pass is not true");
+          }
+
+          if (report.checks.realPdfPageCount !== 6) {
+            failures.push(
+              `PDF pages=${report.checks.realPdfPageCount}, expected 6`
+            );
+          }
+
+          if (report.checks.logicalSectionCount !== 6) {
+            failures.push(
+              `logical sections=${report.checks.logicalSectionCount}, expected 6`
+            );
+          }
+
+          if (report.checks.unresolvedPlaceholderCount !== 0) {
+            failures.push(
+              `unresolved placeholders=${report.checks.unresolvedPlaceholderCount}`
+            );
+          }
+
+          if (report.checks.horizontalOverflowPx > 1) {
+            failures.push(
+              `horizontal overflow=${report.checks.horizontalOverflowPx}px`
+            );
+          }
+
+          if (report.checks.blankPages.length !== 0) {
+            failures.push(
+              `blank pages=${JSON.stringify(report.checks.blankPages)}`
+            );
+          }
+
+          if (report.checks.paginationWarnings.length !== 0) {
+            failures.push(
+              `pagination warnings=${JSON.stringify(
+                report.checks.paginationWarnings
+              )}`
+            );
+          }
+
+          if (!/^[a-f0-9]{64}$/.test(report.pdf.sha256 ?? "")) {
+            failures.push("PDF SHA-256 is missing or invalid");
+          }
+
+          if (report.evidence.screenshots.length !== 6) {
+            failures.push(
+              `screenshots=${report.evidence.screenshots.length}, expected 6`
+            );
+          }
+
+          if (report.browser.playwright !== "1.62.1") {
+            failures.push(
+              `Playwright revision=${report.browser.playwright}, expected 1.62.1`
+            );
+          }
+
+          if (!report.browser.chromium) {
+            failures.push("Chromium revision is missing");
+          }
 
           for (const relative of [
             `${root}/rendered-sample.html`,
@@ -108,21 +160,34 @@ jobs:
             `${root}/browser-evidence/full.png`,
             ...report.evidence.screenshots,
           ]) {
-            if (!existsSync(relative)) failures.push(`missing artifact: ${relative}`);
+            if (!existsSync(relative)) {
+              failures.push(`missing artifact: ${relative}`);
+            }
           }
 
           if (failures.length) {
-            console.error("❌ Canonical browser evidence gate failed:\n- " + failures.join("\n- "));
+            console.error(
+              "❌ Canonical browser evidence gate failed:\n- " +
+                failures.join("\n- ")
+            );
             process.exit(1);
           }
-          console.log(JSON.stringify({
-            pass: true,
-            pdfSha256: report.pdf.sha256,
-            realPdfPageCount: report.checks.realPdfPageCount,
-            unresolvedPlaceholderCount: report.checks.unresolvedPlaceholderCount,
-            paginationWarnings: report.checks.paginationWarnings,
-            browser: report.browser,
-          }, null, 2));
+
+          console.log(
+            JSON.stringify(
+              {
+                pass: true,
+                pdfSha256: report.pdf.sha256,
+                realPdfPageCount: report.checks.realPdfPageCount,
+                unresolvedPlaceholderCount:
+                  report.checks.unresolvedPlaceholderCount,
+                paginationWarnings: report.checks.paginationWarnings,
+                browser: report.browser,
+              },
+              null,
+              2
+            )
+          );
           NODE
 
       - name: Upload PDF, screenshots, and report
