@@ -1,10 +1,27 @@
 name: Staging Browser Evidence — Trainee Registration
 
-# Browser-only, STAGING-scoped evidence gate for the canonical trainee template.
-# It never connects to a database, Drive, Cloud Run /run, or a production service.
-# The job uses the exact Playwright container revision pinned by worker/Dockerfile.
+# Browser-only evidence gate for the canonical trainee-registration HTML template.
+#
+# Current PR #84 behavior:
+# - Automatically runs on push to arena/01a02c86-seasonal-worker.
+#
+# Future behavior after this workflow reaches main:
+# - Can be started manually with workflow_dispatch.
+#
+# SAFETY:
+# - No database access.
+# - No Google Drive access.
+# - No Cloud Run /run access.
+# - No production service access.
+# - No Production secrets.
+# - No template publish/activation.
+# - Browser evidence only.
 
 on:
+  push:
+    branches:
+      - arena/01a02c86-seasonal-worker
+
   workflow_dispatch:
     inputs:
       expected_pages:
@@ -26,8 +43,10 @@ jobs:
   browser-evidence:
     name: Render canonical six-page PDF evidence
     runs-on: ubuntu-latest
-    # This environment is intentionally staging-only. Environment protection,
-    # if configured, requires a staging approver before the browser can run.
+
+    # Staging-only protection boundary.
+    # If the staging environment requires approval, GitHub will pause here
+    # until an authorized reviewer approves the job.
     environment: staging
 
     container:
@@ -36,6 +55,10 @@ jobs:
     env:
       PLAYWRIGHT_BROWSERS_PATH: /ms-playwright
       EVIDENCE_ROOT: artifacts/document-merge/trainee-registration
+
+      # workflow_dispatch supplies expected_pages.
+      # push events have no workflow_dispatch inputs, therefore default to 6.
+      EXPECTED_PAGES: ${{ github.event.inputs.expected_pages || '6' }}
 
     steps:
       - name: Checkout selected branch
@@ -47,20 +70,40 @@ jobs:
           node-version: 20
           cache: npm
 
-      - name: Verify no production inputs exist
+      - name: Verify staging browser isolation
         shell: bash
         run: |
           set -euo pipefail
-          test "${{ github.event.inputs.expected_pages }}" = "6"
+
+          echo "event=${{ github.event_name }}"
+          echo "branch=${{ github.ref_name }}"
+          echo "expected_pages=${EXPECTED_PAGES}"
+
+          test "${EXPECTED_PAGES}" = "6"
+
           test -f templates/document-merge/trainee-registration/test.html
           test -f worker/Dockerfile
-          grep -Fq 'mcr.microsoft.com/playwright:v1.62.1-noble' worker/Dockerfile
-          echo "✅ Browser evidence is isolated: no database, Drive, Cloud Run, or production inputs."
+
+          grep -Fq \
+            'mcr.microsoft.com/playwright:v1.62.1-noble' \
+            worker/Dockerfile
+
+          if [ "${{ github.event_name }}" = "push" ]; then
+            test "${{ github.ref_name }}" = "arena/01a02c86-seasonal-worker"
+          fi
+
+          echo "✅ Browser evidence isolation verified."
+          echo "✅ No database input."
+          echo "✅ No Google Drive input."
+          echo "✅ No Cloud Run input."
+          echo "✅ No Production input."
+          echo "✅ Expected pages=${EXPECTED_PAGES}."
 
       - name: Install application and worker dependencies
         shell: bash
         run: |
           set -euo pipefail
+
           npm ci --no-audit --no-fund
           npm --prefix worker ci --no-audit --no-fund
 
@@ -68,64 +111,119 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          node --import tsx worker/scripts/generate-template-sample.mjs
+
+          node --import tsx \
+            worker/scripts/generate-template-sample.mjs
+
+          test -f "${EVIDENCE_ROOT}/rendered-sample.html"
+
+          echo "✅ Canonical rendered HTML generated."
 
       - name: Render PDF and capture browser evidence
         shell: bash
         run: |
           set -euo pipefail
+
           npm --prefix worker run verify:visual -- \
             --html "${EVIDENCE_ROOT}/rendered-sample.html" \
-            --expected-pages "${{ github.event.inputs.expected_pages }}" \
+            --expected-pages "${EXPECTED_PAGES}" \
             --out "${EVIDENCE_ROOT}/browser-evidence"
 
-      - name: Enforce canonical evidence gate
+      - name: Enforce canonical browser evidence gate
         shell: bash
         run: |
           set -euo pipefail
+
           node --input-type=module <<'NODE'
-          import { existsSync, readFileSync } from "node:fs";
+          import {
+            existsSync,
+            readFileSync,
+          } from "node:fs";
 
           const root = process.env.EVIDENCE_ROOT;
-          const reportPath = `${root}/browser-evidence/report.json`;
-          const report = JSON.parse(readFileSync(reportPath, "utf8"));
+          const expectedPages = Number(process.env.EXPECTED_PAGES || "6");
+
+          const reportPath =
+            `${root}/browser-evidence/report.json`;
+
+          if (!existsSync(reportPath)) {
+            console.error(
+              `❌ Missing browser evidence report: ${reportPath}`
+            );
+            process.exit(1);
+          }
+
+          const report = JSON.parse(
+            readFileSync(reportPath, "utf8")
+          );
+
           const failures = [];
 
           if (report.pass !== true) {
-            failures.push("report.pass is not true");
-          }
-
-          if (report.checks.realPdfPageCount !== 6) {
             failures.push(
-              `PDF pages=${report.checks.realPdfPageCount}, expected 6`
+              "report.pass is not true"
             );
           }
 
-          if (report.checks.logicalSectionCount !== 6) {
+          if (
+            report.checks.realPdfPageCount !== expectedPages
+          ) {
             failures.push(
-              `logical sections=${report.checks.logicalSectionCount}, expected 6`
+              `PDF pages=${report.checks.realPdfPageCount}, expected ${expectedPages}`
             );
           }
 
-          if (report.checks.unresolvedPlaceholderCount !== 0) {
+          if (
+            report.checks.logicalSectionCount !== expectedPages
+          ) {
+            failures.push(
+              `logical sections=${report.checks.logicalSectionCount}, expected ${expectedPages}`
+            );
+          }
+
+          if (
+            report.checks.unresolvedPlaceholderCount !== 0
+          ) {
             failures.push(
               `unresolved placeholders=${report.checks.unresolvedPlaceholderCount}`
             );
           }
 
-          if (report.checks.horizontalOverflowPx > 1) {
+          if (
+            report.checks.horizontalOverflowPx > 1
+          ) {
             failures.push(
               `horizontal overflow=${report.checks.horizontalOverflowPx}px`
             );
           }
 
-          if (report.checks.blankPages.length !== 0) {
+          if (
+            !Array.isArray(report.checks.blankPages)
+          ) {
             failures.push(
-              `blank pages=${JSON.stringify(report.checks.blankPages)}`
+              "blankPages is missing or invalid"
+            );
+          } else if (
+            report.checks.blankPages.length !== 0
+          ) {
+            failures.push(
+              `blank pages=${JSON.stringify(
+                report.checks.blankPages
+              )}`
             );
           }
 
-          if (report.checks.paginationWarnings.length !== 0) {
+          if (
+            !Array.isArray(
+              report.checks.paginationWarnings
+            )
+          ) {
+            failures.push(
+              "paginationWarnings is missing or invalid"
+            );
+          } else if (
+            report.checks.paginationWarnings.length !== 0
+          ) {
             failures.push(
               `pagination warnings=${JSON.stringify(
                 report.checks.paginationWarnings
@@ -133,56 +231,113 @@ jobs:
             );
           }
 
-          if (!/^[a-f0-9]{64}$/.test(report.pdf.sha256 ?? "")) {
-            failures.push("PDF SHA-256 is missing or invalid");
-          }
-
-          if (report.evidence.screenshots.length !== 6) {
+          if (
+            !/^[a-f0-9]{64}$/.test(
+              report.pdf?.sha256 ?? ""
+            )
+          ) {
             failures.push(
-              `screenshots=${report.evidence.screenshots.length}, expected 6`
+              "PDF SHA-256 is missing or invalid"
             );
           }
 
-          if (report.browser.playwright !== "1.62.1") {
+          if (
+            !Array.isArray(
+              report.evidence?.screenshots
+            )
+          ) {
             failures.push(
-              `Playwright revision=${report.browser.playwright}, expected 1.62.1`
+              "screenshots list is missing or invalid"
+            );
+          } else if (
+            report.evidence.screenshots.length !==
+            expectedPages
+          ) {
+            failures.push(
+              `screenshots=${report.evidence.screenshots.length}, expected ${expectedPages}`
             );
           }
 
-          if (!report.browser.chromium) {
-            failures.push("Chromium revision is missing");
+          if (
+            report.browser?.playwright !== "1.62.1"
+          ) {
+            failures.push(
+              `Playwright revision=${report.browser?.playwright}, expected 1.62.1`
+            );
           }
 
-          for (const relative of [
+          if (!report.browser?.chromium) {
+            failures.push(
+              "Chromium revision is missing"
+            );
+          }
+
+          const mandatoryArtifacts = [
             `${root}/rendered-sample.html`,
             `${root}/browser-evidence/rendered.pdf`,
             `${root}/browser-evidence/report.json`,
             `${root}/browser-evidence/full.png`,
-            ...report.evidence.screenshots,
-          ]) {
+          ];
+
+          if (
+            Array.isArray(
+              report.evidence?.screenshots
+            )
+          ) {
+            mandatoryArtifacts.push(
+              ...report.evidence.screenshots
+            );
+          }
+
+          for (
+            const relative of mandatoryArtifacts
+          ) {
             if (!existsSync(relative)) {
-              failures.push(`missing artifact: ${relative}`);
+              failures.push(
+                `missing artifact: ${relative}`
+              );
             }
           }
 
-          if (failures.length) {
+          if (failures.length > 0) {
             console.error(
               "❌ Canonical browser evidence gate failed:\n- " +
                 failures.join("\n- ")
             );
+
             process.exit(1);
           }
+
+          console.log(
+            "✅ Canonical browser evidence gate PASS."
+          );
 
           console.log(
             JSON.stringify(
               {
                 pass: true,
-                pdfSha256: report.pdf.sha256,
-                realPdfPageCount: report.checks.realPdfPageCount,
+                expectedPages,
+                pdfSha256:
+                  report.pdf.sha256,
+                realPdfPageCount:
+                  report.checks.realPdfPageCount,
+                logicalSectionCount:
+                  report.checks.logicalSectionCount,
                 unresolvedPlaceholderCount:
-                  report.checks.unresolvedPlaceholderCount,
-                paginationWarnings: report.checks.paginationWarnings,
-                browser: report.browser,
+                  report.checks
+                    .unresolvedPlaceholderCount,
+                horizontalOverflowPx:
+                  report.checks
+                    .horizontalOverflowPx,
+                blankPages:
+                  report.checks.blankPages,
+                paginationWarnings:
+                  report.checks
+                    .paginationWarnings,
+                screenshots:
+                  report.evidence.screenshots,
+                browser:
+                  report.browser,
               },
               null,
               2
@@ -190,7 +345,7 @@ jobs:
           );
           NODE
 
-      - name: Upload PDF, screenshots, and report
+      - name: Upload PDF screenshots and browser report
         if: always()
         uses: actions/upload-artifact@v4
         with:
