@@ -3,28 +3,18 @@
  * VISUAL VERIFICATION HARNESS — Document Merge HTML/PDF engine (Phase 5).
  *
  * Render template HTML → PDF (Playwright/Chromium) + chạy các kiểm tra cấu trúc:
- *   - số trang A4 (theo .page trong HTML)
- *   - không còn placeholder <<...>> chưa fill
- *   - không overflow ngang (scrollWidth <= viewport)
- *   - không blank page bất ngờ (nội dung mỗi .page > 0)
- *   - font chờ sẵn sàng (fonts.ready)
- *   - số checkbox ☐ render được
+ *   - số trang A4 thật trong PDF
+ *   - đúng số logical `.page`
+ *   - không còn placeholder <<...>> / {{...}} chưa fill
+ *   - không overflow ngang
+ *   - không overflow dọc trong từng logical A4 page
+ *   - không blank page bất ngờ
+ *   - font chờ sẵn sàng
+ *   - screenshot từng logical page theo đúng print media
  *
  * Chạy ở nơi có Chromium (CI / máy dev / Cloud Run image):
  *   cd worker && npm run generate:sample
  *   npm run verify:visual -- --html ../artifacts/document-merge/trainee-registration/rendered-sample.html --expected-pages 6 --out ../artifacts/document-merge/trainee-registration/browser-evidence
- *
- * Use --expected-pages for an approved canonical visual template. The command
- * fails on an extra/partial PDF page rather than accepting it silently.
- *
- * Output:
- *   <out>/report.json          — page count, SHA-256, browser revision, warnings
- *   <out>/rendered.pdf         — final Playwright PDF
- *   <out>/page-01.png ...      — screenshot of every logical page
- *   <out>/full.png             — full-document screenshot (reference)
- *
- * KHÔNG fake: đây là render THẬT qua engine production (page.pdf A4 + @page CSS).
- * Nếu chưa có Chromium: chạy `npx playwright install chromium` trước.
  */
 
 import { createHash } from "node:crypto";
@@ -70,22 +60,44 @@ try {
     await document.fonts.ready;
   });
 
-  // --- Kiểm tra trong browser -------------------------------------------
+  // IMPORTANT: all geometry checks and screenshots must use the same print CSS
+  // that page.pdf() uses. Previously these checks ran in screen media, so the
+  // harness could miss print-only pagination defects.
+  await page.emulateMedia({ media: "print" });
+
   const checks = await page.evaluate(() => {
     const pageDivs = Array.from(document.querySelectorAll(".page"));
     const pageCount = pageDivs.length;
     const blankPages = pageDivs
       .map((div, i) => ({ i: i + 1, textLen: (div.textContent || "").trim().length }))
       .filter((p) => p.textLen < 10);
-    const overflow = document.documentElement.scrollWidth - document.documentElement.clientWidth;
+
+    const pageGeometry = pageDivs.map((div, i) => {
+      const rect = div.getBoundingClientRect();
+      const verticalOverflowPx = Math.max(0, div.scrollHeight - div.clientHeight);
+      return {
+        page: i + 1,
+        widthPx: Number(rect.width.toFixed(2)),
+        heightPx: Number(rect.height.toFixed(2)),
+        clientHeightPx: div.clientHeight,
+        scrollHeightPx: div.scrollHeight,
+        verticalOverflowPx,
+      };
+    });
+
+    const verticalOverflows = pageGeometry.filter((p) => p.verticalOverflowPx > 1);
+    const horizontalOverflow = Math.max(0, document.documentElement.scrollWidth - document.documentElement.clientWidth);
     const checkboxes = document.querySelectorAll(".chk").length;
     const unreplaced = Array.from(document.querySelectorAll("body *"))
       .flatMap((el) => (el.childNodes.length === 1 && el.textContent ? [el.textContent] : []))
       .filter((t) => /(?:<<\s*[^>]+?\s*>>|\{\{\s*[^{}]+?\s*\}\})/.test(t));
+
     return {
       pageCount,
       blankPages,
-      overflow,
+      pageGeometry,
+      verticalOverflows,
+      horizontalOverflow,
       checkboxes,
       unreplaced,
     };
@@ -96,11 +108,9 @@ try {
   writeFileSync(pdfPath, pdfBytes);
   const pdfSha256 = createHash("sha256").update(pdfBytes).digest("hex");
 
-  // Đếm trang PDF THẬT (không dựa vào .page div) qua pdf-lib.
   const pdfDoc = await PDFDocument.load(pdfBytes);
   const realPageCount = pdfDoc.getPageCount();
 
-  // Xác nhận font render được tiếng Việt (DejaVu Sans có sẵn trong sandbox/Cloud Run image).
   const fontChecks = await page.evaluate(() => {
     const probe = "Nguyễn Văn An — Đà Lạt, ngày 17 tháng 08 năm 2026";
     return {
@@ -109,32 +119,21 @@ try {
     };
   });
 
-  // Screenshot every logical page so a reviewer can compare visual layout
-  // without extracting images from the PDF. These are document-coordinate clips
-  // and work even when a page is below the visible viewport.
-  const pageBoxes = await page.evaluate(() =>
-    Array.from(document.querySelectorAll(".page")).map((div) => {
-      const r = div.getBoundingClientRect();
-      return { left: r.left + window.scrollX, top: r.top + window.scrollY, width: r.width, height: r.height };
-    }),
-  );
+  // Screenshot every logical A4 page in print media. locator.screenshot()
+  // handles scrolling and avoids fragile document-coordinate clipping.
+  const pageLocators = page.locator(".page");
+  const logicalPageCount = await pageLocators.count();
   const screenshotPaths = [];
-  for (const [index, box] of pageBoxes.entries()) {
+
+  for (let index = 0; index < logicalPageCount; index += 1) {
     const filename = `page-${String(index + 1).padStart(2, "0")}.png`;
     const screenshotPath = join(outDir, filename);
-    await page.screenshot({
-      path: screenshotPath,
-      clip: {
-        x: Math.max(0, box.left),
-        y: Math.max(0, box.top),
-        width: Math.max(1, box.width),
-        height: Math.max(1, box.height),
-      },
-    });
+    const pageLocator = pageLocators.nth(index);
+    await pageLocator.scrollIntoViewIfNeeded();
+    await pageLocator.screenshot({ path: screenshotPath, animations: "disabled" });
     screenshotPaths.push(screenshotPath);
   }
 
-  // full-page screenshot
   const fullScreenshotPath = join(outDir, "full.png");
   await page.screenshot({ path: fullScreenshotPath, fullPage: true });
 
@@ -142,9 +141,16 @@ try {
     ...(expectedPages !== null && realPageCount !== expectedPages
       ? [`PDF page count ${realPageCount} differs from expected ${expectedPages}`]
       : []),
+    ...(expectedPages !== null && checks.pageCount !== expectedPages
+      ? [`logical page count ${checks.pageCount} differs from expected ${expectedPages}`]
+      : []),
     ...checks.blankPages.map((blank) => `logical page ${blank.i} appears blank (${blank.textLen} characters)`),
-    ...(checks.overflow > 1 ? [`horizontal overflow ${checks.overflow}px`] : []),
+    ...checks.verticalOverflows.map(
+      (item) => `logical page ${item.page} vertical overflow ${item.verticalOverflowPx}px (scrollHeight=${item.scrollHeightPx}, clientHeight=${item.clientHeightPx})`,
+    ),
+    ...(checks.horizontalOverflow > 1 ? [`horizontal overflow ${checks.horizontalOverflow}px`] : []),
   ];
+
   const report = {
     generatedAt: new Date().toISOString(),
     htmlSource: htmlPath,
@@ -171,7 +177,9 @@ try {
       expectedPageCount: expectedPages,
       logicalSectionCount: checks.pageCount,
       blankPages: checks.blankPages,
-      horizontalOverflowPx: checks.overflow,
+      pageGeometry: checks.pageGeometry,
+      verticalOverflows: checks.verticalOverflows,
+      horizontalOverflowPx: checks.horizontalOverflow,
       checkboxCount: checks.checkboxes,
       unresolvedPlaceholderCount: checks.unreplaced.length,
       unreplacedPlaceholders: checks.unreplaced,
@@ -181,8 +189,10 @@ try {
     },
     pass:
       (expectedPages === null || realPageCount === expectedPages) &&
+      (expectedPages === null || checks.pageCount === expectedPages) &&
       checks.blankPages.length === 0 &&
-      checks.overflow <= 1 &&
+      checks.verticalOverflows.length === 0 &&
+      checks.horizontalOverflow <= 1 &&
       checks.unreplaced.length === 0,
   };
 
