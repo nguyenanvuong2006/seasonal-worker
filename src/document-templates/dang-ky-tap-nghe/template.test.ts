@@ -1,12 +1,20 @@
 /**
- * Canonical HTML must match the 49 active Production mappings
- * and retain the verbatim 5-part golden source from Google Doc
- * 10D0tG71CbllIZe7DaosYNW3vK7QnP76Yq4UC9FMEiUE.
+ * Canonical HTML must match the 49 active mappings and retain the six-page
+ * layout from templates/document-merge/trainee-registration/test.html.
  */
 import test from "node:test";
 import assert from "node:assert/strict";
+import { createHash } from "node:crypto";
+import { readFileSync } from "node:fs";
+import { join } from "node:path";
 import { extractUniquePlaceholders } from "../../lib/document-merge/placeholder-extractor.ts";
+import { stripPreviewOnlyMarkup } from "../../lib/document-merge/html-renderer.ts";
 import { dangKyTapNgheTemplate } from "./template.ts";
+import {
+  CANONICAL_TRAINEE_REGISTRATION_LOGICAL_PAGE_COUNT,
+  CANONICAL_TRAINEE_REGISTRATION_SOURCE_PATH,
+  CANONICAL_TRAINEE_REGISTRATION_SOURCE_SHA256,
+} from "./canonical-template.generated.ts";
 import {
   CHECKBOX_PLACEHOLDERS,
   CONTRACT_PLACEHOLDERS,
@@ -19,6 +27,11 @@ import {
 import { validateTemplateContract } from "../../lib/document-merge/template-contract.ts";
 
 const html = dangKyTapNgheTemplate.html;
+const canonicalSource = readFileSync(join(process.cwd(), CANONICAL_TRAINEE_REGISTRATION_SOURCE_PATH), "utf8");
+const canonicalDraftMigration = readFileSync(
+  join(process.cwd(), "migrations", "2026-08-23-trainee-registration-canonical-html-draft.sql"),
+  "utf8",
+);
 
 function sectionAfter(title: string): string {
   const start = html.indexOf(title);
@@ -31,6 +44,40 @@ function sectionAfter(title: string): string {
   }
   return html.slice(start, end);
 }
+
+test("generated production template is synchronized with the checked-in canonical test.html", () => {
+  const hash = createHash("sha256").update(canonicalSource).digest("hex");
+  assert.equal(CANONICAL_TRAINEE_REGISTRATION_SOURCE_PATH, "templates/document-merge/trainee-registration/test.html");
+  assert.equal(hash, CANONICAL_TRAINEE_REGISTRATION_SOURCE_SHA256, "run npm run sync:trainee-template after editing the canonical source");
+  assert.equal(CANONICAL_TRAINEE_REGISTRATION_LOGICAL_PAGE_COUNT, 6);
+  assert.equal((canonicalSource.match(/<div\b[^>]*\bclass="[^"]*\bpage\b[^"]*"[^>]*>/g) ?? []).length, 6);
+  assert.equal((html.match(/<div\b[^>]*\bclass="[^"]*\bpage\b[^"]*"[^>]*>/g) ?? []).length, 6);
+});
+
+test("production canonical body removes preview/editor controls and placeholder highlighting", () => {
+  assert.match(canonicalSource, /class="toolbar"/);
+  assert.match(canonicalSource, /class="code-panel"/);
+  assert.match(canonicalSource, /class="nav-tabs"/);
+  assert.match(canonicalSource, /<script>/);
+  const bodyStart = canonicalSource.indexOf("<body>") + "<body>".length;
+  const bodyEnd = canonicalSource.lastIndexOf("</body>");
+  const rawBodyAfterPreviewStrip = stripPreviewOnlyMarkup(canonicalSource.slice(bodyStart, bodyEnd));
+  assert.doesNotMatch(rawBodyAfterPreviewStrip, /toolbar|code-panel|nav-tabs|page-label|<script\b|<button\b|onclick=/);
+  assert.deepEqual(extractUniquePlaceholders(rawBodyAfterPreviewStrip), [...PLACEHOLDERS].sort());
+  assert.doesNotMatch(html, /class="(?:toolbar|code-panel|nav-tabs|page-label)"/);
+  assert.doesNotMatch(html, /<script\b|<button\b|onclick=/);
+  assert.doesNotMatch(html, /class="f"/);
+  assert.match(dangKyTapNgheTemplate.css, /\.merge-value/);
+  assert.match(dangKyTapNgheTemplate.css, /height: auto/);
+});
+
+test("canonical database version migration is DRAFT-only and never activates HTML/PDF", () => {
+  assert.match(canonicalDraftMigration, /'DRAFT'/);
+  assert.match(canonicalDraftMigration, /trainee-registration\/test\.html/);
+  assert.doesNotMatch(canonicalDraftMigration, /current_published_version\s*=/i);
+  assert.doesNotMatch(canonicalDraftMigration, /html_enabled\s*=/i);
+  assert.doesNotMatch(canonicalDraftMigration, /'PUBLISHED'\s*,\s*\$canonical_html\$/i);
+});
 
 test("canonical dang-ky-tap-nghe HTML has exactly 49 unique active placeholders", () => {
   const found = extractUniquePlaceholders(html);
@@ -76,8 +123,8 @@ test("canonical HTML excludes operator-accepted orphan tax-contract placeholders
   ]);
 });
 
-test("all 5 main golden-source sections exist in order", () => {
-  assert.equal(SECTIONS.length, 5);
+test("all six canonical logical-page sections exist in order", () => {
+  assert.equal(SECTIONS.length, 6);
   let cursor = 0;
   for (const section of SECTIONS) {
     const idx = html.indexOf(section.title, cursor);
@@ -86,8 +133,15 @@ test("all 5 main golden-source sections exist in order", () => {
   }
 });
 
+function quyDinhPages(): string {
+  const start = html.indexOf("QUY ĐỊNH VỀ TẬP NGHỀ");
+  const end = html.indexOf("BẢN CAM KẾT", start);
+  assert.ok(start >= 0 && end > start, "missing two-page QUY ĐỊNH section");
+  return html.slice(start, end);
+}
+
 test("QUY ĐỊNH VỀ TẬP NGHỀ contains all 10 numbered sections", () => {
-  const quyDinh = sectionAfter("QUY ĐỊNH VỀ TẬP NGHỀ");
+  const quyDinh = quyDinhPages();
   const numbered = [
     "1. GIẢI THÍCH TỪ NGỮ",
     "2. CÔNG VIỆC ĐƯỢC HƯỚNG DẪN TẬP LÀM VÀ THỰC HÀNH",
@@ -109,7 +163,7 @@ test("QUY ĐỊNH VỀ TẬP NGHỀ contains all 10 numbered sections", () => {
 });
 
 test("nội quy a–n is retained in QUY ĐỊNH VỀ TẬP NGHỀ", () => {
-  const quyDinh = sectionAfter("QUY ĐỊNH VỀ TẬP NGHỀ");
+  const quyDinh = quyDinhPages();
   const letters = ["a", "b", "c", "d", "e", "f", "g", "h", "i", "j", "k", "l", "m", "n"];
   let cursor = 0;
   for (const letter of letters) {
@@ -150,7 +204,7 @@ test("GIẤY ỦY QUYỀN contains Điều 1–4", () => {
 
 test("TỜ KHAI contains Mẫu 05-ĐKT and MST 5800000167", () => {
   const toKhai = sectionAfter("TỜ KHAI ĐĂNG KÝ THUẾ");
-  assert.match(html, /Mẫu số:05-ĐKT/);
+  assert.match(html, /Mẫu số:\s*<span class="b">05-ĐKT/);
   assert.match(toKhai, /5800000167/);
   assert.match(html, /Mã số thuế: 5800000167/);
 });
@@ -178,9 +232,14 @@ test("tax service contract line exists as static text without orphan tokens", ()
   assert.doesNotMatch(html, /(?:<<|\{\{)Ngay_hop_dong_dich_vu_thue/);
 });
 
-test("checkbox placeholders stay wrapped for semantic checkbox rendering", () => {
-  assert.match(html, /<span class="chk">\{\{Tien_an_tien_su_Khong\}\}<\/span>/);
-  assert.match(html, /<span class="chk">\{\{Tien_an_tien_su_Co\}\}<\/span>/);
-  assert.match(html, /<span class="chk">\{\{Tap_nghe_Trong_cham_soc_thu_hoach\}\}<\/span>/);
-  assert.match(html, /<span class="chk">\{\{Khu_vuc_Da_Lat\}\}<\/span>/);
+test("all checkbox placeholders are semantic checkbox spans and all other values are safe text spans", () => {
+  const checkboxKeys = new Set(CHECKBOX_PLACEHOLDERS);
+  for (const key of CHECKBOX_PLACEHOLDERS) {
+    assert.match(html, new RegExp(`<span class="chk">\\{\\{${key}\\}\\}<\\/span>`), key);
+  }
+  for (const key of PLACEHOLDERS) {
+    if (!checkboxKeys.has(key)) {
+      assert.match(html, new RegExp(`<span class="merge-value">\\{\\{${key}\\}\\}<\\/span>`), key);
+    }
+  }
 });

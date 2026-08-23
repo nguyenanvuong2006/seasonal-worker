@@ -61,11 +61,18 @@ describe("HTML renderer", () => {
   });
 
   it("strips preview/navigation/code UI and retains only print document content", () => {
-    const source = "<nav>Tabs</nav><button>Print</button><aside class=\"template-code\">code</aside><p data-preview-only>highlight</p><p>Giấy tờ</p>";
+    const source = [
+      "<div class=\"toolbar\"><button onclick=\"window.print()\">Print</button></div>",
+      "<div class=\"code-panel\"><pre>{{debug_only}}</pre></div>",
+      "<div class=\"nav-tabs\"><button>Tabs</button></div>",
+      "<div class=\"page-label\">Trang 1</div>",
+      "<nav>Navigation</nav><aside class=\"template-code\">code</aside>",
+      "<p data-preview-only>highlight</p><p onclick=\"alert(1)\">Giấy tờ</p><script>evil()</script>",
+    ].join("");
     assert.equal(stripPreviewOnlyMarkup(source), "<p>Giấy tờ</p>");
     const rendered = renderApplicantHtmlFromParts(source, "", {});
     assert.match(rendered.html, /Giấy tờ/);
-    assert.doesNotMatch(rendered.html, /<nav\b|<button\b|Tabs<\/|Print<\/|highlight<\//);
+    assert.doesNotMatch(rendered.html, /toolbar|code-panel|nav-tabs|page-label|<nav\b|<button\b|debug_only|onclick=|<script\b/);
   });
 
   it("A4 print CSS uses logical section breaks and safe wrapping for long Vietnamese text", () => {

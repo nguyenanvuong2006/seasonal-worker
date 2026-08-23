@@ -26,13 +26,32 @@ export function escapeHtml(value: string): string {
  * and embedded browsing contexts are removed as defence in depth; Chromium's
  * worker additionally blocks all network requests.
  */
+function stripInlineEventHandlers(html: string): string {
+  // Match only inside a literal start tag. Applying a bare `on...=` regex to
+  // arbitrary text would corrupt an escaped candidate value such as
+  // `&lt;img onerror=...&gt;` after merge replacement.
+  const eventAttributeInTag = /(<[a-z][\w:-]*\b[^>]*?)\son[a-z]+\s*=\s*(?:"[^"]*"|'[^']*'|[^\s>]+)/gi;
+  let current = html;
+  let next = current.replace(eventAttributeInTag, "$1");
+  while (next !== current) {
+    current = next;
+    next = current.replace(eventAttributeInTag, "$1");
+  }
+  return current;
+}
+
 export function stripPreviewOnlyMarkup(html: string): string {
-  return html
+  // The named class list includes the canonical trainee-registration source's
+  // visual authoring shell. The legal document itself uses neither of these
+  // classes, so removing the complete containers cannot remove form content.
+  const previewClasses = "preview-only|template-code|placeholder-highlight|toolbar|nav-tabs|code-panel|page-label|debug-panel|editor-controls|template-panel";
+  const withoutPreviewMarkup = html
     .replace(/<script\b[^>]*>[\s\S]*?<\/script\s*>/gi, "")
     .replace(/<(?:iframe|object|embed)\b[^>]*>[\s\S]*?<\/(?:iframe|object|embed)\s*>/gi, "")
     .replace(/<(?:nav|button)\b[^>]*>[\s\S]*?<\/(?:nav|button)\s*>/gi, "")
     .replace(/<([a-z][\w:-]*)\b[^>]*\b(?:data-preview-only|data-template-code)\b[^>]*>[\s\S]*?<\/\1\s*>/gi, "")
-    .replace(/<([a-z][\w:-]*)\b[^>]*\bclass=(?:"[^"]*\b(?:preview-only|template-code|placeholder-highlight)\b[^"]*"|'[^']*\b(?:preview-only|template-code|placeholder-highlight)\b[^']*')[^>]*>[\s\S]*?<\/\1\s*>/gi, "");
+    .replace(new RegExp(`<([a-z][\\w:-]*)\\b[^>]*\\bclass=(?:"[^"]*\\b(?:${previewClasses})\\b[^"]*"|'[^']*\\b(?:${previewClasses})\\b[^']*')[^>]*>[\\s\\S]*?<\\/\\1\\s*>`, "gi"), "");
+  return stripInlineEventHandlers(withoutPreviewMarkup);
 }
 
 export interface HtmlTemplate {

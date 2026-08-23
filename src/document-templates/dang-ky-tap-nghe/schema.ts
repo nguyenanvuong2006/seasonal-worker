@@ -1,8 +1,8 @@
 /**
  * Dang_ky_Tap_nghe_Template — schema tài liệu (tài liệu tham khảo).
  *
- * ⚠️ Đây CHỈ là tài liệu mô tả cấu trúc 5 phần + danh sách 49 canonical placeholder
- * active của template gốc. Source of truth cho MAPPING (placeholder → data)
+ * ⚠️ Đây CHỈ là tài liệu mô tả cấu trúc 6 trang logic + danh sách 49 canonical
+ * placeholder active của template gốc. Source of truth cho MAPPING (placeholder → data)
  * nằm trong bảng merge_template_fields (Mapping Inspector), KHÔNG hardcode ở đây.
  *
  * Template HTML dùng các token semantic `{{...}}`; renderer vẫn hiểu `<<...>>`
@@ -13,13 +13,14 @@ import type { TemplateContract } from "../../lib/document-merge/template-contrac
 
 export const GOOGLE_DOC_ID = "10D0tG71CbllIZe7DaosYNW3vK7QnP76Yq4UC9FMEiUE";
 
-/** 5 phần của bộ hồ sơ — tiêu đề khớp Google Doc golden source. */
+/** Sáu trang logic của nguồn HTML canonical — tiêu đề/cấu trúc giữ nguyên nguồn. */
 export const SECTIONS = [
   { key: "dang_ky", title: "GIẤY ĐĂNG KÝ TẬP NGHỀ", page: 1 },
-  { key: "quy_dinh", title: "QUY ĐỊNH VỀ TẬP NGHỀ", page: 2 },
-  { key: "cam_ket_thue", title: "BẢN CAM KẾT", page: 3 },
-  { key: "uy_quyen", title: "GIẤY ỦY QUYỀN", page: 4 },
-  { key: "to_khai_thue", title: "TỜ KHAI ĐĂNG KÝ THUẾ", page: 5 },
+  { key: "ghi_nhan_quy_dinh_1", title: "GHI NHẬN CỦA PHÒNG NHÂN SỰ", page: 2 },
+  { key: "quy_dinh_2", title: "7. QUY ĐỊNH KHI TẬP NGHỀ TẠI CÔNG TY", page: 3 },
+  { key: "cam_ket_thue", title: "BẢN CAM KẾT", page: 4 },
+  { key: "uy_quyen", title: "GIẤY ỦY QUYỀN", page: 5 },
+  { key: "to_khai_thue", title: "TỜ KHAI ĐĂNG KÝ THUẾ", page: 6 },
 ] as const;
 
 /**
@@ -77,7 +78,7 @@ const checkboxField = (key: string, label: string, sourcePath: string, optionVal
 export const DANG_KY_TAP_NGHE_FIELD_CONTRACT: TemplateContract = {
   key: "dang-ky-tap-nghe",
   name: "Giấy đăng ký tập nghề + Quy định + Hồ sơ thuế",
-  logicalPageCount: 5,
+  logicalPageCount: 6,
   fields: [
     { key: "Ho_ten", label: "Họ và tên", valueKind: "text", required: true, sourcePath: "fullName" },
     { key: "Ngay_sinh", label: "Ngày sinh", valueKind: "date", required: true, sourcePath: "dob" },

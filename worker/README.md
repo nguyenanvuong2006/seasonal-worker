@@ -8,7 +8,7 @@ queue trên Neon. Không phụ thuộc Google Docs API quota cho batch PDF.
 ```
 worker/
   src/index.ts      # HTTP service + render loop + Chromium pool
-  Dockerfile        # base mcr.microsoft.com/playwright:v1.49.0-noble
+  Dockerfile        # base mcr.microsoft.com/playwright:v1.62.1-noble (matches locked package)
   package.json
   tsconfig.json     # paths @/* -> ../src/*
 ```
@@ -69,12 +69,13 @@ npm start   # lắng nghe :8080
 ```bash
 # 1. Tạo sample HTML (đã fill dữ liệu mẫu) từ ĐÚNG template.ts + renderer production
 cd worker && npm run generate:sample
-# → docs/visual-verification/dang-ky-tap-nghe-sample.html
-#   Mở trong trình duyệt → Print (A4) → Save as PDF → so với export Google Docs gốc.
+# → artifacts/document-merge/trainee-registration/rendered-sample.html
+#   Mở trong trình duyệt → Print (A4) → Save as PDF → so với test.html canonical.
 
 # 2. Render + kiểm tra cấu trúc qua Chromium (cần npx playwright install chromium)
-cd worker && npm run verify:visual
-# → docs/visual-verification/out/report.json + rendered.pdf + full.png
+cd worker && npm run verify:visual -- --expected-pages 6
+# → artifacts/document-merge/trainee-registration/browser-evidence/report.json
+#   + rendered.pdf + page-01.png … page-06.png + full.png
 
 # 3. GATE: CHỈ publish version khi report pass + so sánh visual với reference
 #    (số trang, text position, tables, borders, font, checkbox, header/footer, tiếng Việt).

@@ -11,35 +11,41 @@
  *   - số checkbox ☐ render được
  *
  * Chạy ở nơi có Chromium (CI / máy dev / Cloud Run image):
- *   cd worker && npm run verify:visual -- [--html ../docs/visual-verification/dang-ky-tap-nghe-sample.html] [--expected-pages 5] [--out ../docs/visual-verification/out]
+ *   cd worker && npm run generate:sample
+ *   npm run verify:visual -- --html ../artifacts/document-merge/trainee-registration/rendered-sample.html --expected-pages 6 --out ../artifacts/document-merge/trainee-registration/browser-evidence
  *
  * Use --expected-pages for an approved canonical visual template. The command
- * then fails on an extra/partial PDF page rather than accepting it silently.
+ * fails on an extra/partial PDF page rather than accepting it silently.
  *
  * Output:
- *   <out>/report.json          — kết quả kiểm tra (máy đọc được)
- *   <out>/page-01.png ...      — screenshot từng trang (đối chiếu visual)
- *   <out>/full.png             — screenshot toàn bộ (tham khảo)
+ *   <out>/report.json          — page count, SHA-256, browser revision, warnings
+ *   <out>/rendered.pdf         — final Playwright PDF
+ *   <out>/page-01.png ...      — screenshot of every logical page
+ *   <out>/full.png             — full-document screenshot (reference)
  *
  * KHÔNG fake: đây là render THẬT qua engine production (page.pdf A4 + @page CSS).
  * Nếu chưa có Chromium: chạy `npx playwright install chromium` trước.
  */
 
+import { createHash } from "node:crypto";
 import { mkdirSync, writeFileSync, readFileSync } from "node:fs";
+import { createRequire } from "node:module";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { chromium } from "playwright";
 import { PDFDocument } from "pdf-lib";
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), "..", "..");
+const require = createRequire(import.meta.url);
+const playwrightVersion = require("playwright/package.json").version;
 
 function arg(name, fallback) {
   const idx = process.argv.indexOf(name);
   return idx >= 0 ? process.argv[idx + 1] : fallback;
 }
 
-const htmlPath = resolve(arg("--html", join(ROOT, "docs", "visual-verification", "dang-ky-tap-nghe-sample.html")));
-const outDir = resolve(arg("--out", join(ROOT, "docs", "visual-verification", "out")));
+const htmlPath = resolve(arg("--html", join(ROOT, "artifacts", "document-merge", "trainee-registration", "rendered-sample.html")));
+const outDir = resolve(arg("--out", join(ROOT, "artifacts", "document-merge", "trainee-registration", "browser-evidence")));
 const expectedPagesArg = arg("--expected-pages", "");
 const expectedPages = expectedPagesArg === "" ? null : Number(expectedPagesArg);
 if (expectedPages !== null && (!Number.isInteger(expectedPages) || expectedPages < 1)) {
@@ -86,7 +92,9 @@ try {
   });
 
   const pdfBytes = await page.pdf({ format: "A4", printBackground: true, preferCSSPageSize: true });
-  writeFileSync(join(outDir, "rendered.pdf"), pdfBytes);
+  const pdfPath = join(outDir, "rendered.pdf");
+  writeFileSync(pdfPath, pdfBytes);
+  const pdfSha256 = createHash("sha256").update(pdfBytes).digest("hex");
 
   // Đếm trang PDF THẬT (không dựa vào .page div) qua pdf-lib.
   const pdfDoc = await PDFDocument.load(pdfBytes);
@@ -101,25 +109,61 @@ try {
     };
   });
 
-  // Screenshot từng .page
+  // Screenshot every logical page so a reviewer can compare visual layout
+  // without extracting images from the PDF. These are document-coordinate clips
+  // and work even when a page is below the visible viewport.
   const pageBoxes = await page.evaluate(() =>
     Array.from(document.querySelectorAll(".page")).map((div) => {
       const r = div.getBoundingClientRect();
-      return { top: r.top + window.scrollY, height: r.height };
+      return { left: r.left + window.scrollX, top: r.top + window.scrollY, width: r.width, height: r.height };
     }),
   );
+  const screenshotPaths = [];
+  for (const [index, box] of pageBoxes.entries()) {
+    const filename = `page-${String(index + 1).padStart(2, "0")}.png`;
+    const screenshotPath = join(outDir, filename);
+    await page.screenshot({
+      path: screenshotPath,
+      clip: {
+        x: Math.max(0, box.left),
+        y: Math.max(0, box.top),
+        width: Math.max(1, box.width),
+        height: Math.max(1, box.height),
+      },
+    });
+    screenshotPaths.push(screenshotPath);
+  }
 
   // full-page screenshot
-  await page.screenshot({ path: join(outDir, "full.png"), fullPage: true });
+  const fullScreenshotPath = join(outDir, "full.png");
+  await page.screenshot({ path: fullScreenshotPath, fullPage: true });
 
+  const paginationWarnings = [
+    ...(expectedPages !== null && realPageCount !== expectedPages
+      ? [`PDF page count ${realPageCount} differs from expected ${expectedPages}`]
+      : []),
+    ...checks.blankPages.map((blank) => `logical page ${blank.i} appears blank (${blank.textLen} characters)`),
+    ...(checks.overflow > 1 ? [`horizontal overflow ${checks.overflow}px`] : []),
+  ];
   const report = {
     generatedAt: new Date().toISOString(),
     htmlSource: htmlPath,
+    htmlSha256: createHash("sha256").update(html).digest("hex"),
     templateName: "dang-ky-tap-nghe",
     durationMs: Date.now() - startedAt,
+    browser: {
+      chromium: browser.version(),
+      playwright: playwrightVersion,
+      node: process.version,
+    },
     pdf: {
       bytes: pdfBytes.length,
-      path: join(outDir, "rendered.pdf"),
+      path: pdfPath,
+      sha256: pdfSha256,
+    },
+    evidence: {
+      screenshots: screenshotPaths,
+      fullScreenshot: fullScreenshotPath,
     },
     checks: {
       pageDivCount: checks.pageCount,
@@ -129,7 +173,9 @@ try {
       blankPages: checks.blankPages,
       horizontalOverflowPx: checks.overflow,
       checkboxCount: checks.checkboxes,
+      unresolvedPlaceholderCount: checks.unreplaced.length,
       unreplacedPlaceholders: checks.unreplaced,
+      paginationWarnings,
       fontsReady: true,
       fontChecks,
     },

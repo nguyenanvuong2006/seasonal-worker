@@ -2,9 +2,9 @@
  * Tạo sample HTML (đã fill dữ liệu mẫu) cho visual verification.
  *
  * Chạy: cd worker && npm run generate:sample
- * Output: docs/visual-verification/dang-ky-tap-nghe-sample.html
+ * Output: artifacts/document-merge/trainee-registration/rendered-sample.html
  *
- * Mở file trong trình duyệt → Print → Save as PDF → so sánh với PDF
+ * Mở file trong trình duyệt → Print → Save as PDF → so sánh với nguồn canonical
  * export từ Google Docs gốc (reference). KHÔNG fake — đây là bản render
  * thật từ ĐÚNG template.ts + ĐÚNG renderer production (html-renderer).
  */
@@ -77,9 +77,9 @@ const { html } = renderApplicantHtmlFromParts(
   SAMPLE_FIELD_VALUES,
 );
 
-const outDir = join(ROOT, "docs", "visual-verification");
+const outDir = join(ROOT, "artifacts", "document-merge", "trainee-registration");
 mkdirSync(outDir, { recursive: true });
-const outFile = join(outDir, "dang-ky-tap-nghe-sample.html");
+const outFile = join(outDir, "rendered-sample.html");
 writeFileSync(outFile, html, "utf8");
 
 const unreplaced = [...html.matchAll(/(?:<<\s*([^>]+?)\s*>>|\{\{\s*([^{}]+?)\s*\}\})/g)].map((m) => m[1] ?? m[2]);

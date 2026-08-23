@@ -67,6 +67,21 @@ HTML accepts `{{Ho_ten}}` as the canonical syntax and continues to render legacy
 - Preview-only navigation, buttons, template-code panels, highlight markers, scripts, and embedded browsing contexts are stripped before production PDF HTML is built. Candidate values are HTML-escaped.
 - UTF-8 charset, Vietnamese language metadata, and DejaVu/Noto/Arial font fallbacks are preserved.
 
+## Canonical source update — PR #84
+
+The operator-provided canonical source is now committed at:
+
+- `templates/document-merge/trainee-registration/test.html`
+- SHA-256: `22e987f76ff0100f8a7a3f9c6fcda72f1465bbf353f909664d923eed41343bd2`
+
+`npm run sync:trainee-template` extracts the source’s six `.page` legal sections into `src/document-templates/dang-ky-tap-nghe/canonical-template.generated.ts`. The production body retains the supplied document’s typography, spacing, borders, tables, signature blocks, checkbox layout, and A4 print rules. It removes the authoring-only toolbar, tab navigation, code panels, page labels, buttons, scripts, and blue placeholder highlighting. The visual field markers become escaped `.merge-value` spans or semantic `.chk` spans backed by the existing `CHECKBOX_OPTION` resolver.
+
+The reviewed inventory is in `docs/TRAINEE_REGISTRATION_FIELD_MAPPING_REPORT.md`: 76 occurrences, 49 unique semantic fields, **0 unmapped placeholders**, and **0 unmapped required placeholders**. The intended page count is now exactly **6 logical A4 pages**, not the previous reconstructed five-part layout.
+
+`migrations/2026-08-23-trainee-registration-canonical-html-draft.sql` is deliberately DRAFT-only and idempotent. It does not publish a version, set `current_published_version`, set `html_enabled`, enqueue a job, or activate `HTML_PDF` in any environment. The post-source test asserts these constraints.
+
+`worker/scripts/visual-verify.mjs` now records a final PDF, SHA-256, actual PDF page count, per-page screenshots, a full screenshot, unresolved-placeholder count, overflow/pagination warnings, and the Playwright/Chromium/Node revisions whenever it is run in a browser-enabled environment.
+
 ## Files changed
 
 ### Engine and security
@@ -117,7 +132,7 @@ The tests cover:
 - preview-only UI stripping;
 - canonical field-contract coverage (49 fields); 
 - explicit HTML/PDF selection, published-version requirement, queue snapshot, frozen merge clock;
-- A4 size, two logical-page pagination, and valid PDF bytes through Playwright when the browser binary is available.
+- A4 size, baseline two-page pagination, and canonical six-page pagination through Playwright when the browser binary is available.
 
 ## Quality-gate results
 
@@ -126,9 +141,9 @@ The tests cover:
 | `npm run typecheck` | **PASS** |
 | `npm run build` | **PASS** |
 | `npm run lint` | **PASS with 52 warnings, 0 errors** |
-| `npm test` | **PASS — 934 tests, 0 failures** |
+| `npm test` | **PASS — 937 tests, 0 failures** |
 | `npm --prefix worker run typecheck` | **PASS** |
-| `npm --prefix worker run test` | **PASS, 1 skipped** because this sandbox has no Playwright Chromium binary |
+| `npm --prefix worker run test` | **PASS, 2 skipped** because this sandbox has no Playwright Chromium binary (including the canonical six-page PDF gate) |
 | `git diff --check` | **PASS** |
 
 ## Staging verification
@@ -160,8 +175,8 @@ npm --prefix worker run verify:visual -- \
 
 ## Remaining blockers
 
-1. The referenced `test.html` was not present in this checkout or supplied attachment area (repository search found no file by that name). The implementation uses the existing registered Vietnamese canonical template as the code source and supports the requested `{{...}}` syntax. A visual pixel-signoff against the actual supplied `test.html` still requires that file.
-2. This sandbox could not download Playwright Chromium (`ECONNRESET` from the browser CDN), so the real Chromium integration test is correctly skipped locally. It is executable in the existing Playwright Cloud Run image.
-3. No staging-only credentials/endpoints are available in the sandbox, so the protected 1-record/10-record staging E2E could not be run. No production changes were attempted.
+1. The canonical source is now present at `templates/document-merge/trainee-registration/test.html` and is integrated. The remaining visual sign-off is a **real browser render** of its generated production HTML, not a missing-source issue.
+2. This sandbox still cannot download Playwright Chromium (`ECONNRESET` from the browser CDN; Debian package mirrors are also unreachable). The browser integration test is therefore skipped locally. The worker image is now pinned to the matching `mcr.microsoft.com/playwright:v1.62.1-noble` / `playwright@1.62.1` revision for staging/Cloud Run execution.
+3. No staging-only database URL, Cloud Run worker URL/secret, or Drive credentials are available in the sandbox. The protected staging 1-record E2E was attempted and stopped before record access. No production changes were attempted.
 
 No branch was merged to `main`, and no production data/database was modified.
