@@ -109,28 +109,23 @@ try {
     };
   });
 
-  // Screenshot every logical page so a reviewer can compare visual layout
-  // without extracting images from the PDF. These are document-coordinate clips
-  // and work even when a page is below the visible viewport.
-  const pageBoxes = await page.evaluate(() =>
-    Array.from(document.querySelectorAll(".page")).map((div) => {
-      const r = div.getBoundingClientRect();
-      return { left: r.left + window.scrollX, top: r.top + window.scrollY, width: r.width, height: r.height };
-    }),
-  );
+  // Screenshot every logical page using Playwright locators.
+  // This avoids document-coordinate clip errors for pages below the viewport.
+  const pageLocators = page.locator(".page");
+  const logicalPageCount = await pageLocators.count();
   const screenshotPaths = [];
-  for (const [index, box] of pageBoxes.entries()) {
+
+  for (let index = 0; index < logicalPageCount; index += 1) {
     const filename = `page-${String(index + 1).padStart(2, "0")}.png`;
     const screenshotPath = join(outDir, filename);
-    await page.screenshot({
+    const pageLocator = pageLocators.nth(index);
+
+    await pageLocator.scrollIntoViewIfNeeded();
+    await pageLocator.screenshot({
       path: screenshotPath,
-      clip: {
-        x: Math.max(0, box.left),
-        y: Math.max(0, box.top),
-        width: Math.max(1, box.width),
-        height: Math.max(1, box.height),
-      },
+      animations: "disabled",
     });
+
     screenshotPaths.push(screenshotPath);
   }
 
