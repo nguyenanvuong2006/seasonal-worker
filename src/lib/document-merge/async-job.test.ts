@@ -31,6 +31,11 @@ async function load(
     getHtmlTemplateByGoogleDocId?: (id: string | null | undefined) => { key: string } | null;
     getHtmlTemplateContractByGoogleDocId?: () => null;
   } = {},
+  /**
+   * Record data the required-field gate resolves against. Mirrors the shape
+   * loadDailyApplicationRecords returns (flattened applicant merge record).
+   */
+  records: Record<string, Record<string, unknown>> = {},
 ): Promise<AsyncJobModule> {
   const mod = await loadModule(new URL("./async-job.ts", import.meta.url), {
     stubs: {
@@ -60,6 +65,32 @@ async function load(
           [...html.matchAll(/(?:<<\s*([^>]+?)\s*>>|\{\{\s*([^{}]+?)\s*\}\})/g)].map((m) => (m[1] ?? m[2]).trim()),
         )).sort(),
       },
+      "./record-loader.ts": {
+        loadDailyApplicationRecords: async (ids: string[]) =>
+          new Map(ids.filter((id) => id in records).map((id) => [id, records[id]])),
+      },
+      // Resolve/validate exactly like production: read sourcePath off the
+      // record, then treat blank values as missing for isRequired mappings.
+      "./html-pipeline.ts": {
+        resolveHtmlFieldValues: (
+          fields: { placeholder: string; sourcePath: string | null }[],
+          recordData: Record<string, unknown>,
+        ) => Object.fromEntries(fields.map((f) => [
+          f.placeholder,
+          String((f.sourcePath ? recordData[f.sourcePath] : undefined) ?? ""),
+        ])),
+      },
+      "./data-resolver.ts": {
+        validateRequiredFields: (
+          fields: { placeholder: string; isRequired: boolean }[],
+          values: Record<string, string>,
+        ) => {
+          const missingFields = fields
+            .filter((f) => f.isRequired && !(values[f.placeholder] ?? "").trim())
+            .map((f) => f.placeholder);
+          return { valid: missingFields.length === 0, missingFields };
+        },
+      },
     },
   });
   return mod as unknown as AsyncJobModule;
@@ -74,9 +105,39 @@ const PUBLISHED_VERSION_ROW = {
   printCss: "p{color:red}",
 };
 
+type FieldRow = {
+  templateId: string;
+  placeholder: string;
+  sourceType: string;
+  sourceEntity: string | null;
+  sourceField: string | null;
+  sourcePath: string | null;
+  optionValue: string | null;
+  formatType: string | null;
+  fallbackValue: string | null;
+  isRequired: boolean;
+};
+
+function fieldRow(overrides: Partial<FieldRow> = {}): FieldRow {
+  return {
+    templateId: "tpl-1",
+    placeholder: "Ho_ten",
+    sourceType: "CORE_FIELD",
+    sourceEntity: null,
+    sourceField: null,
+    sourcePath: "fullName",
+    optionValue: null,
+    formatType: "RAW",
+    fallbackValue: null,
+    isRequired: false,
+    ...overrides,
+  };
+}
+
 function fixtureDb(
   publishedVersion: typeof PUBLISHED_VERSION_ROW | null,
   application: { permanentAddress?: string | null; residentialAddress?: string | null } = {},
+  fieldRows: FieldRow[] = [fieldRow()],
 ): FakeDb {
   return createFakeDb({
     respond: (call: QueryCall) => {
@@ -91,7 +152,7 @@ function fixtureDb(
         }];
       }
       if (call.root === "select" && call.table === "merge_template_fields") {
-        return [{ templateId: "tpl-1", placeholder: "Ho_ten", sourceType: "CORE_FIELD", sourceEntity: null, sourceField: null, sourcePath: "fullName", optionValue: null, formatType: "RAW", fallbackValue: null, isRequired: false }];
+        return fieldRows;
       }
       if (call.root === "select" && call.table === "merge_template_versions") {
         return publishedVersion ? [publishedVersion] : [];
@@ -208,32 +269,24 @@ const traineeRegistry = {
     id === "gdoc-1" ? { key: "dang-ky-tap-nghe" } : null,
 };
 
-test("createAsyncMergeJob: HTML_PDF trainee registration rejects missing permanentAddress with 422", async () => {
-  const db = fixtureDb(PUBLISHED_VERSION_ROW, { permanentAddress: "   ", residentialAddress: "Tạm trú có giá trị" });
-  const mod = await load(db, traineeRegistry);
+/**
+ * Required-field hotfix: merge_template_fields.isRequired is the single
+ * runtime source of truth. There is no hard-coded permanentAddress rule, so
+ * an EMPTY permanentAddress must queue when its mapping is optional and must
+ * be rejected only when the mapping says required.
+ */
+const ADDRESS_HTML_VERSION = { ...PUBLISHED_VERSION_ROW, htmlBody: "<p><<Ho_ten>> <<Dia_chi_thuong_tru>></p>" };
 
-  await assert.rejects(
-    () => mod.createAsyncMergeJob({
-      templateId: "tpl-1",
-      autoRoute: false,
-      records: { entityType: "daily_applications", recordIds: ["app-1"] },
-      createdBy: "admin",
-      scopeDeptIds: null,
-      engine: "HTML_PDF",
-    }),
-    (error: unknown) => {
-      assert.ok(error instanceof Error);
-      assert.equal(error.message, "Thiếu Địa chỉ thường trú");
-      assert.equal((error as { status?: number }).status, 422);
-      return true;
-    },
-  );
-  assert.equal(db.calls.some((c) => c.root === "insert" && c.table === "merge_jobs"), false);
-});
+const addressFields = (isRequired: boolean): FieldRow[] => [
+  fieldRow(),
+  fieldRow({ placeholder: "Dia_chi_thuong_tru", sourcePath: "permanentAddress", isRequired }),
+];
 
-test("createAsyncMergeJob: HTML_PDF trainee registration accepts a real permanentAddress and does not use residentialAddress", async () => {
-  const db = fixtureDb(PUBLISHED_VERSION_ROW, { permanentAddress: "12 Trần Phú, Đà Lạt", residentialAddress: null });
-  const mod = await load(db, traineeRegistry);
+test("createAsyncMergeJob: HTML_PDF queues when permanentAddress is empty but its mapping is OPTIONAL (no hard-coded rule)", async () => {
+  const db = fixtureDb(ADDRESS_HTML_VERSION, { permanentAddress: "   " }, addressFields(false));
+  const mod = await load(db, traineeRegistry, {
+    "app-1": { fullName: "Nguyễn Văn A", permanentAddress: "   ", residentialAddress: "Tạm trú có giá trị" },
+  });
 
   const result = await mod.createAsyncMergeJob({
     templateId: "tpl-1",
@@ -248,9 +301,85 @@ test("createAsyncMergeJob: HTML_PDF trainee registration accepts a real permanen
   assert.equal(db.calls.some((c) => c.root === "insert" && c.table === "merge_jobs"), true);
 });
 
-test("createAsyncMergeJob: GOOGLE_DOCS still queues when permanentAddress is empty", async () => {
-  const db = fixtureDb(PUBLISHED_VERSION_ROW, { permanentAddress: null, residentialAddress: null });
-  const mod = await load(db, traineeRegistry);
+test("createAsyncMergeJob: HTML_PDF rejects with 422 when a REQUIRED mapping resolves empty", async () => {
+  const db = fixtureDb(ADDRESS_HTML_VERSION, { permanentAddress: "   " }, addressFields(true));
+  const mod = await load(db, traineeRegistry, {
+    "app-1": { fullName: "Nguyễn Văn A", permanentAddress: "   ", residentialAddress: "Tạm trú có giá trị" },
+  });
+
+  await assert.rejects(
+    () => mod.createAsyncMergeJob({
+      templateId: "tpl-1",
+      autoRoute: false,
+      records: { entityType: "daily_applications", recordIds: ["app-1"] },
+      createdBy: "admin",
+      scopeDeptIds: null,
+      engine: "HTML_PDF",
+    }),
+    (error: unknown) => {
+      assert.ok(error instanceof Error);
+      assert.match(error.message, /Dia_chi_thuong_tru/);
+      assert.equal((error as { status?: number }).status, 422);
+      return true;
+    },
+  );
+  assert.equal(db.calls.some((c) => c.root === "insert" && c.table === "merge_jobs"), false);
+});
+
+test("createAsyncMergeJob: required Dia_chi_thuong_tru does NOT fall back to residentialAddress", async () => {
+  // residentialAddress is populated; permanentAddress is not. The required
+  // mapping points at permanentAddress, so the job must still be rejected.
+  const db = fixtureDb(ADDRESS_HTML_VERSION, { permanentAddress: null }, addressFields(true));
+  const mod = await load(db, traineeRegistry, {
+    "app-1": { fullName: "Nguyễn Văn A", permanentAddress: null, residentialAddress: "99 Lê Lợi, Đà Lạt" },
+  });
+
+  await assert.rejects(
+    () => mod.createAsyncMergeJob({
+      templateId: "tpl-1",
+      autoRoute: false,
+      records: { entityType: "daily_applications", recordIds: ["app-1"] },
+      createdBy: "admin",
+      scopeDeptIds: null,
+      engine: "HTML_PDF",
+    }),
+    (error: unknown) => {
+      assert.ok(error instanceof Error);
+      assert.match(error.message, /Dia_chi_thuong_tru/);
+      return true;
+    },
+  );
+});
+
+test("createAsyncMergeJob: generic (non-registered) HTML template uses the same isRequired mechanism", async () => {
+  const db = fixtureDb(ADDRESS_HTML_VERSION, { permanentAddress: null }, addressFields(true));
+  // No registry entry -> generic template, yet the mapping still governs.
+  const mod = await load(db, {}, {
+    "app-1": { fullName: "Nguyễn Văn A", permanentAddress: null },
+  });
+
+  await assert.rejects(
+    () => mod.createAsyncMergeJob({
+      templateId: "tpl-1",
+      autoRoute: false,
+      records: { entityType: "daily_applications", recordIds: ["app-1"] },
+      createdBy: "admin",
+      scopeDeptIds: null,
+      engine: "HTML_PDF",
+    }),
+    (error: unknown) => {
+      assert.ok(error instanceof Error);
+      assert.match(error.message, /Dia_chi_thuong_tru/);
+      return true;
+    },
+  );
+});
+
+test("createAsyncMergeJob: GOOGLE_DOCS is unchanged — queues even when a required mapping is empty", async () => {
+  const db = fixtureDb(PUBLISHED_VERSION_ROW, { permanentAddress: null, residentialAddress: null }, addressFields(true));
+  const mod = await load(db, traineeRegistry, {
+    "app-1": { fullName: "Nguyễn Văn A", permanentAddress: null },
+  });
 
   const result = await mod.createAsyncMergeJob({
     templateId: "tpl-1",
