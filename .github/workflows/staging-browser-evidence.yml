@@ -54,7 +54,7 @@ jobs:
 
     env:
       PLAYWRIGHT_BROWSERS_PATH: /ms-playwright
-      EVIDENCE_ROOT: artifacts/document-merge/trainee-registration
+      EVIDENCE_ROOT: ${{ github.workspace }}/artifacts/document-merge/trainee-registration
 
       # workflow_dispatch supplies expected_pages.
       # push events have no workflow_dispatch inputs, therefore default to 6.
