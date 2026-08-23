@@ -90,12 +90,24 @@ const source = readFileSync(sourcePath, "utf8");
 const html = extractPageBlocks(source).map(semanticizeFieldMarkers).join("\n\n");
 const css = `${extractStyle(source)}
 
-/* Production merge normalisation: no editor highlighting and safe long-value wrapping. */
+/* Production merge normalisation: strip editor styling, preserve exact A4 page geometry, and wrap long values safely. */
 @media print {
   .page {
+    box-shadow: none;
+    margin: 0;
+    width: 210mm;
     min-height: 297mm;
-    height: auto;
+    height: 297mm;
+    padding: 14mm 16mm;
     overflow: visible;
+    break-after: page;
+    page-break-after: always;
+    break-inside: avoid;
+    page-break-inside: avoid;
+  }
+  .page:last-child {
+    break-after: auto;
+    page-break-after: auto;
   }
   .photo-wrap .body-col { min-width: 0; }
   .merge-value {
