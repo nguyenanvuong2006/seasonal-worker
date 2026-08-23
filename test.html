@@ -1,0 +1,906 @@
+<!DOCTYPE html>
+<html lang="vi">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Giấy đăng ký tập nghề - Dalat Hasfarm</title>
+<style>
+/* ================= RESET & BASE ================= */
+*, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+body {
+  background: #e8e8e8;
+  font-family: Arial, "Liberation Sans", "DejaVu Sans", sans-serif;
+  font-size: 11pt;
+  color: #000;
+  padding: 20px 0 40px;
+}
+
+/* ================= PAGE CONTAINER ================= */
+.page {
+  width: 210mm;
+  min-height: 297mm;
+  background: #fff;
+  margin: 0 auto 24px;
+  padding: 14mm 16mm 14mm 16mm;
+  box-shadow: 0 4px 24px rgba(0,0,0,0.18);
+  position: relative;
+  page-break-after: always;
+}
+.page:last-child { page-break-after: auto; }
+
+/* ================= PAGE LABEL ================= */
+.page-label {
+  background: #555;
+  color: #fff;
+  font-size: 9pt;
+  font-family: Arial, sans-serif;
+  padding: 3px 12px;
+  width: 210mm;
+  margin: 0 auto;
+  text-align: left;
+  border-radius: 0;
+}
+
+/* ================= HEADER DALAT HASFARM ================= */
+.doc-header {
+  display: flex;
+  width: 100%;
+  margin-bottom: 7mm;
+  border-bottom: 2.5px solid #4a6122;
+}
+.doc-header .hd-left {
+  width: 44%;
+  color: #4a6122;
+  font-weight: bold;
+  font-size: 15pt;
+  padding: 3mm 4mm 3mm 2mm;
+  display: flex;
+  align-items: center;
+}
+.doc-header .hd-right {
+  width: 56%;
+  background: #3d5220;
+  color: #fff;
+  font-weight: bold;
+  font-size: 13pt;
+  text-align: center;
+  padding: 3.5mm 4mm;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  letter-spacing: .3px;
+}
+
+/* ================= TYPOGRAPHY ================= */
+.b   { font-weight: bold; }
+.u   { text-decoration: underline; }
+.i   { font-style: italic; }
+.sec { font-weight: bold; text-decoration: underline; margin: 3.5mm 0 2mm; display: block; }
+.justify { text-align: justify; }
+.center  { text-align: center; }
+.right   { text-align: right; }
+
+.line  { margin-bottom: 2.8mm; }
+.tight { margin-bottom: 1.2mm; }
+.mt2   { margin-top: 2mm; }
+.mt4   { margin-top: 4mm; }
+.mt6   { margin-top: 6mm; }
+.mt8   { margin-top: 8mm; }
+.mt10  { margin-top: 10mm; }
+.mt14  { margin-top: 14mm; }
+.mt20  { margin-top: 20mm; }
+
+.pl1 { padding-left: 8mm; }
+.pl2 { padding-left: 16mm; }
+.pl3 { padding-left: 24mm; }
+.indent { text-indent: 10mm; }
+
+/* ================= PLACEHOLDER HIGHLIGHT ================= */
+.f {
+  color: #1a5fa8;
+  font-weight: bold;
+  background: #eef4ff;
+  padding: 0 1px;
+  border-radius: 2px;
+}
+
+/* ================= ẢNH 3x4 ================= */
+.photo-wrap {
+  display: flex;
+  gap: 0;
+}
+.photo-wrap .body-col { flex: 1; }
+.photo-box {
+  width: 36mm;
+  height: 46mm;
+  border: 1px solid #000;
+  text-align: center;
+  font-size: 9pt;
+  line-height: 1.5;
+  padding-top: 14mm;
+  flex-shrink: 0;
+  margin-left: 4mm;
+}
+.photo-box .pt { font-weight: bold; text-decoration: underline; }
+
+/* ================= KHUNG ĐÍNH KÈM ================= */
+.attach-box {
+  border: 1px solid #000;
+  padding: 2.5mm 4mm;
+  font-size: 9.5pt;
+  margin: 4mm 0 8mm;
+}
+.attach-box table { width: 100%; border-collapse: collapse; }
+.attach-box td { padding: .5mm 0; }
+.attach-box .ai { font-style: italic; font-weight: bold; text-decoration: underline; }
+
+/* ================= QUỐC HIỆU ================= */
+.quochieu { text-align: center; font-weight: bold; font-size: 11pt; line-height: 1.4; }
+.quochieu .sub { font-weight: bold; }
+.hr-short { width: 50mm; margin: 1.5mm auto 0; border: none; border-bottom: 1px solid #000; }
+
+/* ================= Ô MÃ SỐ THUẾ ================= */
+.mst-wrap { display: inline-flex; vertical-align: middle; align-items: center; gap: 1px; }
+.mst-cell {
+  width: 6.2mm; height: 6.2mm;
+  border: 1px solid #000;
+  display: inline-block;
+}
+.mst-gap { width: 2.5mm; display: inline-block; }
+
+/* ================= CHỮ KÝ ================= */
+.sign-single {
+  width: 75mm;
+  margin-left: auto;
+  text-align: center;
+}
+.sign-3-table {
+  width: 100%;
+  border-collapse: collapse;
+  margin-top: 4mm;
+}
+.sign-3-table td {
+  text-align: center;
+  vertical-align: top;
+  padding: 0 2mm;
+  width: 33.33%;
+}
+.sign-gap { height: 20mm; }
+
+/* ================= MẪU SỐ BOX ================= */
+.mauso-box {
+  border: 1px solid #000;
+  float: right;
+  width: 75mm;
+  text-align: center;
+  font-size: 10pt;
+  padding: 2.5mm 3mm;
+  line-height: 1.4;
+  margin-bottom: 4mm;
+}
+.clearfix::after { content:''; display:table; clear:both; }
+
+/* ================= NAV TABS ================= */
+.nav-tabs {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  margin-bottom: 16px;
+  width: 210mm;
+  margin-left: auto;
+  margin-right: auto;
+}
+.nav-tab {
+  background: #4a6122;
+  color: #fff;
+  border: none;
+  padding: 6px 14px;
+  cursor: pointer;
+  font-size: 9pt;
+  border-radius: 4px;
+  font-family: Arial, sans-serif;
+}
+.nav-tab.active, .nav-tab:hover { background: #3d5220; outline: 2px solid #acd354; }
+
+/* ================= TOGGLE CODE PANEL ================= */
+.code-panel {
+  width: 210mm;
+  margin: 0 auto 24px;
+  background: #1e1e2e;
+  color: #cdd6f4;
+  border-radius: 8px;
+  padding: 16px;
+  font-family: 'Courier New', monospace;
+  font-size: 9pt;
+  line-height: 1.5;
+  display: none;
+  position: relative;
+  max-height: 420px;
+  overflow-y: auto;
+}
+.code-panel.show { display: block; }
+.code-panel .kw  { color: #cba6f7; }
+.code-panel .str { color: #a6e3a1; }
+.code-panel .cm  { color: #6c7086; font-style: italic; }
+.code-panel .var { color: #89dceb; }
+.copy-btn {
+  position: sticky;
+  top: 0;
+  float: right;
+  background: #313244;
+  color: #cdd6f4;
+  border: 1px solid #45475a;
+  border-radius: 4px;
+  padding: 3px 10px;
+  cursor: pointer;
+  font-size: 8.5pt;
+  font-family: Arial, sans-serif;
+  z-index: 10;
+}
+.copy-btn:hover { background: #45475a; }
+
+/* ================= TOOLBAR ================= */
+.toolbar {
+  width: 210mm;
+  margin: 0 auto 12px;
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  flex-wrap: wrap;
+}
+.toolbar button {
+  background: #3d5220;
+  color: #fff;
+  border: none;
+  padding: 7px 16px;
+  border-radius: 5px;
+  cursor: pointer;
+  font-size: 9.5pt;
+  font-family: Arial, sans-serif;
+}
+.toolbar button:hover { background: #4a6122; }
+.toolbar .info {
+  font-size: 9pt;
+  color: #555;
+  font-family: Arial, sans-serif;
+}
+
+/* ================= PRINT ================= */
+@media print {
+  body { background: #fff; padding: 0; }
+  .toolbar, .nav-tabs, .code-panel, .page-label { display: none !important; }
+  .page {
+    box-shadow: none;
+    margin: 0;
+    padding: 14mm 16mm;
+    width: 210mm;
+    height: 297mm;
+    page-break-after: always;
+  }
+  @page { size: A4 portrait; margin: 0; }
+}
+</style>
+</head>
+<body>
+
+<!-- TOOLBAR -->
+<div class="toolbar">
+  <button onclick="window.print()">🖨️ In / Xuất PDF</button>
+  <button onclick="toggleCode('hbs')">📄 Xem Handlebars (.hbs)</button>
+  <button onclick="toggleCode('jinja')">🐍 Xem Jinja2 (.j2)</button>
+  <button onclick="toggleCode('blade')">⚙️ Xem Blade (.blade.php)</button>
+  <span class="info">💡 Các trường màu xanh = placeholder merge</span>
+</div>
+
+<!-- CODE PANELS -->
+<div class="code-panel" id="panel-hbs">
+  <button class="copy-btn" onclick="copyCode('panel-hbs')">Copy</button>
+  <pre><span class="cm">&lt;!-- Handlebars Template (.hbs) --&gt;
+&lt;!-- Sử dụng: Handlebars.compile(template)(data) --&gt;</span>
+
+<span class="cm">&lt;!-- Trang 1: Giấy đăng ký tập nghề --&gt;</span>
+<span class="kw">Họ và Tên:</span> <span class="var">{{Ho_ten}}</span>     <span class="kw">Sinh ngày:</span> <span class="var">{{Ngay_sinh}}</span>
+<span class="kw">Địa chỉ thường trú:</span> <span class="var">{{Dia_chi_thuong_tru}}</span>
+<span class="kw">Địa chỉ tạm trú:</span> <span class="var">{{Dia_chi_tam_tru}}</span>
+<span class="kw">Điện thoại:</span> <span class="var">{{So_dien_thoai}}</span>
+<span class="kw">Số CCCD:</span> <span class="var">{{So_CCCD}}</span>   <span class="kw">Ngày cấp:</span> <span class="var">{{Ngay_cap_CCCD}}</span>   <span class="kw">Nơi cấp:</span> <span class="var">{{Noi_cap_CCCD}}</span>
+
+<span class="cm">&lt;!-- Checkbox: dùng helper hoặc pre-render ☒/☐ --&gt;</span>
+<span class="var">{{Tien_an_tien_su_Khong}}</span> Không   <span class="var">{{Tien_an_tien_su_Co}}</span> Có
+<span class="var">{{Da_tung_lam_DHF_Khong}}</span> Không   <span class="var">{{Da_tung_lam_DHF_Co}}</span> Có
+
+<span class="cm">&lt;!-- Vị trí --&gt;</span>
+<span class="var">{{Loai_cong_viec_Nhan_vien}}</span> Nhân viên
+<span class="var">{{Loai_cong_viec_Cong_nhan}}</span> Công nhân
+<span class="var">{{Loai_cong_viec_Lao_dong_tap_nghe}}</span> Lao động tập nghề
+
+<span class="cm">&lt;!-- Khu vực --&gt;</span>
+<span class="var">{{Khu_vuc_Da_Lat}}</span> Đà Lạt   <span class="var">{{Khu_vuc_Da_Quy}}</span> Đa Quý
+<span class="var">{{Khu_vuc_Da_Ron}}</span> Đạ Ròn  <span class="var">{{Khu_vuc_Lam_Ha}}</span> Lâm Hà
+<span class="var">{{Khu_vuc_Khac}}</span> Khu vực khác
+
+<span class="cm">&lt;!-- Công việc hiện tại --&gt;</span>
+<span class="var">{{Cong_viec_hien_tai_Sinh_vien}}</span> Sinh viên trường <span class="var">{{Ten_truong}}</span>
+<span class="var">{{Cong_viec_hien_tai_Khac}}</span> Khác <span class="var">{{Cong_viec_hien_tai_khac}}</span>
+
+<span class="cm">&lt;!-- Ngân hàng --&gt;</span>
+<span class="var">{{TKNH_Da_co}}</span> Đã có   <span class="var">{{TKNH_Chua_co}}</span> Chưa có
+<span class="kw">Số TK:</span> <span class="var">{{So_tai_khoan}}</span>   <span class="kw">Ngân hàng:</span> <span class="var">{{Ten_ngan_hang}}</span>
+
+<span class="cm">&lt;!-- Thu nhập --&gt;</span>
+<span class="kw">Thu nhập năm</span> <span class="var">{{Nam_thue}}</span>
+<span class="var">{{Thu_nhap_Chi_DHF}}</span> Chỉ phát sinh tại Dalat Hasfarm
+<span class="var">{{Thu_nhap_Ngoai_DHF}}</span> Phát sinh ngoài Dalat Hasfarm
+<span class="kw">Tên Công ty khác:</span> <span class="var">{{Cong_ty_thu_nhap_khac}}</span>
+<span class="kw">Tại:</span> <span class="var">{{Dia_diem_thu_nhap_khac}}</span>
+
+<span class="cm">&lt;!-- Tập nghề --&gt;</span>
+<span class="var">{{Tap_nghe_Trong_cham_soc_thu_hoach}}</span> Trồng, chăm sóc, thu hoạch
+<span class="var">{{Tap_nghe_Ban_hang}}</span> Bán hàng
+<span class="var">{{Tap_nghe_Dong_goi}}</span> Đóng gói
+<span class="var">{{Tap_nghe_Khac}}</span> Khác <span class="var">{{Cong_viec_khac}}</span>
+<span class="kw">Ngày nhận việc:</span> <span class="var">{{Ngay_nhan_viec}}</span>
+
+<span class="cm">&lt;!-- Trang 2: Ghi nhận Nhân sự --&gt;</span>
+<span class="kw">Người tiếp nhận:</span> <span class="var">{{Nguoi_tiep_nhan}}</span>   <span class="kw">Ngày:</span> <span class="var">{{Ngay_tiep_nhan}}</span>
+
+<span class="cm">&lt;!-- Trang 3: Cam kết TNCN --&gt;</span>
+<span class="kw">Địa chỉ cư trú:</span> <span class="var">{{dia_chi_cu_tru}}</span>
+<span class="kw">Năm thuế:</span> <span class="var">{{Nam_thue}}</span>
+<span class="var">{{Dia_diem_ky}}</span>, ngày <span class="var">{{Ngay_ky_day}}</span> tháng <span class="var">{{Ngay_ky_month}}</span> năm <span class="var">{{Ngay_ky_year}}</span>
+
+<span class="cm">&lt;!-- Trang 4: Giấy ủy quyền --&gt;</span>
+<span class="kw">Tên người ủy quyền:</span> <span class="var">{{Ho_ten}}</span>   <span class="kw">Code:</span> <span class="var">{{Code}}</span>
+<span class="kw">Ngày sinh:</span> <span class="var">{{Ngay_sinh}}</span>   <span class="kw">CCCD:</span> <span class="var">{{So_CCCD}}</span>
+<span class="kw">Cấp ngày:</span> <span class="var">{{Ngay_cap_CCCD}}</span>
+<span class="kw">Hộ khẩu:</span> <span class="var">{{Dia_chi_thuong_tru}}</span>
+<span class="kw">Cư trú:</span> <span class="var">{{Dia_chi_tam_tru}}</span>
+
+<span class="cm">&lt;!-- Trang 5: Tờ khai 05-ĐKT --&gt;</span>
+<span class="kw">Họ tên ĐKT:</span> <span class="var">{{Ho_ten}}</span>   <span class="kw">Code:</span> <span class="var">{{Code}}</span>
+<span class="kw">Ngày sinh:</span> <span class="var">{{Ngay_sinh}}</span>
+<span class="kw">CCCD:</span> <span class="var">{{So_CCCD}}</span>
+<span class="kw">Điện thoại:</span> <span class="var">{{So_dien_thoai}}</span>
+<span class="kw">Email:</span> <span class="var">{{Email}}</span>
+<span class="kw">Số định danh cũ:</span> <span class="var">{{So_dinh_danh_cu}}</span>
+
+<span class="cm">&lt;!-- Checkbox helper gợi ý (Handlebars) --&gt;</span>
+<span class="kw">Handlebars.registerHelper</span>(<span class="str">'chk'</span>, <span class="kw">function</span>(val) {
+  <span class="kw">return</span> val ? <span class="str">'☒'</span> : <span class="str">'☐'</span>;
+});
+<span class="cm">&lt;!-- Dùng: {{chk is_khong}} Không   {{chk is_co}} Có --&gt;</span></pre>
+</div>
+
+<div class="code-panel" id="panel-jinja">
+  <button class="copy-btn" onclick="copyCode('panel-jinja')">Copy</button>
+  <pre><span class="cm">{# Jinja2 / Flask / FastAPI Template #}</span>
+<span class="cm">{# render_template('form.j2', **data) #}</span>
+
+<span class="cm">{# Trang 1 #}</span>
+<span class="kw">Họ và Tên:</span> <span class="var">{{ Ho_ten }}</span>        <span class="kw">Sinh ngày:</span> <span class="var">{{ Ngay_sinh }}</span>
+<span class="kw">Địa chỉ thường trú:</span> <span class="var">{{ Dia_chi_thuong_tru }}</span>
+<span class="kw">Địa chỉ tạm trú:</span> <span class="var">{{ Dia_chi_tam_tru }}</span>
+<span class="kw">Điện thoại:</span> <span class="var">{{ So_dien_thoai }}</span>
+<span class="kw">Số CCCD:</span> <span class="var">{{ So_CCCD }}</span>   <span class="kw">Ngày cấp:</span> <span class="var">{{ Ngay_cap_CCCD }}</span>   <span class="kw">Nơi cấp:</span> <span class="var">{{ Noi_cap_CCCD }}</span>
+
+<span class="cm">{# Checkbox render macro #}</span>
+<span class="kw">{% macro chk(val) %}{{ '☒' if val else '☐' }}{% endmacro %}</span>
+
+{{ chk(tien_an == False) }} Không   {{ chk(tien_an == True) }} Có
+{{ chk(da_lam_dhf == False) }} Không   {{ chk(da_lam_dhf == True) }} Có
+
+<span class="cm">{# Vị trí làm việc #}</span>
+{{ chk(loai_cv == 'nhan_vien') }} Nhân viên
+{{ chk(loai_cv == 'cong_nhan') }} Công nhân
+{{ chk(loai_cv == 'tap_nghe') }} Lao động tập nghề
+
+<span class="cm">{# Khu vực #}</span>
+{{ chk(khu_vuc == 'da_lat') }} Đà Lạt
+{{ chk(khu_vuc == 'da_quy') }} Đa Quý
+{{ chk(khu_vuc == 'da_ron') }} Đạ Ròn
+{{ chk(khu_vuc == 'lam_ha') }} Lâm Hà
+{{ chk(khu_vuc == 'khac') }} Khu vực khác
+
+<span class="cm">{# Công việc hiện tại #}</span>
+{{ chk(cong_viec_hien_tai == 'sinh_vien') }} Sinh viên trường <span class="var">{{ Ten_truong }}</span>
+{{ chk(cong_viec_hien_tai == 'khac') }} Khác <span class="var">{{ Cong_viec_hien_tai_khac }}</span>
+
+<span class="cm">{# Ngân hàng #}</span>
+{{ chk(co_tk) }} Đã có   {{ chk(not co_tk) }} Chưa có
+<span class="kw">Số TK:</span> <span class="var">{{ So_tai_khoan }}</span>   <span class="kw">Ngân hàng:</span> <span class="var">{{ Ten_ngan_hang }}</span>
+
+<span class="cm">{# Thu nhập #}</span>
+Thu nhập năm <span class="var">{{ Nam_thue }}</span>
+{{ chk(thu_nhap == 'chi_dhf') }} Chỉ phát sinh tại Dalat Hasfarm
+{{ chk(thu_nhap == 'ngoai_dhf') }} Phát sinh ngoài Dalat Hasfarm
+<span class="kw">Tên Công ty khác:</span> <span class="var">{{ Cong_ty_thu_nhap_khac }}</span>
+<span class="kw">Tại:</span> <span class="var">{{ Dia_diem_thu_nhap_khac }}</span>
+
+<span class="cm">{# Tập nghề #}</span>
+{{ chk(tap_nghe == 'trong') }} Trồng, chăm sóc, thu hoạch
+{{ chk(tap_nghe == 'ban_hang') }} Bán hàng
+{{ chk(tap_nghe == 'dong_goi') }} Đóng gói
+{{ chk(tap_nghe == 'khac') }} Khác <span class="var">{{ Cong_viec_khac }}</span>
+<span class="kw">Ngày nhận việc:</span> <span class="var">{{ Ngay_nhan_viec }}</span>
+
+<span class="cm">{# Trang 2 #}</span>
+<span class="kw">Người tiếp nhận:</span> <span class="var">{{ Nguoi_tiep_nhan }}</span>   <span class="kw">Ngày:</span> <span class="var">{{ Ngay_tiep_nhan }}</span>
+
+<span class="cm">{# Trang 3: Bản cam kết TNCN #}</span>
+<span class="kw">Địa chỉ cư trú:</span> <span class="var">{{ dia_chi_cu_tru }}</span>
+<span class="var">{{ Dia_diem_ky }}</span>, ngày <span class="var">{{ Ngay_ky_day }}</span> tháng <span class="var">{{ Ngay_ky_month }}</span> năm <span class="var">{{ Ngay_ky_year }}</span>
+
+<span class="cm">{# Trang 4: Ủy quyền #}</span>
+<span class="var">{{ Ho_ten }}</span>   Code: <span class="var">{{ Code }}</span>
+<span class="var">{{ Ngay_sinh }}</span>   CCCD: <span class="var">{{ So_CCCD }}</span>   Cấp: <span class="var">{{ Ngay_cap_CCCD }}</span>
+<span class="var">{{ Dia_chi_thuong_tru }}</span> / <span class="var">{{ Dia_chi_tam_tru }}</span>
+
+<span class="cm">{# Trang 5: Tờ khai 05-ĐKT #}</span>
+<span class="var">{{ Ho_ten }}</span>   Code: <span class="var">{{ Code }}</span>
+<span class="var">{{ Ngay_sinh }}</span>   CCCD: <span class="var">{{ So_CCCD }}</span>
+<span class="var">{{ So_dien_thoai }}</span>   Email: <span class="var">{{ Email }}</span>
+Số định danh cũ: <span class="var">{{ So_dinh_danh_cu }}</span></pre>
+</div>
+
+<div class="code-panel" id="panel-blade">
+  <button class="copy-btn" onclick="copyCode('panel-blade')">Copy</button>
+  <pre><span class="cm">{{-- Laravel Blade Template (.blade.php) --}}</span>
+<span class="cm">{{-- return view('dang-ky-tap-nghe', compact('data')) --}}</span>
+
+<span class="cm">{{-- Trang 1 --}}</span>
+<span class="kw">Họ và Tên:</span> <span class="var">{{ $data['Ho_ten'] }}</span>     <span class="kw">Sinh ngày:</span> <span class="var">{{ $data['Ngay_sinh'] }}</span>
+<span class="kw">Địa chỉ thường trú:</span> <span class="var">{{ $data['Dia_chi_thuong_tru'] }}</span>
+<span class="kw">Địa chỉ tạm trú:</span> <span class="var">{{ $data['Dia_chi_tam_tru'] }}</span>
+<span class="kw">Điện thoại:</span> <span class="var">{{ $data['So_dien_thoai'] }}</span>
+<span class="kw">Số CCCD:</span> <span class="var">{{ $data['So_CCCD'] }}</span>
+<span class="kw">Ngày cấp:</span> <span class="var">{{ $data['Ngay_cap_CCCD'] }}</span>
+<span class="kw">Nơi cấp:</span> <span class="var">{{ $data['Noi_cap_CCCD'] }}</span>
+
+<span class="cm">{{-- Helper macro checkbox --}}</span>
+<span class="kw">@php</span>
+  <span class="kw">function</span> chk($val) { <span class="kw">return</span> $val ? <span class="str">'☒'</span> : <span class="str">'☐'</span>; }
+<span class="kw">@endphp</span>
+
+{!! chk(!$data['tien_an']) !!} Không   {!! chk($data['tien_an']) !!} Có
+{!! chk(!$data['da_lam_dhf']) !!} Không   {!! chk($data['da_lam_dhf']) !!} Có
+
+<span class="cm">{{-- Vị trí --}}</span>
+{!! chk($data['loai_cv'] == 'nhan_vien') !!} Nhân viên
+{!! chk($data['loai_cv'] == 'cong_nhan') !!} Công nhân
+{!! chk($data['loai_cv'] == 'tap_nghe') !!} Lao động tập nghề
+
+<span class="cm">{{-- Khu vực --}}</span>
+{!! chk($data['khu_vuc'] == 'da_lat') !!} Đà Lạt
+{!! chk($data['khu_vuc'] == 'da_quy') !!} Đa Quý
+{!! chk($data['khu_vuc'] == 'da_ron') !!} Đạ Ròn
+{!! chk($data['khu_vuc'] == 'lam_ha') !!} Lâm Hà
+{!! chk($data['khu_vuc'] == 'khac') !!} Khu vực khác
+
+<span class="cm">{{-- Công việc hiện tại --}}</span>
+{!! chk($data['cong_viec_ht'] == 'sinh_vien') !!} Sinh viên trường
+<span class="var">{{ $data['Ten_truong'] }}</span>
+{!! chk($data['cong_viec_ht'] == 'khac') !!} Khác
+<span class="var">{{ $data['Cong_viec_hien_tai_khac'] }}</span>
+
+<span class="cm">{{-- Ngân hàng --}}</span>
+{!! chk($data['co_tk']) !!} Đã có   {!! chk(!$data['co_tk']) !!} Chưa có
+<span class="kw">Số TK:</span> <span class="var">{{ $data['So_tai_khoan'] }}</span>
+<span class="kw">Ngân hàng:</span> <span class="var">{{ $data['Ten_ngan_hang'] }}</span>
+
+<span class="cm">{{-- Thu nhập --}}</span>
+Thu nhập năm <span class="var">{{ $data['Nam_thue'] }}</span>
+{!! chk($data['thu_nhap'] == 'chi_dhf') !!} Chỉ DHF
+{!! chk($data['thu_nhap'] == 'ngoai_dhf') !!} Ngoài DHF
+<span class="var">{{ $data['Cong_ty_thu_nhap_khac'] }}</span>
+<span class="var">{{ $data['Dia_diem_thu_nhap_khac'] }}</span>
+
+<span class="cm">{{-- Tập nghề --}}</span>
+{!! chk($data['tap_nghe'] == 'trong') !!} Trồng, chăm sóc, thu hoạch
+{!! chk($data['tap_nghe'] == 'ban_hang') !!} Bán hàng
+{!! chk($data['tap_nghe'] == 'dong_goi') !!} Đóng gói
+{!! chk($data['tap_nghe'] == 'khac') !!} Khác <span class="var">{{ $data['Cong_viec_khac'] }}</span>
+<span class="kw">Ngày nhận việc:</span> <span class="var">{{ $data['Ngay_nhan_viec'] }}</span>
+
+<span class="cm">{{-- Trang 2 --}}</span>
+<span class="var">{{ $data['Nguoi_tiep_nhan'] }}</span>   <span class="var">{{ $data['Ngay_tiep_nhan'] }}</span>
+
+<span class="cm">{{-- Trang 3: TNCN --}}</span>
+<span class="var">{{ $data['dia_chi_cu_tru'] }}</span>
+<span class="var">{{ $data['Dia_diem_ky'] }}</span>, ngày <span class="var">{{ $data['Ngay_ky_day'] }}</span>
+tháng <span class="var">{{ $data['Ngay_ky_month'] }}</span> năm <span class="var">{{ $data['Ngay_ky_year'] }}</span>
+
+<span class="cm">{{-- Trang 4: Ủy quyền --}}</span>
+<span class="var">{{ $data['Ho_ten'] }}</span>   Code: <span class="var">{{ $data['Code'] }}</span>
+<span class="var">{{ $data['Ngay_sinh'] }}</span>   CCCD: <span class="var">{{ $data['So_CCCD'] }}</span>
+Cấp: <span class="var">{{ $data['Ngay_cap_CCCD'] }}</span>
+<span class="var">{{ $data['Dia_chi_thuong_tru'] }}</span>
+<span class="var">{{ $data['Dia_chi_tam_tru'] }}</span>
+
+<span class="cm">{{-- Trang 5: 05-ĐKT --}}</span>
+<span class="var">{{ $data['Ho_ten'] }}</span>   Code: <span class="var">{{ $data['Code'] }}</span>
+<span class="var">{{ $data['Ngay_sinh'] }}</span>
+CCCD: <span class="var">{{ $data['So_CCCD'] }}</span>
+ĐT: <span class="var">{{ $data['So_dien_thoai'] }}</span>
+Email: <span class="var">{{ $data['Email'] }}</span>
+Định danh cũ: <span class="var">{{ $data['So_dinh_danh_cu'] }}</span></pre>
+</div>
+
+<!-- NAV TABS -->
+<div class="nav-tabs">
+  <button class="nav-tab active" onclick="showPage(0,this)">📋 Trang 1: Đăng ký tập nghề</button>
+  <button class="nav-tab" onclick="showPage(1,this)">📋 Trang 2: Ghi nhận + Quy định</button>
+  <button class="nav-tab" onclick="showPage(2,this)">📋 Trang 3: Quy định (tt)</button>
+  <button class="nav-tab" onclick="showPage(3,this)">📋 Trang 4: Bản cam kết TNCN</button>
+  <button class="nav-tab" onclick="showPage(4,this)">📋 Trang 5: Giấy ủy quyền</button>
+  <button class="nav-tab" onclick="showPage(5,this)">📋 Trang 6: Tờ khai 05-ĐKT</button>
+  <button class="nav-tab" onclick="showAll(this)">📄 Xem tất cả</button>
+</div>
+
+<!-- ============================================================ -->
+<!-- TRANG 1: GIẤY ĐĂNG KÝ TẬP NGHỀ                            -->
+<!-- ============================================================ -->
+<div class="page" id="pg0">
+  <div class="doc-header">
+    <div class="hd-left">DALAT HASFARM</div>
+    <div class="hd-right">GIẤY ĐĂNG KÝ TẬP NGHỀ</div>
+  </div>
+
+  <div class="line b"><span class="u">Kính gửi</span>: CÔNG TY TNHH DALAT HASFARM</div>
+  <div class="line mt2 b">I/ <span class="u">THÔNG TIN CÁ NHÂN</span></div>
+
+  <div class="photo-wrap">
+    <div class="body-col">
+      <div class="line">Họ và Tên: <span class="f">{{Ho_ten}}</span> &nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp; Sinh ngày: <span class="f">{{Ngay_sinh}}</span></div>
+      <div class="line">Địa chỉ thường trú: <span class="f">{{Dia_chi_thuong_tru}}</span></div>
+      <div class="line">Địa chỉ tạm trú: <span class="f">{{Dia_chi_tam_tru}}</span></div>
+      <div class="line">Điện thoại liên lạc: <span class="f">{{So_dien_thoai}}</span></div>
+      <div class="line">Số CCCD: <span class="f">{{So_CCCD}}</span> &nbsp;&nbsp; Ngày cấp: <span class="f">{{Ngay_cap_CCCD}}</span></div>
+      <div class="line">Nơi cấp: Cục CSQLHC về TTXH <span class="f">{{Noi_cap_CCCD}}</span></div>
+    </div>
+    <div class="photo-box">
+      <div class="pt">HÌNH 3*4</div>
+      <div class="pt">01 TẤM</div>
+      <div>(dán vào đây)</div>
+    </div>
+  </div>
+
+  <div class="tight">CCCD: <span class="i">Đính kèm bản photo CCCD (không cần công chứng)</span></div>
+  <div class="tight">Đã có tiền án, tiền sự trước đây: &nbsp; <span class="f">{{Tien_an_tien_su_Khong}}</span> Không &nbsp;&nbsp; <span class="f">{{Tien_an_tien_su_Co}}</span> Có</div>
+  <div class="tight">Đã từng tập nghề/ làm việc cho Cty Dalat Hasfarm: &nbsp; <span class="f">{{Da_tung_lam_DHF_Khong}}</span> Không &nbsp; <span class="f">{{Da_tung_lam_DHF_Co}}</span> Có</div>
+  <div class="tight">Vị trí tập nghề/ làm việc trước đây:</div>
+  <div class="tight pl1"><span class="f">{{Loai_cong_viec_Nhan_vien}}</span> Nhân viên &nbsp;&nbsp; <span class="f">{{Loai_cong_viec_Cong_nhan}}</span> Công nhân &nbsp;&nbsp; <span class="f">{{Loai_cong_viec_Lao_dong_tap_nghe}}</span> Lao động tập nghề</div>
+  <div class="tight pl1 i">Khu vực làm việc: &nbsp; <span class="f">{{Khu_vuc_Da_Lat}}</span> Đà lạt &nbsp; <span class="f">{{Khu_vuc_Da_Quy}}</span> Đa Quý &nbsp; <span class="f">{{Khu_vuc_Da_Ron}}</span> Đạ Ròn &nbsp; <span class="f">{{Khu_vuc_Lam_Ha}}</span> Lâm Hà &nbsp; <span class="f">{{Khu_vuc_Khac}}</span> Khu vực khác</div>
+  <div class="tight">Công việc hiện tại: <span class="f">{{Cong_viec_hien_tai_Sinh_vien}}</span> Sinh viên trường <span class="f">{{Ten_truong}}</span></div>
+  <div class="tight"><span class="f">{{Cong_viec_hien_tai_Khac}}</span> Khác <span class="f">{{Cong_viec_hien_tai_khac}}</span></div>
+  <div class="tight">Tài khoản ngân hàng (chính chủ): <span class="f">{{TKNH_Da_co}}</span> Đã có &nbsp;&nbsp; <span class="f">{{TKNH_Chua_co}}</span> Chưa có</div>
+  <div class="tight">Số tài khoản: <span class="f">{{So_tai_khoan}}</span> &nbsp;&nbsp; Tên ngân hàng: <span class="f">{{Ten_ngan_hang}}</span></div>
+  <div class="tight">Thu nhập trong năm <span class="f">{{Nam_thue}}</span></div>
+  <div class="tight pl1"><span class="f">{{Thu_nhap_Chi_DHF}}</span> Chỉ phát sinh tại Công ty TNHH Dalat Hasfarm</div>
+  <div class="tight pl1"><span class="f">{{Thu_nhap_Ngoai_DHF}}</span> Phát sinh tại Công ty/ Đơn vị khác ngoài Công ty TNHH Dalat Hasfarm. Cụ thể:</div>
+  <div class="tight pl2">Tên Công ty/ Đơn vị: <span class="f">{{Cong_ty_thu_nhap_khac}}</span></div>
+  <div class="tight pl2">Tại: <span class="f">{{Dia_diem_thu_nhap_khac}}</span></div>
+
+  <div class="line mt4"><span class="b">II/ <span class="u">THÔNG TIN TẬP NGHỀ:</span></span> Xin đăng ký được vào tập nghề sau đây tại Công ty:</div>
+  <div class="tight b"><span class="f">{{Tap_nghe_Trong_cham_soc_thu_hoach}}</span> Trồng, chăm sóc, thu hoạch</div>
+  <div class="tight b"><span class="f">{{Tap_nghe_Ban_hang}}</span> Bán hàng</div>
+  <div class="tight"><span class="f">{{Tap_nghe_Dong_goi}}</span> Đóng gói &nbsp;&nbsp; <span class="f">{{Tap_nghe_Khac}}</span> Khác <span class="f">{{Cong_viec_khac}}</span></div>
+  <div class="tight">Thời gian đăng ký tập nghề: từ ngày <span class="f">{{Ngay_nhan_viec}}</span></div>
+
+  <div class="line mt4 b">III/ <span class="u">CAM KẾT CỦA NGƯỜI LÀM ĐƠN</span></div>
+  <div class="line justify">Tôi xin cam kết sẽ chấp hành tốt mọi nội quy, chính sách và quy định Tập Nghề cụ thể của Công ty trong suốt thời gian tập nghề. Nếu tôi có bất cứ hành vi sai phạm nào làm ảnh hưởng đến tài sản, uy tín, hoặc trật tự kỷ luật chung của Công ty, Công ty có quyền chấm dứt ngay thời gian tập nghề với tôi và xử lý sai phạm, yêu cầu tôi bồi thường thiệt hại (nếu có).</div>
+  <div class="line justify">Mọi thông tin tôi cung cấp bên trên là đúng sự thật, nếu có sai sót tôi xin hoàn toàn chịu trách nhiệm theo quy định của pháp luật hiện hành.</div>
+  <div class="line justify">Giấy đăng ký này thay cho thỏa thuận tập nghề giữa tôi và Công ty.</div>
+
+  <div class="line mt6 b">Người làm đơn ký: &nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp; Họ tên: <span class="f">{{Ho_ten}}</span></div>
+  <div class="line b">Ngày đăng ký: <span class="f">{{Ngay_nhan_viec}}</span></div>
+</div>
+
+<!-- ============================================================ -->
+<!-- TRANG 2: GHI NHẬN + QUY ĐỊNH (PHẦN ĐẦU)                   -->
+<!-- ============================================================ -->
+<div class="page" id="pg1">
+  <div class="line b u">GHI NHẬN CỦA PHÒNG NHÂN SỰ:</div>
+  <div class="line">Đồng ý tiếp nhận anh/chị theo giấy đăng ký vào tập nghề tại Công ty</div>
+  <div class="line b">Người tiếp nhận: <span class="f">{{Nguoi_tiep_nhan}}</span> &nbsp;&nbsp;&nbsp; Ngày: <span class="f">{{Ngay_tiep_nhan}}</span></div>
+
+  <div class="attach-box">
+    <span class="ai">Đính kèm</span>:
+    <table>
+      <tr><td style="width:50%">- Cam kết về thuế TNCN</td><td style="width:10%">Có</td><td>Chưa</td></tr>
+      <tr><td>- CCCD</td><td>Có</td><td>Chưa</td></tr>
+      <tr><td colspan="3">- Khác: ……………………………………………………………………………………</td></tr>
+    </table>
+  </div>
+
+  <div class="doc-header">
+    <div class="hd-left">DALAT HASFARM</div>
+    <div class="hd-right">QUY ĐỊNH VỀ TẬP NGHỀ</div>
+  </div>
+
+  <div class="pl1 i">
+    <div class="tight">- Căn cứ Điều 61 của Bộ luật Lao động 2019 về Tập nghề;</div>
+    <div class="tight">- Căn cứ nhu cầu tuyển dụng của Công ty;</div>
+    <div class="tight">- Căn cứ nhu cầu tập nghề và xin việc của người tập nghề.</div>
+  </div>
+  <div class="line mt4">Nay, Công ty quy định các điều khoản liên quan đến Tập nghề cụ thể như sau:</div>
+
+  <span class="sec">1. GIẢI THÍCH TỪ NGỮ:</span>
+  <div class="line justify indent">Tập nghề nghĩa là được hướng dẫn thực hành công việc, tập làm nghề theo vị trí việc làm tại công ty.</div>
+
+  <span class="sec">2. CÔNG VIỆC ĐƯỢC HƯỚNG DẪN TẬP LÀM VÀ THỰC HÀNH:</span>
+  <div class="line indent">Trồng, chăm sóc, thu hoạch, đóng gói, bán hoa/ ngọn giống/ rau</div>
+
+  <span class="sec">3. ĐỊA ĐIỂM TẬP NGHỀ:</span>
+  <div class="line justify indent">Các khu vực sản xuất, kinh doanh của Công ty: do Quản lý bộ phận &amp; Phòng Nhân sự sắp xếp cụ thể</div>
+
+  <span class="sec">4. THỜI HẠN TẬP NGHỀ:</span>
+  <div class="line justify indent">Thời hạn tập nghề là 03 tháng kể từ ngày nhận đơn đăng ký tập nghề. Thời gian tập nghề có thể kết thúc sớm hơn, hoặc kéo dài hơn tùy vào nhu cầu và khả năng đáp ứng của 2 bên. Trong hoặc sau thời gian tập nghề, người tập nghề có thể xin ứng tuyển vào những vị trí tuyển dụng phù hợp tại Công ty (nếu có).</div>
+
+  <span class="sec">5. TRỢ CẤP TẬP NGHỀ VÀ THỜI GIAN CHI TRẢ:</span>
+  <div class="tight pl1 u">Trợ cấp tập nghề:</div>
+  <div class="line justify" style="padding-left:8mm;text-indent:10mm;">Mức trợ cấp tập nghề sẽ được thông báo cụ thể cho người tập nghề ngay ngày đầu tiên tiếp nhận vào tập nghề.</div>
+  <div class="line justify" style="padding-left:8mm;text-indent:10mm;">Trợ cấp tập nghề có thể thay đổi tùy thời điểm, khu vực và nhóm công việc tham gia tập nghề. Mọi thay đổi liên quan đến phần trợ cấp này sẽ được thông báo rộng rãi, kịp thời đến người tập nghề.</div>
+  <div class="line justify" style="padding-left:8mm;text-indent:10mm;">Tiền trợ cấp hàng ngày này được tính theo thời gian tập nghề và thực hành thực tế của người tập nghề</div>
+  <div class="tight pl1 u">Thời gian chi trả:</div>
+  <div class="line justify" style="padding-left:8mm;text-indent:10mm;">Đối với tập nghề tại các bộ phận thuộc các khu vực sản xuất của Công ty: Thời gian làm việc được chốt và chi trả 02 lần/ 01 tháng, cụ thể:</div>
+  <div class="line justify" style="padding-left:8mm;text-indent:10mm;">Đợt 1: công từ ngày 01 đến ngày 15 được tính gộp và chi trả trong khoản thời gian từ ngày 25 đến ngày 28 của tháng.</div>
+  <div class="line justify" style="padding-left:8mm;text-indent:10mm;">Đợt 2: công từ ngày 16 đến ngày cuối tháng được tính gộp và chi trả trong khoản thời gian từ ngày 12 đến ngày 15 của tháng tiếp theo.</div>
+  <div class="line justify" style="padding-left:8mm;text-indent:10mm;">Đối với tập nghề tại Khu vực Kinh doanh: công được tính theo kỳ từ 21 tháng trước đến 20 tháng sau và chi vào ngày cuối cùng của tháng.</div>
+  <div class="line justify" style="padding-left:8mm;text-indent:10mm;">Nếu thời gian chi trả thay đổi do thực tế hoạt động, Công ty sẽ thông báo cụ thể đến người tập nghề.</div>
+
+  <span class="sec">6. BẢO HIỂM XÃ HỘI, BẢO HIỂM Y TẾ, BẢO HIỂM THẤT NGHIỆP:</span>
+  <div class="line justify indent">Bảo hiểm Xã hội, Bảo hiểm Y tế, Bảo hiểm Thất nghiệp sẽ không áp dụng đối với người tập nghề theo qui định của pháp luật Việt Nam hiện hành.</div>
+</div>
+
+<!-- ============================================================ -->
+<!-- TRANG 3: QUY ĐỊNH (TIẾP THEO)                              -->
+<!-- ============================================================ -->
+<div class="page" id="pg2">
+  <span class="sec" style="margin-top:0">7. QUY ĐỊNH KHI TẬP NGHỀ TẠI CÔNG TY:</span>
+  <div class="line justify indent">a. Thời gian làm việc và nghỉ ngơi: Theo quy định chung của bộ phận/ khu vực, và theo yêu cầu/ nhu cầu thực tế; được quản lý bộ phận &amp; phòng nhân sự thông báo cụ thể vào ngày đầu tiên tham gia tập nghề.</div>
+  <div class="line justify indent">b. Phải đăng ký tập nghề và được phòng Nhân sự đồng ý tiếp nhận, sắp xếp. Không tự ý vào tập nghề tại các bộ phận của Công ty.</div>
+  <div class="line justify indent">c. Phải bấm vân tay đầy đủ theo quy định của Công ty. Vân tay và xác nhận của quản lý trực tiếp là căn cứ để tính trợ cấp cho người tập nghề.</div>
+  <div class="line justify indent">d. Phải có thẻ ngân hàng ATM hoặc làm hồ sơ đăng ký làm thẻ ATM ngay khi vào đăng ký tập nghề.</div>
+  <div class="line justify indent">e. Phải đăng ký đầy đủ danh sách và thông tin cá nhân cơ bản theo biểu mẫu quy định trước khi vào tập nghề tại Công ty. Bổ sung đầy đủ 02 hình 3x4cm và 02 bản sao CCCD (không công chứng) theo quy định. Hiểu rõ các yêu cầu cũng như trách nhiệm khi vào Công ty tập nghề. Trong thời gian tập nghề, người tập nghề phải tuân thủ sự sắp xếp, điều phối của tổ trưởng và quản đốc bộ phận.</div>
+  <div class="line justify indent">f. Trang phục (theo yêu cầu cụ thể của công việc tại từng bộ phận, khu vực):</div>
+  <div class="tight pl2">Quần áo: &nbsp;quần áo phù hợp, phải mặc áo đồng phục do Công ty cấp.</div>
+  <div class="line pl2">Giày: phải mang giày bata, giày thể thao hoặc ủng.</div>
+  <div class="line justify indent">g. Không được tự ý rời khỏi khu vực đã đăng ký tập nghề ban đầu, ngoại trừ có thông báo khác.</div>
+  <div class="line justify indent">h. Đậu đỗ xe đúng nơi quy định.</div>
+  <div class="line justify indent">i. Không được gây lộn, đánh nhau hoặc không được có bất cứ hành vi, cử chỉ khiếm nhã, thiếu văn hóa khi đang ở trong khu vực Công ty.</div>
+  <div class="line justify indent">j. Không được uống hoặc có mùi rượu bia khi làm việc.</div>
+  <div class="line justify indent">k. Hút thuốc và bỏ rác đúng nơi quy định. Hành vi hút thuốc và bỏ rác sai nơi quy định sẽ bị phạt theo chính sách chung của Công ty.</div>
+  <div class="line justify indent">l. Không được đem hoặc sử dụng các chất kích thích trong khu vực Công ty.</div>
+  <div class="line justify indent">m. Có trách nhiệm bảo quản các công cụ, tài sản của Công ty. Không được mang các vật dụng, tài sản của Công ty ra khỏi khu vực làm việc.</div>
+  <div class="line justify indent">n. Phải tự trang bị đầy đủ bảo hộ lao động khi vào làm việc tại Công ty theo đúng công việc đảm nhiệm, đảm bảo tuân thủ các quy định về an toàn khi làm việc.</div>
+
+  <span class="sec">8. TRÁCH NHIỆM KHI VI PHẠM:</span>
+  <div class="line justify indent">Nếu hành vi vi phạm ở mức làm ảnh hưởng đến trật tự, an toàn tại nơi làm việc thì người vi phạm sẽ không được tiếp tục vào Công ty tập nghề, trường hợp đặc biệt sẽ được xem xét cụ thể.</div>
+  <div class="line justify indent">Nếu hành vi vi phạm ở mức làm hư hỏng, mất mát hoặc có bất cứ hành vi nào làm thiệt hại đến tài sản, uy tín của Công ty thì người vi phạm không được phép tiếp tục vào Công ty làm việc, và phải bồi thường toàn bộ thiệt hại đã gây ra.</div>
+
+  <span class="sec">9. CHẤM DỨT VIỆC TẬP NGHỀ:</span>
+  <div class="line justify indent">Trong quá trình tập nghề, nếu xét thấy việc tập nghề không đạt kết quả mong đợi, Công ty và người tập nghề có quyền đơn phương chấp dứt thỏa thuận tập nghề, và thông báo (bằng lời nói, hoặc bằng văn bản) cho nhau biết trước 01 ngày.</div>
+
+  <span class="sec">10. CAM KẾT:</span>
+  <div class="line justify indent">Đối tượng đăng ký tham gia tập nghề tại Công ty đều được giới thiệu rõ về những điều khoản trong quy định tập nghề để đảm bảo hiểu rõ và tiến hành áp dụng cho phù hợp.</div>
+
+  <div class="sign-single mt10">
+    <div>Người đăng ký tham gia tập nghề</div>
+    <div>ký tên xác nhận hiểu rõ các khoản nêu trên</div>
+    <div>và cam kết tuân thủ nghiêm túc</div>
+    <div class="sign-gap"></div>
+    <div class="b"><span class="f">{{Ho_ten}}</span></div>
+  </div>
+</div>
+
+<!-- ============================================================ -->
+<!-- TRANG 4: BẢN CAM KẾT TNCN                                 -->
+<!-- ============================================================ -->
+<div class="page" id="pg3">
+  <div class="quochieu">
+    CỘNG HÒA XÃ HỘI CHỦ NGHĨA VIỆT NAM
+    <div class="sub">Độc lập - Tự do - Hạnh phúc</div>
+  </div>
+
+  <div class="center b mt8" style="font-size:12pt;">BẢN CAM KẾT</div>
+  <div class="center b">(Áp dụng khi cá nhân nhận thu nhập và ước tính tổng thu nhập trong năm dương lịch chưa đến mức chịu thuế TNCN)</div>
+
+  <div class="line mt8 center">Kính gửi: <span class="i">(Tên tổ chức, cá nhân trả thu thập)</span>………………………………………..</div>
+
+  <div class="line mt4 pl1">1. Tên tôi là: <span class="f">{{Ho_ten}}</span></div>
+  <div class="line pl1">
+    2. Mã số thuế:&nbsp;
+    <span class="mst-wrap">
+      <span class="mst-cell"></span><span class="mst-cell"></span><span class="mst-cell"></span>
+      <span class="mst-cell"></span><span class="mst-cell"></span><span class="mst-cell"></span>
+      <span class="mst-cell"></span><span class="mst-cell"></span><span class="mst-cell"></span>
+      <span class="mst-cell"></span>
+      <span class="mst-gap"></span>
+      <span class="mst-cell"></span><span class="mst-cell"></span><span class="mst-cell"></span>
+    </span>
+  </div>
+  <div class="line pl1">3. Địa chỉ cư trú: <span class="f">{{dia_chi_cu_tru}}</span></div>
+
+  <div class="line justify indent">Tôi cam kết rằng, năm <span class="f">{{Nam_thue}}</span> tôi có tổng thu nhập từ tiền lương, tiền công thuộc diện phải khấu trừ thuế theo tỷ lệ 10%, nhưng theo ước tính tổng thu nhập trong năm của tôi không quá 186 (*) triệu đồng (ghi bằng chữ: Một trăm tám mươi sáu triệu đồng) chưa đến mức phải nộp thuế TNCN. Vì vậy, tôi đề nghị Công ty TNHH Dalat Hasfarm căn cứ vào bản cam kết này để không khấu trừ thuế TNCN khi trả thu nhập cho tôi.</div>
+
+  <div class="line justify indent">Tôi chịu trách nhiệm trước pháp luật về những số liệu đã khai./.</div>
+
+  <div class="sign-single mt8">
+    <div class="i"><span class="f">{{Dia_diem_ky}}</span>, ngày <span class="f">{{Ngay_ky_day}}</span> tháng <span class="f">{{Ngay_ky_month}}</span> năm <span class="f">{{Ngay_ky_year}}</span></div>
+    <div class="b">CÁ NHÂN CAM KẾT</div>
+    <div class="i">(Ký, ghi rõ họ tên)</div>
+    <div class="sign-gap"></div>
+    <div class="b"><span class="f">{{Ho_ten}}</span></div>
+  </div>
+</div>
+
+<!-- ============================================================ -->
+<!-- TRANG 5: GIẤY ỦY QUYỀN                                    -->
+<!-- ============================================================ -->
+<div class="page" id="pg4">
+  <div class="quochieu">
+    CỘNG HÒA XÃ HỘI CHỦ NGHĨA VIỆT NAM
+    <div class="sub">Độc lập – Tự do – Hạnh phúc</div>
+    <div>-----ooo0ooo-----</div>
+  </div>
+
+  <div class="center b mt8" style="font-size:12pt;">GIẤY ỦY QUYỀN</div>
+  <div class="center b">(Đăng ký mã số thuế thu nhập cá nhân)</div>
+
+  <div class="line mt8 b">BÊN UỶ QUYỀN (BÊN A):</div>
+  <div class="line b">Tên người ủy quyền: <span class="f">{{Ho_ten}}</span> &nbsp;&nbsp; Code: <span class="f">{{Code}}</span></div>
+  <div class="line">Ngày sinh: <span class="f">{{Ngay_sinh}}</span> &nbsp; Chứng minh nhân dân/ CCCD số: <span class="f">{{So_CCCD}}</span></div>
+  <div class="line">Do Công an: Cục CSQLHC về TTXH &nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp; Cấp ngày: <span class="f">{{Ngay_cap_CCCD}}</span></div>
+  <div class="line">Địa chỉ đăng ký theo hộ khẩu: <span class="f">{{Dia_chi_thuong_tru}}</span></div>
+  <div class="line">Địa chỉ cư trú: <span class="f">{{Dia_chi_tam_tru}}</span></div>
+  <div class="line">Nơi làm việc hiện nay: Công ty TNHH Dalat Hasfarm</div>
+
+  <div class="line mt4 b">BÊN NHẬN UỶ QUYỀN (BÊN B):</div>
+  <div class="tight b">Tên đơn vị: Công ty TNHH Dalat Hasfarm</div>
+  <div class="tight">Mã số thuế: 5800000167</div>
+  <div class="tight">Địa chỉ trụ sở chính: 450 Nguyên Tử Lực, Phường 08, Tp Đà Lạt, Tỉnh Lâm Đồng</div>
+  <div class="tight">Đại diện pháp luật: &nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp; Chức vụ:</div>
+
+  <span class="sec mt4">ĐIỀU 1: NỘI DUNG VÀ PHẠM VI ỦY QUYỀN</span>
+  <div class="tight">Bên A ủy quyền cho bên B thực hiện các công việc sau đây:</div>
+  <div class="line justify">Làm việc với Cục Thuế tỉnh Lâm Đồng để làm thủ tục đăng ký mã số thuế thu nhập cá nhân cho (Tên người ủy quyền) <span class="f">{{Ho_ten}}</span> theo quy định về đăng ký thuế.</div>
+
+  <span class="sec">ĐIỀU 2: THỜI HẠN ỦY QUYỀN</span>
+  <div class="line">10 ngày kể từ ngày ký.</div>
+
+  <span class="sec">ĐIỀU 3: NGHĨA VỤ CỦA CÁC BÊN</span>
+  <div class="tight">Bên A và bên B chịu trách nhiệm trước pháp luật về những lời cam đoan sau đây:</div>
+  <div class="tight">1. Bên A chịu trách nhiệm cho Bên B thực hiện trong phạm vi được ủy quyền.</div>
+  <div class="tight">2. Bên B thực hiện công việc được ủy quyền phải báo cho Bên A về việc thực hiện công việc nêu trên.</div>
+  <div class="tight">3. Việc giao kết Giấy uỷ quyền này hoàn toàn tự nguyện, không bị lừa dối hoặc ép buộc</div>
+  <div class="tight">4. Thực hiện đúng và đầy đủ tất cả các thỏa thuận đã ghi trong Giấy ủy quyền này.</div>
+
+  <span class="sec">ĐIỀU 4: ĐIỀU KHOẢN CUỐI CÙNG</span>
+  <div class="tight justify">1. Hai bên công nhận đã hiểu rõ quyền, nghĩa vụ và lợi ích hợp pháp của mình, ý nghĩa và hậu quả pháp lý của việc giao kết Giấy ủy quyền này.</div>
+  <div class="tight justify">2. Hai bên đã tự đọc Giấy ủy quyền, đã hiểu và đồng ý tất cả các điều khoản ghi trong Giấy và ký vào Giấy ủy quyền này.</div>
+  <div class="tight">3. Giấy uỷ quyền này có hiệu lực từ ngày hai bên ký.</div>
+
+  <div class="line mt6 i">Đà Lạt, ngày <span class="f">{{Ngay_ky_day}}</span> tháng <span class="f">{{Ngay_ky_month}}</span> năm <span class="f">{{Ngay_ky_year}}</span></div>
+
+  <table class="sign-3-table mt4">
+    <tr>
+      <td><div class="b">BÊN UỶ QUYỀN</div><div>(ký, ghi rõ họ tên)</div></td>
+      <td><div class="b">PHÒNG NHÂN SỰ</div><div>(ký, ghi rõ họ tên)</div></td>
+      <td><div class="b">ĐẠI DIỆN HỢP PHÁP</div><div>(ký, đóng dấu, ghi rõ họ tên)</div></td>
+    </tr>
+    <tr><td class="sign-gap"></td><td></td><td></td></tr>
+    <tr>
+      <td><span class="f">{{Ho_ten}}</span></td>
+      <td></td>
+      <td></td>
+    </tr>
+  </table>
+</div>
+
+<!-- ============================================================ -->
+<!-- TRANG 6: TỜ KHAI ĐĂNG KÝ THUẾ 05-ĐKT                     -->
+<!-- ============================================================ -->
+<div class="page clearfix" id="pg5">
+  <div class="mauso-box">
+    <div>Mẫu số: <span class="b">05-ĐKT</span></div>
+    <div class="i">(Kèm theo Thông tư số 90/2026/TT-BTC</div>
+    <div class="i">ngày 30 tháng 6 năm 2026</div>
+    <div class="i">của Bộ trưởng Bộ Tài chính)</div>
+  </div>
+
+  <div class="quochieu" style="clear:none;">
+    CỘNG HÒA XÃ HỘI CHỦ NGHĨA VIỆT NAM
+    <div class="sub">Độc lập - Tự do - Hạnh phúc</div>
+    <div class="hr-short"></div>
+  </div>
+
+  <div class="center b mt8" style="font-size:12pt;">TỜ KHAI ĐĂNG KÝ THUẾ</div>
+  <div class="center i">(Dùng cho người nộp thuế là cá nhân không kinh doanh trực tiếp đăng ký thuế)</div>
+
+  <div class="line mt8 b">1. Họ và tên người đăng ký thuế: <span class="f">{{Ho_ten}}</span> &nbsp;&nbsp;&nbsp; Code: <span class="f">{{Code}}</span></div>
+
+  <div class="line mt4 b">2. Thông tin tổ chức, cá nhân cung cấp dịch vụ làm thủ tục về thuế (nếu có):</div>
+  <div class="tight pl1">2a. Tên: <span class="b">Công ty TNHH DALAT HASFARM</span></div>
+  <div class="tight pl1">2b. Mã số thuế: <span class="b">5800000167</span></div>
+  <div class="tight pl1">2c. Hợp đồng dịch vụ làm thủ tục về thuế: Số: ………….. Ngày: …………………………….</div>
+
+  <div class="line mt4 b">3. Thông tin đăng ký thuế của cá nhân:</div>
+  <div class="line b i">Trường hợp cá nhân đăng ký thuế là người có quốc tịch Việt Nam có thông tin trong Cơ sở dữ liệu quốc gia về dân cư:</div>
+  <div class="tight pl1">3.1. Ngày, tháng, năm sinh: <span class="f">{{Ngay_sinh}}</span></div>
+  <div class="tight pl1">3.2. Số định danh cá nhân: <span class="f">{{So_CCCD}}</span></div>
+  <div class="tight pl1">3.3. Điện thoại liên hệ: <span class="f">{{So_dien_thoai}}</span></div>
+  <div class="tight pl1">3.4. Email: <span class="f">{{Email}}</span></div>
+  <div class="tight pl1">3.5. Số định danh cá nhân đã cấp trước đó: <span class="f">{{So_dinh_danh_cu}}</span></div>
+
+  <div class="line mt4 b i">Trường hợp cá nhân là người có quốc tịch nước ngoài hoặc là người có quốc tịch Việt Nam đang sống tại nước ngoài không có số định danh cá nhân:</div>
+  <div class="tight pl1">3.1. Ngày, tháng, năm sinh: …./….. / …………………………………………………..</div>
+  <div class="tight pl1">3.2. Giới tính: □ Nam &nbsp;&nbsp;&nbsp;&nbsp;&nbsp; □ Nữ</div>
+  <div class="tight pl1">3.3. Quốc tịch: …………………………………………………………………………….</div>
+  <div class="tight pl1">3.4. Số hộ chiếu:…………… Ngày cấp:.../.../…. Nơi cấp ……………………………</div>
+  <div class="tight pl1">3.5. Địa chỉ thường trú:</div>
+  <div class="tight pl1">Số nhà, ngách, hẻm, ngõ, đường/phố, tổ/xóm/ấp/thôn: ……………………………..</div>
+  <div class="tight pl1">Xã/Phường/Đặc khu: …………………………………………………………………….</div>
+  <div class="tight pl1">Tỉnh/Thành phố trực thuộc trung ương: ……………………………………………….</div>
+  <div class="tight pl1">3.6. Địa chỉ hiện tại:</div>
+  <div class="tight pl1">Số nhà, ngách, hẻm, ngõ, đường/phố, tổ/xóm/ấp/thôn: ……………………………..</div>
+  <div class="tight pl1">Tỉnh/Thành phố trực thuộc trung ương: ……………………………………………….</div>
+  <div class="tight pl1">3.7. Điện thoại liên hệ: …………………………………………………………………..</div>
+  <div class="tight pl1">3.8. Email: …………………………………………………………………………………</div>
+
+  <div class="line mt4 justify indent">Tôi cam kết những nội dung kê khai là đúng và chịu trách nhiệm trước pháp luật về những nội dung đã khai./.</div>
+
+  <div class="sign-single mt6">
+    <div class="i"><span class="f">{{Dia_diem_ky}}</span>, ngày <span class="f">{{Ngay_ky_day}}</span> tháng <span class="f">{{Ngay_ky_month}}</span> năm <span class="f">{{Ngay_ky_year}}</span></div>
+    <div class="b i">NGƯỜI ĐĂNG KÝ THUẾ</div>
+    <div class="i">(Ký, ghi rõ họ tên, xác nhận điện tử)</div>
+    <div class="sign-gap"></div>
+    <div class="b"><span class="f">{{Ho_ten}}</span></div>
+  </div>
+</div>
+
+<script>
+// Tab navigation
+function showPage(idx, btn) {
+  document.querySelectorAll('.page').forEach((p, i) => {
+    p.style.display = (i === idx) ? 'block' : 'none';
+  });
+  document.querySelectorAll('.nav-tab').forEach(b => b.classList.remove('active'));
+  btn.classList.add('active');
+}
+
+function showAll(btn) {
+  document.querySelectorAll('.page').forEach(p => p.style.display = 'block');
+  document.querySelectorAll('.nav-tab').forEach(b => b.classList.remove('active'));
+  btn.classList.add('active');
+}
+
+// Init: show page 0 only
+showPage(0, document.querySelectorAll('.nav-tab')[0]);
+
+// Toggle code panels
+function toggleCode(type) {
+  const panels = { hbs: 'panel-hbs', jinja: 'panel-jinja', blade: 'panel-blade' };
+  Object.entries(panels).forEach(([k, id]) => {
+    const el = document.getElementById(id);
+    if (k === type) {
+      el.classList.toggle('show');
+    } else {
+      el.classList.remove('show');
+    }
+  });
+}
+
+// Copy code
+function copyCode(panelId) {
+  const el = document.getElementById(panelId);
+  const text = el.querySelector('pre').innerText;
+  navigator.clipboard.writeText(text).then(() => {
+    const btn = el.querySelector('.copy-btn');
+    btn.textContent = '✓ Đã copy!';
+    setTimeout(() => btn.textContent = 'Copy', 2000);
+  });
+}
+</script>
+</body>
+</html>
