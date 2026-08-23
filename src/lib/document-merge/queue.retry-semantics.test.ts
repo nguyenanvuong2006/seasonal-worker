@@ -43,6 +43,11 @@ async function load(db: FakeDb, opts: { shouldRetry?: boolean } = {}): Promise<Q
         isTerminalItemStatus: (status: string) => status === "COMPLETED" || status === "FAILED" || status === "CANCELLED",
         retryBackoffSeconds: () => 30,
         shouldRetry: () => opts.shouldRetry ?? true,
+        isRetryableItemError: (errorCode?: string | null, explicit?: boolean) => {
+          if (typeof explicit === "boolean") return explicit;
+          if (!errorCode) return true;
+          return !["INCOMPLETE", "INVALID_MAPPING", "INVALID_TEMPLATE", "UNSUPPORTED_SOURCE_PATH", "TEMPLATE_NOT_PUBLISHED", "RECORD_NOT_FOUND"].includes(errorCode);
+        },
       },
     },
   });
@@ -120,7 +125,7 @@ test("allRemainingItemsAwaitingRetry: no pending items → false", async () => {
   assert.equal(await mod.allRemainingItemsAwaitingRetry("job-1"), false);
 });
 
-test("failItem: DATA_RESOLUTION INCOMPLETE stays on the item through RETRY", async () => {
+test("failItem: DATA_RESOLUTION INCOMPLETE on attempt 1 is FAILED immediately (not RETRY)", async () => {
   const db = createFakeDb({
     respond: (call) => {
       if (call.root === "update" && call.table === "merge_job_records") return [{ id: "item-1" }];
@@ -133,15 +138,42 @@ test("failItem: DATA_RESOLUTION INCOMPLETE stays on the item through RETRY", asy
     { errorCode: "INCOMPLETE", errorMessage: "Thiếu: Dia_chi_thuong_tru" },
     { attemptCount: 1 },
   );
-  assert.equal(status, "RETRY");
+  assert.equal(status, "FAILED");
   const update = db.calls.find((c) => c.root === "update" && c.table === "merge_job_records");
   assert.ok(update);
-  const set = argOf(update!, "set") as { status: string; errorCode: string; errorMessage: string; retryAt: Date | null };
-  assert.equal(set.status, "RETRY");
+  const set = argOf(update!, "set") as {
+    status: string;
+    errorCode: string;
+    errorMessage: string;
+    retryAt: Date | null;
+    completedAt: Date | null;
+    leasedUntil: Date | null;
+  };
+  assert.equal(set.status, "FAILED");
   assert.equal(set.errorCode, "INCOMPLETE");
   assert.match(set.errorMessage, /Dia_chi_thuong_tru/);
+  assert.equal(set.retryAt, null);
+  assert.ok(set.completedAt instanceof Date);
+  assert.equal(set.leasedUntil, null);
+});
+
+test("failItem: transient RENDER_FAILED still RETRY while attempts remain", async () => {
+  const db = createFakeDb({
+    respond: (call) => {
+      if (call.root === "update" && call.table === "merge_job_records") return [{ id: "item-1" }];
+      return undefined;
+    },
+  });
+  const mod = await load(db, { shouldRetry: true });
+  const status = await mod.failItem(
+    "item-1",
+    { errorCode: "RENDER_FAILED", errorMessage: "ECONNRESET" },
+    { attemptCount: 1 },
+  );
+  assert.equal(status, "RETRY");
+  const set = argOf(db.calls.find((c) => c.root === "update")!, "set") as { status: string; retryAt: Date | null };
+  assert.equal(set.status, "RETRY");
   assert.ok(set.retryAt instanceof Date);
-  assert.ok(set.retryAt.getTime() > Date.now());
 });
 
 test("failItem: exhausted INCOMPLETE becomes FAILED and keeps the original error", async () => {

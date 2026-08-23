@@ -90,7 +90,7 @@ test("renderApplicantDocumentFromVersion: version chưa có HTML → throw rõ r
   );
 });
 
-test("renderApplicantDocumentFromParts: canonical contract catches required data before a worker can render PDF", () => {
+test("renderApplicantDocumentFromParts: mapped isRequired=false wins over catalog required=true", () => {
   const contract: TemplateContract = {
     key: "test",
     name: "Test",
@@ -101,7 +101,7 @@ test("renderApplicantDocumentFromParts: canonical contract catches required data
     ],
   };
   const result = renderApplicantDocumentFromParts(
-    "<p>{{Ho_ten}} <span class=\"chk\">{{Lua_chon_Co}}</span></p>",
+    '<p>{{Ho_ten}} <span class="chk">{{Lua_chon_Co}}</span></p>',
     null,
     [
       field({ placeholder: "Ho_ten", sourcePath: "fullName", isRequired: false }),
@@ -112,10 +112,65 @@ test("renderApplicantDocumentFromParts: canonical contract catches required data
     { contract },
   );
 
-  assert.equal(result.valid, false);
-  assert.deepEqual(result.missingFields, ["Ho_ten"]);
+  assert.equal(result.valid, true);
+  assert.deepEqual(result.missingFields, []);
   assert.match(result.html, /☐/);
   assert.equal(result.unreplaced.length, 0);
+});
+
+test("renderApplicantDocumentFromParts: unmapped catalog-required key still fails", () => {
+  const contract: TemplateContract = {
+    key: "test",
+    name: "Test",
+    logicalPageCount: 1,
+    fields: [{ key: "Ho_ten", label: "Họ tên", valueKind: "text", required: true, sourcePath: "fullName" }],
+  };
+  const result = renderApplicantDocumentFromParts("<p>{{Ho_ten}}</p>", null, [], {}, {}, { contract });
+  assert.equal(result.valid, false);
+  assert.deepEqual(result.missingFields, ["Ho_ten"]);
+});
+
+test("production: Dia_chi_thuong_tru mapped optional + permanentAddress NULL reaches HTML render", () => {
+  const contract: TemplateContract = {
+    key: "dang-ky-tap-nghe",
+    name: "Đăng ký tập nghề",
+    logicalPageCount: 1,
+    fields: [{ key: "Dia_chi_thuong_tru", label: "Địa chỉ thường trú", valueKind: "text", required: true, sourcePath: "permanentAddress" }],
+  };
+  const result = renderApplicantDocumentFromParts(
+    "<p>Địa chỉ thường trú: {{Dia_chi_thuong_tru}}</p>",
+    null,
+    [field({ placeholder: "Dia_chi_thuong_tru", sourcePath: "permanentAddress", isRequired: false })],
+    { permanentAddress: null, residentialAddress: "Đơn Dương" },
+    {},
+    { contract },
+  );
+  assert.equal(result.valid, true);
+  assert.deepEqual(result.missingFields, []);
+  assert.deepEqual(result.unreplaced, []);
+  assert.doesNotMatch(result.html, /Đơn Dương/);
+});
+
+test("mapped required permanentAddress NULL is missing; optional generic missing is blank", () => {
+  const required = renderApplicantDocumentFromParts(
+    "<p>{{Dia_chi_thuong_tru}}</p>",
+    null,
+    [field({ placeholder: "Dia_chi_thuong_tru", sourcePath: "permanentAddress", isRequired: true })],
+    { permanentAddress: null },
+    {},
+  );
+  assert.equal(required.valid, false);
+  assert.deepEqual(required.missingFields, ["Dia_chi_thuong_tru"]);
+
+  const optional = renderApplicantDocumentFromParts(
+    "<p>[{{Ghi_chu}}]</p>",
+    null,
+    [field({ placeholder: "Ghi_chu", sourcePath: "notes", isRequired: false })],
+    {},
+    {},
+  );
+  assert.equal(optional.valid, true);
+  assert.match(optional.html, /\[\]/);
 });
 
 test("renderApplicantDocumentFromVersion DELEGATE tới đúng renderApplicantDocumentFromParts (worker HTML_PDF path)", () => {

@@ -64,19 +64,38 @@ export function validateTemplateContract(htmlBody: string, contract: TemplateCon
   };
 }
 
+export interface ContractRequiredValueOptions {
+  /**
+   * Placeholders that already have a mapping row (merge_template_fields /
+   * snapshot). Mapping `isRequired` is the sole runtime requiredness source
+   * for these keys — catalog `required=true` must not override `isRequired=false`.
+   * Unmapped catalog-required keys still fail here.
+   */
+  mappedKeys?: ReadonlySet<string> | readonly string[] | null;
+}
+
 /**
  * Contract-level required-data validation.  DB mappings may mark additional
  * fields required; callers merge this result with validateRequiredFields().
  * Checkbox fields are never required as text: an unchecked option is rendered
  * semantically as ☐ and is a valid value.
+ *
+ * For keys that have a mapping row, skip catalog requiredness — mapping wins.
  */
 export function validateContractRequiredValues(
   contract: TemplateContract | null | undefined,
   values: Record<string, string>,
+  options: ContractRequiredValueOptions = {},
 ): string[] {
   if (!contract) return [];
+  const mapped = options.mappedKeys
+    ? options.mappedKeys instanceof Set
+      ? options.mappedKeys
+      : new Set(options.mappedKeys)
+    : null;
   return contract.fields
     .filter((field) => field.required && field.valueKind !== "checkbox")
+    .filter((field) => !mapped || !mapped.has(field.key))
     .filter((field) => !values[field.key] || values[field.key].trim() === "")
     .map((field) => field.key)
     .sort();

@@ -33,6 +33,7 @@ import { mergeJobRecords, mergeJobs } from "../../db/schema";
 import {
   DEFAULT_MAX_ATTEMPTS,
   ITEM_STATUS,
+  isRetryableItemError,
   isTerminalItemStatus,
   retryBackoffSeconds,
   shouldRetry,
@@ -184,16 +185,19 @@ export async function completeItem(
 }
 
 /**
- * Đánh dấu item lỗi. Nếu còn lượt retry → RETRY + retry_at (backoff);
- * nếu hết lượt → FAILED. Một record lỗi KHÔNG fail toàn bộ batch.
+ * Đánh dấu item lỗi. Lỗi deterministic (INCOMPLETE, mapping/template invalid)
+ * → FAILED ngay. Lỗi hạ tầng tạm thời còn lượt retry → RETRY + retry_at.
+ * Một record lỗi KHÔNG fail toàn bộ batch.
  */
 export async function failItem(
   itemId: string,
   info: { errorCode?: string | null; errorMessage?: string | null },
-  opts: { attemptCount: number; maxAttempts?: number },
+  opts: { attemptCount: number; maxAttempts?: number; retryable?: boolean },
 ): Promise<ItemStatus> {
   const max = opts.maxAttempts ?? DEFAULT_MAX_ATTEMPTS;
-  const finalStatus: ItemStatus = shouldRetry(opts.attemptCount, max) ? ITEM_STATUS.RETRY : ITEM_STATUS.FAILED;
+  const retryable = isRetryableItemError(info.errorCode, opts.retryable);
+  const finalStatus: ItemStatus =
+    retryable && shouldRetry(opts.attemptCount, max) ? ITEM_STATUS.RETRY : ITEM_STATUS.FAILED;
 
   await db
     .update(mergeJobRecords)

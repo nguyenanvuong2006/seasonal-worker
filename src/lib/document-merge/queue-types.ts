@@ -127,6 +127,27 @@ export function claimRetryDelayMs(attempt: number): number {
 
 export const DEFAULT_MAX_ATTEMPTS = 3;
 
+/** Deterministic validation / configuration errors — never retry. */
+export const NON_RETRYABLE_ERROR_CODES = [
+  "INCOMPLETE",
+  "INVALID_MAPPING",
+  "INVALID_TEMPLATE",
+  "UNSUPPORTED_SOURCE_PATH",
+  "TEMPLATE_NOT_PUBLISHED",
+  "RECORD_NOT_FOUND",
+  "HTML_TEMPLATE_EMPTY",
+  "HTML_TEMPLATE_MISSING",
+] as const;
+
+export type NonRetryableErrorCode = (typeof NON_RETRYABLE_ERROR_CODES)[number];
+
+/** Transient infrastructure failures keep the existing backoff policy. */
+export function isRetryableItemError(errorCode?: string | null, explicit?: boolean): boolean {
+  if (typeof explicit === "boolean") return explicit;
+  if (!errorCode) return true;
+  return !(NON_RETRYABLE_ERROR_CODES as readonly string[]).includes(errorCode);
+}
+
 /** Exponential backoff (giây) cho item retry, có jitter. Không retry vô hạn. */
 export function retryBackoffSeconds(attemptCount: number, baseMs = 2_000): number {
   const exp = Math.min(60_000, baseMs * 2 ** Math.max(0, attemptCount - 1));
@@ -134,7 +155,7 @@ export function retryBackoffSeconds(attemptCount: number, baseMs = 2_000): numbe
   return Math.round((exp + jitter) / 1000);
 }
 
-/** Quyết định retry hay fail hẳn dựa trên số lần đã thử. */
+/** Quyết định retry hay fail hẳn dựa trên số lần đã thử (chỉ khi lỗi retryable). */
 export function shouldRetry(attemptCount: number, maxAttempts: number = DEFAULT_MAX_ATTEMPTS): boolean {
   return attemptCount < maxAttempts;
 }

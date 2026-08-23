@@ -294,15 +294,28 @@ async function processItem(item: QueueItem, jobCtx: JobContext): Promise<void> {
     context,
     { contract: getHtmlTemplateContractByKey(snap.contractKey) },
   );
-  await stage(jobCtx.jobId, item.id, "DATA_RESOLUTION", t, rendered.valid);
+  const missingPlaceholders = [...rendered.missingFields, ...rendered.unreplaced].slice(0, 20);
+  await stage(jobCtx.jobId, item.id, "DATA_RESOLUTION", t, rendered.valid, rendered.valid ? undefined : "INCOMPLETE");
   if (!rendered.valid) {
+    console.log(
+      JSON.stringify({
+        event: "pdf_worker_stage",
+        jobId: jobCtx.jobId,
+        itemId: item.id,
+        sourceRecordId: item.sourceRecordId,
+        stage: "DATA_RESOLUTION",
+        ok: false,
+        errorCode: "INCOMPLETE",
+        missingPlaceholders,
+      }),
+    );
     await failItem(
       item.id,
       {
         errorCode: "INCOMPLETE",
-        errorMessage: `Thiếu: ${[...rendered.missingFields, ...rendered.unreplaced].slice(0, 20).join(", ")}`,
+        errorMessage: `Thiếu: ${missingPlaceholders.join(", ")}`,
       },
-      { attemptCount: item.attemptCount },
+      { attemptCount: item.attemptCount, retryable: false },
     );
     return;
   }

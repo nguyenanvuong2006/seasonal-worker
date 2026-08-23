@@ -68,7 +68,8 @@ export function renderApplicantDocumentFromParts(
 ): RenderApplicantDocumentResult {
   const fieldValues = resolveHtmlFieldValues(fields, recordData, context);
   const dbValidation = validateRequiredFields(fields, fieldValues);
-  const contractMissing = validateContractRequiredValues(options.contract, fieldValues);
+  const mappedKeys = new Set(fields.filter((field) => !field.isOrphaned).map((field) => field.placeholder));
+  const contractMissing = validateContractRequiredValues(options.contract, fieldValues, { mappedKeys });
   const missingFields = [...new Set([...dbValidation.missingFields, ...contractMissing])].sort();
   const rendered = renderApplicantHtmlFromParts(htmlBody, printCss, fieldValues);
 
