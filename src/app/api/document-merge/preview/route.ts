@@ -23,6 +23,7 @@ import { applyFallbackPlaceholders, buildPreviewContent } from "@/lib/document-m
 import { buildApplicantMergeRecord } from "@/lib/document-merge/applicant-record";
 import { renderApplicantDocumentFromVersion } from "@/lib/document-merge/html-pipeline";
 import { loadDailyApplicationRecords } from "@/lib/document-merge/record-loader";
+import { getHtmlTemplateContractByGoogleDocId } from "@/document-templates/registry";
 import {
   documentKindLabel,
   resolveDocumentKind,
@@ -243,7 +244,9 @@ async function handleHtmlVersionPreview(input: {
     mergeCount: 1,
   };
 
-  const rendered = renderApplicantDocumentFromVersion(version, fields, recordData, context);
+  const rendered = renderApplicantDocumentFromVersion(version, fields, recordData, context, {
+    contract: getHtmlTemplateContractByGoogleDocId(template.googleDocId),
+  });
   const pageCount = (rendered.html.match(/class="[^"]*\bpage\b[^"]*"/g) ?? []).length;
   const sectionCount = (rendered.html.match(/<section\b/gi) ?? []).length;
 

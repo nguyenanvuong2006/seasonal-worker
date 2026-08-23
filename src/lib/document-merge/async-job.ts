@@ -20,6 +20,15 @@ import { dailyApplications, mergeJobRecords, mergeJobs, mergeTemplateFields, mer
 import { getDocumentMergeEngine, type DocumentMergeEngine } from "./engine-config.ts";
 import { selectTemplateForApplicant, documentKindLabel } from "./template-routing.ts";
 import { ITEM_STATUS, JOB_STATUS } from "./queue-types.ts";
+import {
+  getHtmlTemplateByGoogleDocId,
+  getHtmlTemplateContractByGoogleDocId,
+} from "../../document-templates/registry.ts";
+import {
+  validateContractRequiredMappings,
+  validateTemplateContract,
+} from "./template-contract.ts";
+import { extractUniquePlaceholders } from "./placeholder-extractor.ts";
 
 export interface AsyncJobRecordsInput {
   entityType: string;
@@ -74,19 +83,6 @@ export class AsyncJobValidationError extends Error {
 
 export async function createAsyncMergeJob(input: CreateAsyncJobInput): Promise<CreateAsyncJobResult> {
   const engine = input.engine ?? getDocumentMergeEngine();
-
-  // HTML_PDF bị vô hiệu hoá VĨNH VIỄN cho việc tạo job — mẫu đơn chính thức
-  // (registry.ts chỉ có duy nhất "Đăng ký tập nghề") không được phép render
-  // bằng HTML/CSS tái tạo. Chặn NGAY tại nguồn tạo job (không tạo job QUEUED
-  // rồi để worker fail sau) — không silent fallback sang GOOGLE_DOCS, fail rõ
-  // ràng để operator biết cấu hình sai. Xem docs/PDF-COORDINATE-MAPPING-ENGINE-DESIGN.md.
-  if (engine === "HTML_PDF") {
-    throw new AsyncJobValidationError(
-      "Engine HTML_PDF đã bị vô hiệu hoá vĩnh viễn cho mẫu đơn chính thức — không được tái tạo bằng HTML/CSS. Dùng GOOGLE_DOCS (mặc định) hoặc PDF Overlay (khi được kích hoạt).",
-      409,
-    );
-  }
-
   const { entityType, recordIds } = input.records;
 
   if (!recordIds?.length) {
@@ -103,6 +99,16 @@ export async function createAsyncMergeJob(input: CreateAsyncJobInput): Promise<C
   const mergeMode = input.mergeMode ?? "ONE_DOCUMENT";
   const shouldDispatch = Boolean(input.dispatchToApplicant) && entityType === "daily_applications";
 
+  // HTML/PDF is deliberately explicit: callers must select one concrete
+  // template. Auto-routing remains available to the legacy Google Docs flow,
+  // but may not silently choose an HTML template/version for a legal PDF.
+  if (engine === "HTML_PDF" && (shouldAutoRoute || !input.templateId)) {
+    throw new AsyncJobValidationError(
+      "HTML/PDF yêu cầu chọn một template cụ thể (templateId) và tắt Auto Route.",
+      400,
+    );
+  }
+
   // 2. Validate template
   const allTemplates = await db.select().from(mergeTemplates);
   const activeTemplates = allTemplates.filter((t) => t.isActive);
@@ -112,6 +118,9 @@ export async function createAsyncMergeJob(input: CreateAsyncJobInput): Promise<C
     const forced = allTemplates.find((t) => t.id === input.templateId);
     if (!forced) throw new AsyncJobValidationError("Template not found", 404);
     if (!forced.isActive) throw new AsyncJobValidationError("Template is inactive", 400);
+    if (engine === "HTML_PDF" && !forced.htmlEnabled) {
+      throw new AsyncJobValidationError("Template này chưa được bật chế độ HTML/PDF.", 422);
+    }
     forcedTemplateId = forced.id;
   }
 
@@ -220,6 +229,50 @@ export async function createAsyncMergeJob(input: CreateAsyncJobInput): Promise<C
     );
   const versionByTemplate = new Map(publishedVersions.map((v) => [v.templateId, v]));
 
+  // Fail before queuing when the requested HTML mode cannot possibly render.
+  // This reuses the existing version/mapping tables rather than allowing the
+  // worker to discover a missing version after an item has been claimed.
+  if (engine === "HTML_PDF") {
+    for (const templateId of templateIds) {
+      const template = allTemplates.find((item) => item.id === templateId);
+      const version = versionByTemplate.get(templateId);
+      if (!template || !version?.htmlBody?.trim()) {
+        throw new AsyncJobValidationError(
+          "Template chưa có phiên bản HTML PUBLISHED. Hãy Preview và Xuất bản phiên bản trước khi tạo job.",
+          422,
+        );
+      }
+
+      const mappedTokens = new Set((fieldsByTemplate.get(templateId) ?? []).map((field) => field.placeholder));
+      const unmappedTokens = extractUniquePlaceholders(version.htmlBody).filter((token) => !mappedTokens.has(token));
+      if (unmappedTokens.length > 0) {
+        throw new AsyncJobValidationError(
+          `HTML template có placeholder chưa mapping: ${unmappedTokens.join(", ")}.`,
+          422,
+        );
+      }
+
+      const registered = getHtmlTemplateByGoogleDocId(template.googleDocId);
+      const contract = getHtmlTemplateContractByGoogleDocId(template.googleDocId);
+      if (registered && contract) {
+        const contractResult = validateTemplateContract(version.htmlBody, contract);
+        if (!contractResult.valid) {
+          throw new AsyncJobValidationError(
+            `HTML template không khớp contract: thiếu ${contractResult.missingFromHtml.join(", ") || "—"}; token lạ ${contractResult.unknownInHtml.join(", ") || "—"}; trùng ${contractResult.duplicateKeys.join(", ") || "—"}.`,
+            422,
+          );
+        }
+        const missingMappings = validateContractRequiredMappings(contract, fieldsByTemplate.get(templateId) ?? []);
+        if (missingMappings.length > 0) {
+          throw new AsyncJobValidationError(
+            `Thiếu mapping bắt buộc theo contract: ${missingMappings.join(", ")}.`,
+            422,
+          );
+        }
+      }
+    }
+  }
+
   const primaryTemplate = allTemplates.find((t) => t.id === planned[0].templateId) ?? null;
 
   // 5+6. Tạo job + items trong 1 khối (job QUEUED, items QUEUED theo sequence)
@@ -247,6 +300,9 @@ export async function createAsyncMergeJob(input: CreateAsyncJobInput): Promise<C
         dispatchToApplicant: shouldDispatch,
         entityType,
         mergeMode,
+        // Freeze the merge clock as well as HTML/CSS/mappings. A retry cannot
+        // change signature/computed dates or pagination after the job exists.
+        renderedAt: new Date().toISOString(),
         templates: Object.fromEntries(
           templateIds.map((tid) => {
             const t = allTemplates.find((x) => x.id === tid);
@@ -256,6 +312,10 @@ export async function createAsyncMergeJob(input: CreateAsyncJobInput): Promise<C
                 name: t?.name ?? "",
                 documentKind: t?.documentKind ?? "GENERIC",
                 googleDocId: t?.googleDocId ?? "",
+                // First-party contracts are registered by stable key. Generic
+                // customer templates have no code contract and rely on their
+                // DB mapping snapshot only.
+                contractKey: getHtmlTemplateByGoogleDocId(t?.googleDocId)?.key ?? null,
                 // Snapshot template version lúc tạo job — PDF cũ không regenerate
                 // bằng template mới (spec E: mỗi PDF snapshot template_version).
                 version: versionByTemplate.get(tid)?.version ?? t?.currentPublishedVersion ?? null,

@@ -7,7 +7,16 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { extractUniquePlaceholders } from "../../lib/document-merge/placeholder-extractor.ts";
 import { dangKyTapNgheTemplate } from "./template.ts";
-import { PLACEHOLDERS, REJECTED_ORPHAN_PLACEHOLDERS, SECTIONS } from "./schema.ts";
+import {
+  CHECKBOX_PLACEHOLDERS,
+  CONTRACT_PLACEHOLDERS,
+  DANG_KY_TAP_NGHE_FIELD_CONTRACT,
+  PLACEHOLDERS,
+  REJECTED_ORPHAN_PLACEHOLDERS,
+  REQUIRED_PLACEHOLDERS,
+  SECTIONS,
+} from "./schema.ts";
+import { validateTemplateContract } from "../../lib/document-merge/template-contract.ts";
 
 const html = dangKyTapNgheTemplate.html;
 
@@ -30,6 +39,23 @@ test("canonical dang-ky-tap-nghe HTML has exactly 49 unique active placeholders"
   assert.deepEqual(found, [...PLACEHOLDERS].sort());
 });
 
+test("canonical semantic field contract exactly covers the HTML and declares required/checkbox semantics", () => {
+  const result = validateTemplateContract(html, DANG_KY_TAP_NGHE_FIELD_CONTRACT);
+  assert.equal(result.valid, true, JSON.stringify(result));
+  assert.deepEqual(CONTRACT_PLACEHOLDERS, [...PLACEHOLDERS].sort());
+  assert.deepEqual(REQUIRED_PLACEHOLDERS, [
+    "Dia_chi_tam_tru",
+    "Dia_chi_thuong_tru",
+    "Ho_ten",
+    "Ngay_nhan_viec",
+    "Ngay_sinh",
+    "So_CCCD",
+    "So_dien_thoai",
+  ]);
+  assert.equal(CHECKBOX_PLACEHOLDERS.length, 22);
+  assert.ok(CHECKBOX_PLACEHOLDERS.every((key) => (PLACEHOLDERS as readonly string[]).includes(key)));
+});
+
 test("canonical HTML has no extra placeholders beyond the 49 active set", () => {
   const found = extractUniquePlaceholders(html);
   for (const token of found) {
@@ -41,7 +67,7 @@ test("canonical HTML excludes operator-accepted orphan tax-contract placeholders
   const found = extractUniquePlaceholders(html);
   for (const orphan of REJECTED_ORPHAN_PLACEHOLDERS) {
     assert.equal(found.includes(orphan), false, orphan);
-    assert.doesNotMatch(html, new RegExp(`<<\\s*${orphan}\\s*>>`));
+    assert.doesNotMatch(html, new RegExp(`(?:<<\\s*${orphan}\\s*>>|\\{\\{\\s*${orphan}\\s*\\}\\})`));
   }
   assert.equal(REJECTED_ORPHAN_PLACEHOLDERS.length, 2);
   assert.deepEqual([...REJECTED_ORPHAN_PLACEHOLDERS], [
@@ -148,13 +174,13 @@ test("Vietnamese Unicode is intact in titles and legal phrases", () => {
 test("tax service contract line exists as static text without orphan tokens", () => {
   assert.match(html, /Hợp đồng dịch vụ làm thủ tục về thuế:\s*Số:/);
   assert.match(html, /Hợp đồng dịch vụ làm thủ tục về thuế: Số: .+ Ngày:/);
-  assert.doesNotMatch(html, /<<So_hop_dong_dich_vu_thue>>/);
-  assert.doesNotMatch(html, /<<Ngay_hop_dong_dich_vu_thue>>/);
+  assert.doesNotMatch(html, /(?:<<|\{\{)So_hop_dong_dich_vu_thue/);
+  assert.doesNotMatch(html, /(?:<<|\{\{)Ngay_hop_dong_dich_vu_thue/);
 });
 
-test("checkbox placeholders stay wrapped for the 49-token checkbox groups", () => {
-  assert.match(html, /<span class="chk"><<Tien_an_tien_su_Khong>><\/span>/);
-  assert.match(html, /<span class="chk"><<Tien_an_tien_su_Co>><\/span>/);
-  assert.match(html, /<span class="chk"><<Tap_nghe_Trong_cham_soc_thu_hoach>><\/span>/);
-  assert.match(html, /<span class="chk"><<Khu_vuc_Da_Lat>><\/span>/);
+test("checkbox placeholders stay wrapped for semantic checkbox rendering", () => {
+  assert.match(html, /<span class="chk">\{\{Tien_an_tien_su_Khong\}\}<\/span>/);
+  assert.match(html, /<span class="chk">\{\{Tien_an_tien_su_Co\}\}<\/span>/);
+  assert.match(html, /<span class="chk">\{\{Tap_nghe_Trong_cham_soc_thu_hoach\}\}<\/span>/);
+  assert.match(html, /<span class="chk">\{\{Khu_vuc_Da_Lat\}\}<\/span>/);
 });

@@ -11,7 +11,10 @@
  *   - số checkbox ☐ render được
  *
  * Chạy ở nơi có Chromium (CI / máy dev / Cloud Run image):
- *   cd worker && npm run verify:visual -- [--html ../docs/visual-verification/dang-ky-tap-nghe-sample.html] [--out ../docs/visual-verification/out]
+ *   cd worker && npm run verify:visual -- [--html ../docs/visual-verification/dang-ky-tap-nghe-sample.html] [--expected-pages 5] [--out ../docs/visual-verification/out]
+ *
+ * Use --expected-pages for an approved canonical visual template. The command
+ * then fails on an extra/partial PDF page rather than accepting it silently.
  *
  * Output:
  *   <out>/report.json          — kết quả kiểm tra (máy đọc được)
@@ -37,6 +40,11 @@ function arg(name, fallback) {
 
 const htmlPath = resolve(arg("--html", join(ROOT, "docs", "visual-verification", "dang-ky-tap-nghe-sample.html")));
 const outDir = resolve(arg("--out", join(ROOT, "docs", "visual-verification", "out")));
+const expectedPagesArg = arg("--expected-pages", "");
+const expectedPages = expectedPagesArg === "" ? null : Number(expectedPagesArg);
+if (expectedPages !== null && (!Number.isInteger(expectedPages) || expectedPages < 1)) {
+  throw new Error("--expected-pages phải là số nguyên dương.");
+}
 
 const html = readFileSync(htmlPath, "utf8");
 mkdirSync(outDir, { recursive: true });
@@ -67,7 +75,7 @@ try {
     const checkboxes = document.querySelectorAll(".chk").length;
     const unreplaced = Array.from(document.querySelectorAll("body *"))
       .flatMap((el) => (el.childNodes.length === 1 && el.textContent ? [el.textContent] : []))
-      .filter((t) => /<<[^>]+>>/.test(t));
+      .filter((t) => /(?:<<\s*[^>]+?\s*>>|\{\{\s*[^{}]+?\s*\}\})/.test(t));
     return {
       pageCount,
       blankPages,
@@ -116,7 +124,8 @@ try {
     checks: {
       pageDivCount: checks.pageCount,
       realPdfPageCount: realPageCount,
-      expectedPageCount: 5, // 5 phần tài liệu (template reference ≈ 6 trang — CHƯA đạt)
+      expectedPageCount: expectedPages,
+      logicalSectionCount: checks.pageCount,
       blankPages: checks.blankPages,
       horizontalOverflowPx: checks.overflow,
       checkboxCount: checks.checkboxes,
@@ -125,7 +134,7 @@ try {
       fontChecks,
     },
     pass:
-      realPageCount >= 4 &&
+      (expectedPages === null || realPageCount === expectedPages) &&
       checks.blankPages.length === 0 &&
       checks.overflow <= 1 &&
       checks.unreplaced.length === 0,

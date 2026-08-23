@@ -1,92 +1,77 @@
 /**
- * Document Merge Engine — Placeholder Extraction
- * 
- * Quét Google Docs content để tìm tất cả placeholders theo pattern <<...>>
+ * Semantic merge-placeholder utilities.
+ *
+ * New HTML templates use familiar {{Field}} tokens.  Legacy Google Docs and
+ * existing published versions use <<Field>>.  Both forms are intentionally
+ * accepted and resolve to exactly the same field key, which keeps old template
+ * versions renderable while making HTML templates first-class.
  */
 
-/** Pattern để nhận diện placeholder: <<...>> */
-export const PLACEHOLDER_PATTERN = /<<([^>]+)>>/g;
+/** Matches either {{placeholder}} or <<placeholder>>. */
+export const PLACEHOLDER_PATTERN = /(?:<<\s*([^>]+?)\s*>>|\{\{\s*([^{}]+?)\s*\}\})/g;
 
-/** Loại bỏ duplicate placeholders */
+function placeholderName(match: RegExpMatchArray): string {
+  return (match[1] ?? match[2] ?? "").trim();
+}
+
+/** Extract unique semantic keys from either supported delimiter style. */
 export function extractUniquePlaceholders(content: string): string[] {
-  const matches = content.matchAll(PLACEHOLDER_PATTERN);
   const unique = new Set<string>();
-  
-  for (const match of matches) {
-    unique.add(match[1].trim());
+  for (const match of content.matchAll(PLACEHOLDER_PATTERN)) {
+    const name = placeholderName(match);
+    if (name) unique.add(name);
   }
-  
   return Array.from(unique).sort();
 }
 
-/** Kiểm tra xem một chuỗi có phải là placeholder hợp lệ không */
+/** Check whether a string is exactly one supported placeholder. */
 export function isPlaceholder(text: string): boolean {
-  return /^<<[^>]+>>$/.test(text);
+  return /^(?:<<\s*[^>]+?\s*>>|\{\{\s*[^{}]+?\s*\}\})$/.test(text);
 }
 
-/** Extract placeholder name từ text có thể chứa thêm nội dung khác */
+/** Extract the first semantic placeholder key from arbitrary text. */
 export function extractPlaceholderFromText(text: string): string | null {
-  const match = text.match(/<<([^>]+)>>/);
-  return match ? match[1].trim() : null;
+  // String#match with a global regex discards capture groups; use a fresh
+  // non-global expression so the semantic key is preserved.
+  const match = text.match(/(?:<<\s*([^>]+?)\s*>>|\{\{\s*([^{}]+?)\s*\}\})/);
+  return match ? placeholderName(match) : null;
 }
 
-/** Thay thế placeholder trong text bằng giá trị */
-export function replacePlaceholder(
-  content: string,
-  placeholder: string,
-  value: string
-): string {
-  const pattern = new RegExp(`<<${escapeRegex(placeholder)}>>`, 'g');
+/** Replace a semantic key in both {{key}} and legacy <<key>> forms. */
+export function replacePlaceholder(content: string, placeholder: string, value: string): string {
+  const escaped = escapeRegex(placeholder.trim());
+  const pattern = new RegExp(`(?:<<\\s*${escaped}\\s*>>|\\{\\{\\s*${escaped}\\s*\\}\\})`, "g");
   return content.replace(pattern, value);
 }
 
-/** Thay thế nhiều placeholders cùng lúc */
-export function replaceMultiplePlaceholders(
-  content: string,
-  replacements: Record<string, string>
-): string {
+/** Replace every supplied semantic key. Values must already be HTML-escaped by the caller. */
+export function replaceMultiplePlaceholders(content: string, replacements: Record<string, string>): string {
   let result = content;
-  
   for (const [placeholder, value] of Object.entries(replacements)) {
     result = replacePlaceholder(result, placeholder, value);
   }
-  
   return result;
 }
 
-/** Escape special regex characters */
-function escapeRegex(string: string): string {
-  return string.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+function escapeRegex(value: string): string {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }
 
-/** Lấy danh sách placeholders chưa được map */
-export function getUnmappedPlaceholders(
-  allPlaceholders: string[],
-  mappedPlaceholders: Set<string>
-): string[] {
-  return allPlaceholders.filter(p => !mappedPlaceholders.has(p));
+export function getUnmappedPlaceholders(allPlaceholders: string[], mappedPlaceholders: Set<string>): string[] {
+  return allPlaceholders.filter((placeholder) => !mappedPlaceholders.has(placeholder));
 }
 
-/** Kiểm tra xem content có chứa placeholder chưa được thay thế không */
 export function hasUnreplacedPlaceholders(content: string): boolean {
-  return PLACEHOLDER_PATTERN.test(content);
+  // Do not use a mutable global regex for .test(); callers may invoke this repeatedly.
+  return /(?:<<\s*[^>]+?\s*>>|\{\{\s*[^{}]+?\s*\}\})/.test(content);
 }
 
-/** Đếm số placeholder trong content */
 export function countPlaceholders(content: string): number {
-  const matches = content.match(PLACEHOLDER_PATTERN);
-  return matches ? matches.length : 0;
+  return [...content.matchAll(PLACEHOLDER_PATTERN)].length;
 }
 
-/** Validate placeholder name theo convention */
+/** Conservative validation for database-backed semantic keys. */
 export function isValidPlaceholderName(name: string): boolean {
-  // Placeholder phải:
-  // - Không trống
-  // - Không chứa ký tự đặc biệt nguy hiểm
-  // - Độ dài hợp lý
-  if (!name || name.length === 0 || name.length > 255) return false;
-  
-  // Cho phép: chữ cái, số, dấu gạch dưới, khoảng trắng, tiếng Việt có dấu
-  // Không cho phép: <> | \ / * ? " :
-  return !/[<>|\\\/:*?"]/g.test(name);
+  if (!name || name.length > 255) return false;
+  return !/[<>|\\\/:*?"{}]/g.test(name);
 }

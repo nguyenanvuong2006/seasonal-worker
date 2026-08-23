@@ -9,13 +9,13 @@
  * (So_hop_dong_dich_vu_thue, Ngay_hop_dong_dich_vu_thue) KHÔNG được khôi phục;
  * dòng hợp đồng dịch vụ thuế giữ dạng nội dung tĩnh như Google Doc.
  *
- * KHÔNG hardcode mapping dữ liệu ở đây: giá trị được Data Resolver fill qua <<...>>.
- * Token phải là literal `<<...>>` (KHÔNG HTML-escape) để renderer thay thế được;
+ * KHÔNG hardcode mapping dữ liệu ở đây: giá trị được Data Resolver fill qua {{...}}.
+ * Token phải là literal `{{...}}` (KHÔNG HTML-escape) để renderer thay thế được;
  * renderer tự escape giá trị trước khi fill (chống XSS).
  */
 
 import type { HtmlTemplate } from "../../lib/document-merge/html-renderer.ts";
-import { GOOGLE_DOC_ID } from "./schema.ts";
+import { DANG_KY_TAP_NGHE_FIELD_CONTRACT, GOOGLE_DOC_ID } from "./schema.ts";
 
 const html = `
 <div class="page">
@@ -29,64 +29,64 @@ const html = `
   <p>Kính gửi: <b>CÔNG TY TNHH DALAT HASFARM</b></p>
 
   <p><b>I/ THÔNG TIN CÁ NHÂN</b></p>
-  <p>Họ và Tên: <<Ho_ten>>&nbsp;&nbsp;&nbsp;&nbsp;Sinh ngày: <<Ngay_sinh>></p>
-  <p>Địa chỉ thường trú: <<Dia_chi_thuong_tru>></p>
-  <p>Địa chỉ tạm trú: <<Dia_chi_tam_tru>></p>
-  <p>Điện thoại liên lạc: <<So_dien_thoai>></p>
-  <p>Số CCCD: <<So_CCCD>>&nbsp;&nbsp;&nbsp;&nbsp;Ngày cấp: <<Ngay_cap_CCCD>>&nbsp;&nbsp;Nơi cấp: Cục CSQLHC về TTXH <<Noi_cap_CCCD>></p>
+  <p>Họ và Tên: {{Ho_ten}}&nbsp;&nbsp;&nbsp;&nbsp;Sinh ngày: {{Ngay_sinh}}</p>
+  <p>Địa chỉ thường trú: {{Dia_chi_thuong_tru}}</p>
+  <p>Địa chỉ tạm trú: {{Dia_chi_tam_tru}}</p>
+  <p>Điện thoại liên lạc: {{So_dien_thoai}}</p>
+  <p>Số CCCD: {{So_CCCD}}&nbsp;&nbsp;&nbsp;&nbsp;Ngày cấp: {{Ngay_cap_CCCD}}&nbsp;&nbsp;Nơi cấp: Cục CSQLHC về TTXH {{Noi_cap_CCCD}}</p>
   <p>CCCD: Đính kèm bản photo CCCD (không cần công chứng)</p>
 
   <p>Đã có tiền án, tiền sự trước đây:
-    <span class="chk"><<Tien_an_tien_su_Khong>></span> Không&nbsp;&nbsp;&nbsp;&nbsp;
-    <span class="chk"><<Tien_an_tien_su_Co>></span> Có
+    <span class="chk">{{Tien_an_tien_su_Khong}}</span> Không&nbsp;&nbsp;&nbsp;&nbsp;
+    <span class="chk">{{Tien_an_tien_su_Co}}</span> Có
   </p>
   <p>Đã từng tập nghề/ làm việc cho Cty Dalat Hasfarm:
-    <span class="chk"><<Da_tung_lam_DHF_Khong>></span> Không&nbsp;&nbsp;&nbsp;&nbsp;
-    <span class="chk"><<Da_tung_lam_DHF_Co>></span> Có
+    <span class="chk">{{Da_tung_lam_DHF_Khong}}</span> Không&nbsp;&nbsp;&nbsp;&nbsp;
+    <span class="chk">{{Da_tung_lam_DHF_Co}}</span> Có
   </p>
 
   <p>Vị trí tập nghề/ làm việc trước đây:</p>
   <p>
-    <span class="chk"><<Loai_cong_viec_Nhan_vien>></span> Nhân viên&nbsp;&nbsp;&nbsp;&nbsp;
-    <span class="chk"><<Loai_cong_viec_Cong_nhan>></span> Công nhân&nbsp;&nbsp;&nbsp;&nbsp;
-    <span class="chk"><<Loai_cong_viec_Lao_dong_tap_nghe>></span> Lao động tập nghề
+    <span class="chk">{{Loai_cong_viec_Nhan_vien}}</span> Nhân viên&nbsp;&nbsp;&nbsp;&nbsp;
+    <span class="chk">{{Loai_cong_viec_Cong_nhan}}</span> Công nhân&nbsp;&nbsp;&nbsp;&nbsp;
+    <span class="chk">{{Loai_cong_viec_Lao_dong_tap_nghe}}</span> Lao động tập nghề
   </p>
 
   <p>Khu vực làm việc:
-    <span class="chk"><<Khu_vuc_Da_Lat>></span> Đà lạt&nbsp;&nbsp;
-    <span class="chk"><<Khu_vuc_Da_Quy>></span> Đa Quý&nbsp;&nbsp;
-    <span class="chk"><<Khu_vuc_Da_Ron>></span> Đạ Ròn&nbsp;&nbsp;
-    <span class="chk"><<Khu_vuc_Lam_Ha>></span> Lâm Hà&nbsp;&nbsp;
-    <span class="chk"><<Khu_vuc_Khac>></span> Khu vực khác
+    <span class="chk">{{Khu_vuc_Da_Lat}}</span> Đà lạt&nbsp;&nbsp;
+    <span class="chk">{{Khu_vuc_Da_Quy}}</span> Đa Quý&nbsp;&nbsp;
+    <span class="chk">{{Khu_vuc_Da_Ron}}</span> Đạ Ròn&nbsp;&nbsp;
+    <span class="chk">{{Khu_vuc_Lam_Ha}}</span> Lâm Hà&nbsp;&nbsp;
+    <span class="chk">{{Khu_vuc_Khac}}</span> Khu vực khác
   </p>
 
   <p>Công việc hiện tại:
-    <span class="chk"><<Cong_viec_hien_tai_Sinh_vien>></span> Sinh viên trường <<Ten_truong>>&nbsp;&nbsp;&nbsp;&nbsp;
-    <span class="chk"><<Cong_viec_hien_tai_Khac>></span> Khác <<Cong_viec_hien_tai_khac>>
+    <span class="chk">{{Cong_viec_hien_tai_Sinh_vien}}</span> Sinh viên trường {{Ten_truong}}&nbsp;&nbsp;&nbsp;&nbsp;
+    <span class="chk">{{Cong_viec_hien_tai_Khac}}</span> Khác {{Cong_viec_hien_tai_khac}}
   </p>
 
   <p>Tài khoản ngân hàng (chính chủ):
-    <span class="chk"><<TKNH_Da_co>></span> Đã có&nbsp;&nbsp;&nbsp;&nbsp;
-    <span class="chk"><<TKNH_Chua_co>></span> Chưa có
+    <span class="chk">{{TKNH_Da_co}}</span> Đã có&nbsp;&nbsp;&nbsp;&nbsp;
+    <span class="chk">{{TKNH_Chua_co}}</span> Chưa có
   </p>
-  <p>Số tài khoản: <<So_tai_khoan>>&nbsp;&nbsp;&nbsp;&nbsp;Tên ngân hàng: <<Ten_ngan_hang>></p>
+  <p>Số tài khoản: {{So_tai_khoan}}&nbsp;&nbsp;&nbsp;&nbsp;Tên ngân hàng: {{Ten_ngan_hang}}</p>
 
-  <p>Thu nhập trong năm <<Nam_thue>></p>
-  <p><span class="chk"><<Thu_nhap_Chi_DHF>></span> Chỉ phát sinh tại Công ty TNHH Dalat Hasfarm</p>
-  <p><span class="chk"><<Thu_nhap_Ngoai_DHF>></span> Phát sinh tại Công ty/ Đơn vị khác ngoài Công ty TNHH Dalat Hasfarm. Cụ thể:</p>
-  <p>Tên Công ty/ Đơn vị: <<Cong_ty_thu_nhap_khac>></p>
-  <p>Tại: <<Dia_diem_thu_nhap_khac>></p>
+  <p>Thu nhập trong năm {{Nam_thue}}</p>
+  <p><span class="chk">{{Thu_nhap_Chi_DHF}}</span> Chỉ phát sinh tại Công ty TNHH Dalat Hasfarm</p>
+  <p><span class="chk">{{Thu_nhap_Ngoai_DHF}}</span> Phát sinh tại Công ty/ Đơn vị khác ngoài Công ty TNHH Dalat Hasfarm. Cụ thể:</p>
+  <p>Tên Công ty/ Đơn vị: {{Cong_ty_thu_nhap_khac}}</p>
+  <p>Tại: {{Dia_diem_thu_nhap_khac}}</p>
 
   <p><b>II/ THÔNG TIN TẬP NGHỀ:</b> Xin đăng ký được vào tập nghề sau đây tại Công ty:</p>
   <p>
-    <span class="chk"><<Tap_nghe_Trong_cham_soc_thu_hoach>></span> Trồng, chăm sóc, thu hoạch&nbsp;&nbsp;&nbsp;&nbsp;
-    <span class="chk"><<Tap_nghe_Ban_hang>></span> Bán hàng
+    <span class="chk">{{Tap_nghe_Trong_cham_soc_thu_hoach}}</span> Trồng, chăm sóc, thu hoạch&nbsp;&nbsp;&nbsp;&nbsp;
+    <span class="chk">{{Tap_nghe_Ban_hang}}</span> Bán hàng
   </p>
   <p>
-    <span class="chk"><<Tap_nghe_Dong_goi>></span> Đóng gói&nbsp;&nbsp;&nbsp;&nbsp;
-    <span class="chk"><<Tap_nghe_Khac>></span> Khác <<Cong_viec_khac>>
+    <span class="chk">{{Tap_nghe_Dong_goi}}</span> Đóng gói&nbsp;&nbsp;&nbsp;&nbsp;
+    <span class="chk">{{Tap_nghe_Khac}}</span> Khác {{Cong_viec_khac}}
   </p>
-  <p>Thời gian đăng ký tập nghề: từ ngày <<Ngay_nhan_viec>></p>
+  <p>Thời gian đăng ký tập nghề: từ ngày {{Ngay_nhan_viec}}</p>
 
   <p><b>III/ CAM KẾT CỦA NGƯỜI LÀM ĐƠN</b></p>
   <p>Tôi xin cam kết sẽ chấp hành tốt mọi nội quy, chính sách và quy định Tập Nghề cụ thể của Công ty trong suốt thời gian tập nghề. Nếu tôi có bất cứ hành vi sai phạm nào làm ảnh hưởng đến tài sản, uy tín, hoặc trật tự kỷ luật chung của Công ty, Công ty có quyền chấm dứt ngay thời gian tập nghề với tôi và xử lý sai phạm, yêu cầu tôi bồi thường thiệt hại (nếu có).</p>
@@ -96,17 +96,17 @@ const html = `
   <table class="no-border sig-block">
     <tr>
       <td>Người làm đơn ký:</td>
-      <td>Họ tên: <<Ho_ten>></td>
+      <td>Họ tên: {{Ho_ten}}</td>
     </tr>
     <tr>
-      <td>Ngày đăng ký: <<Ngay_nhan_viec>></td>
+      <td>Ngày đăng ký: {{Ngay_nhan_viec}}</td>
       <td></td>
     </tr>
   </table>
 
   <p><b>GHI NHẬN CỦA PHÒNG NHÂN SỰ:</b></p>
   <p>Đồng ý tiếp nhận anh/chị theo giấy đăng ký vào tập nghề tại Công ty</p>
-  <p>Người tiếp nhận: <<Nguoi_tiep_nhan>>&nbsp;&nbsp;&nbsp;&nbsp;Ngày: <<Ngay_tiep_nhan>></p>
+  <p>Người tiếp nhận: {{Nguoi_tiep_nhan}}&nbsp;&nbsp;&nbsp;&nbsp;Ngày: {{Ngay_tiep_nhan}}</p>
 </div>
 
 <div class="page">
@@ -181,7 +181,7 @@ const html = `
     <p>Người đăng ký tham gia tập nghề</p>
     <p>ký tên xác nhận hiểu rõ các khoản nêu trên</p>
     <p>và cam kết tuân thủ nghiêm túc</p>
-    <p style="margin-top:24pt"><<Ho_ten>></p>
+    <p style="margin-top:24pt">{{Ho_ten}}</p>
   </div>
 </div>
 
@@ -195,7 +195,7 @@ const html = `
   <p class="center italic">(Áp dụng khi cá nhân nhận thu nhập và ước tính tổng thu nhập trong năm dương lịch chưa đến mức chịu thuế TNCN)</p>
 
   <p>Kính gửi: (Tên tổ chức, cá nhân trả thu thập)………………………………………..</p>
-  <p>1. Tên tôi là: <<Ho_ten>></p>
+  <p>1. Tên tôi là: {{Ho_ten}}</p>
 
   <table class="mst-grid no-outer">
     <tr>
@@ -216,15 +216,15 @@ const html = `
     </tr>
   </table>
 
-  <p>3. Địa chỉ cư trú:<<dia_chi_cu_tru>></p>
-  <p>Tôi cam kết rằng, năm <<Nam_thue>> tôi có tổng thu nhập từ tiền lương, tiền công thuộc diện phải khấu trừ thuế theo tỷ lệ 10%, nhưng theo ước tính tổng thu nhập trong năm của tôi không quá 186 (*) triệu đồng (ghi bằng chữ: Một trăm tám mươi sáu triệu đồng) chưa đến mức phải nộp thuế TNCN. Vì vậy, tôi đề nghị Công ty TNHH Dalat Hasfarm căn cứ vào bản cam kết này để không khấu trừ thuế TNCN khi trả thu nhập cho tôi.</p>
+  <p>3. Địa chỉ cư trú:{{dia_chi_cu_tru}}</p>
+  <p>Tôi cam kết rằng, năm {{Nam_thue}} tôi có tổng thu nhập từ tiền lương, tiền công thuộc diện phải khấu trừ thuế theo tỷ lệ 10%, nhưng theo ước tính tổng thu nhập trong năm của tôi không quá 186 (*) triệu đồng (ghi bằng chữ: Một trăm tám mươi sáu triệu đồng) chưa đến mức phải nộp thuế TNCN. Vì vậy, tôi đề nghị Công ty TNHH Dalat Hasfarm căn cứ vào bản cam kết này để không khấu trừ thuế TNCN khi trả thu nhập cho tôi.</p>
   <p>Tôi chịu trách nhiệm trước pháp luật về những số liệu đã khai./.</p>
 
   <div class="right sig-block">
-    <p><<Dia_diem_ky>>, ngày <<Ngay_ky_day>> tháng <<Ngay_ky_month>> năm <<Ngay_ky_year>></p>
+    <p>{{Dia_diem_ky}}, ngày {{Ngay_ky_day}} tháng {{Ngay_ky_month}} năm {{Ngay_ky_year}}</p>
     <p><b>CÁ NHÂN CAM KẾT</b></p>
     <p class="italic">(Ký, ghi rõ họ tên)</p>
-    <p style="margin-top:24pt"><<Ho_ten>></p>
+    <p style="margin-top:24pt">{{Ho_ten}}</p>
   </div>
 </div>
 
@@ -239,11 +239,11 @@ const html = `
   <p class="center italic">(Đăng ký mã số thuế thu nhập cá nhân)</p>
 
   <p><b>BÊN UỶ QUYỀN (BÊN A):</b></p>
-  <p>Tên người ủy quyền: <<Ho_ten>>&nbsp;&nbsp;Code: <<Code>></p>
-  <p>Ngày sinh:<<Ngay_sinh>>&nbsp;&nbsp;Chứng minh nhân dân/ CCCD số: <<So_CCCD>></p>
-  <p>Do Công an: Cục CSQLHC về TTXH&nbsp;&nbsp;&nbsp;&nbsp;Cấp ngày: <<Ngay_cap_CCCD>></p>
-  <p>Địa chỉ đăng ký theo hộ khẩu: <<Dia_chi_thuong_tru>></p>
-  <p>Địa chỉ cư trú: <<Dia_chi_tam_tru>></p>
+  <p>Tên người ủy quyền: {{Ho_ten}}&nbsp;&nbsp;Code: {{Code}}</p>
+  <p>Ngày sinh:{{Ngay_sinh}}&nbsp;&nbsp;Chứng minh nhân dân/ CCCD số: {{So_CCCD}}</p>
+  <p>Do Công an: Cục CSQLHC về TTXH&nbsp;&nbsp;&nbsp;&nbsp;Cấp ngày: {{Ngay_cap_CCCD}}</p>
+  <p>Địa chỉ đăng ký theo hộ khẩu: {{Dia_chi_thuong_tru}}</p>
+  <p>Địa chỉ cư trú: {{Dia_chi_tam_tru}}</p>
   <p>Nơi làm việc hiện nay: Công ty TNHH Dalat Hasfarm</p>
 
   <p><b>BÊN NHẬN UỶ QUYỀN (BÊN B):</b></p>
@@ -255,7 +255,7 @@ const html = `
 
   <p><b>ĐIỀU 1: NỘI DUNG VÀ PHẠM VI ỦY QUYỀN</b></p>
   <p>Bên A ủy quyền cho bên B thực hiện các công việc sau đây:</p>
-  <p>Làm việc với Cục Thuế tỉnh Lâm Đồng để làm thủ tục đăng ký mã số thuế thu nhập cá nhân cho (Tên người ủy quyền) <<Ho_ten>>theo quy định về đăng ký thuế.</p>
+  <p>Làm việc với Cục Thuế tỉnh Lâm Đồng để làm thủ tục đăng ký mã số thuế thu nhập cá nhân cho (Tên người ủy quyền) {{Ho_ten}}theo quy định về đăng ký thuế.</p>
 
   <p><b>ĐIỀU 2: THỜI HẠN ỦY QUYỀN</b></p>
   <p>10 ngày kể từ ngày ký.</p>
@@ -272,7 +272,7 @@ const html = `
   <p>2. Hai bên đã tự đọc Giấy ủy quyền, đã hiểu và đồng ý tất cả các điều khoản ghi trong Giấy và ký vào Giấy ủy quyền này.</p>
   <p>3. Giấy uỷ quyền này có hiệu lực từ ngày hai bên ký.</p>
 
-  <p class="right">Đà Lạt, ngày <<Ngay_ky_day>> tháng <<Ngay_ky_month>> năm <<Ngay_ky_year>></p>
+  <p class="right">Đà Lạt, ngày {{Ngay_ky_day}} tháng {{Ngay_ky_month}} năm {{Ngay_ky_year}}</p>
   <table class="sig-3col">
     <tr>
       <td>BÊN UỶ QUYỀN<br/>(ký, ghi rõ họ tên)</td>
@@ -280,7 +280,7 @@ const html = `
       <td>ĐẠI DIỆN HỢP PHÁP<br/>(ký, đóng dấu, ghi rõ họ tên)</td>
     </tr>
     <tr>
-      <td class="sig-name"><<Ho_ten>></td>
+      <td class="sig-name">{{Ho_ten}}</td>
       <td></td>
       <td></td>
     </tr>
@@ -308,7 +308,7 @@ const html = `
   <h1 class="center">TỜ KHAI ĐĂNG KÝ THUẾ</h1>
   <p class="center italic">(Dùng cho người nộp thuế là cá nhân không kinh doanh trực tiếp đăng ký thuế)</p>
 
-  <p>1. Họ và tên người đăng ký thuế: <<Ho_ten>>&nbsp;&nbsp;&nbsp;&nbsp;Code: <<Code>></p>
+  <p>1. Họ và tên người đăng ký thuế: {{Ho_ten}}&nbsp;&nbsp;&nbsp;&nbsp;Code: {{Code}}</p>
   <p>2. Thông tin tổ chức, cá nhân cung cấp dịch vụ làm thủ tục về thuế (nếu có):</p>
   <p>2a. Tên: Công ty TNHH DALAT HASFARM</p>
   <p>2b. Mã số thuế: 5800000167</p>
@@ -316,11 +316,11 @@ const html = `
 
   <p>3. Thông tin đăng ký thuế của cá nhân:</p>
   <p>Trường hợp cá nhân đăng ký thuế là người có quốc tịch Việt Nam có thông tin trong Cơ sở dữ liệu quốc gia về dân cư:</p>
-  <p>3.1. Ngày, tháng, năm sinh: <<Ngay_sinh>></p>
-  <p>3.2. Số định danh cá nhân:<<So_CCCD>></p>
-  <p>3.3. Điện thoại liên hệ: <<So_dien_thoai>></p>
-  <p>3.4. Email: <<Email>></p>
-  <p>3.5. Số định danh cá nhân đã cấp trước đó (trong trường hợp cá nhân được xác lập lại số định danh cá nhân): <<So_dinh_danh_cu>></p>
+  <p>3.1. Ngày, tháng, năm sinh: {{Ngay_sinh}}</p>
+  <p>3.2. Số định danh cá nhân:{{So_CCCD}}</p>
+  <p>3.3. Điện thoại liên hệ: {{So_dien_thoai}}</p>
+  <p>3.4. Email: {{Email}}</p>
+  <p>3.5. Số định danh cá nhân đã cấp trước đó (trong trường hợp cá nhân được xác lập lại số định danh cá nhân): {{So_dinh_danh_cu}}</p>
 
   <p>Trường hợp cá nhân là người có quốc tịch nước ngoài hoặc là người có quốc tịch Việt Nam đang sống tại nước ngoài không có số định danh cá nhân:</p>
   <p>3.1. Ngày, tháng, năm sinh: …./….. / …………………………………………………..</p>
@@ -340,10 +340,10 @@ const html = `
   <p>Tôi cam kết những nội dung kê khai là đúng và chịu trách nhiệm trước pháp luật về những nội dung đã khai./.</p>
 
   <div class="right sig-block">
-    <p><<Dia_diem_ky>>, ngày <<Ngay_ky_day>> tháng <<Ngay_ky_month>> năm <<Ngay_ky_year>></p>
+    <p>{{Dia_diem_ky}}, ngày {{Ngay_ky_day}} tháng {{Ngay_ky_month}} năm {{Ngay_ky_year}}</p>
     <p><b>NGƯỜI ĐĂNG KÝ THUẾ</b></p>
     <p class="italic">(Ký, ghi rõ họ tên, xác nhận điện tử)</p>
-    <p style="margin-top:24pt"><<Ho_ten>></p>
+    <p style="margin-top:24pt">{{Ho_ten}}</p>
   </div>
 </div>
 `;
@@ -390,4 +390,5 @@ export const dangKyTapNgheTemplate: HtmlTemplate = {
   googleDocIds: [GOOGLE_DOC_ID],
   html,
   css,
+  fieldContract: DANG_KY_TAP_NGHE_FIELD_CONTRACT,
 };

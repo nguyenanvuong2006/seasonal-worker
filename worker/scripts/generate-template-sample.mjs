@@ -82,7 +82,7 @@ mkdirSync(outDir, { recursive: true });
 const outFile = join(outDir, "dang-ky-tap-nghe-sample.html");
 writeFileSync(outFile, html, "utf8");
 
-const unreplaced = [...html.matchAll(/<<([^>]+)>>/g)].map((m) => m[1]);
+const unreplaced = [...html.matchAll(/(?:<<\s*([^>]+?)\s*>>|\{\{\s*([^{}]+?)\s*\}\})/g)].map((m) => m[1] ?? m[2]);
 console.log(`✅ Sample HTML: ${outFile}`);
 console.log(`   Template: ${dangKyTapNgheTemplate.name}`);
 console.log(`   Placeholder chưa fill: ${unreplaced.length > 0 ? unreplaced.join(", ") : "KHÔNG (tất cả đã fill)"}`);

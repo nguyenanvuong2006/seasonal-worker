@@ -7,6 +7,7 @@
   "scripts": {
     "start": "node --import tsx src/index.ts",
     "typecheck": "tsc --noEmit -p tsconfig.json",
+    "test": "node --import tsx --test $(find src -name '*.test.ts')",
     "generate:sample": "node scripts/generate-template-sample.mjs",
     "verify:visual": "node scripts/visual-verify.mjs",
     "benchmark": "node scripts/benchmark.mjs",

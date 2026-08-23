@@ -55,12 +55,13 @@ import { createDocumentHistory, linkRecordToHistory } from "../../src/lib/docume
 import { finalizeBatchOutputs } from "../../src/lib/document-merge/batch-finalize.ts";
 import { loadDailyApplicationRecords } from "../../src/lib/document-merge/record-loader.ts";
 import { db } from "../../src/db";
-import { mergeJobs, mergeTemplateVersions } from "../../src/db/schema";
-import { eq } from "drizzle-orm";
+import { dailyApplications, mergeJobs, mergeTemplateVersions } from "../../src/db/schema";
+import { and, eq } from "drizzle-orm";
 import { getDbIdentity } from "../../src/lib/document-merge/db-identity.ts";
 import { runClaimProbe, claimExistingJobItem } from "../../src/lib/document-merge/queue-diagnostics.ts";
 import { shouldBlockRestrictedWorkerRequest } from "../../src/lib/document-merge/worker-diag-gate.ts";
 import { runOverlayE2EJob } from "../../src/lib/document-merge/pdf-overlay/worker-overlay-e2e.ts";
+import { getHtmlTemplateContractByKey } from "../../src/document-templates/registry.ts";
 
 /**
  * App-level auth — LỚP RIÊNG, độc lập với Cloud Run IAM (IAM verify Google ID
@@ -199,6 +200,8 @@ interface TemplateSnapshot {
   name?: string;
   documentKind?: string;
   googleDocId?: string;
+  /** Registered first-party contract key, null for generic DB-authored templates. */
+  contractKey?: string | null;
   version?: number | null;
   retentionYears?: number | null;
   fields?: FieldSnapshotRow[];
@@ -233,6 +236,10 @@ function toRenderFields(rows: FieldSnapshotRow[] = []): MergeTemplateField[] {
 interface JobContext {
   jobId: string;
   createdBy: string;
+  /** Captured when the job was accepted; retries must not move computed dates. */
+  renderedAt: Date;
+  recordCount: number;
+  dispatchToApplicant: boolean;
   templates: Record<string, TemplateSnapshot>;
 }
 
@@ -272,8 +279,20 @@ async function processItem(item: QueueItem, jobCtx: JobContext): Promise<void> {
   }
 
   t = Date.now();
-  const context = { currentUserName: jobCtx.createdBy, currentDate: new Date(), mergeIndex: item.sortOrder, mergeCount: 1 };
-  const rendered = renderApplicantDocumentFromParts(snap.htmlBody, snap.printCss, toRenderFields(snap.fields), recordData, context);
+  const context = {
+    currentUserName: jobCtx.createdBy,
+    currentDate: jobCtx.renderedAt,
+    mergeIndex: item.sortOrder,
+    mergeCount: jobCtx.recordCount,
+  };
+  const rendered = renderApplicantDocumentFromParts(
+    snap.htmlBody,
+    snap.printCss,
+    toRenderFields(snap.fields),
+    recordData,
+    context,
+    { contract: getHtmlTemplateContractByKey(snap.contractKey) },
+  );
   await stage(jobCtx.jobId, item.id, "DATA_RESOLUTION", t, rendered.valid);
   if (!rendered.valid) {
     await failItem(
@@ -337,6 +356,26 @@ async function processItem(item: QueueItem, jobCtx: JobContext): Promise<void> {
   await linkRecordToHistory(item.id, history.id);
   await stage(jobCtx.jobId, item.id, "HISTORY_WRITE", t, true);
 
+  // Preserve the existing "dispatch to applicant" behaviour for HTML/PDF:
+  // only an explicitly requested job updates the application link, and it
+  // points at the audited immutable PDF rather than a transient preview.
+  if (jobCtx.dispatchToApplicant) {
+    const sentAt = new Date();
+    await db
+      .update(dailyApplications)
+      .set({
+        mergedDocUrl: null,
+        mergedDocPdfUrl: stored.url,
+        mergedTemplateId: item.templateId ?? null,
+        documentSentAt: sentAt,
+        signatureDataUrl: null,
+        signatureConfirmedAt: null,
+        confirmedAnswers: {},
+        updatedAt: sentAt,
+      })
+      .where(eq(dailyApplications.id, item.sourceRecordId));
+  }
+
   t = Date.now();
   await completeItem(item.id, {
     pdfUrl: stored.url,
@@ -362,8 +401,28 @@ async function runJob(jobId: string): Promise<{ processed: number; failed: numbe
   const [job] = await db.select().from(mergeJobs).where(eq(mergeJobs.id, jobId)).limit(1);
   if (!job) throw new Error("job not found");
 
-  const templates = (job.metadata as { templates?: Record<string, TemplateSnapshot> }).templates ?? {};
-  const jobCtx: JobContext = { jobId, createdBy: job.createdBy, templates };
+  if (job.engine !== "HTML_PDF") {
+    // The worker is only the HTML/PDF consumer of the existing queue. Legacy
+    // Google Docs jobs have their own synchronous path and must remain intact.
+    throw new Error(`UNSUPPORTED_WORKER_ENGINE:${job.engine}`);
+  }
+
+  const metadata = job.metadata as {
+    templates?: Record<string, TemplateSnapshot>;
+    renderedAt?: string;
+    dispatchToApplicant?: boolean;
+  };
+  const templates = metadata.templates ?? {};
+  const parsedRenderedAt = metadata.renderedAt ? new Date(metadata.renderedAt) : new Date(job.createdAt);
+  const renderedAt = Number.isNaN(parsedRenderedAt.getTime()) ? new Date(job.createdAt) : parsedRenderedAt;
+  const jobCtx: JobContext = {
+    jobId,
+    createdBy: job.createdBy,
+    renderedAt,
+    recordCount: job.recordCount,
+    dispatchToApplicant: metadata.dispatchToApplicant === true,
+    templates,
+  };
 
   const jobStartedAt = Date.now();
   await markJobProcessing(jobId);
@@ -589,7 +648,7 @@ const server = http.createServer(async (req, res) => {
         const [nextJob] = await db
           .select({ id: mergeJobs.id })
           .from(mergeJobs)
-          .where(eq(mergeJobs.status, "QUEUED"))
+          .where(and(eq(mergeJobs.status, "QUEUED"), eq(mergeJobs.engine, "HTML_PDF")))
           .limit(1);
         if (!nextJob) return json(res, 200, { processed: 0, note: "no queued jobs" });
         const result = await runJob(nextJob.id);
