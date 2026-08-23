@@ -4,7 +4,7 @@
  */
 import test from "node:test";
 import assert from "node:assert/strict";
-import { shouldRetryClaim, claimRetryDelayMs, WORKER_STAGES } from "./queue-types.ts";
+import { shouldRetryClaim, claimRetryDelayMs, WORKER_STAGES, isRetryableItemError } from "./queue-types.ts";
 
 test("shouldRetryClaim: retries while under the max, stops at the max", () => {
   assert.equal(shouldRetryClaim(1, 3), true);
@@ -23,6 +23,17 @@ test("claimRetryDelayMs: increases with attempt, capped at 2000ms", () => {
   assert.equal(claimRetryDelayMs(2), 500);
   assert.equal(claimRetryDelayMs(3), 1000);
   assert.equal(claimRetryDelayMs(10), 2000);
+});
+
+test("isRetryableItemError: deterministic validation is non-retryable; transient stays retryable", () => {
+  assert.equal(isRetryableItemError("INCOMPLETE"), false);
+  assert.equal(isRetryableItemError("INVALID_MAPPING"), false);
+  assert.equal(isRetryableItemError("INVALID_TEMPLATE"), false);
+  assert.equal(isRetryableItemError("UNSUPPORTED_SOURCE_PATH"), false);
+  assert.equal(isRetryableItemError("RENDER_FAILED"), true);
+  assert.equal(isRetryableItemError(null), true);
+  assert.equal(isRetryableItemError("INCOMPLETE", true), true);
+  assert.equal(isRetryableItemError("RENDER_FAILED", false), false);
 });
 
 test("WORKER_STAGES: contains the full pipeline in order, JOB_CLAIMED first", () => {
