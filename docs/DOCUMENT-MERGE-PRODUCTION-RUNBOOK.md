@@ -53,10 +53,12 @@ thủ công, không có gì tự động chạy khi push code:
    `docs/PRODUCTION-DEPLOY.md` mục 2).
 3. Chạy workflow **"Migrate Document Merge DB — PRODUCTION"**
    (`migrate-production.yml`) — nhập `confirm=PRODUCTION` và xác nhận đã
-   backup. Chỉ chạy 8 migration Document Merge (không đụng bảng khác), báo
+   backup. Chỉ chạy 7 migration Document Merge (không đụng bảng khác), báo
    counts, không seed dữ liệu test. Runner này KHÔNG BAO GIỜ chứa migration
-   cleanup xoá dữ liệu (sự cố 2026-08-24) — chỉ gồm migration idempotent,
-   non-destructive, chạy lại an toàn.
+   cleanup xoá dữ liệu (sự cố 2026-08-24) lẫn migration seed body canonical
+   pre-v7 (2026-08-23-trainee-registration-canonical-html-draft.sql — chỉ còn
+   trong git history) — chỉ gồm migration idempotent, non-destructive, chạy
+   lại an toàn.
 4. Chạy workflow **"Deploy Document Merge Worker — PRODUCTION"**
    (`deploy-worker-production.yml`) — build + deploy Cloud Run service
    `seasonal-worker-pdf-production`, `--no-allow-unauthenticated`, smoke

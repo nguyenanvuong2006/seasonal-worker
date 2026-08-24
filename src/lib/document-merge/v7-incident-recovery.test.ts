@@ -19,6 +19,25 @@
  *   6. merge_template_fields are never changed;
  *   7. merge_jobs / document_history rows are never changed.
  *
+ * FINAL RUNNER HYGIENE HOTFIX (2026-08-24, sau recovery PR #96):
+ * Production sau recovery cho thấy versions table bị tái tạo kèm một DRAFT
+ * v1 legacy (source_docx_name = "...canonical-source.html...", mapping_snapshot
+ * rỗng). Nguyên nhân: migration
+ * 2026-08-23-trainee-registration-canonical-html-draft.sql (insert
+ * MAX(version)+1 với body canonical-source.html LỖI THỜI) còn nằm trong
+ * runner định kỳ — khi versions table trống (đúng trạng thái sự cố, trước
+ * khi recovery v7 chạy) nó tạo v1 legacy. Migration đó đã bị LOẠI VĨNH VIỄN
+ * khỏi runner (file vẫn nằm trong git như immutable history — KHÔNG xoá).
+ * Các test bên dưới chứng minh thêm:
+ *   8. legacy canonical HTML draft migration ABSENT khỏi runner, được cảnh
+ *      báo bằng comment tại array, nhưng file vẫn tồn tại trong repo;
+ *   9. KHÔNG migration nào trong runner có thể tạo document body pre-v7:
+ *      chỉ recovery + v7 draft insert vào merge_template_versions (cả hai
+ *      dedupe theo source_docx_name), và không SQL thực thi nào còn tham
+ *      chiếu canonical-source.html;
+ *  10. chạy lại runner khi CHỈ CÓ v7 tồn tại là true no-op: không v1,
+ *      không v8/v9.
+ *
  * The behavioural section runs a faithful in-memory model of the exact SQL
  * statements; every modelled statement is cross-locked to the real SQL text
  * by the static assertions above it (statement counts, guards, literals),
@@ -194,18 +213,38 @@ test("HOTFIX-2: the destructive canonical cleanup is ABSENT from the recurring r
 
 test("HOTFIX-3: the v7 DRAFT migration IS present, in the correct sequence", () => {
   const list = parseRunnerList();
-  const canonical = list.indexOf(CANONICAL_DRAFT_MIGRATION);
   const recovery = list.indexOf(RECOVERY_MIGRATION);
   const v7 = list.indexOf(V7_DRAFT_MIGRATION);
 
   assert.ok(v7 !== -1, "v7 DRAFT migration must be in the runner");
   assert.ok(recovery !== -1, "incident recovery migration must be in the runner");
-  assert.ok(canonical !== -1, "canonical draft migration must stay in the runner");
-  assert.ok(canonical < recovery, "recovery runs after the canonical draft");
+  assert.equal(list.indexOf(CANONICAL_DRAFT_MIGRATION), -1, "legacy canonical draft must NOT be in the runner");
   assert.ok(
     recovery < v7,
     "recovery runs BEFORE the v7 draft so an emptied versions table receives v7 at its deterministic version 7, never MAX(version)+1",
   );
+});
+
+test("HOTFIX-8: the legacy canonical HTML draft migration is ABSENT from the recurring runner but kept as immutable git history", () => {
+  const list = parseRunnerList();
+  assert.ok(
+    !list.includes(CANONICAL_DRAFT_MIGRATION),
+    "obsolete canonical-source.html draft (insert MAX(version)+1) must never run again from the runner — " +
+      "it recreated a legacy v1 DRAFT on the emptied Production versions table after PR #96",
+  );
+
+  // The exclusion is documented at the array itself so nobody re-adds it by accident.
+  const source = readRepoFile(RUNNER_SCRIPT);
+  assert.match(source, /KHÔNG thêm/);
+  assert.ok(
+    source.includes(CANONICAL_DRAFT_MIGRATION),
+    "the runner must keep a warning naming the excluded legacy canonical draft migration",
+  );
+
+  // The historical migration file itself MUST NOT be deleted from the repo —
+  // it remains immutable migration history for audit. Only its execution is banned.
+  const file = readRepoFile(`migrations/${CANONICAL_DRAFT_MIGRATION}`);
+  assert.ok(file.includes(CANONICAL_SOURCE_NAME), "the historical file is preserved verbatim");
 });
 
 test("HOTFIX-1: the runner list is exactly the known-safe, idempotent sequence", () => {
@@ -215,7 +254,6 @@ test("HOTFIX-1: the runner list is exactly the known-safe, idempotent sequence",
     "2026-08-17-document-merge-template-versions.sql",
     "2026-08-20-document-merge-async-pdf.sql",
     "2026-08-21-dang-ky-tap-nghe-html-draft.sql",
-    CANONICAL_DRAFT_MIGRATION,
     RECOVERY_MIGRATION,
     V7_DRAFT_MIGRATION,
   ]);
@@ -245,6 +283,42 @@ test("HOTFIX-1: rerunning the runner can NEVER delete a published version (no de
   // (prose warnings about the incident live in comments and are stripped).
   const runnerCode = stripJsComments(readRepoFile(RUNNER_SCRIPT));
   assert.doesNotMatch(runnerCode, /\bDELETE\s+FROM\b|\bTRUNCATE\b|\bDROP\s+TABLE\b/i);
+});
+
+test("HOTFIX-9: NO runner migration can (re)create a pre-v7 document body — only the two dedupe-guarded v7 producers insert versions", () => {
+  const list = parseRunnerList();
+  const versionInserters: string[] = [];
+  for (const filename of list) {
+    const code = stripSqlComments(readRepoFile(`migrations/${filename}`));
+    if (!/\bINSERT\s+INTO\s+merge_template_versions\b/i.test(code)) continue;
+    versionInserters.push(filename);
+
+    // Recovery guards via "AND NOT EXISTS (... source_docx_name ...)"; the v7
+    // draft via "WHERE NOT EXISTS (... source_docx_name ...)" — both forms are
+    // valid dedupe guards, so only the NOT EXISTS + source_docx_name pairing matters.
+    assert.match(
+      code,
+      /\bNOT\s+EXISTS[\s\S]*?source_docx_name/i,
+      `${filename}: every version insert must be dedupe-guarded by source_docx_name (rerun-safe)`,
+    );
+    assert.ok(
+      !code.includes("canonical-source.html"),
+      `${filename}: executable SQL must not carry the legacy canonical-source.html body/name — ` +
+        "the runner must never be able to recreate the v1 legacy draft or any pre-v7 body",
+    );
+  }
+  assert.deepEqual(
+    versionInserters,
+    [RECOVERY_MIGRATION, V7_DRAFT_MIGRATION],
+    "exactly the recovery migration and the v7 operator draft may insert document versions",
+  );
+
+  // And the only source_docx_name those producers can write is the v7 one.
+  for (const filename of [RECOVERY_MIGRATION, V7_DRAFT_MIGRATION]) {
+    const code = stripSqlComments(readRepoFile(`migrations/${filename}`));
+    assert.ok(code.includes(V7_SOURCE_NAME), `${filename} must write/guard on the v7 source_docx_name`);
+    assert.ok(!code.includes(CANONICAL_SOURCE_NAME), `${filename} must not write the legacy canonical source name`);
+  }
 });
 
 // ---------------------------------------------------------------------------
@@ -362,20 +436,12 @@ function maxVersion(state: DbState): number {
   return state.versions.reduce((m, v) => Math.max(m, v.version), 0);
 }
 
-/**
- * Model of migrations/2026-08-23-trainee-registration-canonical-html-draft.sql:
- * INSERT ... MAX(version)+1 ... WHERE NOT EXISTS (same source_docx_name).
- */
-function canonicalDraftMigration(state: DbState): DbState {
-  if (state.versions.some((v) => v.sourceDocxName === CANONICAL_SOURCE_NAME)) return state;
-  return {
-    ...state,
-    versions: [
-      ...state.versions,
-      { version: maxVersion(state) + 1, status: "DRAFT", sourceDocxName: CANONICAL_SOURCE_NAME, bodySha256: "canonical-v6-body" },
-    ],
-  };
-}
+// NOTE: migrations/2026-08-23-trainee-registration-canonical-html-draft.sql
+// deliberately has NO model anymore — it is excluded from the recurring
+// runner (HOTFIX-8). Its MAX(version)+1 insert is exactly what recreated the
+// legacy v1 DRAFT on the emptied Production versions table. If anyone ever
+// re-adds it to the runner list, runRecurringRunner() below fails with
+// "every runner migration needs a model" (in addition to the static tests).
 
 /**
  * Model of migrations/2026-08-24-trainee-registration-v7-operator-test2-draft.sql:
@@ -435,7 +501,6 @@ const MIGRATION_MODELS: Record<string, (state: DbState) => DbState> = {
   "2026-08-17-document-merge-template-versions.sql": ddlMigration,
   "2026-08-20-document-merge-async-pdf.sql": ddlMigration,
   "2026-08-21-dang-ky-tap-nghe-html-draft.sql": ddlMigration,
-  [CANONICAL_DRAFT_MIGRATION]: canonicalDraftMigration,
   [RECOVERY_MIGRATION]: recoveryMigration,
   [V7_DRAFT_MIGRATION]: v7DraftMigration,
 };
@@ -484,7 +549,7 @@ function healthyStateWithPublishedV6(): DbState {
   };
 }
 
-test("HOTFIX-1/4: rerunning the runner on the incident Production state fails closed with exactly one v7 DRAFT", () => {
+test("HOTFIX-1/4: rerunning the runner on the incident Production state fails closed with exactly one v7 DRAFT and NOTHING else", () => {
   const before = incidentState();
   const after = runRecurringRunner(before);
 
@@ -495,10 +560,49 @@ test("HOTFIX-1/4: rerunning the runner on the incident Production state fails cl
   assert.equal(v7Rows[0].status, "DRAFT", "v7 is a DRAFT — never auto-published");
   assert.equal(v7Rows[0].version, 7, "the recovered v7 lands on its deterministic version 7");
 
+  assert.equal(
+    after.versions.length,
+    1,
+    "the runner must recreate NOTHING besides v7 on an emptied versions table — " +
+      "in particular NO legacy v1 canonical-source.html DRAFT (the post-PR-#96 regression)",
+  );
+  assert.ok(
+    !after.versions.some((v) => v.sourceDocxName === CANONICAL_SOURCE_NAME),
+    "the legacy canonical-source.html draft must never reappear",
+  );
   assert.ok(
     after.versions.every((v) => v.status === "DRAFT"),
     "no version may be PUBLISHED after the incident recovery — publishing is an explicit operator act",
   );
+});
+
+test("HOTFIX-10: rerunning the runner when ONLY v7 exists is a true no-op — never recreates v1, never creates v8/v9", () => {
+  // Post-recovery Production state: {current_published_version=NULL, versions={v7 DRAFT}}.
+  const onlyV7: DbState = {
+    currentPublishedVersion: null,
+    versions: [
+      { version: 7, status: "DRAFT", sourceDocxName: V7_SOURCE_NAME, bodySha256: V7_BODY_SHA256 },
+    ],
+    mergeTemplateFields: incidentState().mergeTemplateFields,
+    mergeJobs: incidentState().mergeJobs,
+    documentHistory: incidentState().documentHistory,
+  };
+
+  const once = runRecurringRunner(onlyV7);
+  const twice = runRecurringRunner(once);
+  const thrice = runRecurringRunner(twice);
+
+  for (const [label, state] of [["once", once], ["twice", twice], ["thrice", thrice]] as const) {
+    assert.equal(state.versions.length, 1, `after run ${label}: still exactly one version row`);
+    assert.equal(state.versions[0].version, 7, `after run ${label}: no v1 and no v8/v9 may appear`);
+    assert.equal(state.versions[0].status, "DRAFT", `after run ${label}: v7 is never auto-published`);
+    assert.ok(
+      !state.versions.some((v) => v.sourceDocxName === CANONICAL_SOURCE_NAME),
+      `after run ${label}: the legacy canonical-source.html draft never reappears`,
+    );
+    assert.equal(state.currentPublishedVersion, null, `after run ${label}: nothing is auto-published`);
+  }
+  assert.deepEqual(twice, once, "second rerun is byte-for-byte identical to the first");
 });
 
 test("HOTFIX-5: running the runner (incl. recovery) twice never duplicates v7 nor creates v8/v9", () => {
