@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { Component, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import {
   AlertCircle,
   CheckCircle2,
@@ -22,6 +22,10 @@ import {
   resolveDwClassification,
 } from "@/lib/document-merge/template-routing";
 import { JobProgressPanel } from "@/components/document-merge/job-progress-panel";
+import {
+  normalizePreviewResponse,
+  type SafePreviewResult,
+} from "@/lib/document-merge/preview-response";
 
 type MergeTemplate = {
   id: string;
@@ -50,32 +54,10 @@ type ApplicantRow = {
   signatureConfirmedAt?: string | null;
 };
 
-type PreviewResult = {
-  applicationId: string;
-  fullName: string;
-  cccd: string;
-  deptName?: string | null;
-  startingDate?: string | null;
-  dwClassification: "OLD" | "NEW";
-  documentKind: "A" | "B";
-  documentKindLabel: string;
-  templateId?: string;
-  templateName: string;
-  content: string;
-  missingFields: string[];
-  unreplaced: string[];
-  valid: boolean;
-  mappingSummary?: { total: number; mapped: number; required: number; suggested: number };
-  // Canonical provenance — an operator must always know exactly WHAT is previewed.
-  mode?: string;
-  renderedHtml?: string;
-  templateVersion?: number | null;
-  versionStatus?: string | null;
-  isPublishedCanonical?: boolean;
-  engine?: string | null;
-  pageCount?: number | null;
-  renderer?: string | null;
-};
+// Preview state — LUÔN là kết quả đã qua normalizePreviewResponse().
+// INCIDENT FIX: không bao giờ đưa payload API thô vào state; mọi field mà UI
+// dereference (missingFields, unreplaced, …) được đảm bảo đúng kiểu.
+type PreviewResult = SafePreviewResult;
 
 type Diagnostic = {
   code: string;
@@ -180,6 +162,66 @@ function DiagnosticBox({ diagnostic }: { diagnostic: Diagnostic }) {
       </div>
     </div>
   );
+}
+
+/**
+ * PREVIEW ERROR BOUNDARY — incident fix.
+ *
+ * Sự cố production: một TypeError trong lúc render kết quả Preview đã unmount
+ * TOÀN BỘ route /admin/document-merge ("This page couldn't load") vì app
+ * không có error boundary nào. Boundary này giam MỌI lỗi render của panel
+ * Preview lại bên trong panel, hiển thị thông báo tiếng Việt và cho phép
+ * thử lại — phần còn lại của trang (danh sách ứng viên, nút merge) vẫn dùng
+ * được bình thường.
+ */
+class PreviewErrorBoundary extends Component<
+  { resetKey: string; onReset: () => void; children: ReactNode },
+  { error: Error | null }
+> {
+  state: { error: Error | null } = { error: null };
+
+  static getDerivedStateFromError(error: Error) {
+    return { error };
+  }
+
+  componentDidUpdate(prevProps: { resetKey: string }) {
+    // Chọn ứng viên khác / bấm thử lại → cho boundary render lại từ đầu.
+    if (prevProps.resetKey !== this.props.resetKey && this.state.error) {
+      this.setState({ error: null });
+    }
+  }
+
+  render() {
+    if (this.state.error) {
+      return (
+        <div className="rounded-xl border border-red-200 bg-red-50 p-4 text-xs text-red-800">
+          <div className="flex items-start gap-2">
+            <AlertCircle className="mt-0.5 h-4 w-4 shrink-0" />
+            <div className="min-w-0 flex-1">
+              <p className="font-bold">Không hiển thị được bản xem trước.</p>
+              <p className="mt-1 text-red-700">
+                Đã xảy ra lỗi khi hiển thị Preview. Trang vẫn hoạt động bình thường — chọn lại ứng viên hoặc bấm thử lại.
+              </p>
+              <pre className="mt-2 max-h-24 overflow-auto whitespace-pre-wrap rounded-lg bg-white/80 p-2 font-mono text-[10px] text-red-900">
+                {this.state.error.message}
+              </pre>
+              <button
+                type="button"
+                onClick={() => {
+                  this.setState({ error: null });
+                  this.props.onReset();
+                }}
+                className="mt-2 inline-flex items-center gap-1.5 rounded-lg border border-red-300 bg-white px-3 py-1.5 font-semibold text-red-800"
+              >
+                <RefreshCw className="h-3.5 w-3.5" /> Thử lại Preview
+              </button>
+            </div>
+          </div>
+        </div>
+      );
+    }
+    return this.props.children;
+  }
 }
 
 function MappingInspector({ template }: { template: MergeTemplate | undefined }) {
@@ -604,6 +646,10 @@ export function MergeWorkspace({
     setPreviewTargetId(id);
   };
 
+  // INCIDENT FIX — chống race khi bấm nhanh nhiều ứng viên: chỉ response của
+  // request MỚI NHẤT được phép chạm vào state; response cũ về muộn bị bỏ qua.
+  const previewRequestSeq = useRef(0);
+
   const loadPreview = async (id?: string) => {
     const target = id || previewTargetId || Array.from(selectedIds)[0];
     if (!target) {
@@ -614,6 +660,7 @@ export function MergeWorkspace({
       setMergeError("Chọn template cố định trước khi Preview.");
       return;
     }
+    const seq = ++previewRequestSeq.current;
     setPreviewTargetId(target);
     setPreviewLoading(true);
     setMergeError(null);
@@ -628,19 +675,34 @@ export function MergeWorkspace({
           autoRoute,
         }),
       });
-      const data = await res.json();
+      // INCIDENT FIX — body không phải JSON hợp lệ (edge/proxy error page…)
+      // không được ném ra ngoài như network error: parse an toàn.
+      let data: Record<string, unknown> = {};
+      try {
+        const parsed: unknown = await res.json();
+        if (parsed !== null && typeof parsed === "object" && !Array.isArray(parsed)) {
+          data = parsed as Record<string, unknown>;
+        }
+      } catch {
+        data = {};
+      }
+      if (seq !== previewRequestSeq.current) return; // response cũ — bỏ qua
       if (!res.ok) {
         setDiagnostic({
-          code: data.code || `HTTP_${res.status}`,
-          error: data.error || "Không xem trước được",
-          action: data.action,
-          details: data.details,
+          code: typeof data.code === "string" ? data.code : `HTTP_${res.status}`,
+          error: typeof data.error === "string" ? data.error : "Không xem trước được",
+          action: typeof data.action === "string" ? data.action : undefined,
+          details: typeof data.details === "string" ? data.details : undefined,
         });
         setPreview(null);
         return;
       }
-      setPreview(data);
+      // INCIDENT FIX — KHÔNG BAO GIỜ set payload thô vào state. Nhánh
+      // canonical trả `unresolved` (không có `unreplaced`) từng làm render
+      // crash toàn trang. Normalizer đảm bảo mọi field UI đọc đều đúng kiểu.
+      setPreview(normalizePreviewResponse(data));
     } catch (error) {
+      if (seq !== previewRequestSeq.current) return;
       setPreview(null);
       setDiagnostic({
         code: "NETWORK_ERROR",
@@ -649,7 +711,7 @@ export function MergeWorkspace({
         details: error instanceof Error ? error.message : String(error),
       });
     } finally {
-      setPreviewLoading(false);
+      if (seq === previewRequestSeq.current) setPreviewLoading(false);
     }
   };
 
@@ -988,6 +1050,10 @@ export function MergeWorkspace({
           <div className="mt-3 flex-1 overflow-y-auto rounded-lg bg-slate-50 p-4 text-xs leading-relaxed text-slate-800">
             {!preview && !previewLoading && <p className="text-center text-slate-400">Chọn một ứng viên rồi nhấn Preview để xem nội dung merge với dữ liệu thật.</p>}
             {previewLoading && <p className="text-center text-slate-400">Đang merge thử...</p>}
+            <PreviewErrorBoundary
+              resetKey={`${previewTargetId}:${preview?.applicationId ?? ""}`}
+              onReset={() => void loadPreview()}
+            >
             {preview && (
               <div className="space-y-3">
                 <div className="rounded-lg bg-white p-3 shadow-xs">
@@ -1048,6 +1114,7 @@ export function MergeWorkspace({
                 )}
               </div>
             )}
+            </PreviewErrorBoundary>
           </div>
 
           <div className="mt-4 space-y-3 border-t border-slate-100 pt-4">

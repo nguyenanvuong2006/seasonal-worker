@@ -595,3 +595,62 @@ test("preview: htmlVersion không tồn tại → 404 VERSION_NOT_FOUND", async 
   assert.equal(res.body.code, "VERSION_NOT_FOUND");
   assert.equal(ctx.renderCalls.length, 0);
 });
+
+/* ============================================================
+   INCIDENT REGRESSION — CANONICAL PUBLISHED PREVIEW (engine HTML_PDF)
+   ------------------------------------------------------------
+   Sự cố production sau PR #91: nhánh canonical trả `unresolved` nhưng
+   KHÔNG trả `unreplaced`, trong khi merge-workspace render
+   `preview.unreplaced.length` → TypeError → crash toàn bộ route
+   /admin/document-merge. Các test dưới đây khóa cứng contract đó.
+   ============================================================ */
+
+// Q. Engine HTML_PDF + published v3 → canonical preview 200 với ĐẦY ĐỦ
+//    các mảng mà UI dereference (unreplaced + missingFields), dùng đúng
+//    version PUBLISHED và KHÔNG ghi gì.
+test("preview: engine HTML_PDF → canonical published v3, response có unreplaced[] + missingFields[] (UI contract), 0 write", async () => {
+  const ctx = makeContext({
+    role: "HR_RECRUITER",
+    engine: "HTML_PDF",
+    publishedRow: makeVersionRow(3, "PUBLISHED"),
+  });
+  const res = await ctx.POST(requestFor({ templateId: "tpl-1", applicationId: "app-1", autoRoute: false }));
+
+  assert.equal(res.status, 200);
+  assert.equal(res.body.mode, "CANONICAL_PUBLISHED_PREVIEW");
+  assert.equal(res.body.isPublishedCanonical, true);
+  assert.equal(res.body.versionStatus, "PUBLISHED");
+  assert.equal(res.body.templateVersion, 3);
+  assert.equal(typeof res.body.renderedHtml, "string");
+  // UI CONTRACT (incident fix): cả hai key phải là MẢNG — merge-workspace đọc
+  // `unreplaced.length` ngay trong render; thiếu key này là crash toàn trang.
+  assert.ok(Array.isArray(res.body.unreplaced), "canonical preview PHẢI trả unreplaced[]");
+  assert.ok(Array.isArray(res.body.unresolved), "canonical preview PHẢI trả unresolved[]");
+  assert.ok(Array.isArray(res.body.missingFields), "canonical preview PHẢI trả missingFields[]");
+  assert.equal(ctx.renderCalls.length, 1, "render qua shared renderer đúng 1 lần");
+  assert.equal(ctx.googleCalls.length, 0, "engine HTML_PDF KHÔNG gọi Google Docs");
+  assert.equal(ctx.db.writes.length, 0, "Preview KHÔNG tạo merge job / không ghi bảng nào");
+});
+
+// R. Engine HTML_PDF nhưng CHƯA có version PUBLISHED → 422 fail-closed có
+//    code rõ ràng (không crash, không fallback Google Docs).
+test("preview: engine HTML_PDF + không có PUBLISHED → 422 CANONICAL_TEMPLATE_NOT_PUBLISHED, không fallback", async () => {
+  const ctx = makeContext({ role: "ADMIN", engine: "HTML_PDF", publishedRow: null });
+  const res = await ctx.POST(requestFor({ templateId: "tpl-1", applicationId: "app-1", autoRoute: false }));
+
+  assert.equal(res.status, 422);
+  assert.equal(res.body.code, "CANONICAL_TEMPLATE_NOT_PUBLISHED");
+  assert.equal(typeof res.body.error, "string");
+  assert.equal(ctx.googleCalls.length, 0, "fail-closed: không rơi về Google Docs");
+  assert.equal(ctx.db.writes.length, 0);
+});
+
+// S. Canonical preview dùng CÙNG record loader mà worker dùng và load đúng 1 hồ sơ.
+test("preview: engine HTML_PDF → loadDailyApplicationRecords đúng 1 lần với đúng applicationId", async () => {
+  const ctx = makeContext({ role: "ADMIN", engine: "HTML_PDF", publishedRow: makeVersionRow(3, "PUBLISHED") });
+  const res = await ctx.POST(requestFor({ templateId: "tpl-1", applicationId: "app-1", autoRoute: false }));
+
+  assert.equal(res.status, 200);
+  // Mảng sinh trong vm context có prototype khác → so sánh bằng JSON.
+  assert.equal(JSON.stringify(ctx.loaderCalls), JSON.stringify([["app-1"]]));
+});
