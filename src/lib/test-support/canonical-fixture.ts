@@ -23,7 +23,12 @@ import type {
  */
 const REPO_ROOT = join(dirname(fileURLToPath(import.meta.url)), "..", "..", "..");
 
-const CANONICAL_MIGRATION = "migrations/2026-08-23-trainee-registration-canonical-html-draft.sql";
+/**
+ * The current canonical DRAFT under review. The v7 draft carries the operator
+ * provided test(2).html body/printCss (.paper marker, 6 pages / 49 tokens).
+ * The historical 2026-08-23 migration remains on disk as immutable v6 history.
+ */
+const CANONICAL_MIGRATION = "migrations/2026-08-24-trainee-registration-v7-operator-test2-draft.sql";
 const MANIFEST = "templates/document-merge/trainee-registration/canonical-source.manifest.json";
 
 export interface CanonicalManifest {
@@ -58,8 +63,8 @@ function extractDollarQuoted(sql: string, tag: string): string {
 export function readCanonicalVersionParts(): { htmlBody: string; printCss: string } {
   const sql = readRepoFile(CANONICAL_MIGRATION);
   return {
-    htmlBody: extractDollarQuoted(sql, "canonical_html"),
-    printCss: extractDollarQuoted(sql, "canonical_css"),
+    htmlBody: extractDollarQuoted(sql, "v7_html"),
+    printCss: extractDollarQuoted(sql, "v7_css"),
   };
 }
 

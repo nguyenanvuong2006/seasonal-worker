@@ -3,21 +3,38 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Giấy đăng ký tập nghề - Dalat Hasfarm</title>
-<!--
-  CANONICAL RUNTIME SOURCE — generated verbatim from the operator-provided
-  authoring shell. The document print CSS and body are extracted unchanged
-  from the operator's tagged style/template blocks. This file contains ONLY
-  the real six-page document; the browser preview shell is excluded.
--->
-<style>
+<title>Preview – Giấy đăng ký tập nghề | Dalat Hasfarm</title>
 
-/* ===== runtime parity (auto-generated): neutralise generic A4 renderer CSS; #doccss follows and wins ===== */
-@page { size: A4 portrait; margin: 12mm 14mm; }
-.paper table { margin: 0; table-layout: auto; }
-.paper th, .paper td { border: none; padding: 0; text-align: left; vertical-align: baseline; }
-.paper .mst { margin: 0; }
+<!-- ============ UI CHROME (không in ra PDF) ============ -->
+<style id="uicss">
+  :root{ --brand:#3d5220; --brand2:#4a6122; }
+  body{margin:0;background:#e9ecef;font-family:system-ui,Segoe UI,Roboto,Arial,sans-serif;}
+  .toolbar{position:sticky;top:0;z-index:50;background:#fff;border-bottom:1px solid #ccd;
+    padding:10px 16px;display:flex;flex-wrap:wrap;gap:14px;align-items:center;
+    box-shadow:0 2px 6px rgba(0,0,0,.08);}
+  .toolbar h1{font-size:15px;margin:0 12px 0 0;color:var(--brand);white-space:nowrap}
+  .grp{display:flex;align-items:center;gap:6px;font-size:13px}
+  select,button{font-size:13px;padding:6px 10px;border:1px solid #bbb;border-radius:6px;background:#fff;cursor:pointer}
+  button.primary{background:var(--brand);color:#fff;border-color:var(--brand)}
+  button:hover{filter:brightness(1.08)}
+  .stage{padding:24px 0 60px;display:flex;flex-direction:column;align-items:center;gap:22px}
+  .paper{background:#fff;box-shadow:0 3px 14px rgba(0,0,0,.18);}
+  .ph{background:#fff3cd;color:#8a6100;border-radius:3px;padding:0 2px;font-family:Consolas,monospace;font-size:.92em}
+  .val{background:#e8f5e9;border-radius:3px;padding:0 2px}
+  .hint{font-size:12px;color:#666}
+  #code{width:100%;max-width:1100px;height:280px;font-family:Consolas,monospace;font-size:12px;display:none}
+  @media print{
+    .toolbar,.hint,#code{display:none!important}
+    body{background:#fff}
+    .stage{padding:0;gap:0}
+    .paper{box-shadow:none;margin:0}
+    .ph{background:none!important;color:#000!important}
+    .val{background:none!important}
+  }
+</style>
 
+<!-- ============ CSS CỦA TÀI LIỆU (dùng luôn khi export) ============ -->
+<style id="doccss">
 @page { size: A4 portrait; margin: 12mm 14mm; }
 *{box-sizing:border-box}
 .paper{
@@ -63,6 +80,45 @@ p,div{orphans:2;widows:2}
 </style>
 </head>
 <body>
+
+<div class="toolbar">
+  <h1>📄 Giấy đăng ký tập nghề – Dalat Hasfarm</h1>
+
+  <div class="grp">
+    <label>Cú pháp:</label>
+    <select id="mode">
+      <option value="data">✅ Dữ liệu mẫu (preview thật)</option>
+      <option value="docx">&lt;&lt;Field&gt;&gt; – Word/docx merge</option>
+      <option value="hbs">{{Field}} – Handlebars/Mustache</option>
+      <option value="jinja">{{ field }} – Jinja2/Twig</option>
+      <option value="blade">{{ $field }} – Laravel Blade</option>
+    </select>
+  </div>
+
+  <div class="grp">
+    <label>Zoom:</label>
+    <select id="zoom">
+      <option value="0.6">60%</option><option value="0.75">75%</option>
+      <option value="0.9" selected>90%</option><option value="1">100%</option>
+      <option value="1.25">125%</option>
+    </select>
+  </div>
+
+  <button class="primary" onclick="window.print()">🖨️ In / Xuất PDF</button>
+  <button onclick="downloadTpl()">⬇️ Tải template .html</button>
+  <button onclick="toggleCode()">&lt;/&gt; Xem mã nguồn</button>
+  <span class="hint">Ctrl+P → Đích: “Lưu dưới dạng PDF” → Lề: <b>Không có</b> → bật <b>Đồ họa nền</b></span>
+</div>
+
+<textarea id="code" spellcheck="false"></textarea>
+
+<div class="stage" id="stage"></div>
+
+<!-- ==================================================================== -->
+<!-- ================= TEMPLATE GỐC (token {{Field}}) =================== -->
+<!-- ==================================================================== -->
+<script type="text/template" id="tpl">
+
 <!-- ======================= TRANG 1 ======================= -->
 <div class="paper">
   <div class="doc-header">
@@ -362,5 +418,106 @@ p,div{orphans:2;widows:2}
     <div class="b">{{Ho_ten}}</div>
   </div>
 </div>
+</script>
+
+<!-- ==================================================================== -->
+<script>
+const ON = '☒', OFF = '☐';
+
+/* ---------- DỮ LIỆU MẪU ĐỂ PREVIEW ---------- */
+const SAMPLE = {
+  Ho_ten:'NGUYỄN VĂN AN', Ngay_sinh:'12/05/2001', Code:'DHF-2026-00871',
+  Dia_chi_thuong_tru:'Thôn 3, xã Đạ Ròn, tỉnh Lâm Đồng',
+  Dia_chi_tam_tru:'45 Nguyên Tử Lực, Phường 8, Tp. Đà Lạt, Lâm Đồng',
+  dia_chi_cu_tru:'45 Nguyên Tử Lực, Phường 8, Tp. Đà Lạt, Lâm Đồng',
+  So_dien_thoai:'0912 345 678', Email:'nguyenvanan@gmail.com',
+  So_CCCD:'068201001234', Ngay_cap_CCCD:'20/03/2021', Noi_cap_CCCD:'',
+  So_dinh_danh_cu:'',
+  Tien_an_tien_su_Khong:ON, Tien_an_tien_su_Co:OFF,
+  Da_tung_lam_DHF_Khong:OFF, Da_tung_lam_DHF_Co:ON,
+  Loai_cong_viec_Nhan_vien:OFF, Loai_cong_viec_Cong_nhan:ON, Loai_cong_viec_Lao_dong_tap_nghe:OFF,
+  Khu_vuc_Da_Lat:ON, Khu_vuc_Da_Quy:OFF, Khu_vuc_Da_Ron:OFF, Khu_vuc_Lam_Ha:OFF, Khu_vuc_Khac:OFF,
+  Cong_viec_hien_tai_Sinh_vien:ON, Ten_truong:'CĐ Kinh tế – Kỹ thuật Lâm Đồng',
+  Cong_viec_hien_tai_Khac:OFF, Cong_viec_hien_tai_khac:'',
+  TKNH_Da_co:ON, TKNH_Chua_co:OFF,
+  So_tai_khoan:'1903 6688 2345 01', Ten_ngan_hang:'Techcombank – CN Đà Lạt',
+  Nam_thue:'2026',
+  Thu_nhap_Chi_DHF:ON, Thu_nhap_Ngoai_DHF:OFF,
+  Cong_ty_thu_nhap_khac:'', Dia_diem_thu_nhap_khac:'',
+  Tap_nghe_Trong_cham_soc_thu_hoach:ON, Tap_nghe_Ban_hang:OFF,
+  Tap_nghe_Dong_goi:OFF, Tap_nghe_Khac:OFF, Cong_viec_khac:'',
+  Ngay_nhan_viec:'02/03/2026',
+  Nguoi_tiep_nhan:'Trần Thị Bình', Ngay_tiep_nhan:'02/03/2026',
+  Dia_diem_ky:'Đà Lạt', Ngay_ky_day:'02', Ngay_ky_month:'03', Ngay_ky_year:'2026'
+};
+
+const RX = /\{\{\s*([A-Za-z0-9_]+)\s*\}\}/g;
+const TPL = document.getElementById('tpl').innerHTML;
+const esc = s => String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+
+function token(mode, k){
+  switch(mode){
+    case 'docx' : return '<<'+k+'>>';
+    case 'hbs'  : return '{{'+k+'}}';
+    case 'jinja': return '{{ '+k+' }}';
+    case 'blade': return '{{ $'+k+' }}';
+  }
+}
+/* highlight = true khi render lên màn hình */
+function build(mode, highlight){
+  return TPL.replace(RX, (m,k)=>{
+    if(mode==='data'){
+      const v = SAMPLE[k] ?? '';
+      return highlight ? '<span class="val">'+esc(v)+'</span>' : esc(v);
+    }
+    const t = token(mode,k);
+    return highlight ? '<span class="ph">'+esc(t)+'</span>' : t;
+  });
+}
+
+function draw(){
+  const mode = document.getElementById('mode').value;
+  const z = document.getElementById('zoom').value;
+  const stage = document.getElementById('stage');
+  stage.innerHTML = build(mode, true);
+  stage.querySelectorAll('.paper').forEach(p=>{
+    p.style.transform = 'scale('+z+')';
+    p.style.transformOrigin = 'top center';
+    p.style.marginBottom = (297*(z-1)) + 'mm';
+  });
+  const ta = document.getElementById('code');
+  if(ta.style.display==='block') ta.value = fullHtml(mode);
+}
+
+function fullHtml(mode){
+  const css = document.getElementById('doccss').textContent;
+  return '<!DOCTYPE html>\n<html lang="vi">\n<head>\n<meta charset="UTF-8">\n'
+       + '<title>Giấy đăng ký tập nghề</title>\n<style>'+css+'\n.paper{box-shadow:none}\n</style>\n'
+       + '</head>\n<body>\n' + build(mode,false) + '\n</body>\n</html>';
+}
+
+function downloadTpl(){
+  const mode = document.getElementById('mode').value;
+  const name = {data:'preview', docx:'template-docx', hbs:'template.hbs',
+                jinja:'template-jinja.html', blade:'template.blade.php'}[mode];
+  const blob = new Blob([fullHtml(mode)], {type:'text/html;charset=utf-8'});
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(blob);
+  a.download = (mode==='hbs' ? 'tap-nghe.hbs'
+              : mode==='blade' ? 'tap-nghe.blade.php'
+              : 'tap-nghe-'+name+'.html');
+  a.click(); URL.revokeObjectURL(a.href);
+}
+
+function toggleCode(){
+  const ta = document.getElementById('code');
+  ta.style.display = (ta.style.display==='block') ? 'none' : 'block';
+  draw();
+}
+
+document.getElementById('mode').addEventListener('change', draw);
+document.getElementById('zoom').addEventListener('change', draw);
+draw();
+</script>
 </body>
 </html>

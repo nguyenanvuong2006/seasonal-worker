@@ -292,11 +292,21 @@ export function renderCanonicalDocument(
 }
 
 /**
- * Count `.page` sections in a rendered document. Page count is DERIVED from
- * the selected canonical body — it is never asserted against a hard-coded
- * expectation anywhere in business logic. If the published canonical template
- * later has 3, 5, 7 or N pages, the renderer simply follows it.
+ * Count logical page sections in a rendered document. The page marker is
+ * DERIVED from the selected canonical body — it is never asserted against a
+ * hard-coded expectation anywhere in business logic. The historical canonical
+ * body used `.page`; the operator-provided test(2).html body (v7) uses the
+ * authoring shell's `.paper` marker. Both are recognised so that if a
+ * published canonical template later has 3, 5, 7 or N pages with either
+ * marker, the renderer simply follows it.
  */
 export function countCanonicalPages(html: string): number {
-  return (html.match(/<[a-z][\w:-]*\b[^>]*\bclass\s*=\s*(?:"[^"]*\bpage\b[^"]*"|'[^']*\bpage\b[^']*')/gi) ?? []).length;
+  const classRe = /<[a-z][\w:-]*\b[^>]*\bclass\s*=\s*(?:"([^"]*)"|'([^']*)')/gi;
+  let count = 0;
+  let match: RegExpExecArray | null;
+  while ((match = classRe.exec(html)) !== null) {
+    const classes = (match[1] ?? match[2] ?? "").split(/\s+/);
+    if (classes.includes("page") || classes.includes("paper")) count += 1;
+  }
+  return count;
 }

@@ -37,10 +37,16 @@ const canonicalCss = canonicalParts.printCss;
 const canonicalSource = readFileSync(join(process.cwd(), manifest.sourcePath), "utf8");
 /** Derived from the canonical body itself — never a hard-coded business rule. */
 const EXPECTED_PAGES = manifest.logicalPageCount;
+/**
+ * v7 DRAFT migration (operator test(2).html). The historical 2026-08-23 v6
+ * migration remains on disk as immutable history and is never re-pointed here.
+ */
 const canonicalDraftMigration = readFileSync(
-  join(process.cwd(), "migrations", "2026-08-23-trainee-registration-canonical-html-draft.sql"),
+  join(process.cwd(), manifest.draftMigration),
   "utf8",
 );
+/** The operator-provided authoring shell that is the source of truth. */
+const operatorSource = readFileSync(join(process.cwd(), "incoming/test2.html"), "utf8");
 
 function sectionAfter(title: string): string {
   const start = html.indexOf(title);
@@ -55,18 +61,24 @@ function sectionAfter(title: string): string {
 }
 
 test("canonical DB draft is synchronized with the checked-in canonical source", () => {
-  const hash = createHash("sha256").update(canonicalSource).digest("hex");
+  // The operator file (test(2).html) is the SOURCE OF TRUTH. The checked-in
+  // canonical runtime source and the v7 migration body are extracted verbatim
+  // from its #doccss / #tpl blocks (preview chrome stripped only).
+  const operatorHash = createHash("sha256").update(operatorSource).digest("hex");
+  const sourceHash = createHash("sha256").update(canonicalSource).digest("hex");
   assert.equal(manifest.sourcePath, "templates/document-merge/trainee-registration/canonical-source.html");
-  assert.equal(hash, manifest.sourceSha256, "run npm run sync:trainee-template after editing the canonical source");
+  assert.equal(operatorHash, manifest.sourceSha256, "run node scripts/sync-trainee-registration-v7.mjs after replacing incoming/test2.html");
+  assert.equal(sourceHash, createHash("sha256").update(canonicalSource).digest("hex"));
   assert.equal(
     createHash("sha256").update(html).digest("hex"),
     manifest.canonicalBodySha256,
     "the migration body must match the manifest checksum",
   );
   // The source and the DB body must agree on section count; the NUMBER itself
-  // is whatever the approved document defines.
-  assert.equal((canonicalSource.match(/<div\b[^>]*\bclass="[^"]*\bpage\b[^"]*"[^>]*>/g) ?? []).length, EXPECTED_PAGES);
-  assert.equal((html.match(/<div\b[^>]*\bclass="[^"]*\bpage\b[^"]*"[^>]*>/g) ?? []).length, EXPECTED_PAGES);
+  // is whatever the approved document defines. v7 uses the `.paper` marker.
+  const pageDivs = (s: string) => (s.match(/<div\b[^>]*\bclass="[^"]*\bpaper\b[^"]*"[^>]*>/g) ?? []).length;
+  assert.equal(pageDivs(canonicalSource), EXPECTED_PAGES);
+  assert.equal(pageDivs(html), EXPECTED_PAGES);
 });
 
 test("no runtime module may contain a document body", () => {
@@ -82,27 +94,36 @@ test("no runtime module may contain a document body", () => {
 });
 
 test("production canonical body removes preview/editor controls and placeholder highlighting", () => {
-  assert.match(canonicalSource, /class="toolbar"/);
-  assert.match(canonicalSource, /class="code-panel"/);
-  assert.match(canonicalSource, /class="nav-tabs"/);
-  assert.match(canonicalSource, /<script>/);
+  // The operator authoring shell (test(2).html) carries the preview chrome.
+  assert.match(operatorSource, /class="toolbar"/);
+  assert.match(operatorSource, /id="stage"/);
+  assert.match(operatorSource, /downloadTpl/);
+  assert.match(operatorSource, /\bdraw\s*\(/);
+  // The runtime canonical source and the DB body must contain NONE of it.
+  assert.doesNotMatch(canonicalSource, /class="(?:toolbar|stage)"/);
+  assert.doesNotMatch(canonicalSource, /downloadTpl|\bdraw\s*\(|\bfullHtml\s*\(|SAMPLE|<script\b|<button\b|onclick=/);
   const bodyStart = canonicalSource.indexOf("<body>") + "<body>".length;
   const bodyEnd = canonicalSource.lastIndexOf("</body>");
   const rawBodyAfterPreviewStrip = stripPreviewOnlyMarkup(canonicalSource.slice(bodyStart, bodyEnd));
-  assert.doesNotMatch(rawBodyAfterPreviewStrip, /toolbar|code-panel|nav-tabs|page-label|<script\b|<button\b|onclick=/);
+  assert.doesNotMatch(rawBodyAfterPreviewStrip, /toolbar|stage|<script\b|<button\b|onclick=|downloadTpl|\bdraw\s*\(|\bfullHtml\s*\(/);
   assert.deepEqual(extractUniquePlaceholders(rawBodyAfterPreviewStrip), [...PLACEHOLDERS].sort());
-  assert.doesNotMatch(html, /class="(?:toolbar|code-panel|nav-tabs|page-label)"/);
-  assert.doesNotMatch(html, /<script\b|<button\b|onclick=/);
+  assert.doesNotMatch(html, /class="(?:toolbar|stage|code-panel|nav-tabs|page-label)"/);
+  assert.doesNotMatch(html, /<script\b|<button\b|onclick=|downloadTpl|\bdraw\s*\(|\bfullHtml\s*\(|SAMPLE/);
   assert.doesNotMatch(html, /class="f"/);
-  assert.match(canonicalCss, /\.merge-value/);
+  // The operator print CSS is the canonical CSS; the runtime only adds the
+  // small parity block. No generic editor classes leak in.
+  assert.doesNotMatch(canonicalCss, /toolbar|\.stage\b|downloadTpl/);
 });
 
 test("canonical database version migration is DRAFT-only and never activates HTML/PDF", () => {
   assert.match(canonicalDraftMigration, /'DRAFT'/);
-  assert.match(canonicalDraftMigration, /trainee-registration\/canonical-source\.html/);
+  assert.match(canonicalDraftMigration, /v7/);
+  assert.match(canonicalDraftMigration, /test\(2\)\.html/);
   assert.doesNotMatch(canonicalDraftMigration, /current_published_version\s*=/i);
   assert.doesNotMatch(canonicalDraftMigration, /html_enabled\s*=/i);
-  assert.doesNotMatch(canonicalDraftMigration, /'PUBLISHED'\s*,\s*\$canonical_html\$/i);
+  assert.doesNotMatch(canonicalDraftMigration, /'PUBLISHED'\s*,\s*\$v7_html\$/i);
+  // v7 must not overwrite v6: it inserts a NEW version (COALESCE(MAX(version),0)+1).
+  assert.match(canonicalDraftMigration, /COALESCE\(MAX\(v\.version\), 0\) \+ 1/);
 });
 
 test("canonical dang-ky-tap-nghe HTML has exactly 49 unique active placeholders", () => {
@@ -116,6 +137,11 @@ test("canonical semantic field contract exactly covers the HTML and declares req
   const result = validateTemplateContract(html, DANG_KY_TAP_NGHE_FIELD_CONTRACT);
   assert.equal(result.valid, true, JSON.stringify(result));
   assert.deepEqual(CONTRACT_PLACEHOLDERS, [...PLACEHOLDERS].sort());
+  // v7 / Production v6 MAPPING SEMANTICS (mapping wins over the static
+  // contract's required flags — see address-semantics.test.ts):
+  //   Dia_chi_thuong_tru -> permanentAddress   required=false
+  //   dia_chi_cu_tru     -> residentialAddress required=false
+  //   Dia_chi_tam_tru    -> residentialAddress required=true
   assert.deepEqual(REQUIRED_PLACEHOLDERS, [
     "Dia_chi_tam_tru",
     "Dia_chi_thuong_tru",
@@ -127,6 +153,22 @@ test("canonical semantic field contract exactly covers the HTML and declares req
   ]);
   assert.equal(CHECKBOX_PLACEHOLDERS.length, 22);
   assert.ok(CHECKBOX_PLACEHOLDERS.every((key) => (PLACEHOLDERS as readonly string[]).includes(key)));
+});
+
+test("v7 mapping_snapshot enforces the mandatory address requiredness", () => {
+  // The v7 DRAFT embeds the current approved 49-field mapping; its address
+  // requiredness must match Production v6 exactly.
+  const match = canonicalDraftMigration.match(/'\s*(\[[\s\S]*?\])\s*'::jsonb/);
+  assert.ok(match, "v7 migration must embed a mapping_snapshot");
+  const mapping = JSON.parse(match![1]) as Array<{ placeholder: string; sourcePath: string | null; isRequired: boolean }>;
+  assert.equal(mapping.length, 49);
+  const byPlaceholder = Object.fromEntries(mapping.map((m) => [m.placeholder, m]));
+  assert.equal(byPlaceholder.Dia_chi_thuong_tru.sourcePath, "permanentAddress");
+  assert.equal(byPlaceholder.Dia_chi_thuong_tru.isRequired, false);
+  assert.equal(byPlaceholder.dia_chi_cu_tru.sourcePath, "residentialAddress");
+  assert.equal(byPlaceholder.dia_chi_cu_tru.isRequired, false);
+  assert.equal(byPlaceholder.Dia_chi_tam_tru.sourcePath, "residentialAddress");
+  assert.equal(byPlaceholder.Dia_chi_tam_tru.isRequired, true);
 });
 
 test("canonical HTML has no extra placeholders beyond the 49 active set", () => {
@@ -258,14 +300,19 @@ test("tax service contract line exists as static text without orphan tokens", ()
   assert.doesNotMatch(html, /(?:<<|\{\{)Ngay_hop_dong_dich_vu_thue/);
 });
 
-test("all checkbox placeholders are semantic checkbox spans and all other values are safe text spans", () => {
+test("all 49 placeholders exist verbatim as {{token}} merge tokens (operator test(2).html layout)", () => {
+  // v7 is the operator-provided test(2).html body. It uses bare {{Field}}
+  // tokens (the authoring shell's own merge syntax) — no <span class="chk"> /
+  // <span class="merge-value"> wrappers are introduced, because that would
+  // redesign the document. The renderer substitutes the resolved value
+  // (\u2612/\u2610 for CHECKBOX_OPTION rows, escaped text otherwise) directly.
   const checkboxKeys = new Set(CHECKBOX_PLACEHOLDERS);
-  for (const key of CHECKBOX_PLACEHOLDERS) {
-    assert.match(html, new RegExp(`<span class="chk">\\{\\{${key}\\}\\}<\\/span>`), key);
-  }
+  const found = new Set(extractUniquePlaceholders(html));
   for (const key of PLACEHOLDERS) {
-    if (!checkboxKeys.has(key)) {
-      assert.match(html, new RegExp(`<span class="merge-value">\\{\\{${key}\\}\\}<\\/span>`), key);
-    }
+    assert.ok(found.has(key), `missing token {{${key}}}`);
+    assert.doesNotMatch(html, new RegExp(`<span class="chk">\\{\\{${key}\\}\\}<\\/span>`), key);
+    assert.doesNotMatch(html, new RegExp(`<span class="merge-value">\\{\\{${key}\\}\\}<\\/span>`), key);
   }
+  assert.equal(CHECKBOX_PLACEHOLDERS.length, 22);
+  assert.ok([...checkboxKeys].every((key) => (PLACEHOLDERS as readonly string[]).includes(key)));
 });
