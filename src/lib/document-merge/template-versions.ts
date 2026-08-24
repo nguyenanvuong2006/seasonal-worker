@@ -11,6 +11,10 @@
  *     → worker render deterministic; đổi mapping sau không ảnh hưởng PDF cũ.
  *   - Rollback = publish lại version cũ (version đang PUBLISHED bị ARCHIVED).
  *   - merge_templates.current_published_version = điểm vào render.
+ *   - Clone ("Tạo bản nháp từ phiên bản này") = CREATE version DRAFT mới copy
+ *     html/css từ version nguồn; version nguồn (kể cả PUBLISHED) bất biến,
+ *     DRAFT mới mapping_snapshot = [] cho tới khi publish.
+ *   - Sửa HTML/CSS chỉ áp dụng cho DRAFT (updateTemplateVersionDraft).
  */
 
 import { and, desc, eq } from "drizzle-orm";
@@ -83,6 +87,188 @@ export async function createTemplateVersion(
     .returning();
 
   return version;
+}
+
+/** Số lần tính lại version number khi hai admin clone gần như cùng lúc. */
+export const CLONE_VERSION_MAX_ATTEMPTS = 5;
+
+/**
+ * Postgres unique_violation (23505) — drizzle có thể bọc lỗi pg trong
+ * `cause`, nên kiểm tra cả hai tầng.
+ */
+export function isUniqueViolation(error: unknown): boolean {
+  const codeOf = (candidate: unknown): unknown =>
+    typeof candidate === "object" && candidate !== null
+      ? (candidate as { code?: unknown }).code
+      : undefined;
+  return codeOf(error) === "23505" || codeOf((error as { cause?: unknown })?.cause) === "23505";
+}
+
+export type ClonedTemplateVersion = MergeTemplateVersion & {
+  /** Version đã được clone (nguồn) — để UI hiển thị "đã tạo v9 từ v8". */
+  sourceVersionNumber: number;
+};
+
+/**
+ * "Tạo bản nháp từ phiên bản này" — clone MỘT version hiện có (thường là
+ * PUBLISHED) thành version DRAFT MỚI để operator chỉnh HTML/CSS.
+ *
+ * INVARIANTS (có regression test riêng — template-version-clone.test.ts):
+ *   - Version nguồn KHÔNG BAO GIỜ bị UPDATE/DELETE (clone = CREATE NEW ROW).
+ *   - Chỉ copy nội dung render: htmlBody, printCss, sourceDocxName,
+ *     retentionYears. KHÔNG copy id/version/status/publishedAt/archivedAt/
+ *     supersededBy/createdAt.
+ *   - Version mới: status = DRAFT, publishedAt = NULL, archivedAt = NULL.
+ *   - mapping_snapshot của version mới PHẢI = [] — DRAFT resolve CURRENT
+ *     non-orphaned merge_template_fields khi Preview (PR #99); snapshot chỉ
+ *     được freeze ở publishTemplateVersion. KHÔNG copy frozen snapshot của
+ *     version nguồn.
+ *   - KHÔNG đổi merge_templates.current_published_version, KHÔNG publish,
+ *     KHÔNG tạo merge job / document_history, KHÔNG dispatch worker.
+ *
+ * CONCURRENCY: version number = max(version)+1 tính TRONG transaction; nếu hai
+ * admin tạo cùng lúc, unique index (template_id, version) khiến bên thua nhận
+ * 23505 → retry với số version mới (KHÔNG overwrite version đã tồn tại).
+ * Client không bao giờ gửi version number hay HTML nguồn — server tự load từ DB.
+ */
+export async function cloneTemplateVersion(
+  templateId: string,
+  versionId: string,
+  createdBy: string,
+): Promise<ClonedTemplateVersion> {
+  // Load version nguồn trực tiếp từ DB, cross-check templateId từ URL —
+  // versionId thuộc template khác bị từ chối như "not found" (404).
+  const [source] = await db
+    .select()
+    .from(mergeTemplateVersions)
+    .where(and(eq(mergeTemplateVersions.id, versionId), eq(mergeTemplateVersions.templateId, templateId)))
+    .limit(1);
+
+  if (!source) {
+    throw new TemplateVersionError("Template version not found", 404);
+  }
+  if (source.htmlBody == null || source.htmlBody.trim().length === 0) {
+    throw new TemplateVersionError(
+      "Không thể tạo bản nháp từ version chưa có nội dung HTML — hãy chọn version đã có HTML.",
+      400,
+    );
+  }
+
+  let lastError: unknown;
+  for (let attempt = 1; attempt <= CLONE_VERSION_MAX_ATTEMPTS; attempt += 1) {
+    try {
+      return await db.transaction(async (tx) => {
+        // max(version) + 1 tính trong transaction theo DB hiện tại —
+        // không bao giờ tin version number do client gửi.
+        const existing = await tx
+          .select({ version: mergeTemplateVersions.version })
+          .from(mergeTemplateVersions)
+          .where(eq(mergeTemplateVersions.templateId, templateId));
+
+        const [cloned] = await tx
+          .insert(mergeTemplateVersions)
+          .values({
+            templateId,
+            version: nextVersionNumber(existing),
+            status: TEMPLATE_VERSION_STATUS.DRAFT,
+            // Nội dung render được copy nguyên vẹn từ version nguồn…
+            htmlBody: source.htmlBody,
+            printCss: source.printCss,
+            sourceDocxName: source.sourceDocxName,
+            retentionYears: source.retentionYears,
+            // …nhưng mapping_snapshot KHÔNG copy: DRAFT = [] cho tới khi publish.
+            mappingSnapshot: [],
+            // Lifecycle fields thuộc về version mới.
+            publishedAt: null,
+            archivedAt: null,
+            supersededBy: null,
+            createdBy,
+          })
+          .returning();
+
+        return { ...cloned, sourceVersionNumber: source.version };
+      });
+    } catch (error) {
+      // Hai admin clone cùng lúc → cùng tính ra version N; unique index
+      // (template_id, version) từ chối bên về sau → tính lại số mới.
+      // Lỗi khác (không phải xung đột số version) được ném thẳng.
+      if (!isUniqueViolation(error)) throw error;
+      lastError = error;
+    }
+  }
+  // Hết lượt thử vẫn xung đột số version — trả conflict có kiểm soát cho
+  // client; chi tiết lỗi driver chỉ ghi log server-side, không lộ ra ngoài.
+  console.error(
+    `[cloneTemplateVersion] unique-version conflict not resolved after ${CLONE_VERSION_MAX_ATTEMPTS} attempts (templateId=${templateId}, sourceVersion=${source.version}):`,
+    lastError,
+  );
+  throw new TemplateVersionError(
+    `Không tạo được version mới sau ${CLONE_VERSION_MAX_ATTEMPTS} lần thử do xung đột số phiên bản — vui lòng thử lại.`,
+    409,
+  );
+}
+
+export type UpdateTemplateVersionDraftInput = {
+  htmlBody: string;
+  printCss?: string | null;
+};
+
+/**
+ * Sửa HTML/CSS của một version DRAFT. Server-side guard — KHÔNG chỉ chặn ở UI:
+ *   - Version phải tồn tại và thuộc template (id + templateId cross-check).
+ *   - Chỉ DRAFT được UPDATE; PUBLISHED/ARCHIVED → 409 (kể cả khi editor đã mở
+ *     từ trước và version vừa được ai đó publish).
+ *   - UPDATE mang điều kiện status='DRAFT' ngay trong WHERE, nên kể cả race
+ *     giữa SELECT và UPDATE, row đã rời DRAFT không bao giờ bị ghi đè.
+ *   - KHÔNG đổi status/mapping_snapshot/publishedAt/archivedAt — bản PUBLISHED
+ *     immutable.
+ */
+export async function updateTemplateVersionDraft(
+  templateId: string,
+  versionId: string,
+  input: UpdateTemplateVersionDraftInput,
+): Promise<MergeTemplateVersion> {
+  const [target] = await db
+    .select()
+    .from(mergeTemplateVersions)
+    .where(and(eq(mergeTemplateVersions.id, versionId), eq(mergeTemplateVersions.templateId, templateId)))
+    .limit(1);
+
+  if (!target) {
+    throw new TemplateVersionError("Template version not found", 404);
+  }
+  if (target.status !== TEMPLATE_VERSION_STATUS.DRAFT) {
+    throw new TemplateVersionError(
+      `Chỉ version DRAFT mới được sửa HTML/CSS. Version v${target.version} hiện đang ${target.status} và là bất biến.`,
+      409,
+    );
+  }
+
+  const [updated] = await db
+    .update(mergeTemplateVersions)
+    .set({
+      htmlBody: input.htmlBody,
+      printCss: input.printCss ?? null,
+      updatedAt: new Date(),
+    })
+    // Guard trong câu UPDATE: chỉ ghi nếu row VẪN là DRAFT tại thời điểm ghi.
+    .where(
+      and(
+        eq(mergeTemplateVersions.id, versionId),
+        eq(mergeTemplateVersions.templateId, templateId),
+        eq(mergeTemplateVersions.status, TEMPLATE_VERSION_STATUS.DRAFT),
+      ),
+    )
+    .returning();
+
+  // Row không còn DRAFT giữa SELECT và UPDATE (admin khác vừa publish) → reject.
+  if (!updated) {
+    throw new TemplateVersionError(
+      "Version đã không còn là DRAFT (có thể vừa được publish/archive) — không thể lưu. Hãy tải lại danh sách phiên bản.",
+      409,
+    );
+  }
+  return updated;
 }
 
 /** Lấy danh sách version (mới nhất trước). */
