@@ -60,6 +60,7 @@ const CLEANUP_MIGRATION = "2026-08-24-trainee-registration-canonical-cleanup.sql
 const CANONICAL_DRAFT_MIGRATION = "2026-08-23-trainee-registration-canonical-html-draft.sql";
 const V7_DRAFT_MIGRATION = "2026-08-24-trainee-registration-v7-operator-test2-draft.sql";
 const RECOVERY_MIGRATION = "2026-08-24-trainee-registration-v7-incident-recovery.sql";
+const V8_DRAFT_MIGRATION = "2026-08-24-trainee-registration-v8-pagination-draft.sql";
 
 const CANONICAL_TEMPLATE_ID = "a1b2c3d4-e5f6-7890-abcd-ef1234567890";
 const CANONICAL_SOURCE_NAME =
@@ -67,6 +68,8 @@ const CANONICAL_SOURCE_NAME =
 const V7_SOURCE_NAME =
   "trainee-registration/test(2).html (operator-provided canonical HTML; preview UI stripped) v7";
 const V7_BODY_SHA256 = "7cb43551d3d4f5178ce203a176a7004aa7e3994ecad2276ef593b6fe401116c1";
+const V8_SOURCE_NAME = "trainee-registration/test(2).html (operator-provided canonical HTML; v8 explicit regulations pagination only) v8";
+const V8_BODY_SHA256 = "d68b329629c7b5ac7722f207035e057a6a757c44966c613a03852c3bbadf794e";
 
 function readRepoFile(relative: string): string {
   return readFileSync(join(ROOT, relative), "utf8");
@@ -247,6 +250,16 @@ test("HOTFIX-8: the legacy canonical HTML draft migration is ABSENT from the rec
   assert.ok(file.includes(CANONICAL_SOURCE_NAME), "the historical file is preserved verbatim");
 });
 
+test("v8 pagination migration is DRAFT-only and preserves v7 immutability", () => {
+  const code = stripSqlComments(readRepoFile(`migrations/${V8_DRAFT_MIGRATION}`));
+  assert.match(code, /t\.id,\s*8,\s*'DRAFT'/);
+  assert.match(code, /'\[\]'::jsonb/);
+  assert.match(code, /existing\.version\s*=\s*8/);
+  assert.doesNotMatch(code, /UPDATE\s+merge_template_versions|UPDATE\s+merge_templates|merge_template_fields|merge_jobs|current_published_version|'PUBLISHED'/i);
+  assert.ok(code.includes(V8_SOURCE_NAME));
+  assert.ok(readRepoFile(`migrations/${V8_DRAFT_MIGRATION}`).includes(V8_BODY_SHA256));
+});
+
 test("HOTFIX-1: the runner list is exactly the known-safe, idempotent sequence", () => {
   assert.deepEqual(parseRunnerList(), [
     "2026-08-15-document-merge-engine.sql",
@@ -256,6 +269,7 @@ test("HOTFIX-1: the runner list is exactly the known-safe, idempotent sequence",
     "2026-08-21-dang-ky-tap-nghe-html-draft.sql",
     RECOVERY_MIGRATION,
     V7_DRAFT_MIGRATION,
+    V8_DRAFT_MIGRATION,
   ]);
 });
 
@@ -309,8 +323,8 @@ test("HOTFIX-9: NO runner migration can (re)create a pre-v7 document body — on
   }
   assert.deepEqual(
     versionInserters,
-    [RECOVERY_MIGRATION, V7_DRAFT_MIGRATION],
-    "exactly the recovery migration and the v7 operator draft may insert document versions",
+    [RECOVERY_MIGRATION, V7_DRAFT_MIGRATION, V8_DRAFT_MIGRATION],
+    "exactly the recovery migration, v7 operator draft, and v8 pagination draft may insert document versions",
   );
 
   // And the only source_docx_name those producers can write is the v7 one.
@@ -490,6 +504,12 @@ function recoveryMigration(state: DbState): DbState {
   return next;
 }
 
+/** Model of v8: exactly version 8 DRAFT; never changes a pre-existing version. */
+function v8DraftMigration(state: DbState): DbState {
+  if (state.versions.some((v) => v.version === 8 || v.sourceDocxName === V8_SOURCE_NAME)) return state;
+  return { ...state, versions: [...state.versions, { version: 8, status: "DRAFT", sourceDocxName: V8_SOURCE_NAME, bodySha256: V8_BODY_SHA256 }] };
+}
+
 /** Every other runner migration is pure DDL / seed with no version writes. */
 function ddlMigration(state: DbState): DbState {
   return state;
@@ -503,6 +523,7 @@ const MIGRATION_MODELS: Record<string, (state: DbState) => DbState> = {
   "2026-08-21-dang-ky-tap-nghe-html-draft.sql": ddlMigration,
   [RECOVERY_MIGRATION]: recoveryMigration,
   [V7_DRAFT_MIGRATION]: v7DraftMigration,
+  [V8_DRAFT_MIGRATION]: v8DraftMigration,
 };
 
 /** Re-run the recurring runner exactly as scripts/run-document-merge-migrations.mjs does. */
@@ -549,7 +570,7 @@ function healthyStateWithPublishedV6(): DbState {
   };
 }
 
-test("HOTFIX-1/4: rerunning the runner on the incident Production state fails closed with exactly one v7 DRAFT and NOTHING else", () => {
+test("runner recovery creates v7 and v8 DRAFTs only; neither is published", () => {
   const before = incidentState();
   const after = runRecurringRunner(before);
 
@@ -562,9 +583,8 @@ test("HOTFIX-1/4: rerunning the runner on the incident Production state fails cl
 
   assert.equal(
     after.versions.length,
-    1,
-    "the runner must recreate NOTHING besides v7 on an emptied versions table — " +
-      "in particular NO legacy v1 canonical-source.html DRAFT (the post-PR-#96 regression)",
+    2,
+    "the runner may create only the approved v7 recovery and v8 pagination DRAFTs; never the legacy v1 draft",
   );
   assert.ok(
     !after.versions.some((v) => v.sourceDocxName === CANONICAL_SOURCE_NAME),
@@ -576,7 +596,7 @@ test("HOTFIX-1/4: rerunning the runner on the incident Production state fails cl
   );
 });
 
-test("HOTFIX-10: rerunning the runner when ONLY v7 exists is a true no-op — never recreates v1, never creates v8/v9", () => {
+test("runner adds v8 once when only v7 exists, then is idempotent", () => {
   // Post-recovery Production state: {current_published_version=NULL, versions={v7 DRAFT}}.
   const onlyV7: DbState = {
     currentPublishedVersion: null,
@@ -593,9 +613,9 @@ test("HOTFIX-10: rerunning the runner when ONLY v7 exists is a true no-op — ne
   const thrice = runRecurringRunner(twice);
 
   for (const [label, state] of [["once", once], ["twice", twice], ["thrice", thrice]] as const) {
-    assert.equal(state.versions.length, 1, `after run ${label}: still exactly one version row`);
-    assert.equal(state.versions[0].version, 7, `after run ${label}: no v1 and no v8/v9 may appear`);
-    assert.equal(state.versions[0].status, "DRAFT", `after run ${label}: v7 is never auto-published`);
+    assert.equal(state.versions.length, 2, `after run ${label}: exactly v7 and v8 rows exist`);
+    assert.deepEqual(state.versions.map((v) => v.version).sort(), [7, 8], `after run ${label}: no v1/v9 may appear`);
+    assert.ok(state.versions.every((v) => v.status === "DRAFT"), `after run ${label}: no draft is auto-published`);
     assert.ok(
       !state.versions.some((v) => v.sourceDocxName === CANONICAL_SOURCE_NAME),
       `after run ${label}: the legacy canonical-source.html draft never reappears`,
@@ -605,7 +625,7 @@ test("HOTFIX-10: rerunning the runner when ONLY v7 exists is a true no-op — ne
   assert.deepEqual(twice, once, "second rerun is byte-for-byte identical to the first");
 });
 
-test("HOTFIX-5: running the runner (incl. recovery) twice never duplicates v7 nor creates v8/v9", () => {
+test("running the runner twice creates no duplicate v7/v8 drafts", () => {
   const once = runRecurringRunner(incidentState());
   const twice = runRecurringRunner(once);
   const thrice = runRecurringRunner(twice);
@@ -614,10 +634,10 @@ test("HOTFIX-5: running the runner (incl. recovery) twice never duplicates v7 no
     const v7Rows = state.versions.filter((v) => v.bodySha256 === V7_BODY_SHA256);
     assert.equal(v7Rows.length, 1, `after run #${label}: exactly one v7`);
     assert.equal(v7Rows[0].version, 7, `after run #${label}: still version 7`);
-    assert.ok(
-      !state.versions.some((v) => v.version > 7),
-      `after run #${label}: no v8/v9/... may appear`,
-    );
+    const v8Rows = state.versions.filter((v) => v.bodySha256 === V8_BODY_SHA256);
+    assert.equal(v8Rows.length, 1, `after run #${label}: exactly one v8`);
+    assert.equal(v8Rows[0].version, 8, `after run #${label}: v8 remains DRAFT version 8`);
+    assert.ok(!state.versions.some((v) => v.version > 8), `after run #${label}: no v9/... may appear`);
     assert.equal(state.currentPublishedVersion, null, `after run #${label}: still fail closed`);
   }
   assert.deepEqual(twice.versions, once.versions, "second run is a true no-op on versions");
