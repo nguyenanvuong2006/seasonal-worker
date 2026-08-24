@@ -4,7 +4,7 @@
  *
  * KHÁC với scripts/run-migrations.mjs (thiết kế cho fresh/staging DB — chạy
  * TOÀN BỘ schema.sql + TOÀN BỘ migrations/*.sql, kể cả các migration không
- * liên quan Document Merge): script này CHỈ chạy 8 migration Document Merge
+ * liên quan Document Merge): script này CHỈ chạy 7 migration Document Merge
  * cụ thể, theo đúng thứ tự khai báo bên dưới, trên 1 database ĐÃ CÓ schema
  * nền tảng (production) — không đụng tới bất kỳ bảng/migration nào khác.
  *
@@ -12,7 +12,7 @@
  *   export DATABASE_URL=postgresql://...   # PROD_DATABASE_URL — KHÔNG dùng staging!
  *   node scripts/run-document-merge-migrations.mjs
  *
- * An toàn: cả 8 migration đều idempotent (ADD COLUMN IF NOT EXISTS / CREATE
+ * An toàn: cả 7 migration đều idempotent (ADD COLUMN IF NOT EXISTS / CREATE
  * TABLE IF NOT EXISTS / ON CONFLICT DO NOTHING / WHERE NOT EXISTS). Không
  * DROP/TRUNCATE/DELETE. Không seed dữ liệu test/verification — chỉ seed
  * permissions hệ thống + 1 template thật (Đăng ký tập nghề) ở trạng thái
@@ -26,6 +26,19 @@
  * trong git history, KHÔNG nằm trong danh sách chạy production định kỳ.
  * Mọi sửa chữa sự cố phải dùng migration forward-only, idempotent,
  * non-destructive (như ...-v7-incident-recovery.sql bên dưới).
+ *
+ * INVARIANT SỐNG CÒN THỨ HAI (sự cố production 2026-08-24, phát hiện sau
+ * recovery PR #96): runner định kỳ này KHÔNG BAO GIỜ được tái tạo bất kỳ
+ * document body nào TRƯỚC v7. Migration
+ * 2026-08-23-trainee-registration-canonical-html-draft.sql đã bị LOẠI KHỎI
+ * danh sách vĩnh viễn: nó chèn DRAFT theo kiểu MAX(version)+1 với body
+ * canonical-source.html LỖI THỜI — khi bảng merge_template_versions TRỐNG
+ * (đúng trạng thái sự cố) nó tái tạo DRAFT v1 với body cũ TRƯỚC khi
+ * recovery v7 chạy, khiến production lại xuất hiện v1 legacy. File đó cũng
+ * chỉ còn tồn tại trong git history (immutable history — KHÔNG xoá file),
+ * KHÔNG nằm trong danh sách chạy production định kỳ. Body DUY NHẤT runner
+ * được phép tạo là v7 (operator test(2).html) qua 2 migration cuối bên
+ * dưới — cả hai đều dedupe theo source_docx_name / SHA-256 body.
  *
  * Dừng ngay ở migration đầu tiên lỗi (không tiếp tục "cho có kết quả").
  */
@@ -42,7 +55,7 @@ if (!DATABASE_URL) {
   process.exit(1);
 }
 
-// Đúng 8 migration Document Merge, ĐÚNG THỨ TỰ — KHÔNG đọc toàn bộ thư mục
+// Đúng 7 migration Document Merge, ĐÚNG THỨ TỰ — KHÔNG đọc toàn bộ thư mục
 // migrations/ (khác run-migrations.mjs) để không vô tình chạy migration của
 // tính năng khác trên production (production có lịch sử migration riêng,
 // không đảm bảo đồng bộ với danh sách file hiện tại của thư mục này).
@@ -57,9 +70,13 @@ const DOCUMENT_MERGE_MIGRATIONS = [
   // Tombstone: obsolete 5-trang HTML seed đã bị gỡ khỏi migration này (chỉ còn
   // set html_enabled). KHÔNG seed document body nào.
   "2026-08-21-dang-ky-tap-nghe-html-draft.sql",
-  // Canonical HTML hiện hành — tạo DRAFT mới, KHÔNG publish. Operator phải
-  // Preview rồi bấm Xuất bản thì HTML_PDF mới dùng được.
-  "2026-08-23-trainee-registration-canonical-html-draft.sql",
+  // ⚠️ KHÔNG thêm "2026-08-23-trainee-registration-canonical-html-draft.sql"
+  // vào đây — migration obsolete: chèn DRAFT theo MAX(version)+1 với body
+  // canonical-source.html LỖI THỜI; khi bảng merge_template_versions TRỐNG
+  // (trạng thái sự cố) nó tái tạo DRAFT v1 legacy TRƯỚC khi recovery v7
+  // chạy (đã xảy ra trên production sau recovery PR #96). File chỉ còn trong
+  // git history (immutable history), KHÔNG nằm trong danh sách chạy
+  // production định kỳ.
   // Recovery sự cố 2026-08-24 (forward-only, idempotent, NON-DESTRUCTIVE):
   // tạo lại ĐÚNG MỘT v7 DRAFT ở version 7 xác định nếu chưa có (dedupe theo
   // source_docx_name + SHA-256 body), và set current_published_version = NULL
