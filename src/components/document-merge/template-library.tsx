@@ -21,6 +21,12 @@ import {
   DraftVersionPreviewModal,
   type PreviewVersionTarget,
 } from "@/components/document-merge/draft-version-preview-modal";
+import {
+  DraftVersionEditorModal,
+  VersionCloneConfirmModal,
+  type CloneVersionTarget,
+  type DraftEditTarget,
+} from "@/components/document-merge/version-clone-modals";
 
 type Template = {
   id: string;
@@ -129,6 +135,13 @@ export function TemplateLibrary({ onSelectForMerge }: { onSelectForMerge: (templ
   const [versions, setVersions] = useState<TemplateVersion[]>([]);
   const [versionsLoading, setVersionsLoading] = useState(false);
   const [versionAction, setVersionAction] = useState<string | null>(null);
+  /** Version đang chờ xác nhận "Tạo bản nháp từ phiên bản này". */
+  const [cloneConfirmVersion, setCloneConfirmVersion] = useState<CloneVersionTarget | null>(null);
+  const [cloning, setCloning] = useState(false);
+  /** Version DRAFT đang mở editor "Sửa HTML/CSS". */
+  const [editDraftVersion, setEditDraftVersion] = useState<DraftEditTarget | null>(null);
+  /** Version vừa clone/lưu — highlight trong danh sách. */
+  const [highlightVersionId, setHighlightVersionId] = useState<string | null>(null);
   // DRAFT VERSION PREVIEW — read-only "Xem trước"; never publishes.
   const [previewVersion, setPreviewVersion] = useState<PreviewVersionTarget | null>(null);
   const [syncingGoogleDoc, setSyncingGoogleDoc] = useState(false);
@@ -191,6 +204,7 @@ export function TemplateLibrary({ onSelectForMerge }: { onSelectForMerge: (templ
   const openEdit = async (template: Template) => {
     setCreating(false);
     setEditing(template);
+    setHighlightVersionId(null);
     setForm({
       name: template.name,
       description: template.description || "",
@@ -243,6 +257,37 @@ export function TemplateLibrary({ onSelectForMerge }: { onSelectForMerge: (templ
       alert(err instanceof Error ? err.message : `Không ${label.toLowerCase()} được version.`);
     } finally {
       setVersionAction(null);
+    }
+  };
+
+  /**
+   * "Tạo bản nháp từ phiên bản này" — sau khi operator xác nhận trong dialog.
+   * Server load version nguồn theo URL (không tin HTML từ client) và CREATE
+   * một version DRAFT mới; version nguồn (kể cả PUBLISHED) bất biến.
+   * KHÔNG tự publish, KHÔNG đổi current_published_version.
+   */
+  const confirmCloneVersion = async () => {
+    if (!editing || !cloneConfirmVersion) return;
+    const sourceVersionNumber = cloneConfirmVersion.version;
+    setCloning(true);
+    try {
+      const res = await fetch(
+        `/api/document-merge/templates/${editing.id}/versions/${cloneConfirmVersion.id}/clone`,
+        { method: "POST" },
+      );
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || "Không tạo được bản nháp.");
+      setCloneConfirmVersion(null);
+      setHighlightVersionId(data.versionId ?? null);
+      await loadVersions(editing.id);
+      alert(
+        `Đã tạo phiên bản v${data.version} (DRAFT) từ v${data.sourceVersion ?? sourceVersionNumber}.\n\n` +
+          "Phiên bản nguồn không bị thay đổi. Hãy dùng [Sửa HTML/CSS] rồi [Xem trước] với ứng viên thật trước khi Xuất bản.",
+      );
+    } catch (err) {
+      alert(err instanceof Error ? err.message : "Không tạo được bản nháp.");
+    } finally {
+      setCloning(false);
     }
   };
 
@@ -641,10 +686,22 @@ export function TemplateLibrary({ onSelectForMerge }: { onSelectForMerge: (templ
                         </div>
                       )}
                       {versions.map((version) => (
-                        <div key={version.id} className="flex flex-col gap-2 rounded-xl border border-slate-200 bg-white p-3 sm:flex-row sm:items-center">
+                        <div
+                          key={version.id}
+                          className={`flex flex-col gap-2 rounded-xl border p-3 sm:flex-row sm:items-center ${
+                            highlightVersionId === version.id
+                              ? "border-emerald-400 bg-emerald-50/50 ring-2 ring-emerald-300"
+                              : "border-slate-200 bg-white"
+                          }`}
+                        >
                           <div className="min-w-0 flex-1">
                             <div className="flex flex-wrap items-center gap-2">
                               <span className="text-xs font-bold text-slate-800">v{version.version}</span>
+                              {highlightVersionId === version.id && (
+                                <span className="rounded-full bg-emerald-100 px-2 py-0.5 text-[10px] font-bold text-emerald-700">
+                                  vừa tạo
+                                </span>
+                              )}
                               <span className={`rounded-full px-2 py-0.5 text-[10px] font-bold ${
                                 version.status === "PUBLISHED"
                                   ? "bg-emerald-100 text-emerald-700"
@@ -692,6 +749,44 @@ export function TemplateLibrary({ onSelectForMerge }: { onSelectForMerge: (templ
                             >
                               Xem trước
                             </button>
+                            {/* TẠO BẢN NHÁP TỪ PHIÊN BẢN NÀY — clone sang version
+                                DRAFT mới; version nguồn bất biến, không publish. */}
+                            <button
+                              type="button"
+                              disabled={versionAction !== null || cloning}
+                              onClick={() => {
+                                setHighlightVersionId(null);
+                                setCloneConfirmVersion({
+                                  id: version.id,
+                                  version: version.version,
+                                  status: version.status,
+                                });
+                              }}
+                              title="Tạo một phiên bản DRAFT mới sao chép HTML/CSS từ phiên bản này. Phiên bản nguồn không bị thay đổi."
+                              className="rounded-lg border border-sky-300 bg-sky-50 px-2.5 py-1.5 text-[10px] font-bold text-sky-700 hover:bg-sky-100 disabled:opacity-50"
+                            >
+                              Tạo bản nháp từ phiên bản này
+                            </button>
+                            {version.status === "DRAFT" && (
+                              <button
+                                type="button"
+                                disabled={versionAction !== null}
+                                onClick={() => {
+                                  setHighlightVersionId(null);
+                                  setEditDraftVersion({
+                                    id: version.id,
+                                    version: version.version,
+                                    status: version.status,
+                                    htmlBody: version.htmlBody,
+                                    printCss: version.printCss,
+                                  });
+                                }}
+                                title="Sửa HTML/CSS của bản DRAFT này (server chỉ cho phép UPDATE khi version còn là DRAFT)."
+                                className="rounded-lg border border-amber-300 bg-amber-50 px-2.5 py-1.5 text-[10px] font-bold text-amber-700 hover:bg-amber-100 disabled:opacity-50"
+                              >
+                                Sửa HTML/CSS
+                              </button>
+                            )}
                             {version.status !== "PUBLISHED" && (
                               <button
                                 disabled={versionAction !== null}
@@ -825,6 +920,30 @@ export function TemplateLibrary({ onSelectForMerge }: { onSelectForMerge: (templ
           templateName={editing.name}
           version={previewVersion}
           onClose={() => setPreviewVersion(null)}
+        />
+      )}
+
+      {editing && cloneConfirmVersion && (
+        <VersionCloneConfirmModal
+          templateName={editing.name}
+          version={cloneConfirmVersion}
+          cloning={cloning}
+          onCancel={() => setCloneConfirmVersion(null)}
+          onConfirm={() => void confirmCloneVersion()}
+        />
+      )}
+
+      {editing && editDraftVersion && (
+        <DraftVersionEditorModal
+          templateId={editing.id}
+          templateName={editing.name}
+          version={editDraftVersion}
+          onCancel={() => setEditDraftVersion(null)}
+          onSaved={(versionId) => {
+            setEditDraftVersion(null);
+            setHighlightVersionId(versionId);
+            void loadVersions(editing.id);
+          }}
         />
       )}
     </div>
