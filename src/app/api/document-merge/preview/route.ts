@@ -295,7 +295,11 @@ async function handleHtmlVersionPreview(input: {
     recordId: input.applicationId,
     applicationId: input.applicationId,
     fullName: typeof recordData.fullName === "string" ? recordData.fullName : undefined,
+    cccd: typeof recordData.cccd === "string" ? recordData.cccd : undefined,
     unresolved: rendered.unreplaced,
+    // UI contract: merge-workspace đọc `unreplaced` (cùng dữ liệu với
+    // `unresolved` — giữ cả hai key để không phá client nào).
+    unreplaced: rendered.unreplaced,
     missingFields: rendered.missingFields,
     valid: rendered.valid,
     pageCount,
@@ -366,7 +370,13 @@ async function renderCanonicalPublishedPreview(input: {
     applicationId: input.applicationId,
     recordId: input.applicationId,
     fullName: typeof input.recordData.fullName === "string" ? input.recordData.fullName : undefined,
+    cccd: typeof input.recordData.cccd === "string" ? input.recordData.cccd : undefined,
     unresolved: rendered.unreplaced,
+    // UI contract (INCIDENT FIX): merge-workspace render `preview.unreplaced`.
+    // Nhánh canonical trước đây CHỈ trả `unresolved` → client đọc
+    // `unreplaced.length` trên undefined → TypeError làm crash toàn bộ route
+    // /admin/document-merge. Luôn trả cả hai key.
+    unreplaced: rendered.unreplaced,
     missingFields: rendered.missingFields,
     valid: rendered.valid,
     pageCount: countCanonicalPages(rendered.html),
