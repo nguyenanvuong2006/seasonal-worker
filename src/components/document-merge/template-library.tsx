@@ -17,6 +17,10 @@ import {
 } from "lucide-react";
 import { documentKindLabel, extractGoogleDocId } from "@/lib/document-merge/template-routing";
 import { ResizableMappingTable } from "@/components/document-merge/resizable-mapping-table";
+import {
+  DraftVersionPreviewModal,
+  type PreviewVersionTarget,
+} from "@/components/document-merge/draft-version-preview-modal";
 
 type Template = {
   id: string;
@@ -125,6 +129,8 @@ export function TemplateLibrary({ onSelectForMerge }: { onSelectForMerge: (templ
   const [versions, setVersions] = useState<TemplateVersion[]>([]);
   const [versionsLoading, setVersionsLoading] = useState(false);
   const [versionAction, setVersionAction] = useState<string | null>(null);
+  // DRAFT VERSION PREVIEW — read-only "Xem trước"; never publishes.
+  const [previewVersion, setPreviewVersion] = useState<PreviewVersionTarget | null>(null);
   const [syncingGoogleDoc, setSyncingGoogleDoc] = useState(false);
   const [draftHtml, setDraftHtml] = useState("");
   const [draftCss, setDraftCss] = useState("");
@@ -668,6 +674,24 @@ export function TemplateLibrary({ onSelectForMerge }: { onSelectForMerge: (templ
                             </p>
                           </div>
                           <div className="flex shrink-0 flex-wrap gap-1.5">
+                            {/* XEM TRƯỚC — chỉ đọc. KHÔNG publish, không đổi
+                                current_published_version, không tạo job. */}
+                            <button
+                              type="button"
+                              disabled={versionAction !== null}
+                              onClick={() =>
+                                setPreviewVersion({
+                                  id: version.id,
+                                  version: version.version,
+                                  status: version.status,
+                                  mappingSnapshotCount: version.mappingSnapshot?.length ?? 0,
+                                })
+                              }
+                              title="Xem trước phiên bản này với một ứng viên có thật. KHÔNG xuất bản, không tạo job, không sửa dữ liệu."
+                              className="rounded-lg border border-slate-300 bg-white px-2.5 py-1.5 text-[10px] font-bold text-slate-700 hover:bg-slate-50 disabled:opacity-50"
+                            >
+                              Xem trước
+                            </button>
                             {version.status !== "PUBLISHED" && (
                               <button
                                 disabled={versionAction !== null}
@@ -793,6 +817,15 @@ export function TemplateLibrary({ onSelectForMerge }: { onSelectForMerge: (templ
             </div>
           </div>
         </div>
+      )}
+
+      {editing && previewVersion && (
+        <DraftVersionPreviewModal
+          templateId={editing.id}
+          templateName={editing.name}
+          version={previewVersion}
+          onClose={() => setPreviewVersion(null)}
+        />
       )}
     </div>
   );
