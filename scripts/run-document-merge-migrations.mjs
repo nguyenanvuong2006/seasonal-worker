@@ -4,19 +4,28 @@
  *
  * KHÁC với scripts/run-migrations.mjs (thiết kế cho fresh/staging DB — chạy
  * TOÀN BỘ schema.sql + TOÀN BỘ migrations/*.sql, kể cả các migration không
- * liên quan Document Merge): script này CHỈ chạy 5 migration Document Merge
- * cụ thể, theo đúng thứ tự filename, trên 1 database ĐÃ CÓ schema nền tảng
- * (production) — không đụng tới bất kỳ bảng/migration nào khác.
+ * liên quan Document Merge): script này CHỈ chạy 8 migration Document Merge
+ * cụ thể, theo đúng thứ tự khai báo bên dưới, trên 1 database ĐÃ CÓ schema
+ * nền tảng (production) — không đụng tới bất kỳ bảng/migration nào khác.
  *
  * Cách dùng:
  *   export DATABASE_URL=postgresql://...   # PROD_DATABASE_URL — KHÔNG dùng staging!
  *   node scripts/run-document-merge-migrations.mjs
  *
- * An toàn: cả 5 migration đều idempotent (ADD COLUMN IF NOT EXISTS / CREATE
+ * An toàn: cả 8 migration đều idempotent (ADD COLUMN IF NOT EXISTS / CREATE
  * TABLE IF NOT EXISTS / ON CONFLICT DO NOTHING / WHERE NOT EXISTS). Không
  * DROP/TRUNCATE/DELETE. Không seed dữ liệu test/verification — chỉ seed
  * permissions hệ thống + 1 template thật (Đăng ký tập nghề) ở trạng thái
- * DRAFT (chưa publish).
+ * DRAFT (chưa publish). Chạy đi chạy lại nhiều lần luôn an toàn.
+ *
+ * INVARIANT SỐNG CÒN (sự cố production 2026-08-24): runner định kỳ này
+ * KHÔNG BAO GIỜ được chứa migration cleanup xoá dữ liệu (destructive
+ * DELETE). Migration 2026-08-24-trainee-registration-canonical-cleanup.sql
+ * đã bị LOẠI KHỎI danh sách vĩnh viễn: nó chứa DELETE ... status != 'DRAFT'
+ * — chạy lại đã xoá PUBLISHED v6 trên production. File đó chỉ còn tồn tại
+ * trong git history, KHÔNG nằm trong danh sách chạy production định kỳ.
+ * Mọi sửa chữa sự cố phải dùng migration forward-only, idempotent,
+ * non-destructive (như ...-v7-incident-recovery.sql bên dưới).
  *
  * Dừng ngay ở migration đầu tiên lỗi (không tiếp tục "cho có kết quả").
  */
@@ -33,10 +42,13 @@ if (!DATABASE_URL) {
   process.exit(1);
 }
 
-// Đúng 5 migration Document Merge, ĐÚNG THỨ TỰ — KHÔNG đọc toàn bộ thư mục
+// Đúng 8 migration Document Merge, ĐÚNG THỨ TỰ — KHÔNG đọc toàn bộ thư mục
 // migrations/ (khác run-migrations.mjs) để không vô tình chạy migration của
 // tính năng khác trên production (production có lịch sử migration riêng,
 // không đảm bảo đồng bộ với danh sách file hiện tại của thư mục này).
+//
+// NGHIÊM CẤM thêm vào đây migration có DELETE/TRUNCATE/DROP xoá dữ liệu —
+// xem khối INVARIANT ở đầu file (sự cố production 2026-08-24).
 const DOCUMENT_MERGE_MIGRATIONS = [
   "2026-08-15-document-merge-engine.sql",
   "2026-08-17-document-merge-async-phase2.sql",
@@ -48,7 +60,19 @@ const DOCUMENT_MERGE_MIGRATIONS = [
   // Canonical HTML hiện hành — tạo DRAFT mới, KHÔNG publish. Operator phải
   // Preview rồi bấm Xuất bản thì HTML_PDF mới dùng được.
   "2026-08-23-trainee-registration-canonical-html-draft.sql",
-  "2026-08-24-trainee-registration-canonical-cleanup.sql",
+  // Recovery sự cố 2026-08-24 (forward-only, idempotent, NON-DESTRUCTIVE):
+  // tạo lại ĐÚNG MỘT v7 DRAFT ở version 7 xác định nếu chưa có (dedupe theo
+  // source_docx_name + SHA-256 body), và set current_published_version = NULL
+  // CHỈ KHI nó trỏ vào version không còn tồn tại (fail closed). KHÔNG
+  // publish, KHÔNG xoá gì. Chạy TRƯỚC v7 draft bên dưới để trong trạng thái
+  // sự cố (versions trống) v7 rơi vào đúng version 7 thay vì MAX(version)+1.
+  "2026-08-24-trainee-registration-v7-incident-recovery.sql",
+  // v7 DRAFT từ operator test(2).html — KHÔNG publish. Idempotent: dedupe
+  // theo source_docx_name nên chạy lại không tạo version trùng.
+  "2026-08-24-trainee-registration-v7-operator-test2-draft.sql",
+  // ⚠️ KHÔNG thêm "2026-08-24-trainee-registration-canonical-cleanup.sql"
+  // vào đây — migration destructive (DELETE versions status != 'DRAFT'),
+  // chỉ chạy MỘT LẦN trong lịch sử; chạy lại đã gây sự cố production.
 ];
 
 const client = new pg.Client({ connectionString: DATABASE_URL, ssl: { rejectUnauthorized: false } });
