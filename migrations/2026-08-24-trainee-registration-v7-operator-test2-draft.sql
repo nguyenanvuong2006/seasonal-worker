@@ -1,69 +1,48 @@
-<!DOCTYPE html>
-<html lang="vi">
-<head>
-<meta charset="UTF-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Giấy đăng ký tập nghề - Dalat Hasfarm</title>
-<!--
-  CANONICAL RUNTIME SOURCE — generated verbatim from the operator-provided
-  authoring shell. The document print CSS and body are extracted unchanged
-  from the operator's tagged style/template blocks. This file contains ONLY
-  the real six-page document; the browser preview shell is excluded.
--->
-<style>
-
-/* ===== runtime parity (auto-generated): neutralise generic A4 renderer CSS; #doccss follows and wins ===== */
-@page { size: A4 portrait; margin: 12mm 14mm; }
-.paper table { margin: 0; table-layout: auto; }
-.paper th, .paper td { border: none; padding: 0; text-align: left; vertical-align: baseline; }
-.paper .mst { margin: 0; }
-
-@page { size: A4 portrait; margin: 12mm 14mm; }
-*{box-sizing:border-box}
-.paper{
-  font-family: Arial,"Liberation Sans","DejaVu Sans",sans-serif;
-  font-size:10.5pt; line-height:1.42; color:#000;
-  width:210mm; min-height:297mm; padding:12mm 14mm;
-  position:relative; page-break-after:always;
-}
-.paper:last-child{page-break-after:auto}
-.doc-header{display:table;width:100%;table-layout:fixed;margin-bottom:6mm}
-.doc-header .left,.doc-header .right{display:table-cell;vertical-align:middle}
-.doc-header .left{width:45%;color:#4a6122;font-weight:bold;font-size:15pt;padding-left:6mm}
-.doc-header .right{width:55%;background:#3d5220;color:#fff;font-weight:bold;font-size:14pt;
-  text-align:center;padding:3.2mm 2mm;letter-spacing:.3px}
-.u{text-decoration:underline} .b{font-weight:bold} .i{font-style:italic}
-.center{text-align:center} .justify{text-align:justify}
-.sec{font-weight:bold;text-decoration:underline;margin:3.5mm 0 2mm}
-.line{margin:0 0 2.6mm} .tight{margin:0 0 .8mm}
-.indent{text-indent:10mm}
-.pl-1{padding-left:10mm} .pl-2{padding-left:18mm}
-.mt-4{margin-top:4mm} .mt-8{margin-top:8mm}
-.hang{padding-left:10mm;text-indent:10mm;text-align:justify;margin:0 0 2.6mm}
-.photo-box{position:absolute;top:28mm;right:14mm;width:38mm;height:46mm;border:1px solid #000;
-  text-align:center;font-size:9pt;padding-top:16mm;line-height:1.35}
-.photo-box .t1{font-weight:bold;text-decoration:underline}
-.body-narrow{width:130mm}
-.attach-box{border:1px solid #000;padding:2mm 3mm;font-size:9.5pt;font-style:italic;margin:4mm 0 8mm}
-.attach-box table{width:100%;border-collapse:collapse}
-.attach-box td{padding:.4mm 0}
-.attach-box td.c1{width:45%} .attach-box td.c2{width:15%} .attach-box td.c3{width:40%}
-.quochieu{text-align:center;font-weight:bold;font-size:11pt;line-height:1.35}
-.quochieu .sub{font-size:10.5pt}
-.hr-short{width:52mm;margin:1.5mm auto 0;border-bottom:1px solid #000}
-.mst{border-collapse:collapse;display:inline-table;vertical-align:middle}
-.mst td{width:6.5mm;height:6.5mm;border:1px solid #000}
-.mst td.gap{border:none;width:2.5mm}
-.sign-block{width:78mm;margin-left:auto;text-align:center}
-.sign-3{width:100%;border-collapse:collapse;margin-top:4mm}
-.sign-3 td{text-align:center;vertical-align:top;padding-top:1mm}
-.mau-so{border:1px solid #000;width:82mm;margin-left:auto;text-align:center;font-size:10pt;
-  padding:2mm;line-height:1.35}
-p,div{orphans:2;widows:2}
-</style>
-</head>
-<body>
-<!-- ======================= TRANG 1 ======================= -->
+-- ============================================================
+-- CANONICAL TRAINEE-REGISTRATION HTML — v7 DRAFT (OPERATOR test(2).html)
+-- ------------------------------------------------------------
+-- Operator source : incoming/test2.html  (a.k.a. "test(2).html")
+-- Source SHA-256  : b9172b02f0b4bf1a03f9108d7c231c6ace9e8c67a1ef003b60db206caac086f5
+-- Body SHA-256    : 7cb43551d3d4f5178ce203a176a7004aa7e3994ecad2276ef593b6fe401116c1
+-- Print CSS SHA   : 2ed7f6d0a17b53ae4a3e138b289bb89e05cbc01945367bf5863cbf3a6fc63ec9
+-- Logical .paper  : 6 (derived from the source, not enforced)
+-- Placeholders    : 49 (current approved mapping, unchanged)
+--
+-- NON-DESTRUCTIVE / DRAFT ONLY.
+-- This migration adds ONE new DRAFT version (v7). It does NOT publish, does
+-- NOT set current_published_version, does NOT change html_enabled, does NOT
+-- touch v6, does NOT modify merge_template_fields (Production mapping), does
+-- NOT create jobs, and does NOT activate HTML_PDF. v6 remains the PUBLISHED
+-- runtime version until an operator explicitly publishes v7.
+--
+-- mapping_snapshot is intentionally EMPTY ('[]') for the DRAFT. The snapshot
+-- is created ONLY at PUBLISH time by publishTemplateVersion(), which reads the
+-- CURRENT non-orphaned merge_template_fields (the approved 49 rows including
+-- the mandatory address semantics) and overwrites this column. Draft previews
+-- read merge_template_fields directly; the frozen PUBLISHED snapshot is what
+-- jobs render. merge_template_fields is unchanged here.
+-- ============================================================
+WITH target_template AS (
+  SELECT id
+  FROM merge_templates
+  WHERE google_doc_id = '10D0tG71CbllIZe7DaosYNW3vK7QnP76Yq4UC9FMEiUE'
+  ORDER BY created_at ASC
+  LIMIT 1
+), next_version AS (
+  SELECT t.id AS template_id, COALESCE(MAX(v.version), 0) + 1 AS version
+  FROM target_template t
+  LEFT JOIN merge_template_versions v ON v.template_id = t.id
+  GROUP BY t.id
+)
+INSERT INTO merge_template_versions (
+  template_id, version, status, html_body, print_css, source_docx_name,
+  retention_years, mapping_snapshot, created_by, created_at, updated_at
+)
+SELECT
+  n.template_id,
+  n.version,
+  'DRAFT',
+  $v7_html$<!-- ======================= TRANG 1 ======================= -->
 <div class="paper">
   <div class="doc-header">
     <div class="left">DALAT HASFARM</div>
@@ -361,6 +340,71 @@ p,div{orphans:2;widows:2}
     <div style="height:24mm"></div>
     <div class="b">{{Ho_ten}}</div>
   </div>
-</div>
-</body>
-</html>
+</div>$v7_html$,
+  $v7_css$
+/* ===== runtime parity (auto-generated): neutralise generic A4 renderer CSS; #doccss follows and wins ===== */
+@page { size: A4 portrait; margin: 12mm 14mm; }
+.paper table { margin: 0; table-layout: auto; }
+.paper th, .paper td { border: none; padding: 0; text-align: left; vertical-align: baseline; }
+.paper .mst { margin: 0; }
+
+@page { size: A4 portrait; margin: 12mm 14mm; }
+*{box-sizing:border-box}
+.paper{
+  font-family: Arial,"Liberation Sans","DejaVu Sans",sans-serif;
+  font-size:10.5pt; line-height:1.42; color:#000;
+  width:210mm; min-height:297mm; padding:12mm 14mm;
+  position:relative; page-break-after:always;
+}
+.paper:last-child{page-break-after:auto}
+.doc-header{display:table;width:100%;table-layout:fixed;margin-bottom:6mm}
+.doc-header .left,.doc-header .right{display:table-cell;vertical-align:middle}
+.doc-header .left{width:45%;color:#4a6122;font-weight:bold;font-size:15pt;padding-left:6mm}
+.doc-header .right{width:55%;background:#3d5220;color:#fff;font-weight:bold;font-size:14pt;
+  text-align:center;padding:3.2mm 2mm;letter-spacing:.3px}
+.u{text-decoration:underline} .b{font-weight:bold} .i{font-style:italic}
+.center{text-align:center} .justify{text-align:justify}
+.sec{font-weight:bold;text-decoration:underline;margin:3.5mm 0 2mm}
+.line{margin:0 0 2.6mm} .tight{margin:0 0 .8mm}
+.indent{text-indent:10mm}
+.pl-1{padding-left:10mm} .pl-2{padding-left:18mm}
+.mt-4{margin-top:4mm} .mt-8{margin-top:8mm}
+.hang{padding-left:10mm;text-indent:10mm;text-align:justify;margin:0 0 2.6mm}
+.photo-box{position:absolute;top:28mm;right:14mm;width:38mm;height:46mm;border:1px solid #000;
+  text-align:center;font-size:9pt;padding-top:16mm;line-height:1.35}
+.photo-box .t1{font-weight:bold;text-decoration:underline}
+.body-narrow{width:130mm}
+.attach-box{border:1px solid #000;padding:2mm 3mm;font-size:9.5pt;font-style:italic;margin:4mm 0 8mm}
+.attach-box table{width:100%;border-collapse:collapse}
+.attach-box td{padding:.4mm 0}
+.attach-box td.c1{width:45%} .attach-box td.c2{width:15%} .attach-box td.c3{width:40%}
+.quochieu{text-align:center;font-weight:bold;font-size:11pt;line-height:1.35}
+.quochieu .sub{font-size:10.5pt}
+.hr-short{width:52mm;margin:1.5mm auto 0;border-bottom:1px solid #000}
+.mst{border-collapse:collapse;display:inline-table;vertical-align:middle}
+.mst td{width:6.5mm;height:6.5mm;border:1px solid #000}
+.mst td.gap{border:none;width:2.5mm}
+.sign-block{width:78mm;margin-left:auto;text-align:center}
+.sign-3{width:100%;border-collapse:collapse;margin-top:4mm}
+.sign-3 td{text-align:center;vertical-align:top;padding-top:1mm}
+.mau-so{border:1px solid #000;width:82mm;margin-left:auto;text-align:center;font-size:10pt;
+  padding:2mm;line-height:1.35}
+p,div{orphans:2;widows:2}$v7_css$,
+  'trainee-registration/test(2).html (operator-provided canonical HTML; preview UI stripped) v7',
+  3,
+  '[]'::jsonb,
+  'system',
+  now(),
+  now()
+FROM next_version n
+WHERE NOT EXISTS (
+  SELECT 1
+  FROM merge_template_versions existing
+  WHERE existing.template_id = n.template_id
+    AND existing.source_docx_name = 'trainee-registration/test(2).html (operator-provided canonical HTML; preview UI stripped) v7'
+);
+
+-- Read-only verification: reports the v7 DRAFT row; v6 PUBLISHED untouched.
+SELECT version, status, source_docx_name
+FROM merge_template_versions
+WHERE source_docx_name = 'trainee-registration/test(2).html (operator-provided canonical HTML; preview UI stripped) v7';

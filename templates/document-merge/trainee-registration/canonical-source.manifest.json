@@ -1,9 +1,19 @@
 {
   "note": "Metadata only. The document body lives exclusively in merge_template_versions after an explicit Publish.",
+  "operatorSource": "incoming/test2.html",
+  "operatorSourceDisplayName": "test(2).html",
   "sourcePath": "templates/document-merge/trainee-registration/canonical-source.html",
-  "sourceSha256": "22e987f76ff0100f8a7a3f9c6fcda72f1465bbf353f909664d923eed41343bd2",
-  "canonicalBodySha256": "7fa929541c05100e51c76c20da72dc863e3dfdfac3b95f2c90d662be9115ae7f",
+  "sourceSha256": "b9172b02f0b4bf1a03f9108d7c231c6ace9e8c67a1ef003b60db206caac086f5",
+  "canonicalBodySha256": "7cb43551d3d4f5178ce203a176a7004aa7e3994ecad2276ef593b6fe401116c1",
+  "canonicalPrintCssSha256": "2ed7f6d0a17b53ae4a3e138b289bb89e05cbc01945367bf5863cbf3a6fc63ec9",
+  "draftVersion": 7,
+  "draftStatus": "DRAFT",
+  "draftMigration": "migrations/2026-08-24-trainee-registration-v7-operator-test2-draft.sql",
+  "draftMappingSnapshot": [],
+  "snapshotCreatedAtPublish": true,
+  "expectedPublishedMappingCount": 49,
   "logicalPageCount": 6,
+  "pageSelector": ".paper",
   "placeholderCount": 49,
   "placeholders": [
     "Code",
@@ -56,6 +66,21 @@
     "Tien_an_tien_su_Khong",
     "dia_chi_cu_tru"
   ],
-  "sourceDocxName": "trainee-registration/canonical-source.html (canonical HTML; preview UI stripped)",
-  "generatedBy": "scripts/sync-trainee-registration-template.mjs"
+  "addressSemantics": {
+    "Dia_chi_thuong_tru": {
+      "sourcePath": "permanentAddress",
+      "required": false
+    },
+    "dia_chi_cu_tru": {
+      "sourcePath": "residentialAddress",
+      "required": false
+    },
+    "Dia_chi_tam_tru": {
+      "sourcePath": "residentialAddress",
+      "required": true
+    },
+    "crossAddressFallback": false
+  },
+  "sourceDocxName": "trainee-registration/test(2).html (operator-provided canonical HTML; preview UI stripped) v7",
+  "generatedBy": "scripts/sync-trainee-registration-v7.mjs"
 }
