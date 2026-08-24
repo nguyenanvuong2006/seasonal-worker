@@ -1,13 +1,9 @@
 name: Migrate Document Merge DB — PRODUCTION
 
-# CHỈ chạy 8 migration Document Merge (scripts/run-document-merge-migrations.mjs)
+# CHỈ chạy 5 migration Document Merge (scripts/run-document-merge-migrations.mjs)
 # — KHÔNG chạy schema.sql, KHÔNG chạy migration của tính năng khác. Không
 # seed dữ liệu test/verification. KHÔNG publish template, KHÔNG đổi
 # DOCUMENT_MERGE_ENGINE (workflow này không chạm tới Vercel).
-#
-# INVARIANT: danh sách này KHÔNG BAO GIỜ chứa migration cleanup xoá dữ liệu
-# (destructive DELETE) — sự cố production 2026-08-24: cleanup rerun đã xoá
-# PUBLISHED v6. Sửa chữa sự cố chỉ dùng migration forward-only, idempotent.
 
 on:
   workflow_dispatch:
