@@ -27,9 +27,16 @@
  *          html_enabled, never sets current_published_version.
  *   3. templates/.../canonical-source.manifest.json (metadata/checksums).
  *
- * The current approved 49-field mapping is preserved unchanged. The three
- * address mappings are embedded into the v7 mapping_snapshot so the draft is
- * self-describing, but merge_template_fields (Production) is NOT modified:
+ * The current approved 49-field mapping is preserved unchanged. Per the
+ * established invariant, a DRAFT version carries an EMPTY mapping_snapshot
+ * ('[]'); publishTemplateVersion() is the sole authority that snapshots the
+ * CURRENT Production merge_template_fields (non-orphaned, 49 rows) into
+ * mapping_snapshot at PUBLISH time — overwriting whatever the draft held.
+ * merge_template_fields (Production) is NOT modified by this script.
+ *
+ * The MAPPING constant below is used ONLY as a structural/address-semantics
+ * self-check against the 49 document tokens; it is never written to the DRAFT.
+ * The three mandatory address mappings (verified by this check) are:
  *
  *   Dia_chi_thuong_tru -> permanentAddress   required=false
  *   dia_chi_cu_tru     -> residentialAddress required=false
@@ -49,6 +56,11 @@ const OPERATOR_SOURCE = "incoming/test2.html"; // operator file "test(2).html"
 const TEMPLATE_DIR = join(ROOT, "templates", "document-merge", "trainee-registration");
 const CANONICAL_SOURCE = join(TEMPLATE_DIR, "canonical-source.html");
 const MANIFEST_PATH = join(TEMPLATE_DIR, "canonical-source.manifest.json");
+// Authoritative 49-field mapping (for review/verification only). This is NOT
+// written into the DRAFT mapping_snapshot (which stays '[]'); it documents the
+// current approved Production v6 mapping that publishTemplateVersion() will
+// snapshot at PUBLISH time.
+const MAPPING_JSON_PATH = join(TEMPLATE_DIR, "v7-mapping.json");
 const MIGRATION_PATH = join(
   ROOT,
   "migrations",
@@ -265,10 +277,12 @@ const migration = `-- ==========================================================
 -- NOT create jobs, and does NOT activate HTML_PDF. v6 remains the PUBLISHED
 -- runtime version until an operator explicitly publishes v7.
 --
--- The embedded mapping_snapshot is a self-describing copy of the current
--- approved 49-field mapping (Production v6), including the mandatory address
--- semantics. It is informational for the draft; merge_template_fields is the
--- runtime authority and is unchanged here.
+-- mapping_snapshot is intentionally EMPTY ('[]') for the DRAFT. The snapshot
+-- is created ONLY at PUBLISH time by publishTemplateVersion(), which reads the
+-- CURRENT non-orphaned merge_template_fields (the approved 49 rows including
+-- the mandatory address semantics) and overwrites this column. Draft previews
+-- read merge_template_fields directly; the frozen PUBLISHED snapshot is what
+-- jobs render. merge_template_fields is unchanged here.
 -- ============================================================
 WITH target_template AS (
   SELECT id
@@ -294,7 +308,7 @@ SELECT
   $v7_css$${printCss}$v7_css$,
   '${SOURCE_DOCX_NAME}',
   3,
-  '${mappingJson.replace(/'/g, "''")}'::jsonb,
+  '[]'::jsonb,
   'system',
   now(),
   now()
@@ -314,6 +328,7 @@ WHERE source_docx_name = '${SOURCE_DOCX_NAME}';
 
 writeFileSync(CANONICAL_SOURCE, canonicalSource, "utf8");
 writeFileSync(MIGRATION_PATH, migration, "utf8");
+writeFileSync(MAPPING_JSON_PATH, `${JSON.stringify(MAPPING, null, 2)}\n`, "utf8");
 
 const manifest = {
   note: "Metadata only. The document body lives exclusively in merge_template_versions after an explicit Publish.",
@@ -326,6 +341,11 @@ const manifest = {
   draftVersion: 7,
   draftStatus: "DRAFT",
   draftMigration: "migrations/2026-08-24-trainee-registration-v7-operator-test2-draft.sql",
+  // DRAFT invariant: mapping_snapshot is empty at draft time. publishTemplateVersion()
+  // snapshots the CURRENT non-orphaned merge_template_fields (49 rows) at PUBLISH.
+  draftMappingSnapshot: [],
+  snapshotCreatedAtPublish: true,
+  expectedPublishedMappingCount: 49,
   logicalPageCount: pageCount,
   pageSelector: ".paper",
   placeholderCount: placeholders.length,
@@ -347,5 +367,6 @@ console.log(`v7 DRAFT SQL    : ${MIGRATION_PATH}`);
 console.log(`Manifest        : ${MANIFEST_PATH}`);
 console.log(`Pages (.paper)  : ${pageCount}`);
 console.log(`Placeholders    : ${placeholders.length}`);
-console.log(`Mapping rows    : ${MAPPING.length}`);
+console.log(`DRAFT snapshot  : [] (snapshotted at PUBLISH from current merge_template_fields)`);
+console.log(`Mapping self-check: ${MAPPING.length} rows (not written to DRAFT)`);
 console.log(`Body SHA-256    : ${bodyHash}`);

@@ -41,10 +41,9 @@ const EXPECTED_PAGES = manifest.logicalPageCount;
  * v7 DRAFT migration (operator test(2).html). The historical 2026-08-23 v6
  * migration remains on disk as immutable history and is never re-pointed here.
  */
-const canonicalDraftMigration = readFileSync(
-  join(process.cwd(), manifest.draftMigration),
-  "utf8",
-);
+const DRAFT_MIGRATION =
+  manifest.draftMigration ?? "migrations/2026-08-24-trainee-registration-v7-operator-test2-draft.sql";
+const canonicalDraftMigration = readFileSync(join(process.cwd(), DRAFT_MIGRATION), "utf8");
 /** The operator-provided authoring shell that is the source of truth. */
 const operatorSource = readFileSync(join(process.cwd(), "incoming/test2.html"), "utf8");
 
@@ -155,20 +154,41 @@ test("canonical semantic field contract exactly covers the HTML and declares req
   assert.ok(CHECKBOX_PLACEHOLDERS.every((key) => (PLACEHOLDERS as readonly string[]).includes(key)));
 });
 
-test("v7 mapping_snapshot enforces the mandatory address requiredness", () => {
-  // The v7 DRAFT embeds the current approved 49-field mapping; its address
-  // requiredness must match Production v6 exactly.
-  const match = canonicalDraftMigration.match(/'\s*(\[[\s\S]*?\])\s*'::jsonb/);
-  assert.ok(match, "v7 migration must embed a mapping_snapshot");
-  const mapping = JSON.parse(match![1]) as Array<{ placeholder: string; sourcePath: string | null; isRequired: boolean }>;
-  assert.equal(mapping.length, 49);
-  const byPlaceholder = Object.fromEntries(mapping.map((m) => [m.placeholder, m]));
-  assert.equal(byPlaceholder.Dia_chi_thuong_tru.sourcePath, "permanentAddress");
-  assert.equal(byPlaceholder.Dia_chi_thuong_tru.isRequired, false);
-  assert.equal(byPlaceholder.dia_chi_cu_tru.sourcePath, "residentialAddress");
-  assert.equal(byPlaceholder.dia_chi_cu_tru.isRequired, false);
-  assert.equal(byPlaceholder.Dia_chi_tam_tru.sourcePath, "residentialAddress");
-  assert.equal(byPlaceholder.Dia_chi_tam_tru.isRequired, true);
+test("v7 DRAFT follows the invariant: mapping_snapshot is empty until PUBLISH", () => {
+  // A DRAFT must NOT pre-populate mapping_snapshot. publishTemplateVersion()
+  // is the sole authority that snapshots the CURRENT non-orphaned
+  // merge_template_fields (the approved 49 rows) into mapping_snapshot at
+  // PUBLISH time, overwriting whatever the draft held. Draft previews read
+  // merge_template_fields directly; the frozen PUBLISHED snapshot is what
+  // jobs render.
+  assert.ok(
+    canonicalDraftMigration.includes("'[]'::jsonb"),
+    "DRAFT mapping_snapshot must be '[]' (empty)",
+  );
+  // No embedded mapping objects may be written to the DRAFT snapshot.
+  assert.doesNotMatch(canonicalDraftMigration, /mapping_snapshot[\s\S]*?"placeholder"/);
+  assert.doesNotMatch(canonicalDraftMigration, /"sourcePath":"permanentAddress"/);
+  // The 49-field mapping must NOT be embedded in the DRAFT (it is snapshotted
+  // at publish from merge_template_fields).
+  assert.doesNotMatch(canonicalDraftMigration, /"placeholder":"Ho_ten"/);
+  assert.doesNotMatch(canonicalDraftMigration, /"sourcePath":"permanentAddress"/);
+});
+
+test("publishTemplateVersion() snapshots current merge_template_fields and overwrites a DRAFT snapshot", () => {
+  // Plain source-contract assertions (no live DB): the publish path SELECTs
+  // non-orphaned merge_template_fields and writes them to mapping_snapshot,
+  // archiving the previously PUBLISHED version and setting
+  // current_published_version.
+  const publishSource = readFileSync(
+    join(process.cwd(), "src/lib/document-merge/template-versions.ts"),
+    "utf8",
+  );
+  assert.match(publishSource, /from\(mergeTemplateFields\)/);
+  assert.match(publishSource, /eq\(mergeTemplateFields\.isOrphaned,\s*false\)/);
+  assert.match(publishSource, /mappingSnapshot,/);
+  assert.match(publishSource, /currentPublishedVersion:\s*published\.version/);
+  // Coverage is validated before snapshotting.
+  assert.match(publishSource, /validatePlaceholderCoverage/);
 });
 
 test("canonical HTML has no extra placeholders beyond the 49 active set", () => {

@@ -39,6 +39,13 @@ export interface CanonicalManifest {
   placeholderCount: number;
   placeholders: string[];
   sourceDocxName: string;
+  /** v7: DRAFT mapping_snapshot is empty until PUBLISH. */
+  draftMappingSnapshot?: unknown[];
+  snapshotCreatedAtPublish?: boolean;
+  expectedPublishedMappingCount?: number;
+  draftMigration?: string;
+  operatorSource?: string;
+  operatorSourceDisplayName?: string;
 }
 
 function readRepoFile(relative: string): string {

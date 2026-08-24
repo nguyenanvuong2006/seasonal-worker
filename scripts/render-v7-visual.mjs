@@ -19,6 +19,7 @@ import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
 import { renderCanonicalDocument } from "../src/lib/document-merge/canonical-document.ts";
+import { DANG_KY_TAP_NGHE_FIELD_CONTRACT } from "../src/document-templates/dang-ky-tap-nghe/schema.ts";
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), "..");
 const OUT = join(ROOT, "artifacts", "v7-visual");
@@ -35,10 +36,15 @@ function dollar(tag) {
 const htmlBody = dollar("v7_html");
 const printCss = dollar("v7_css");
 
-// mapping_snapshot is embedded as a JSON literal
-const mapMatch = sql.match(/'\s*(\[[\s\S]*?\])\s*'::jsonb/);
-if (!mapMatch) throw new Error("mapping_snapshot not found in v7 migration");
-const mappings = JSON.parse(mapMatch[1]);
+// The DRAFT mapping_snapshot is intentionally empty ('[]'); mappings are
+// snapshotted at PUBLISH time from merge_template_fields. For this offline
+// verification we use the checked-in, reviewable 49-field mapping
+// (templates/.../v7-mapping.json) — the current approved Production v6
+// mapping, including the mandatory address semantics.
+const mappings = JSON.parse(
+  readFileSync(join(ROOT, "templates/document-merge/trainee-registration/v7-mapping.json"), "utf8"),
+);
+if (mappings.length !== 49) throw new Error(`expected 49 mappings, got ${mappings.length}`);
 
 // Candidate: Trần Văn Dũng — realistic, complete (all required fields present).
 const CONTEXT = { currentUserName: "Trần Thị Bình", currentDate: new Date("2026-03-02T00:00:00Z"), mergeIndex: 1, mergeCount: 1 };
