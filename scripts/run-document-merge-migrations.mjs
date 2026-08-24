@@ -48,6 +48,7 @@ const DOCUMENT_MERGE_MIGRATIONS = [
   // Canonical HTML hiện hành — tạo DRAFT mới, KHÔNG publish. Operator phải
   // Preview rồi bấm Xuất bản thì HTML_PDF mới dùng được.
   "2026-08-23-trainee-registration-canonical-html-draft.sql",
+  "2026-08-24-trainee-registration-canonical-cleanup.sql",
 ];
 
 const client = new pg.Client({ connectionString: DATABASE_URL, ssl: { rejectUnauthorized: false } });
