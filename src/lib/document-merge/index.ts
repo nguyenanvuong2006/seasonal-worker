@@ -137,6 +137,31 @@ export {
   joinWithPageBreaks,
 } from './preview-merge.ts';
 
+// Placeholder aliases (shared by the fallback resolver + the Template Diff Engine)
+export {
+  FALLBACK_PLACEHOLDER_MAP as ALIAS_FALLBACK_PLACEHOLDER_MAP,
+  CUSTOM_ANSWER_PLACEHOLDER_MAP,
+  SOURCE_FIELD_LABELS,
+} from './placeholder-aliases.ts';
+
+// Template Diff Engine — read-only change analysis for a DRAFT vs its base.
+export {
+  buildTemplateDiff,
+  extractPlaceholderSet,
+  compareMappingSemantics,
+  toMappingSemantics,
+  suggestDeterministicMapping,
+  sourceFieldLabel,
+  MAPPING_SEMANTIC_FIELDS,
+  type MappingSemantics,
+  type PlaceholderChangeKind,
+  type PlaceholderDiffItem,
+  type PlaceholderDiffSummary,
+  type TemplateDiffInput,
+  type TemplateDiffResult,
+  type MappingSuggestion,
+} from './template-diff.ts';
+
 // Electronic signature / confirmation
 export {
   MAX_SIGNATURE_DATA_URL_LENGTH,
