@@ -24,8 +24,10 @@ import {
 import {
   DraftVersionEditorModal,
   VersionCloneConfirmModal,
+  VersionDeleteConfirmModal,
   type CloneVersionTarget,
   type DraftEditTarget,
+  type VersionDeleteTarget,
 } from "@/components/document-merge/version-clone-modals";
 
 type Template = {
@@ -138,6 +140,9 @@ export function TemplateLibrary({ onSelectForMerge }: { onSelectForMerge: (templ
   /** Version đang chờ xác nhận "Tạo bản nháp từ phiên bản này". */
   const [cloneConfirmVersion, setCloneConfirmVersion] = useState<CloneVersionTarget | null>(null);
   const [cloning, setCloning] = useState(false);
+  /** Version DRAFT đang chờ xác nhận "Xóa bản nháp" (xoá vĩnh viễn). */
+  const [deleteConfirmVersion, setDeleteConfirmVersion] = useState<VersionDeleteTarget | null>(null);
+  const [deleting, setDeleting] = useState(false);
   /** Version DRAFT đang mở editor "Sửa HTML/CSS". */
   const [editDraftVersion, setEditDraftVersion] = useState<DraftEditTarget | null>(null);
   /** Version vừa clone/lưu — highlight trong danh sách. */
@@ -288,6 +293,43 @@ export function TemplateLibrary({ onSelectForMerge }: { onSelectForMerge: (templ
       alert(err instanceof Error ? err.message : "Không tạo được bản nháp.");
     } finally {
       setCloning(false);
+    }
+  };
+
+  /**
+   * "Xóa bản nháp" — xoá VĨNH VIỄN một version DRAFT sau khi operator xác nhận
+   * trong dialog. Server re-read version trong transaction ngay trước DELETE
+   * và guard status='DRAFT' trong WHERE → PUBLISHED/ARCHIVED/stale đều bị từ
+   * chối (409) kể cả khi gọi API trực tiếp. Sau khi xoá: refresh danh sách
+   * version; không tự publish, không đổi current_published_version, không
+   * đụng mapping dùng chung hay PDF/job/history của version khác.
+   */
+  const confirmDeleteVersion = async () => {
+    if (!editing || !deleteConfirmVersion) return;
+    const target = deleteConfirmVersion;
+    setDeleting(true);
+    setVersionAction(`delete:${target.id}`);
+    try {
+      const res = await fetch(
+        `/api/document-merge/templates/${editing.id}/versions/${target.id}`,
+        { method: "DELETE" },
+      );
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(data.error || "Không xoá được bản nháp.");
+      setDeleteConfirmVersion(null);
+      if (highlightVersionId === target.id) setHighlightVersionId(null);
+      // Refresh danh sách version — nếu trước đó có 2 DRAFT thì giờ còn đúng
+      // 1 DRAFT làm việc và guard SINGLE_DRAFT_AMBIGUOUS tự hết block.
+      await loadVersions(editing.id);
+      alert(
+        `Đã xoá vĩnh viễn bản nháp v${target.version} của "${editing.name}".\n\n` +
+          "Phiên bản đang xuất bản và mapping của mẫu không thay đổi.",
+      );
+    } catch (err) {
+      alert(err instanceof Error ? err.message : "Không xoá được bản nháp.");
+    } finally {
+      setDeleting(false);
+      setVersionAction(null);
     }
   };
 
@@ -845,6 +887,27 @@ export function TemplateLibrary({ onSelectForMerge }: { onSelectForMerge: (templ
                                 Khôi phục
                               </button>
                             )}
+                            {/* XÓA BẢN NHÁP — chỉ DRAFT. Mở confirmation modal;
+                                server re-check DRAFT trong transaction trước
+                                khi DELETE, nên UI chỉ là lớp bảo vệ thứ nhất. */}
+                            {version.status === "DRAFT" && (
+                              <button
+                                type="button"
+                                disabled={versionAction !== null || cloning || deleting}
+                                onClick={() => {
+                                  setHighlightVersionId(null);
+                                  setDeleteConfirmVersion({
+                                    id: version.id,
+                                    version: version.version,
+                                    status: version.status,
+                                  });
+                                }}
+                                title="Xoá vĩnh viễn bản nháp này (chỉ version DRAFT). Không thể hoàn tác. Server sẽ từ chối nếu version đã đổi trạng thái."
+                                className="rounded-lg border border-red-200 bg-red-50 px-2.5 py-1.5 text-[10px] font-bold text-red-700 hover:bg-red-100 disabled:opacity-50"
+                              >
+                                Xóa bản nháp
+                              </button>
+                            )}
                           </div>
                         </div>
                       ))}
@@ -948,6 +1011,16 @@ export function TemplateLibrary({ onSelectForMerge }: { onSelectForMerge: (templ
           cloning={cloning}
           onCancel={() => setCloneConfirmVersion(null)}
           onConfirm={() => void confirmCloneVersion()}
+        />
+      )}
+
+      {editing && deleteConfirmVersion && (
+        <VersionDeleteConfirmModal
+          templateName={editing.name}
+          version={deleteConfirmVersion}
+          deleting={deleting}
+          onCancel={() => setDeleteConfirmVersion(null)}
+          onConfirm={() => void confirmDeleteVersion()}
         />
       )}
 

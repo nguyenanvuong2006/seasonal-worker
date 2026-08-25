@@ -26,6 +26,14 @@
  *    nhắc rõ: đang sửa BẢN NHÁP, phiên bản đang xuất bản KHÔNG đổi, thao tác
  *    KHÔNG xuất bản.
  *
+ * 4. VersionDeleteConfirmModal — xác nhận "Xóa bản nháp" (xoá VĨNH VIỄN một
+ *    version DRAFT). Hiển thị rõ tên mẫu + số version + cảnh báo không thể
+ *    hoàn tác; liệt kê các bất biến (PUBLISHED không đổi, mapping dùng chung
+ *    không mất, PDF/job/history của version khác không bị xoá).
+ *    API gọi: DELETE /api/document-merge/templates/:id/versions/:vid
+ *    (server re-read trong transaction + guard status='DRAFT' trong WHERE —
+ *    PUBLISHED/ARCHIVED bị từ chối kể cả khi gọi API trực tiếp).
+ *
  * Không dialog nào ở đây publish bất cứ gì — publishing vẫn đi qua workflow
  * hiện có ([Xuất bản phiên bản] → publishTemplateVersion freeze mapping
  * snapshot).
@@ -45,6 +53,7 @@ import {
   Printer,
   Save,
   Search,
+  Trash2,
   X,
 } from "lucide-react";
 
@@ -135,6 +144,93 @@ export function VersionCloneConfirmModal({
           >
             <Copy className="h-3.5 w-3.5" />
             {cloning ? "Đang tạo bản nháp..." : "Tạo bản nháp"}
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+/* ------------------------------------------------------------------ *
+ * 1b. DELETE DRAFT CONFIRM — "Xóa bản nháp" (xoá vĩnh viễn)
+ * ------------------------------------------------------------------ */
+
+export type VersionDeleteTarget = {
+  id: string;
+  version: number;
+  status: "DRAFT" | "PUBLISHED" | "ARCHIVED";
+};
+
+export function VersionDeleteConfirmModal({
+  templateName,
+  version,
+  onCancel,
+  onConfirm,
+  deleting,
+}: {
+  templateName: string;
+  version: VersionDeleteTarget;
+  onCancel: () => void;
+  onConfirm: () => void;
+  deleting: boolean;
+}) {
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/50 p-4">
+      <div className="w-full max-w-md rounded-2xl bg-white p-5 shadow-xl">
+        <div className="flex items-start justify-between gap-3">
+          <div className="flex items-center gap-2">
+            <span className="rounded-lg bg-red-50 p-2 text-red-600">
+              <Trash2 className="h-4 w-4" />
+            </span>
+            <h3 className="text-sm font-bold text-slate-900">
+              Xóa vĩnh viễn bản nháp v{version.version}?
+            </h3>
+          </div>
+          <button
+            type="button"
+            onClick={onCancel}
+            disabled={deleting}
+            className="rounded-lg p-1 text-slate-400 hover:bg-slate-100 hover:text-slate-600 disabled:opacity-50"
+            aria-label="Đóng"
+          >
+            <X className="h-4 w-4" />
+          </button>
+        </div>
+
+        <p className="mt-3 text-[11px] text-slate-500">
+          Mẫu <span className="font-semibold text-slate-700">{templateName}</span> · phiên bản{" "}
+          <b>v{version.version}</b> ({version.status}).
+        </p>
+
+        <div className="mt-3 flex gap-2 rounded-xl border border-red-200 bg-red-50 p-3 text-[11px] font-semibold leading-relaxed text-red-700">
+          <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0" />
+          Thao tác này xóa vĩnh viễn bản nháp và không thể hoàn tác.
+        </div>
+
+        <ul className="mt-3 space-y-1.5 rounded-xl bg-slate-50 p-3 text-[11px] leading-relaxed text-slate-600">
+          <li>• Phiên bản <b>PUBLISHED hiện tại không bị thay đổi</b> — merge production vẫn chạy bình thường.</li>
+          <li>• <b>Mapping dùng chung</b> của mẫu (mọi phiên bản) được giữ nguyên.</li>
+          <li>• PDF / merge job / lịch sử và <b>mapping snapshot của các phiên bản khác</b> không bị xoá hay thay đổi.</li>
+          <li>• Chỉ version DRAFT mới xoá được — server từ chối nếu version đã đổi trạng thái.</li>
+        </ul>
+
+        <div className="mt-4 flex justify-end gap-2">
+          <button
+            type="button"
+            onClick={onCancel}
+            disabled={deleting}
+            className="rounded-lg border border-slate-300 bg-white px-4 py-2 text-xs font-semibold text-slate-700 hover:bg-slate-50 disabled:opacity-50"
+          >
+            Hủy
+          </button>
+          <button
+            type="button"
+            onClick={onConfirm}
+            disabled={deleting}
+            className="inline-flex items-center gap-1.5 rounded-lg bg-red-600 px-4 py-2 text-xs font-bold text-white hover:bg-red-700 disabled:opacity-50"
+          >
+            <Trash2 className="h-3.5 w-3.5" />
+            {deleting ? "Đang xoá..." : "Xóa vĩnh viễn"}
           </button>
         </div>
       </div>
