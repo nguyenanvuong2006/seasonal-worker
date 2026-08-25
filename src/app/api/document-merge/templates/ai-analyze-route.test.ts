@@ -15,7 +15,7 @@ import vm from "node:vm";
 import ts from "typescript";
 import { createFakeDb, drizzleStub, makeTable, type QueryCall } from "../../../../lib/test-support/fake-drizzle.ts";
 import * as draftPreview from "../../../../lib/document-merge/draft-preview.ts";
-import * as aiTemplateAnalyze from "../../../../lib/document-merge/ai-template-analyze.ts";
+import * as fullDocumentAnalyze from "../../../../lib/document-merge/full-document-analyze.ts";
 
 const routeSource = readFileSync(new URL("./[id]/ai-analyze/route.ts", import.meta.url), "utf8");
 const jsSource = ts.transpileModule(routeSource, {
@@ -104,8 +104,8 @@ function makeContext(opts: Options = {}) {
           return { TEMPLATE_VERSION_STATUS: { DRAFT: "DRAFT", PUBLISHED: "PUBLISHED", ARCHIVED: "ARCHIVED" } };
         case "@/lib/document-merge/draft-preview":
           return draftPreview;
-        case "@/lib/document-merge/ai-template-analyze":
-          return aiTemplateAnalyze;
+        case "@/lib/document-merge/full-document-analyze":
+          return fullDocumentAnalyze;
         default:
           throw new Error(`Unexpected require("${id}")`);
       }
@@ -283,6 +283,51 @@ test("ai-analyze: current_published_version / mapping rows are never written eve
   });
   await POST(postRequest({ html: `<<Totally>><<Different>><<Placeholders>>` }), ctxFor());
   assert.equal(db.calls.filter((c) => c.root !== "select").length, 0);
+});
+
+test("ai-analyze (H2): pasting a COMPLETE HTML document is normalized end-to-end — body extracted, style blocks merged, analysisHash present", async () => {
+  const { POST } = makeContext({
+    publishedVersion: { id: "v-3", version: 3, status: "PUBLISHED", htmlBody: `<<Ho_ten>>`, mappingSnapshot: [makeField("Ho_ten")] },
+    fields: [makeField("Ho_ten")],
+  });
+  const fullDoc = `<!DOCTYPE html>
+<html lang="vi">
+<head><meta charset="utf-8"><style>.a{color:red}</style></head>
+<body><div class="page"><<Ho_ten>></div></body>
+</html>`;
+  const res = await POST(postRequest({ html: fullDoc }), ctxFor());
+  assert.equal(res.status, 200);
+  assert.equal(res.body.mutated, false);
+  assert.match(res.body.normalizedHtmlBody as string, /<div class="page"><<Ho_ten>><\/div>/);
+  assert.doesNotMatch(res.body.normalizedHtmlBody as string, /<!DOCTYPE/i);
+  assert.match(res.body.normalizedPrintCss as string, /\.a\{color:red\}/);
+  assert.match(res.body.analysisHash as string, /^[0-9a-f]{64}$/);
+  assert.deepEqual(res.body.externalResourceWarnings, []);
+  assert.deepEqual(res.body.normalizationWarnings, []);
+});
+
+test("ai-analyze (H2): external <link rel=stylesheet> in a pasted full document is reported, never fetched", async () => {
+  const { POST } = makeContext();
+  const fullDoc = `<html><head><link rel="stylesheet" href="https://cdn.example.com/x.css"></head><body><<Ho_ten>></body></html>`;
+  const res = await POST(postRequest({ html: fullDoc }), ctxFor());
+  assert.equal(res.status, 200);
+  const warnings = res.body.externalResourceWarnings as { code: string; href?: string }[];
+  assert.equal(warnings.length, 1);
+  assert.equal(warnings[0].code, "EXTERNAL_STYLESHEET_IGNORED");
+  assert.equal(warnings[0].href, "https://cdn.example.com/x.css");
+});
+
+test("ai-analyze (H2): analysisHash is identical for two calls with the same full document, and changes when the pasted content changes", async () => {
+  const { POST: POST1 } = makeContext();
+  const { POST: POST2 } = makeContext();
+  const doc = `<html><body><<Ho_ten>></body></html>`;
+  const res1 = await POST1(postRequest({ html: doc }), ctxFor());
+  const res2 = await POST2(postRequest({ html: doc }), ctxFor());
+  assert.equal(res1.body.analysisHash, res2.body.analysisHash);
+
+  const { POST: POST3 } = makeContext();
+  const res3 = await POST3(postRequest({ html: `<html><body><<Ho_ten>><<Ngay_sinh>></body></html>` }), ctxFor());
+  assert.notEqual(res1.body.analysisHash, res3.body.analysisHash);
 });
 
 test("ai-analyze: deterministic ordering — repeated identical calls return identical diff", async () => {
