@@ -20,6 +20,7 @@ import * as draftPreviewModule from "./draft-preview.ts";
 import * as printPreviewModule from "./print-preview.ts";
 import * as normalizerModule from "./full-document-normalizer.ts";
 import * as securityModule from "./ai-template-security.ts";
+import * as unresolvedGuardModule from "./unresolved-placeholder-guard.ts";
 
 const ROUTE_PATH = "src/app/api/document-merge/templates/[id]/versions/[versionId]/unsaved-print/route.ts";
 const routeSource = readFileSync(new URL(`../../../${ROUTE_PATH}`, import.meta.url), "utf8");
@@ -182,11 +183,12 @@ function makeContext(opts: Options = {}): Context {
             }),
             renderCanonicalDocument: (snapshot: { htmlBody: string; templateId: string; templateVersion: number; printCss: string | null }) => {
               renderCalls.push({ templateVersion: snapshot.templateVersion, htmlBody: snapshot.htmlBody, printCss: snapshot.printCss });
+              const unreplaced = [...new Set([...snapshot.htmlBody.matchAll(/<<\s*([^>]+?)\s*>>/g)].map((m) => m[1]))];
               return {
                 html: `<!DOCTYPE html><html><body>${snapshot.htmlBody}</body></html>`,
-                unreplaced: [],
+                unreplaced,
                 missingFields: [],
-                valid: true,
+                valid: unreplaced.length === 0,
                 templateId: snapshot.templateId,
                 templateVersion: snapshot.templateVersion,
                 printCss: snapshot.printCss,
@@ -210,6 +212,8 @@ function makeContext(opts: Options = {}): Context {
           return normalizerModule;
         case "@/lib/document-merge/ai-template-security":
           return securityModule;
+        case "@/lib/document-merge/unresolved-placeholder-guard":
+          return unresolvedGuardModule;
         default:
           throw new Error(`Unexpected require("${id}") — route must not depend on this module.`);
       }
@@ -325,6 +329,25 @@ test("unsaved-print: response headers mark this as the UNSAVED_HTML_PREVIEW prin
   const headers = (res as unknown as { headers: Record<string, string> }).headers;
   assert.equal(headers["x-print-mode"], "UNSAVED_HTML_PREVIEW");
   assert.equal(headers["x-print-document"], "unsaved-preview");
+});
+
+test("DEFECT A FIX / print parity: a genuinely unmapped placeholder produces a prominent red warning banner in the print toolbar", async () => {
+  const ctx = makeContext();
+  const rawHtml = `<html><body><<Ho_ten>></body></html>`;
+  const res = await ctx.POST(jsonRequest({ applicationId: "app-1", rawHtml }), params());
+  assert.equal(res.status, 200);
+  const body = (res as unknown as { body: string }).body;
+  assert.match(body, /<div class="pt-warning">/);
+  assert.match(body, /còn 1 trường chưa được thay thế/);
+});
+
+test("DEFECT A FIX: a fully-resolved print view has no warning banner element", async () => {
+  const ctx = makeContext();
+  const rawHtml = `<html><body>Ho ten: JA VALUE</body></html>`;
+  const res = await ctx.POST(jsonRequest({ applicationId: "app-1", rawHtml }), params());
+  assert.equal(res.status, 200);
+  const body = (res as unknown as { body: string }).body;
+  assert.doesNotMatch(body, /<div class="pt-warning">/);
 });
 
 test("unsaved-print: route is nodejs runtime + force-dynamic and exposes POST only", () => {

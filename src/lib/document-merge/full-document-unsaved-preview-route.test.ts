@@ -27,6 +27,7 @@ import * as draftPreviewModule from "./draft-preview.ts";
 import * as normalizerModule from "./full-document-normalizer.ts";
 import * as securityModule from "./ai-template-security.ts";
 import * as analysisHashModule from "./analysis-hash.ts";
+import * as unresolvedGuardModule from "./unresolved-placeholder-guard.ts";
 
 const ROUTE_PATH = "src/app/api/document-merge/templates/[id]/versions/[versionId]/unsaved-preview/route.ts";
 const routeSource = readFileSync(new URL(`../../../${ROUTE_PATH}`, import.meta.url), "utf8");
@@ -175,11 +176,17 @@ function makeContext(opts: Options = {}): Context {
             }),
             renderCanonicalDocument: (snapshot: { htmlBody: string; templateId: string; templateVersion: number; printCss: string | null }) => {
               renderCalls.push({ templateVersion: snapshot.templateVersion, htmlBody: snapshot.htmlBody, printCss: snapshot.printCss });
+              // Mirrors the REAL renderer's contract for this stub: whatever
+              // <<...>> survives is "unreplaced" — since this stub does not
+              // actually substitute, every placeholder literally present in
+              // htmlBody is reported (genuine substitution is proven
+              // end-to-end elsewhere, in unsaved-preview-resolution.test.ts).
+              const unreplaced = [...new Set([...snapshot.htmlBody.matchAll(/<<\s*([^>]+?)\s*>>/g)].map((m) => m[1]))];
               return {
                 html: `<!DOCTYPE html><html><body>${snapshot.htmlBody}</body></html>`,
-                unreplaced: [],
+                unreplaced,
                 missingFields: [],
-                valid: true,
+                valid: unreplaced.length === 0,
                 templateId: snapshot.templateId,
                 templateVersion: snapshot.templateVersion,
                 printCss: snapshot.printCss,
@@ -203,6 +210,8 @@ function makeContext(opts: Options = {}): Context {
           return securityModule;
         case "@/lib/document-merge/analysis-hash":
           return analysisHashModule;
+        case "@/lib/document-merge/unresolved-placeholder-guard":
+          return unresolvedGuardModule;
         default:
           throw new Error(`Unexpected require("${id}") — route must not depend on this module.`);
       }
@@ -360,6 +369,28 @@ test("template without active mapping -> 422 (never renders raw placeholders)", 
   assert.equal(res.status, 422);
   assert.equal(res.body.code, "MAPPING_MISSING");
   assert.equal(ctx.renderCalls.length, 0);
+});
+
+test("DEFECT A FIX: a genuinely unmapped placeholder surfaces a clear, non-null unresolvedPlaceholderWarning naming it", async () => {
+  const ctx = makeContext();
+  const rawHtml = `<html><body><<Ho_ten>> <<Nam_thue>></body></html>`;
+  const res = await ctx.POST(requestFor({ applicationId: "app-1", rawHtml }), params());
+  assert.equal(res.status, 200);
+  assert.match(String(res.body.unresolvedPlaceholderWarning), /còn 2 trường chưa được thay thế/);
+  assert.match(String(res.body.unresolvedPlaceholderWarning), /<<Ho_ten>>/);
+  assert.match(String(res.body.unresolvedPlaceholderWarning), /<<Nam_thue>>/);
+  // The literal tags are STILL present in renderedHtml (never silently hidden) —
+  // the warning is an ADDITIONAL clear signal, not a replacement for the render.
+  assert.match(String(res.body.renderedHtml), /<<Ho_ten>>/);
+});
+
+test("DEFECT A FIX: a fully-resolved preview has unresolvedPlaceholderWarning === null", async () => {
+  const ctx = makeContext();
+  // No <<...>> tokens at all in the stub's echoed body -> nothing unresolved.
+  const rawHtml = `<html><body>Ho ten: JA VALUE</body></html>`;
+  const res = await ctx.POST(requestFor({ applicationId: "app-1", rawHtml }), params());
+  assert.equal(res.status, 200);
+  assert.equal(res.body.unresolvedPlaceholderWarning, null);
 });
 
 test("route is nodejs runtime + force-dynamic and exposes POST only", () => {

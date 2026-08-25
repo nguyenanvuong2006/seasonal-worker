@@ -44,15 +44,38 @@ function attrValue(token: Extract<HtmlToken, { type: "open-tag" }>, name: string
  * Extract the canonical body content + all <style> block text + external
  * stylesheet warnings from a raw pasted string. Never fetches anything.
  */
+/** A candidate <body>...</body> extraction boundary (end === null means unterminated -> runs to EOF). */
+interface BodySpan {
+  start: number;
+  end: number | null;
+}
+
+/**
+ * FIX (Phase 14 / Defect: "49 removed, 0 added" anomaly) — a malformed AI
+ * response can contain an early, EMPTY <body></body> pair (e.g. a stray
+ * duplicated wrapper) before the REAL content, itself wrapped in a SECOND
+ * <body> tag. The naive "first <body> open, first </body> after it" rule
+ * then extracts nothing — every placeholder in the real content silently
+ * vanishes from the analyzed "current" body, which the diff engine
+ * correctly (but confusingly, from an empty body) reports as 100% REMOVED.
+ * Collecting every candidate span and preferring the first NON-EMPTY one
+ * fixes this while staying identical for the common cases: a single
+ * well-formed <body>, a bare fragment (no span at all), an unterminated
+ * <body> (one span, used regardless of emptiness), and two well-formed,
+ * both-non-empty <body> tags (first one still wins, unchanged).
+ */
+function isBlank(value: string): boolean {
+  return value.trim().length === 0;
+}
+
 export function normalizeFullHtmlDocument(raw: string): NormalizedDocument {
   const input = raw ?? "";
   const tokens = tokenizeHtml(input);
   const warnings: NormalizationWarning[] = [];
 
   const styleChunks: string[] = [];
-  let bodyOpenCount = 0;
-  let bodyStart: number | null = null;
-  let bodyEnd: number | null = null;
+  const bodySpans: BodySpan[] = [];
+  let pendingBodyStart: number | null = null;
 
   for (const token of tokens) {
     if (token.type === "raw-text" && token.tagName === "style") {
@@ -72,27 +95,37 @@ export function normalizeFullHtmlDocument(raw: string): NormalizedDocument {
       continue;
     }
     if (token.type === "open-tag" && token.name === "body" && !token.selfClosing) {
-      bodyOpenCount += 1;
-      // Only the FIRST <body> tag defines the extraction boundary — a second
-      // one (malformed input) is counted for the warning below but ignored
-      // for boundary purposes.
-      if (bodyStart === null) bodyStart = token.end;
+      // A new <body> open while a previous one is still unterminated
+      // (malformed/nested) closes that previous span right here — at this
+      // tag's START, so the new tag's own text is never swallowed into the
+      // span being closed — rather than silently extending it past this tag.
+      if (pendingBodyStart !== null) {
+        bodySpans.push({ start: pendingBodyStart, end: token.start });
+      }
+      pendingBodyStart = token.end;
       continue;
     }
     if (token.type === "close-tag" && token.name === "body") {
-      // The FIRST </body> AFTER the first <body> closes the boundary.
-      if (bodyStart !== null && bodyEnd === null && token.start >= bodyStart) bodyEnd = token.start;
+      if (pendingBodyStart !== null) {
+        bodySpans.push({ start: pendingBodyStart, end: token.start });
+        pendingBodyStart = null;
+      }
       continue;
     }
   }
+  if (pendingBodyStart !== null) {
+    bodySpans.push({ start: pendingBodyStart, end: null });
+  }
 
   let htmlBody: string;
-  if (bodyStart !== null) {
-    htmlBody = input.slice(bodyStart, bodyEnd ?? input.length);
-    if (bodyOpenCount > 1) {
+  if (bodySpans.length > 0) {
+    const spanText = (span: BodySpan) => input.slice(span.start, span.end ?? input.length);
+    const chosen = bodySpans.find((span) => !isBlank(spanText(span))) ?? bodySpans[0];
+    htmlBody = spanText(chosen);
+    if (bodySpans.length > 1) {
       warnings.push({
         code: "MULTIPLE_BODY_TAGS_FOUND",
-        message: "Phát hiện nhiều hơn 1 thẻ <body> — đã dùng thẻ <body> đầu tiên.",
+        message: "Phát hiện nhiều hơn 1 thẻ <body> — đã dùng nội dung <body> đầu tiên KHÔNG rỗng.",
       });
     }
   } else {

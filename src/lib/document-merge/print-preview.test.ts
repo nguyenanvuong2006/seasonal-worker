@@ -186,3 +186,36 @@ test("injectPrintTooling reports the version & mapping-free safety note in the t
   assert.ok(out.includes("v8 (PUBLISHED)"));
   assert.ok(out.includes("Không tạo job, không ghi DB, không publish."));
 });
+
+/* -------------------------------------------------------------------- *
+ * DEFECT A FIX (Phase 4/11) — unresolved-placeholder warning in the
+ * print toolbar. Shared with unsaved-preview's JSON field via the SAME
+ * unresolved-placeholder-guard.ts module (print parity).
+ * ------------------------------------------------------------------- */
+
+test("injectPrintTooling with no `warning` renders no warning banner element (unchanged default behavior)", () => {
+  const out = injectPrintTooling(RENDERED_HTML, {
+    templateName: "Giấy đăng ký tập nghề", version: 8, versionStatus: "PUBLISHED",
+  });
+  assert.doesNotMatch(out, /<div class="pt-warning">/);
+});
+
+test("injectPrintTooling with `warning` set renders a prominent banner carrying the exact text", () => {
+  const out = injectPrintTooling(RENDERED_HTML, {
+    templateName: "Giấy đăng ký tập nghề",
+    version: 10,
+    versionStatus: "DRAFT · CHƯA LƯU",
+    warning: "⚠ CẢNH BÁO: còn 2 trường chưa được thay thế — xem chi tiết trong bản xem trước trước khi in.",
+  });
+  assert.match(out, /<div class="pt-warning">/);
+  assert.match(out, /còn 2 trường chưa được thay thế/);
+});
+
+test("injectPrintTooling escapes the warning text (defence in depth against injected markup)", () => {
+  const out = injectPrintTooling(RENDERED_HTML, {
+    templateName: "T", version: 1, versionStatus: "DRAFT",
+    warning: `<script>evil()</script>`,
+  });
+  assert.doesNotMatch(out, /<script>evil\(\)<\/script>/);
+  assert.match(out, /&lt;script&gt;/);
+});

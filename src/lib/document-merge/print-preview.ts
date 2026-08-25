@@ -37,6 +37,15 @@ export interface PrintToolingMeta {
   versionStatus: string;
   fullName?: string | null | undefined;
   cccd?: string | null | undefined;
+  /**
+   * H2 fix (Defect A / Phase 4/11) — when set, a prominent red line is added
+   * to the toolbar so the operator never prints/saves a PDF that still has
+   * unresolved placeholders without seeing why. Build this with
+   * buildUnresolvedPlaceholderTitle() (unresolved-placeholder-guard.ts) —
+   * the SAME module unsaved-preview uses, so Preview and Print never diverge
+   * on this signal (print parity).
+   */
+  warning?: string | null | undefined;
 }
 
 /** True when a preview has actually been produced (so only then may we print it). */
@@ -153,6 +162,15 @@ const PRINT_TOOLBAR_CSS = `
   text-decoration: none;
 }
 .print-toolbar .pt-btn-primary { background: #10b981; border-color: #10b981; color: #04231a; }
+.print-toolbar .pt-warning {
+  width: 100%;
+  margin-top: 6px;
+  padding: 6px 10px;
+  border-radius: 6px;
+  background: #7f1d1d;
+  color: #fecaca;
+  font-weight: 700;
+}
 @media print {
   .print-toolbar, .print-toolbar * { display: none !important; }
 }
@@ -210,6 +228,7 @@ export function injectPrintTooling(
   <div class="pt-actions">
     <button type="button" class="pt-btn pt-btn-primary" id="pt-print-btn">In / Lưu PDF</button>
   </div>
+  ${meta.warning ? `<div class="pt-warning">${escapeAttr(meta.warning)}</div>` : ""}
 </div>`;
   const style = `<style>${PRINT_TOOLBAR_CSS}</style>`;
 

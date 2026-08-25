@@ -76,6 +76,7 @@ import {
 import { normalizeFullHtmlDocument } from "@/lib/document-merge/full-document-normalizer";
 import { analyzeTemplateSecurity } from "@/lib/document-merge/ai-template-security";
 import { computeAnalysisHash } from "@/lib/document-merge/analysis-hash";
+import { buildUnresolvedPlaceholderWarning } from "@/lib/document-merge/unresolved-placeholder-guard";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -274,6 +275,12 @@ export async function POST(request: Request, context: RouteContext) {
       unreplaced: rendered.unreplaced,
       missingFields: rendered.missingFields,
       valid: rendered.valid,
+      // DEFECT A FIX: a literal <<placeholder>> can only survive rendering
+      // when it has genuinely NO mapping row (see
+      // unsaved-preview-resolution.test.ts) — this is never silently hidden;
+      // it is turned into ONE clear, reusable operator-facing message shared
+      // with unsaved-print (Phase 3/4).
+      unresolvedPlaceholderWarning: buildUnresolvedPlaceholderWarning(rendered.unreplaced),
       pageCount: countCanonicalPages(rendered.html),
       note: "Bản xem trước CHƯA LƯU — chưa ghi vào bản nháp, chưa xuất bản. Bấm “Áp dụng vào bản nháp” để lưu nội dung này.",
     });

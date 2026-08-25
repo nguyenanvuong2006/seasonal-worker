@@ -187,6 +187,8 @@ type UnsavedPreviewResult = {
   unreplaced: string[];
   missingFields: string[];
   valid: boolean;
+  /** H2 fix (Defect A): clear, non-null when >=1 placeholder has no mapping at all. */
+  unresolvedPlaceholderWarning: string | null;
 };
 
 const asPreviewString = (value: unknown, fallback = ""): string => (typeof value === "string" ? value : fallback);
@@ -211,6 +213,7 @@ function normalizeUnsavedPreview(raw: unknown): UnsavedPreviewResult {
     unreplaced: [...new Set([...asPreviewArray(data.unreplaced), ...asPreviewArray(data.unresolved)])],
     missingFields: asPreviewArray(data.missingFields),
     valid: data.valid === true,
+    unresolvedPlaceholderWarning: typeof data.unresolvedPlaceholderWarning === "string" ? data.unresolvedPlaceholderWarning : null,
   };
 }
 
@@ -408,6 +411,12 @@ export function DraftVersionEditorModal({
         if (res.status === 409 && data.code === "STALE_ANALYSIS") {
           throw new Error(`${data.error} (bấm "Phân tích thay đổi" lại rồi thử áp dụng.)`);
         }
+        // Phase 15/16: explain the SINGLE-DRAFT guard clearly — which
+        // versions are ambiguous and what to do — never a bare generic error.
+        if (res.status === 409 && data.code === "SINGLE_DRAFT_AMBIGUOUS") {
+          const versions = Array.isArray(data.draftVersions) ? data.draftVersions.map((v: unknown) => `v${v}`).join(", ") : "";
+          throw new Error(`${data.error}${versions ? ` (${versions})` : ""} ${data.action ?? ""}`.trim());
+        }
         throw new Error(data.error || "Không áp dụng được vào bản nháp.");
       }
       setApplied(true);
@@ -539,7 +548,9 @@ export function DraftVersionEditorModal({
               />
               <span className="mt-1 block font-normal text-[10px] text-slate-400">
                 Không cần tự tách HTML/CSS — hệ thống tự nhận diện thẻ {"<body>"} và các thẻ {"<style>"}. Stylesheet
-                ngoài (link href) sẽ bị bỏ qua và báo trong kết quả phân tích, không bao giờ được tải về.
+                ngoài (link href) sẽ bị bỏ qua và báo trong kết quả phân tích, không bao giờ được tải về. Mặc định mọi
+                bảng (table) có đường viền — nếu cần một bảng chỉ để canh layout (ví dụ khối chữ ký/ngày ký) KHÔNG
+                hiển thị viền, thêm <code>class=&quot;no-border&quot;</code> vào thẻ {"<table>"} đó.
               </span>
             </label>
           ) : (
@@ -611,6 +622,12 @@ export function DraftVersionEditorModal({
 
           {analyzeResult && (
             <div className="mt-3 grid gap-2 text-[11px]">
+              {/* PHASE 14 UI FIX: make the comparison base explicit and unmistakable
+                  — "removed" means "present in THIS base version, absent from what
+                  you just pasted", not an error in what you pasted. */}
+              <p className="rounded-lg border border-indigo-200 bg-indigo-50 px-2 py-1.5 font-semibold text-indigo-800">
+                So sánh với: bản v{analyzeResult.baseVersion} ({analyzeResult.baseVersionStatus}) — “bị xóa” nghĩa là có trong v{analyzeResult.baseVersion} nhưng KHÔNG có trong nội dung bạn vừa dán.
+              </p>
               <div className="flex flex-wrap gap-3">
                 <span className={`inline-flex items-center gap-1 font-semibold ${analyzeResult.htmlValid ? "text-emerald-700" : "text-red-700"}`}>
                   {analyzeResult.htmlValid ? <CheckCircle2 className="h-3.5 w-3.5" /> : <AlertTriangle className="h-3.5 w-3.5" />}
@@ -769,6 +786,16 @@ export function DraftVersionEditorModal({
 
             {previewResult && (
               <div className="mt-3 space-y-2">
+                {/* DEFECT A FIX — a literal <<placeholder>> can only survive rendering
+                    when it has NO mapping at all (never "optional and blank", which
+                    already resolves to an empty string). Never silently show this as
+                    if it were a successful, complete preview. */}
+                {previewResult.unresolvedPlaceholderWarning && (
+                  <div className="flex items-start gap-2 rounded-lg border border-red-300 bg-red-50 p-2.5 text-[11px] font-semibold text-red-800">
+                    <AlertTriangle className="mt-0.5 h-3.5 w-3.5 shrink-0" />
+                    <p>{previewResult.unresolvedPlaceholderWarning}</p>
+                  </div>
+                )}
                 <dl className="grid grid-cols-2 gap-x-4 gap-y-1 rounded-lg bg-white p-2 text-[11px] sm:grid-cols-4">
                   <dt className="text-slate-400">Ứng viên</dt>
                   <dd className="truncate font-semibold text-slate-800">{previewResult.fullName ?? "—"}</dd>
@@ -779,10 +806,9 @@ export function DraftVersionEditorModal({
                     {previewResult.mappingSummary.mapped}/{previewResult.mappingSummary.total}
                   </dd>
                 </dl>
-                {(previewResult.unreplaced.length > 0 || previewResult.missingFields.length > 0) && (
+                {previewResult.missingFields.length > 0 && (
                   <p className="rounded-lg bg-amber-50 p-2 text-[11px] text-amber-800">
-                    Placeholder chưa thay / trường thiếu:{" "}
-                    {[...new Set([...previewResult.unreplaced, ...previewResult.missingFields])].join(", ")}
+                    Trường bắt buộc còn thiếu dữ liệu (ứng viên chưa có giá trị): {previewResult.missingFields.join(", ")}
                   </p>
                 )}
                 <iframe
