@@ -18,7 +18,12 @@
  */
 
 import { useEffect, useRef, useState } from "react";
-import { AlertTriangle, Eye, FileText, Printer, Search, X } from "lucide-react";
+import { AlertTriangle, Eye, ExternalLink, FileText, Printer, Search, X } from "lucide-react";
+import {
+  buildPrintViewUrl,
+  canOpenPrintView,
+  hasRenderedPreview,
+} from "@/lib/document-merge/print-preview";
 
 export type PreviewVersionTarget = {
   id: string;
@@ -105,6 +110,9 @@ export function DraftVersionPreviewModal({
   const [rendering, setRendering] = useState(false);
   const [result, setResult] = useState<PreviewResult | null>(null);
   const [problem, setProblem] = useState<Problem | null>(null);
+  /** The candidate id that produced the CURRENT renderedHtml (so the print view
+   *  never drifts if the operator picks another candidate without re-rendering). */
+  const [previewApplicationId, setPreviewApplicationId] = useState<string | null>(null);
   const searchSeq = useRef(0);
 
   const isDraft = version.status !== "PUBLISHED";
@@ -162,6 +170,7 @@ export function DraftVersionPreviewModal({
       }
       if (!res.ok) {
         setResult(null);
+        setPreviewApplicationId(null);
         setProblem({
           code: asString(data.code, `HTTP_${res.status}`),
           error: asString(data.error, "Không tạo được bản xem trước."),
@@ -171,8 +180,12 @@ export function DraftVersionPreviewModal({
         return;
       }
       setResult(normalize(data));
+      // Remember WHICH candidate produced this preview so the print view always
+      // targets the document actually on screen, never a later selection.
+      setPreviewApplicationId(selected.id);
     } catch (error) {
       setResult(null);
+      setPreviewApplicationId(null);
       setProblem({
         code: "NETWORK_ERROR",
         error: "Không kết nối được tới API xem trước.",
@@ -184,13 +197,32 @@ export function DraftVersionPreviewModal({
   };
 
   /**
-   * TEST PDF — uses the browser's own print dialog on the already rendered
-   * preview iframe. It creates no server job, no stored file, no dispatch:
-   * the operator can "Save as PDF" locally for visual sign-off only.
+   * TEST PDF / MỞ BẢN IN.
+   *
+   * The previous implementation called `iframe.contentWindow.print()` on a
+   * `sandbox="allow-modals"` iframe. A sandboxed iframe is an OPAQUE origin, so
+   * the parent page is cross-origin relative to it and `print()` is NOT a
+   * cross-origin-allowed member — the call throws a SecurityError and the button
+   * has no effect. Chrome Android also does not reliably print a nested iframe.
+   *
+   * So both buttons open a TOP-LEVEL print-only view in a new tab: the browser
+   * owns that document and `window.print()` opens the native dialog for the
+   * Preview document on desktop Chrome AND Chrome Android, never the admin page.
+   * The view is the SAME canonical renderer output the iframe displays (the
+   * print route re-renders it from the explicit templateId/versionId/applicationId),
+   * and it performs no DB write, no job, no publish, no Google Docs fallback.
+   *
+   * - "In / Lưu PDF TEST" opens the view with autoprint → dialog opens directly.
+   * - "Mở bản in" opens the same view without autoprint → operator taps the
+   *   in-page "In / Lưu PDF" button (the mobile-safe fallback if the browser
+   *   blocks programmatic print on load).
    */
-  const printPreview = () => {
-    const frame = document.getElementById("draft-preview-frame") as HTMLIFrameElement | null;
-    frame?.contentWindow?.print();
+  const openPrintView = (autoPrint: boolean) => {
+    if (!canOpenPrintView(result, previewApplicationId, selected?.id)) return;
+    const applicationId = previewApplicationId ?? selected?.id;
+    if (!applicationId) return;
+    const url = buildPrintViewUrl({ templateId, versionId: version.id, applicationId, autoPrint });
+    window.open(url, "_blank", "noopener,noreferrer");
   };
 
   return (
@@ -301,15 +333,25 @@ export function DraftVersionPreviewModal({
             >
               <FileText className="h-3.5 w-3.5" /> {rendering ? "Đang dựng bản xem trước..." : "Tạo bản xem trước"}
             </button>
-            {result?.renderedHtml && (
-              <button
-                type="button"
-                onClick={printPreview}
-                title="Mở hộp thoại in của trình duyệt trên chính bản xem trước (In / Lưu thành PDF TEST). Không tạo file trên máy chủ, không tạo job."
-                className="inline-flex items-center gap-1.5 rounded-lg border border-slate-300 px-3 py-2 text-xs font-semibold text-slate-700 hover:bg-slate-50"
-              >
-                <Printer className="h-3.5 w-3.5" /> In / Lưu PDF TEST
-              </button>
+            {hasRenderedPreview(result) && (
+              <>
+                <button
+                  type="button"
+                  onClick={() => openPrintView(true)}
+                  title="Mở hộp thoại in của trình duyệt trên chính bản xem trước (In / Lưu thành PDF TEST). Không tạo file trên máy chủ, không tạo job, không publish."
+                  className="inline-flex items-center gap-1.5 rounded-lg border border-slate-300 px-3 py-2 text-xs font-semibold text-slate-700 hover:bg-slate-50"
+                >
+                  <Printer className="h-3.5 w-3.5" /> In / Lưu PDF TEST
+                </button>
+                <button
+                  type="button"
+                  onClick={() => openPrintView(false)}
+                  title="Mở một bản in (print-only view) của chính bản xem trước trong tab riêng, rồi dùng Print / Save as PDF của trình duyệt. Đây là đường chạy tin cậy trên Chrome Android và khi trình duyệt chặn print tự động."
+                  className="inline-flex items-center gap-1.5 rounded-lg border border-slate-300 px-3 py-2 text-xs font-semibold text-slate-600 hover:bg-slate-50"
+                >
+                  <ExternalLink className="h-3.5 w-3.5" /> Mở bản in
+                </button>
+              </>
             )}
             {selected && (
               <span className="text-[11px] text-slate-500">
