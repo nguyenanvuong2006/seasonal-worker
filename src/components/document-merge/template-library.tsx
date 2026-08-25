@@ -749,6 +749,24 @@ export function TemplateLibrary({ onSelectForMerge }: { onSelectForMerge: (templ
                             >
                               Xem trước
                             </button>
+                            {/* TẢI GÓI AI (H1) — export template.html + print.css +
+                                template-manifest.json + README-AI.md dạng ZIP, để đưa
+                                cho AI chỉnh sửa. READ-ONLY — chỉ GET, không ghi DB. */}
+                            <button
+                              type="button"
+                              disabled={versionAction !== null}
+                              onClick={() =>
+                                window.open(
+                                  `/api/document-merge/templates/${editing?.id}/versions/${version.id}/ai-export`,
+                                  "_blank",
+                                  "noopener",
+                                )
+                              }
+                              title="Tải gói HTML/CSS + manifest + README-AI của phiên bản này để đưa cho AI chỉnh sửa. Không thay đổi gì trên hệ thống."
+                              className="rounded-lg border border-violet-300 bg-violet-50 px-2.5 py-1.5 text-[10px] font-bold text-violet-700 hover:bg-violet-100 disabled:opacity-50"
+                            >
+                              Tải gói AI
+                            </button>
                             {/* TẠO BẢN NHÁP TỪ PHIÊN BẢN NÀY — clone sang version
                                 DRAFT mới; version nguồn bất biến, không publish. */}
                             <button
