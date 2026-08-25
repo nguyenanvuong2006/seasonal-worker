@@ -20,6 +20,7 @@
 import { and, desc, eq } from "drizzle-orm";
 import { db } from "@/db";
 import {
+  documentHistory,
   mergeTemplateFields,
   mergeTemplates,
   mergeTemplateVersions,
@@ -269,6 +270,111 @@ export async function updateTemplateVersionDraft(
     );
   }
   return updated;
+}
+
+export type DeletedTemplateDraftVersion = {
+  id: string;
+  templateId: string;
+  version: number;
+};
+
+/**
+ * XOÁ VĨNH VIỄN một version DRAFT ("Xóa bản nháp"). Server-side guard —
+ * KHÔNG chỉ chặn ở UI, API gọi trực tiếp cũng bị từ chối:
+ *
+ *   - Version phải tồn tại và thuộc template (id + templateId cross-check
+ *     trong WHERE — versionId của template khác bị coi là 404).
+ *   - CHỈ DRAFT được DELETE: version được RE-READ trong transaction ngay
+ *     trước DELETE, và câu DELETE mang điều kiện status='DRAFT' ngay trong
+ *     WHERE — nếu row rồi DRAFT giữa SELECT và DELETE (race publish/archive)
+ *     thì 0 row khớp → fail closed 409. PUBLISHED/ARCHIVED luôn bị từ chối
+ *     (immutable, cần giữ để truy vết).
+ *   - REFERENCE GUARD (fail closed, audit FK trước khi DELETE):
+ *       · document_history lưu (template_id, template_version) dạng GIÁ TRỊ
+ *         (không FK) — bản ghi tuân thủ/retention phải BẢO TOÀN tuyệt đối.
+ *         Về lý thuyết DRAFT không bao giờ tạo document_history (chỉ version
+ *         PUBLISHED mới được batch render; không có đường chuyển PUBLISHED →
+ *         DRAFT), nhưng nếu dữ liệu bất thường khiến 1 row history trỏ tới
+ *         version này → chặn xoá, trả lỗi operator-friendly, KHÔNG cascade
+ *         mù quáng.
+ *       · merge_jobs / merge_job_records chỉ tham chiếu template_id (không
+ *         có cột version); nội dung render được snapshot VÀO job metadata lúc
+ *         tạo job và CHỈ từ version PUBLISHED (async-job.ts lọc
+ *         status='PUBLISHED'; worker render từ snapshot, không tra lại bảng
+ *         versions) → DRAFT không thể bị job nào tham chiếu. Không cần check
+ *         thêm ở đây — đây là kết luận audit, không phải giả định.
+ *   - FK audit: KHÔNG bảng nào có FK trỏ TỚI merge_template_versions.id
+ *     (grep toàn bộ schema.sql + migrations: 0 REFERENCES). DELETE chỉ đụng
+ *     đúng 1 row version; không trigger/cascade nào khác tồn tại.
+ *
+ * BẤT BIẾN SAU DELETE (có regression test):
+ *   - KHÔNG đổi merge_templates.current_published_version (0 ghi vào
+ *     merge_templates) → version PUBLISHED hiện hành bất động.
+ *   - KHÔNG đụng merge_template_fields — mapping là TEMPLATE-GLOBAL, dùng
+ *     chung cho mọi version; xoá 1 DRAFT không xoá mapping rows dùng chung.
+ *   - KHÔNG đụng mapping_snapshot / PDF / job / history của version khác
+ *     (DELETE duy nhất scope theo id của version mục tiêu).
+ *   - KHÔNG publish, KHÔNG archive version nào khác.
+ */
+export async function deleteTemplateDraftVersion(
+  templateId: string,
+  versionId: string,
+): Promise<DeletedTemplateDraftVersion> {
+  return db.transaction(async (tx) => {
+    // RE-READ version trong transaction ngay trước DELETE (fail closed nếu
+    // status đã đổi so với lúc UI tải danh sách).
+    const [target] = await tx
+      .select()
+      .from(mergeTemplateVersions)
+      .where(and(eq(mergeTemplateVersions.id, versionId), eq(mergeTemplateVersions.templateId, templateId)))
+      .limit(1);
+
+    if (!target) {
+      throw new TemplateVersionError("Template version not found", 404);
+    }
+    if (target.status !== TEMPLATE_VERSION_STATUS.DRAFT) {
+      throw new TemplateVersionError(
+        `Chỉ version DRAFT mới được xoá vĩnh viễn. Version v${target.version} hiện đang ${target.status} và là bất biến (phải giữ lại để truy vết).`,
+        409,
+      );
+    }
+
+    // Reference guard — document_history là bản ghi tuân thủ, phải bảo toàn.
+    const [usedInHistory] = await tx
+      .select({ id: documentHistory.id })
+      .from(documentHistory)
+      .where(and(eq(documentHistory.templateId, templateId), eq(documentHistory.templateVersion, target.version)))
+      .limit(1);
+    if (usedInHistory) {
+      throw new TemplateVersionError(
+        `Version v${target.version} đã từng được dùng để tạo tài liệu (có trong document_history) — không thể xoá vĩnh viễn vì sẽ làm mất khả năng truy vết. Hãy Lưu trữ (Archive) thay vì Xoá.`,
+        409,
+      );
+    }
+
+    // DELETE với guard status='DRAFT' NGAY trong WHERE — dù row rồi DRAFT
+    // giữa SELECT và DELETE (admin khác vừa publish/archive) thì 0 row khớp,
+    // fail closed, KHÔNG xoá nhầm.
+    const [deleted] = await tx
+      .delete(mergeTemplateVersions)
+      .where(
+        and(
+          eq(mergeTemplateVersions.id, versionId),
+          eq(mergeTemplateVersions.templateId, templateId),
+          eq(mergeTemplateVersions.status, TEMPLATE_VERSION_STATUS.DRAFT),
+        ),
+      )
+      .returning({ id: mergeTemplateVersions.id, version: mergeTemplateVersions.version });
+
+    if (!deleted) {
+      throw new TemplateVersionError(
+        "Version đã không còn là DRAFT (có thể vừa được publish/archive) — không thể xoá. Hãy tải lại danh sách phiên bản.",
+        409,
+      );
+    }
+
+    return { id: deleted.id, templateId, version: deleted.version };
+  });
 }
 
 /** Lấy danh sách version (mới nhất trước). */
