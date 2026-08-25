@@ -22,6 +22,17 @@
  * Reuses the EXISTING PR #102 Template Diff Engine (buildTemplateDiff) via
  * ai-template-analyze.ts's analyzeTemplate() — this route does not
  * reimplement or fork that logic, only supplies it with DB-loaded data.
+ *
+ * H2 — FULL DOCUMENT PASTE: `html` may now be either a bare fragment (the H1
+ * "advanced" split html+css mode — unchanged behavior) OR a COMPLETE HTML
+ * document (<!DOCTYPE>/<html>/<style>/<body>) as returned verbatim by an AI.
+ * full-document-analyze.ts's analyzeFullDocument() (itself a thin wrapper
+ * around the UNCHANGED normalizer + analyzeTemplate()) normalizes either
+ * shape into {htmlBody, printCss} before analysis runs, and adds
+ * normalizationWarnings/externalResourceWarnings/analysisHash to the
+ * response. The response also now carries the normalized body/CSS — this is
+ * what an Apply call must be able to reproduce (via the same analysisHash)
+ * before it is allowed to write to the DRAFT.
  */
 
 import { NextResponse } from "next/server";
@@ -31,7 +42,7 @@ import { db } from "@/db";
 import { mergeTemplateFields, mergeTemplates, mergeTemplateVersions } from "@/db/schema";
 import { TEMPLATE_VERSION_STATUS } from "@/lib/document-merge/template-versions";
 import { selectPreviewMappings, toPreviewMappings } from "@/lib/document-merge/draft-preview";
-import { analyzeTemplate } from "@/lib/document-merge/ai-template-analyze";
+import { analyzeFullDocument } from "@/lib/document-merge/full-document-analyze";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -112,9 +123,9 @@ export async function POST(request: Request, context: RouteContext) {
   // SAME live non-orphaned fields, independent of the pasted HTML.
   const currentMappings = toPreviewMappings(fields);
 
-  const result = analyzeTemplate({
-    html,
-    printCss,
+  const result = analyzeFullDocument({
+    rawHtml: html,
+    explicitCss: printCss,
     baseHtml: baseVersion.htmlBody ?? "",
     baseMappings,
     currentMappings,
@@ -143,5 +154,10 @@ export async function POST(request: Request, context: RouteContext) {
       needsAttention: result.diff.needsAttention,
       items: Object.fromEntries(result.diff.items),
     },
+    normalizedHtmlBody: result.normalizedHtmlBody,
+    normalizedPrintCss: result.normalizedPrintCss,
+    normalizationWarnings: result.normalizationWarnings,
+    externalResourceWarnings: result.externalResourceWarnings,
+    analysisHash: result.analysisHash,
   });
 }
