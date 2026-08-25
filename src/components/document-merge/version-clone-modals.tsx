@@ -314,6 +314,34 @@ function normalizeUnsavedPreview(raw: unknown): UnsavedPreviewResult {
 }
 
 /**
+ * H3 — "Thông tin tạo tài liệu" (Signing Context, Phase 16). Same shape and
+ * once-per-render-call contract as draft-version-preview-modal.tsx.
+ */
+type SigningContextInput = {
+  signingDate: string;
+  signingLocation: string;
+  documentDate: string;
+  receivedDate: string;
+  receivedBy: string;
+};
+
+const EMPTY_SIGNING_CONTEXT_INPUT: SigningContextInput = {
+  signingDate: "",
+  signingLocation: "",
+  documentDate: "",
+  receivedDate: "",
+  receivedBy: "",
+};
+
+function signingContextBody(input: SigningContextInput): Record<string, string> {
+  const body: Record<string, string> = {};
+  for (const [key, value] of Object.entries(input)) {
+    if (value.trim()) body[key] = value.trim();
+  }
+  return body;
+}
+
+/**
  * Hidden-form-submit-to-new-tab (Phase 8): a top-level `window.print()` opens
  * the native dialog reliably (desktop + Chrome Android); `iframe.contentWindow
  * .print()` on a sandboxed iframe throws (opaque cross-origin). Pasted HTML
@@ -382,6 +410,9 @@ export function DraftVersionEditorModal({
   const [previewing, setPreviewing] = useState(false);
   const [previewResult, setPreviewResult] = useState<UnsavedPreviewResult | null>(null);
   const [previewError, setPreviewError] = useState<string | null>(null);
+  const [signingContext, setSigningContext] = useState<SigningContextInput>(EMPTY_SIGNING_CONTEXT_INPUT);
+  /** The Signing Context that actually produced the CURRENT previewResult (for print parity). */
+  const [renderedSigningContext, setRenderedSigningContext] = useState<SigningContextInput>(EMPTY_SIGNING_CONTEXT_INPUT);
   const candidateSearchSeq = useRef(0);
 
   // H2 — Áp dụng vào bản nháp (Phase 9). Explicit confirmation, never automatic.
@@ -460,7 +491,12 @@ export function DraftVersionEditorModal({
         {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ applicationId: selectedCandidate.id, rawHtml: effectiveHtml, explicitCss: effectiveCss }),
+          body: JSON.stringify({
+            applicationId: selectedCandidate.id,
+            rawHtml: effectiveHtml,
+            explicitCss: effectiveCss,
+            signingContext: signingContextBody(signingContext),
+          }),
         },
       );
       const data = await res.json();
@@ -469,6 +505,9 @@ export function DraftVersionEditorModal({
         throw new Error(data.error || "Không tạo được bản xem trước.");
       }
       setPreviewResult(normalizeUnsavedPreview(data));
+      // Same contract as the persisted preview modal: freeze the Signing
+      // Context that actually produced this render, for print parity below.
+      setRenderedSigningContext(signingContext);
     } catch (err) {
       setPreviewError(err instanceof Error ? err.message : "Không tạo được bản xem trước.");
     } finally {
@@ -485,6 +524,7 @@ export function DraftVersionEditorModal({
         rawHtml: effectiveHtml,
         explicitCss: effectiveCss,
         autoprint: autoPrint ? "1" : "0",
+        ...signingContextBody(renderedSigningContext),
       },
     );
   };
@@ -841,6 +881,50 @@ export function DraftVersionEditorModal({
                 ))}
               </ul>
             )}
+
+            <div className="mt-3 rounded-lg border border-slate-200 bg-white p-2.5">
+              <p className="text-[11px] font-semibold text-slate-600">Thông tin tạo tài liệu (Signing Context)</p>
+              <p className="mt-0.5 text-[10px] text-slate-400">
+                Dùng cho các placeholder tính toán (Ngay_ky_day/month/year, Dia_diem_ky, Nam_thue, Ngay_tiep_nhan...).
+              </p>
+              <div className="mt-2 grid grid-cols-2 gap-2 sm:grid-cols-4">
+                <label className="text-[10px] text-slate-500">
+                  Ngày ký
+                  <input
+                    type="date"
+                    value={signingContext.signingDate}
+                    onChange={(e) => setSigningContext((s) => ({ ...s, signingDate: e.target.value }))}
+                    className="mt-0.5 w-full rounded border border-slate-200 px-2 py-1.5 text-xs"
+                  />
+                </label>
+                <label className="text-[10px] text-slate-500">
+                  Địa điểm ký
+                  <input
+                    value={signingContext.signingLocation}
+                    onChange={(e) => setSigningContext((s) => ({ ...s, signingLocation: e.target.value }))}
+                    placeholder="vd: Đà Lạt"
+                    className="mt-0.5 w-full rounded border border-slate-200 px-2 py-1.5 text-xs"
+                  />
+                </label>
+                <label className="text-[10px] text-slate-500">
+                  Ngày tiếp nhận
+                  <input
+                    type="date"
+                    value={signingContext.receivedDate}
+                    onChange={(e) => setSigningContext((s) => ({ ...s, receivedDate: e.target.value }))}
+                    className="mt-0.5 w-full rounded border border-slate-200 px-2 py-1.5 text-xs"
+                  />
+                </label>
+                <label className="text-[10px] text-slate-500">
+                  Người tiếp nhận
+                  <input
+                    value={signingContext.receivedBy}
+                    onChange={(e) => setSigningContext((s) => ({ ...s, receivedBy: e.target.value }))}
+                    className="mt-0.5 w-full rounded border border-slate-200 px-2 py-1.5 text-xs"
+                  />
+                </label>
+              </div>
+            </div>
 
             <div className="mt-3 flex flex-wrap items-center gap-2">
               <button

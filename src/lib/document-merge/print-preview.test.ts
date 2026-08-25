@@ -104,6 +104,25 @@ test("buildPrintViewUrl URL-encodes templateId/versionId/applicationId", () => {
   assert.ok(!url.includes("autoprint="), "no autoprint when autoPrint is false");
 });
 
+test("H3: buildPrintViewUrl carries signingContext fields as query params, trims blanks", () => {
+  const url = buildPrintViewUrl({
+    templateId: "tpl-1",
+    versionId: "ver-8",
+    applicationId: "app-42",
+    signingContext: { signingDate: "2026-08-26", signingLocation: "Đà Lạt", receivedDate: "", receivedBy: null as unknown as string },
+  });
+  assert.ok(url.includes("signingDate=2026-08-26"), url);
+  assert.ok(url.includes(`signingLocation=${encodeURIComponent("Đà Lạt").replace(/%20/g, "+")}`) || url.includes("signingLocation=%C4%90%C3%A0+L%E1%BA%A1t"), url);
+  assert.ok(!url.includes("receivedDate="), "blank fields must not be added as query params");
+  assert.ok(!url.includes("receivedBy="), "null fields must not be added as query params");
+});
+
+test("buildPrintViewUrl omits signingContext params entirely when not supplied", () => {
+  const url = buildPrintViewUrl({ templateId: "tpl-1", versionId: "ver-8", applicationId: "app-42" });
+  assert.ok(!url.includes("signingDate="));
+  assert.ok(!url.includes("signingLocation="));
+});
+
 test("buildPrintViewUrl uses the canonical route path constant", () => {
   assert.match(PRINT_VIEW_PATH, /\/api\/document-merge\/templates\/:templateId\/versions\/:versionId\/print/);
   assert.ok(!PRINT_VIEW_PATH.includes("current_published_version"));

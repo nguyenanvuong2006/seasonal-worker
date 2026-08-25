@@ -47,6 +47,7 @@ import { injectPrintTooling } from "@/lib/document-merge/print-preview";
 import { normalizeFullHtmlDocument } from "@/lib/document-merge/full-document-normalizer";
 import { analyzeTemplateSecurity } from "@/lib/document-merge/ai-template-security";
 import { buildUnresolvedPlaceholderTitle } from "@/lib/document-merge/unresolved-placeholder-guard";
+import { parseSigningContext } from "@/lib/document-merge/signing-context";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -82,15 +83,37 @@ ${action ? `<p><small>${action}</small></p>` : ""}
   return new NextResponse(html, { status, headers: { "content-type": "text/html; charset=utf-8", "cache-control": "no-store" } });
 }
 
-async function readRequestFields(request: Request): Promise<{ applicationId: string; rawHtml: string; explicitCss: string; autoPrint: boolean }> {
+const SIGNING_CONTEXT_FIELD_NAMES = [
+  "signingDate",
+  "signingLocation",
+  "documentDate",
+  "receivedDate",
+  "receivedBy",
+  "signingLatitude",
+  "signingLongitude",
+  "signingLocationCapturedAt",
+] as const;
+
+async function readRequestFields(
+  request: Request,
+): Promise<{ applicationId: string; rawHtml: string; explicitCss: string; autoPrint: boolean; signingContext: Record<string, unknown> }> {
   const contentType = request.headers.get("content-type") ?? "";
   if (contentType.includes("application/json")) {
     const body = (await request.json().catch(() => ({}))) as Record<string, unknown>;
+    const signingContext: Record<string, unknown> = {};
+    if (body.signingContext !== null && typeof body.signingContext === "object" && !Array.isArray(body.signingContext)) {
+      Object.assign(signingContext, body.signingContext);
+    } else {
+      for (const name of SIGNING_CONTEXT_FIELD_NAMES) {
+        if (name in body) signingContext[name] = body[name];
+      }
+    }
     return {
       applicationId: typeof body.applicationId === "string" ? body.applicationId.trim() : "",
       rawHtml: typeof body.rawHtml === "string" ? body.rawHtml : "",
       explicitCss: typeof body.explicitCss === "string" ? body.explicitCss : "",
       autoPrint: body.autoprint === "1" || body.autoprint === true,
+      signingContext,
     };
   }
   const form = await request.formData();
@@ -98,11 +121,17 @@ async function readRequestFields(request: Request): Promise<{ applicationId: str
     const value = form.get(name);
     return typeof value === "string" ? value : "";
   };
+  const signingContext: Record<string, unknown> = {};
+  for (const name of SIGNING_CONTEXT_FIELD_NAMES) {
+    const value = form.get(name);
+    if (typeof value === "string") signingContext[name] = value;
+  }
   return {
     applicationId: get("applicationId").trim(),
     rawHtml: get("rawHtml"),
     explicitCss: get("explicitCss"),
     autoPrint: get("autoprint") === "1",
+    signingContext,
   };
 }
 
@@ -114,11 +143,17 @@ export async function POST(request: Request, context: RouteContext) {
 
   try {
     const { id: templateId, versionId } = await context.params;
-    const { applicationId, rawHtml, explicitCss, autoPrint } = await readRequestFields(request);
+    const { applicationId, rawHtml, explicitCss, autoPrint, signingContext: rawSigningContext } = await readRequestFields(request);
 
     if (!applicationId) {
       return errorPage(400, "Thiếu ứng viên", "Không xác định được ứng viên để dựng bản in.", "Quay lại bản xem trước, chọn ứng viên rồi mở lại bản in.");
     }
+
+    const signingContextResult = parseSigningContext(rawSigningContext);
+    if (!signingContextResult.ok) {
+      return errorPage(400, "Ngữ cảnh ký không hợp lệ", signingContextResult.error, "Kiểm tra lại Ngày ký / Địa điểm ký rồi thử lại.");
+    }
+    const signingContext = signingContextResult.context;
     if (!rawHtml.trim()) {
       return errorPage(400, "Thiếu nội dung HTML", "Không có nội dung HTML để dựng bản in.", "Dán nội dung HTML rồi thử lại.");
     }
@@ -182,6 +217,8 @@ export async function POST(request: Request, context: RouteContext) {
       currentDate: new Date(),
       mergeIndex: 1,
       mergeCount: 1,
+      // H3 — resolved ONCE for this print render, mirroring the preview routes.
+      signingContext,
     };
 
     const virtualVersion = { ...version, htmlBody: normalized.htmlBody, printCss: normalizedPrintCss };

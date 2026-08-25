@@ -14,6 +14,7 @@ import assert from "node:assert/strict";
 import { createFakeDb, drizzleStub, makeTable, argOf, type FakeDb, type QueryCall } from "../test-support/fake-drizzle.ts";
 import { loadModule, serverOnlyStub } from "../test-support/load-module.ts";
 import * as canonicalDocument from "./canonical-document.ts";
+import * as signingContext from "./signing-context.ts";
 
 const schemaStub = {
   dailyApplications: makeTable("daily_applications"),
@@ -62,6 +63,9 @@ async function load(
       // Real canonical module — pure logic, and the fail-closed behaviour under
       // test must be the production behaviour, not a stub.
       "./canonical-document.ts": canonicalDocument,
+      // Real signing-context module — H3's validation/freeze behaviour under
+      // test must be the production behaviour, not a stub.
+      "./signing-context.ts": signingContext,
       "./template-contract.ts": {
         validateContractRequiredMappings: () => [],
         validateTemplateContract: () => ({ valid: true, missingFromHtml: [], unknownInHtml: [], duplicateKeys: [] }),
@@ -416,6 +420,117 @@ test("createAsyncMergeJob: HTML_PDF refuses a template without a PUBLISHED HTML 
       engine: "HTML_PDF",
     }),
     /CANONICAL_TEMPLATE_NOT_PUBLISHED/,
+  );
+  assert.equal(db.calls.some((c) => c.root === "insert" && c.table === "merge_jobs"), false);
+});
+
+/* ------------------------------------------------------------------ *
+ * H3 — Signing Context is resolved ONCE and frozen into job.metadata.
+ * ------------------------------------------------------------------ */
+
+test("H3: createAsyncMergeJob freezes the supplied signingContext verbatim into metadata.signingContext", async () => {
+  const db = fixtureDb(PUBLISHED_VERSION_ROW);
+  const mod = await load(db);
+
+  await mod.createAsyncMergeJob({
+    templateId: "tpl-1",
+    autoRoute: false,
+    records: { entityType: "daily_applications", recordIds: ["app-1"] },
+    createdBy: "admin",
+    scopeDeptIds: null,
+    engine: "GOOGLE_DOCS",
+    signingContext: { signingDate: "2026-08-26", signingLocation: "Đà Lạt" },
+  });
+
+  const jobInsert = db.calls.find((c) => c.root === "insert" && c.table === "merge_jobs");
+  const values = argOf(jobInsert as QueryCall, "values") as { metadata: { signingContext: Record<string, unknown> } };
+  assert.equal(values.metadata.signingContext.signingDate, "2026-08-26");
+  assert.equal(values.metadata.signingContext.signingLocation, "Đà Lạt");
+});
+
+test("H3: createAsyncMergeJob freezes an empty (all-null) signingContext when none is supplied", async () => {
+  const db = fixtureDb(PUBLISHED_VERSION_ROW);
+  const mod = await load(db);
+
+  await mod.createAsyncMergeJob({
+    templateId: "tpl-1",
+    autoRoute: false,
+    records: { entityType: "daily_applications", recordIds: ["app-1"] },
+    createdBy: "admin",
+    scopeDeptIds: null,
+    engine: "GOOGLE_DOCS",
+  });
+
+  const jobInsert = db.calls.find((c) => c.root === "insert" && c.table === "merge_jobs");
+  const values = argOf(jobInsert as QueryCall, "values") as { metadata: { signingContext: Record<string, unknown> } };
+  assert.equal(values.metadata.signingContext.signingDate, null);
+  assert.equal(values.metadata.signingContext.signingLocation, null);
+});
+
+test("H3: createAsyncMergeJob rejects a malformed signingContext with 400 before any job is created", async () => {
+  const db = fixtureDb(PUBLISHED_VERSION_ROW);
+  const mod = await load(db);
+
+  await assert.rejects(
+    () => mod.createAsyncMergeJob({
+      templateId: "tpl-1",
+      autoRoute: false,
+      records: { entityType: "daily_applications", recordIds: ["app-1"] },
+      createdBy: "admin",
+      scopeDeptIds: null,
+      engine: "GOOGLE_DOCS",
+      signingContext: { signingDate: "not-a-date" },
+    }),
+    (error: unknown) => {
+      assert.ok(error instanceof Error);
+      assert.match(error.message, /Ngày ký/);
+      assert.equal((error as { status?: number }).status, 400);
+      return true;
+    },
+  );
+  assert.equal(db.calls.some((c) => c.root === "insert" && c.table === "merge_jobs"), false);
+});
+
+test("H3: a REQUIRED COMPUTED mapping resolving to empty (no Signing Context) blocks the job before queueing", async () => {
+  const computedField: FieldRow = {
+    templateId: "tpl-1",
+    placeholder: "Ngay_ky_day",
+    sourceType: "COMPUTED",
+    sourceEntity: null,
+    sourceField: null,
+    sourcePath: "day(SigningDate)",
+    optionValue: null,
+    formatType: null,
+    fallbackValue: null,
+    isRequired: true,
+  };
+  const db = fixtureDb(
+    { ...PUBLISHED_VERSION_ROW, htmlBody: "<p><<Ho_ten>> <<Ngay_ky_day>></p>" },
+    {},
+    [fieldRow(), computedField],
+  );
+  // NOTE: the fake html-pipeline stub above only understands sourcePath as a
+  // literal record-field lookup, so it resolves COMPUTED's sourcePath
+  // ("day(SigningDate)") to an empty string exactly as an unresolvable/absent
+  // value would — proving the required-field gate blocks it regardless of
+  // which source type produced the empty value.
+  const mod = await load(db, {}, { "app-1": { fullName: "Nguyễn Văn A" } });
+
+  await assert.rejects(
+    () => mod.createAsyncMergeJob({
+      templateId: "tpl-1",
+      autoRoute: false,
+      records: { entityType: "daily_applications", recordIds: ["app-1"] },
+      createdBy: "admin",
+      scopeDeptIds: null,
+      engine: "HTML_PDF",
+    }),
+    (error: unknown) => {
+      assert.ok(error instanceof Error);
+      assert.match(error.message, /Ngay_ky_day/);
+      assert.equal((error as { status?: number }).status, 422);
+      return true;
+    },
   );
   assert.equal(db.calls.some((c) => c.root === "insert" && c.table === "merge_jobs"), false);
 });

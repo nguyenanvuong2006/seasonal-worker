@@ -77,6 +77,7 @@ import { normalizeFullHtmlDocument } from "@/lib/document-merge/full-document-no
 import { analyzeTemplateSecurity } from "@/lib/document-merge/ai-template-security";
 import { computeAnalysisHash } from "@/lib/document-merge/analysis-hash";
 import { buildUnresolvedPlaceholderWarning } from "@/lib/document-merge/unresolved-placeholder-guard";
+import { parseSigningContext } from "@/lib/document-merge/signing-context";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -97,7 +98,7 @@ export async function POST(request: Request, context: RouteContext) {
   try {
     const { id: templateId, versionId } = await context.params;
     const body = (await request.json().catch(() => null)) as
-      | { applicationId?: unknown; rawHtml?: unknown; explicitCss?: unknown }
+      | { applicationId?: unknown; rawHtml?: unknown; explicitCss?: unknown; signingContext?: unknown }
       | null;
     if (!body || typeof body !== "object") {
       return NextResponse.json({ error: "Request body phải là JSON." }, { status: 400 });
@@ -105,6 +106,14 @@ export async function POST(request: Request, context: RouteContext) {
     const applicationId = typeof body.applicationId === "string" ? body.applicationId.trim() : "";
     const rawHtml = typeof body.rawHtml === "string" ? body.rawHtml : "";
     const explicitCss = typeof body.explicitCss === "string" ? body.explicitCss : "";
+    const signingContextResult = parseSigningContext(body.signingContext);
+    if (!signingContextResult.ok) {
+      return NextResponse.json(
+        { code: "SIGNING_CONTEXT_INVALID", error: signingContextResult.error, action: "Kiểm tra lại Ngày ký / Địa điểm ký rồi thử lại." },
+        { status: 400 },
+      );
+    }
+    const signingContext = signingContextResult.context;
 
     if (!applicationId) {
       return NextResponse.json(
@@ -221,6 +230,10 @@ export async function POST(request: Request, context: RouteContext) {
       currentDate: new Date(),
       mergeIndex: 1,
       mergeCount: 1,
+      // H3 — resolved ONCE for this unsaved Preview call, same as the
+      // persisted Preview route and exactly what Apply/a merge job would
+      // freeze — never re-derived per placeholder.
+      signingContext,
     };
 
     // VIRTUAL VERSION — the real, persisted version row with its body/CSS
@@ -267,6 +280,7 @@ export async function POST(request: Request, context: RouteContext) {
       analysisHash: computeAnalysisHash(normalized.htmlBody, normalizedPrintCss),
       renderedHtml: rendered.html,
       printCss: snapshot.printCss,
+      signingContext,
       applicationId,
       recordId: applicationId,
       fullName: typeof recordData.fullName === "string" ? recordData.fullName : undefined,

@@ -1,12 +1,19 @@
 /**
  * Document Merge Engine — Data Resolver
- * 
+ *
  * Resolve dữ liệu từ various sources để fill vào placeholders.
  * Hỗ trợ:
  * - CORE_FIELD: Trường từ database tables
  * - DYNAMIC_ANSWER: customAnswers từ form questions
  * - RELATED_FIELD: Trường từ bảng liên quan (JOIN)
- * - COMPUTED_FIELD: Giá trị tính toán
+ * - COMPUTED_FIELD: Giá trị tính toán (legacy fixed-enum computed values —
+ *   CURRENT_DATE/AGE_FROM_DOB/DATE_DAY/...; sourceField chọn loại)
+ * - COMPUTED: Safe Formula DSL V1 (H3) — sourcePath chứa MỘT biểu thức nhỏ,
+ *   ví dụ `day(SigningDate)` hay `coalesce(SigningLocation, "Đà Lạt")`, chạy
+ *   qua formula-dsl.ts (tokenize -> parse -> validate -> evaluate, KHÔNG bao
+ *   giờ eval() JS thật) đối chiếu với Signing Context (signing-context.ts).
+ *   Đây là loại NGUỒN MỚI, tách biệt với COMPUTED_FIELD ở trên — không đụng
+ *   tới semantics cũ.
  * - SYSTEM_FIELD: Thông tin hệ thống (current user, timestamp, etc.)
  * - STATIC_TEXT: Giá trị tĩnh
  * - CHECKBOX_OPTION: Checkbox option matching
@@ -15,6 +22,8 @@
 import type { MergeTemplateField } from '../../db/schema';
 import { formatValue, type FormatType } from './formatters.ts';
 import { isCheckboxMatch } from './checkbox-engine.ts';
+import { resolveFormula } from './formula-dsl.ts';
+import { toFormulaContextValues, EMPTY_SIGNING_CONTEXT, type SigningContext } from './signing-context.ts';
 
 /** Source types */
 export type SourceType =
@@ -22,6 +31,7 @@ export type SourceType =
   | 'DYNAMIC_ANSWER'
   | 'RELATED_FIELD'
   | 'COMPUTED_FIELD'
+  | 'COMPUTED'
   | 'SYSTEM_FIELD'
   | 'STATIC_TEXT'
   | 'CHECKBOX_OPTION';
@@ -62,6 +72,13 @@ export interface MergeContext {
   currentDate?: Date;
   mergeIndex?: number;
   mergeCount?: number;
+  /**
+   * H3 — deterministic Signing Context for COMPUTED (formula DSL) mappings.
+   * Resolved ONCE by the caller (Preview) or frozen ONCE at merge-job
+   * creation (async-job.ts) — never re-derived per record. See
+   * signing-context.ts for the "why" (batch determinism).
+   */
+  signingContext?: SigningContext;
   [key: string]: unknown;
 }
 
@@ -184,6 +201,41 @@ export function resolveComputedField(
 }
 
 /**
+ * Resolve COMPUTED — Safe Formula DSL V1 (H3).
+ *
+ * `field.sourcePath` holds the raw expression (e.g. `day(SigningDate)`).
+ * Runs through formula-dsl.ts's tokenize -> parse -> validate -> evaluate
+ * pipeline against the frozen Signing Context — never a live wall-clock
+ * read, never JS execution of any kind.
+ *
+ * NEVER THROWS. A syntax error, an unknown identifier, an invalid date, or
+ * a genuinely-missing Signing Context value all collapse to the field's
+ * fallbackValue (or "") — the exact same "resolve to empty, let the
+ * required-field gate decide" contract every other source type already
+ * follows (resolveCoreField, resolveComputedField, ...). This is what
+ * guarantees a computed placeholder NEVER renders as a literal
+ * `<<Ngay_ky_day>>` tag: resolveAllFields always supplies SOME string for
+ * every non-orphaned placeholder, so substitution always finds a match.
+ * A formula mistake in a REQUIRED placeholder is caught by
+ * validateRequiredFields()/the pre-queue required-field gate exactly like a
+ * missing CORE_FIELD value is (Phase 24) — the primary defense against a
+ * broken expression is validating it BEFORE save (Mapping UI "Thử công
+ * thức" -> parseFormula()), not a throw here.
+ */
+export function resolveComputedExpression(
+  field: MergeTemplateField,
+  context: MergeContext,
+): string {
+  const expression = field.sourcePath ?? '';
+  if (!expression.trim()) return field.fallbackValue ?? '';
+
+  const values = toFormulaContextValues(context.signingContext ?? EMPTY_SIGNING_CONTEXT);
+  const result = resolveFormula(expression, values);
+  if (!result.ok) return field.fallbackValue ?? '';
+  return result.value || (field.fallbackValue ?? '');
+}
+
+/**
  * Resolve CORE_FIELD hoặc DYNAMIC_ANSWER từ record data
  */
 export function resolveCoreField(
@@ -242,6 +294,8 @@ export function resolveFieldValue(
       return resolveSystemField(field, context);
     case 'COMPUTED_FIELD':
       return resolveComputedField(field, recordData, context);
+    case 'COMPUTED':
+      return resolveComputedExpression(field, context);
     case 'CHECKBOX_OPTION':
       return resolveCheckboxOption(field, recordData);
     case 'STATIC_TEXT':

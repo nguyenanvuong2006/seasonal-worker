@@ -40,6 +40,7 @@ import {
 // these tests assert, so they are NOT stubbed.
 import * as draftPreviewModule from "./draft-preview.ts";
 import * as printPreviewModule from "./print-preview.ts";
+import * as signingContextModule from "./signing-context.ts";
 
 const ROUTE_PATH = "src/app/api/document-merge/templates/[id]/versions/[versionId]/print/route.ts";
 const routeSource = readFileSync(new URL(`../../../${ROUTE_PATH}`, import.meta.url), "utf8");
@@ -138,7 +139,7 @@ type Context = {
     ctx: { params: Promise<{ id: string; versionId: string }> },
   ) => Promise<{ status: number; body: string; headers: Record<string, string> }>;
   db: FakeDb;
-  renderCalls: { templateVersion: number; mappings: { placeholder: string; sourcePath: string | null }[] }[];
+  renderCalls: { templateVersion: number; mappings: { placeholder: string; sourcePath: string | null }[]; context: Record<string, unknown> }[];
   loaderCalls: string[][];
   requiredIds: string[];
 };
@@ -232,14 +233,18 @@ function makeContext(opts: Options = {}): Context {
               formatting: input.formatting,
               allowUnpublished: Boolean(input.allowUnpublishedForVerification),
             }),
-            renderCanonicalDocument: (snapshot: {
-              htmlBody: string;
-              templateId: string;
-              templateVersion: number;
-              printCss: string | null;
-              mappings: { placeholder: string; sourcePath: string | null }[];
-            }) => {
-              renderCalls.push({ templateVersion: snapshot.templateVersion, mappings: snapshot.mappings });
+            renderCanonicalDocument: (
+              snapshot: {
+                htmlBody: string;
+                templateId: string;
+                templateVersion: number;
+                printCss: string | null;
+                mappings: { placeholder: string; sourcePath: string | null }[];
+              },
+              _recordData: unknown,
+              renderContext: Record<string, unknown>,
+            ) => {
+              renderCalls.push({ templateVersion: snapshot.templateVersion, mappings: snapshot.mappings, context: renderContext });
               return {
                 html: `<!DOCTYPE html><html><head><style>@page{size:A4;margin:12mm 12mm} .paper{width:210mm}</style></head><body>${snapshot.htmlBody}</body></html>`,
                 unreplaced: [],
@@ -264,6 +269,8 @@ function makeContext(opts: Options = {}): Context {
           return draftPreviewModule;
         case "@/lib/document-merge/print-preview":
           return printPreviewModule;
+        case "@/lib/document-merge/signing-context":
+          return signingContextModule;
         default:
           throw new Error(`Unexpected require("${id}") — print route must not depend on this module.`);
       }
@@ -545,6 +552,39 @@ test("print: uses the SHARED canonical renderer + the SAME record loader as the 
     /renderCanonicalDocument[\s\S]*from "\.\.\/\.\.\/src\/lib\/document-merge\/canonical-document\.ts"/,
     "worker must import the SAME renderCanonicalDocument",
   );
+});
+
+/* ------------------------------------------------------------------ *
+ * H3 — Signing Context via query params.
+ * ------------------------------------------------------------------ */
+
+test("H3: signingContext query params reach the renderer", async () => {
+  const ctx = makeContext();
+  const res = await ctx.GET(
+    requestFor({ applicationId: "app-1", signingDate: "2026-08-26", signingLocation: "Đà Lạt" }),
+    params(),
+  );
+  assert.equal(res.status, 200);
+  const signingContext = ctx.renderCalls[0].context.signingContext as Record<string, unknown>;
+  assert.equal(signingContext.signingDate, "2026-08-26");
+  assert.equal(signingContext.signingLocation, "Đà Lạt");
+});
+
+test("H3: signingContext defaults to an empty (all-null) context when no query params supplied", async () => {
+  const ctx = makeContext();
+  const res = await ctx.GET(requestFor({ applicationId: "app-1" }), params());
+  assert.equal(res.status, 200);
+  const signingContext = ctx.renderCalls[0].context.signingContext as Record<string, unknown>;
+  assert.equal(signingContext.signingDate, null);
+  assert.equal(signingContext.signingLocation, null);
+});
+
+test("H3: a malformed signingContext query param is rejected with 400, never rendered", async () => {
+  const ctx = makeContext();
+  const res = await ctx.GET(requestFor({ applicationId: "app-1", signingDate: "not-a-date" }), params());
+  assert.equal(res.status, 400);
+  assert.equal(ctx.renderCalls.length, 0);
+  assert.match(res.body, /Ngày ký/);
 });
 
 test("route is nodejs runtime + force-dynamic and exposes GET only (no POST side effects)", () => {

@@ -6,6 +6,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { createFakeDb, drizzleStub, makeTable, type FakeDb } from "../../src/lib/test-support/fake-drizzle.ts";
 import { loadModule } from "../../src/lib/test-support/load-module.ts";
+import * as signingContextModule from "../../src/lib/document-merge/signing-context.ts";
 
 const schemaStub = {
   dailyApplications: makeTable("daily_applications"),
@@ -42,7 +43,12 @@ type WorkerModule = {
   runJob: (jobId: string) => Promise<{ processed: number; failed: number }>;
 };
 
-async function loadWorker(db: FakeDb, spies: QueueSpies): Promise<WorkerModule> {
+async function loadWorker(
+  db: FakeDb,
+  spies: QueueSpies,
+  renderCalls: Record<string, unknown>[] = [],
+  records: Map<string, Record<string, unknown>> = new Map(),
+): Promise<WorkerModule> {
   const queueStub = {
     allRemainingItemsAwaitingRetry: async () => spies.allRemainingItemsAwaitingRetry,
     claimItems: async () => {
@@ -115,8 +121,16 @@ async function loadWorker(db: FakeDb, spies: QueueSpies): Promise<WorkerModule> 
           }
           return { ...raw, mappings: [], formatting: {} };
         },
-        renderCanonicalDocument: () => ({ valid: true, html: "", missingFields: [], unreplaced: [] }),
+        renderCanonicalDocument: (
+          _snapshot: unknown,
+          _recordData: unknown,
+          context: Record<string, unknown>,
+        ) => {
+          renderCalls.push(context);
+          return { valid: true, html: "", missingFields: [], unreplaced: [] };
+        },
       },
+      "../../src/lib/document-merge/signing-context.ts": signingContextModule,
       "../../src/lib/storage/index.ts": { getStorageProvider: () => ({ name: "local", put: async () => ({ key: "k", url: "u" }) }) },
       "../../src/lib/document-merge/filename.ts": {
         buildIndividualPdfFilename: () => "file.pdf",
@@ -129,7 +143,7 @@ async function loadWorker(db: FakeDb, spies: QueueSpies): Promise<WorkerModule> 
       "../../src/lib/document-merge/batch-finalize.ts": {
         finalizeBatchOutputs: async () => ({ pdfUrl: "p", zipUrl: "z", pdfBytes: 1, zipBytes: 1, itemCount: 1 }),
       },
-      "../../src/lib/document-merge/record-loader.ts": { loadDailyApplicationRecords: async () => new Map() },
+      "../../src/lib/document-merge/record-loader.ts": { loadDailyApplicationRecords: async () => records },
       "../../src/lib/document-merge/db-identity.ts": { getDbIdentity: async () => ({}) },
       "../../src/lib/document-merge/queue-diagnostics.ts": {
         runClaimProbe: async () => ({}),
@@ -195,6 +209,77 @@ test("HTML worker: true unclaimable QUEUED item still becomes CLAIM_STALLED", as
   assert.equal((stall.args[1] as { errorCode?: string }).errorCode, "CLAIM_STALLED");
   const finalize = spies.finalizeJob.calls.find((call) => call.args[1] === "FAILED");
   assert.ok(finalize, "true stall must finalize the job FAILED");
+});
+
+test("H3: runJob threads the frozen job.metadata.signingContext into every item's render context, unchanged", async () => {
+  const db = createFakeDb({
+    respond: (call) =>
+      call.root === "select" && call.table === "merge_jobs"
+        ? [
+            htmlJob({
+              metadata: {
+                templates: { "tpl-1": { htmlBody: "<p><<Ho_ten>></p>", templateVersion: 1 } },
+                renderedAt: "2026-08-23T00:00:00.000Z",
+                signingContext: { signingDate: "2026-08-26", signingLocation: "Đà Lạt" },
+              },
+            }),
+          ]
+        : [],
+  });
+  const spies = makeQueueSpies();
+  spies.claimItems.results = [
+    [{ id: "item-1", templateId: "tpl-1", sortOrder: 1, sourceRecordId: "app-1", mergeJobId: "job-1", attemptCount: 0 }],
+    [],
+  ];
+  spies.recomputeJobProgress.results = [{ queued: 0, completed: 0, failed: 1, terminal: true }];
+  const renderCalls: Record<string, unknown>[] = [];
+  const records = new Map([["app-1", { id: "app-1", fullName: "Nguyễn Văn A" }]]);
+  const worker = await loadWorker(db, spies, renderCalls, records);
+
+  // No Chromium in this unit test — the item still reaches renderCanonicalDocument
+  // (HTML_RENDER stage) before failing later at CHROMIUM_LAUNCH/PDF_RENDER, which
+  // is exactly the point at which the render context (and its signingContext) is
+  // built and passed — proving the wiring without needing a real browser.
+  await worker.runJob("job-1");
+
+  assert.equal(renderCalls.length, 1);
+  const signingContext = renderCalls[0].signingContext as Record<string, unknown>;
+  assert.equal(signingContext.signingDate, "2026-08-26");
+  assert.equal(signingContext.signingLocation, "Đà Lạt");
+  // Never a per-record wall-clock read: the value came verbatim from the
+  // frozen job metadata, not from `new Date()`/geolocation inside the worker.
+});
+
+test("H3: runJob defaults to an empty (all-null) signingContext when job.metadata carries none (older jobs)", async () => {
+  const db = createFakeDb({
+    respond: (call) =>
+      call.root === "select" && call.table === "merge_jobs"
+        ? [
+            htmlJob({
+              metadata: {
+                templates: { "tpl-1": { htmlBody: "<p><<Ho_ten>></p>", templateVersion: 1 } },
+                renderedAt: "2026-08-23T00:00:00.000Z",
+              },
+            }),
+          ]
+        : [],
+  });
+  const spies = makeQueueSpies();
+  spies.claimItems.results = [
+    [{ id: "item-1", templateId: "tpl-1", sortOrder: 1, sourceRecordId: "app-1", mergeJobId: "job-1", attemptCount: 0 }],
+    [],
+  ];
+  spies.recomputeJobProgress.results = [{ queued: 0, completed: 0, failed: 1, terminal: true }];
+  const renderCalls: Record<string, unknown>[] = [];
+  const records = new Map([["app-1", { id: "app-1", fullName: "Nguyễn Văn A" }]]);
+  const worker = await loadWorker(db, spies, renderCalls, records);
+
+  await worker.runJob("job-1");
+
+  assert.equal(renderCalls.length, 1);
+  const signingContext = renderCalls[0].signingContext as Record<string, unknown>;
+  assert.equal(signingContext.signingDate, null);
+  assert.equal(signingContext.signingLocation, null);
 });
 
 test("HTML worker: GOOGLE_DOCS jobs are rejected — legacy path stays untouched", async () => {
