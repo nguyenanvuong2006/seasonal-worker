@@ -33,6 +33,7 @@
  */
 
 import type { CanonicalMapping } from "./canonical-document.ts";
+import { parseSigningContext, type SigningContext } from "./signing-context.ts";
 
 /** Response `mode` discriminator for the draft/version preview branch. */
 export const DRAFT_PREVIEW_MODE = "DRAFT_VERSION_PREVIEW" as const;
@@ -168,16 +169,23 @@ export function summarizePreviewMappings(mappings: readonly CanonicalMapping[]):
 /** Validated, server-trusted preview request. */
 export interface DraftPreviewRequest {
   applicationId: string;
+  /**
+   * H3 — deterministic Signing Context for COMPUTED (formula DSL) mappings.
+   * Optional: an absent/empty body resolves to EMPTY_SIGNING_CONTEXT (every
+   * field null), so a computed placeholder resolves to "" like any other
+   * unmapped/missing field — never a hard preview failure.
+   */
+  signingContext: SigningContext;
 }
 
 export interface DraftPreviewRequestError {
-  code: "APPLICATION_REQUIRED";
+  code: "APPLICATION_REQUIRED" | "SIGNING_CONTEXT_INVALID";
   error: string;
   action: string;
 }
 
 /**
- * Validate the ONLY client-controlled input of the preview call.
+ * Validate the client-controlled input of the preview call.
  *
  * templateId / versionId are NOT taken from the body: they come from the route
  * path and are re-checked against the database (version must belong to the
@@ -199,5 +207,12 @@ export function parseDraftPreviewRequest(
       },
     };
   }
-  return { ok: true, value: { applicationId } };
+  const signingContextResult = parseSigningContext(raw.signingContext);
+  if (!signingContextResult.ok) {
+    return {
+      ok: false,
+      error: { code: "SIGNING_CONTEXT_INVALID", error: signingContextResult.error, action: "Kiểm tra lại Ngày ký / Địa điểm ký rồi thử lại." },
+    };
+  }
+  return { ok: true, value: { applicationId, signingContext: signingContextResult.context } };
 }

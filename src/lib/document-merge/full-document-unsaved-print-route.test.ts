@@ -21,6 +21,7 @@ import * as printPreviewModule from "./print-preview.ts";
 import * as normalizerModule from "./full-document-normalizer.ts";
 import * as securityModule from "./ai-template-security.ts";
 import * as unresolvedGuardModule from "./unresolved-placeholder-guard.ts";
+import * as signingContextModule from "./signing-context.ts";
 
 const ROUTE_PATH = "src/app/api/document-merge/templates/[id]/versions/[versionId]/unsaved-print/route.ts";
 const routeSource = readFileSync(new URL(`../../../${ROUTE_PATH}`, import.meta.url), "utf8");
@@ -95,7 +96,7 @@ type Options = {
 type Context = {
   POST: (req: Request, ctx: { params: Promise<{ id: string; versionId: string }> }) => Promise<Response>;
   db: FakeDb;
-  renderCalls: { templateVersion: number; htmlBody: string; printCss: string | null }[];
+  renderCalls: { templateVersion: number; htmlBody: string; printCss: string | null; context: Record<string, unknown> }[];
   loaderCalls: string[][];
   requiredIds: string[];
 };
@@ -181,8 +182,12 @@ function makeContext(opts: Options = {}): Context {
               mappings: input.mappings,
               formatting: input.formatting,
             }),
-            renderCanonicalDocument: (snapshot: { htmlBody: string; templateId: string; templateVersion: number; printCss: string | null }) => {
-              renderCalls.push({ templateVersion: snapshot.templateVersion, htmlBody: snapshot.htmlBody, printCss: snapshot.printCss });
+            renderCanonicalDocument: (
+              snapshot: { htmlBody: string; templateId: string; templateVersion: number; printCss: string | null },
+              _recordData: unknown,
+              renderContext: Record<string, unknown>,
+            ) => {
+              renderCalls.push({ templateVersion: snapshot.templateVersion, htmlBody: snapshot.htmlBody, printCss: snapshot.printCss, context: renderContext });
               const unreplaced = [...new Set([...snapshot.htmlBody.matchAll(/<<\s*([^>]+?)\s*>>/g)].map((m) => m[1]))];
               return {
                 html: `<!DOCTYPE html><html><body>${snapshot.htmlBody}</body></html>`,
@@ -214,6 +219,8 @@ function makeContext(opts: Options = {}): Context {
           return securityModule;
         case "@/lib/document-merge/unresolved-placeholder-guard":
           return unresolvedGuardModule;
+        case "@/lib/document-merge/signing-context":
+          return signingContextModule;
         default:
           throw new Error(`Unexpected require("${id}") — route must not depend on this module.`);
       }
@@ -355,4 +362,63 @@ test("unsaved-print: route is nodejs runtime + force-dynamic and exposes POST on
   assert.match(routeCode, /export const dynamic = "force-dynamic"/);
   assert.match(routeCode, /export async function POST\(/);
   assert.doesNotMatch(routeCode, /export async function (GET|PUT|PATCH|DELETE)\(/);
+});
+
+test("H3: a JSON body's signingContext reaches the renderer", async () => {
+  const ctx = makeContext();
+  const res = await ctx.POST(
+    jsonRequest({
+      applicationId: "app-1",
+      rawHtml: "<<Ho_ten>>",
+      signingContext: { signingDate: "2026-08-26", signingLocation: "Đà Lạt" },
+    }),
+    params(),
+  );
+  assert.equal(res.status, 200);
+  assert.equal(ctx.renderCalls.length, 1);
+  const signingContext = ctx.renderCalls[0].context.signingContext as Record<string, unknown>;
+  assert.equal(signingContext.signingDate, "2026-08-26");
+  assert.equal(signingContext.signingLocation, "Đà Lạt");
+});
+
+test("H3: a real <form> submission's flat signingContext fields reach the renderer", async () => {
+  const ctx = makeContext();
+  const res = await ctx.POST(
+    formRequest({
+      applicationId: "app-1",
+      rawHtml: "<<Ho_ten>>",
+      signingDate: "2026-08-26",
+      signingLocation: "Đà Lạt",
+      receivedDate: "2026-08-20",
+      receivedBy: "Nguyễn Văn A",
+    }),
+    params(),
+  );
+  assert.equal(res.status, 200);
+  const signingContext = ctx.renderCalls[0].context.signingContext as Record<string, unknown>;
+  assert.equal(signingContext.signingDate, "2026-08-26");
+  assert.equal(signingContext.signingLocation, "Đà Lạt");
+  assert.equal(signingContext.receivedDate, "2026-08-20");
+  assert.equal(signingContext.receivedBy, "Nguyễn Văn A");
+});
+
+test("H3: signingContext defaults to an empty (all-null) context when omitted", async () => {
+  const ctx = makeContext();
+  const res = await ctx.POST(jsonRequest({ applicationId: "app-1", rawHtml: "<<Ho_ten>>" }), params());
+  assert.equal(res.status, 200);
+  const signingContext = ctx.renderCalls[0].context.signingContext as Record<string, unknown>;
+  assert.equal(signingContext.signingDate, null);
+  assert.equal(signingContext.signingLocation, null);
+});
+
+test("H3: a malformed signingContext is rejected with a 400 error page, never rendered", async () => {
+  const ctx = makeContext();
+  const res = await ctx.POST(
+    jsonRequest({ applicationId: "app-1", rawHtml: "<<Ho_ten>>", signingContext: { signingDate: "not-a-date" } }),
+    params(),
+  );
+  assert.equal(res.status, 400);
+  assert.equal(ctx.renderCalls.length, 0);
+  const body = (res as unknown as { body: string }).body;
+  assert.match(body, /Ngày ký/);
 });

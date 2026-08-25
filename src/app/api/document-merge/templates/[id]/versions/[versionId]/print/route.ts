@@ -71,6 +71,18 @@ import {
   isUnpublishedPreview,
 } from "@/lib/document-merge/draft-preview";
 import { injectPrintTooling } from "@/lib/document-merge/print-preview";
+import { parseSigningContext } from "@/lib/document-merge/signing-context";
+
+const SIGNING_CONTEXT_QUERY_PARAMS = [
+  "signingDate",
+  "signingLocation",
+  "documentDate",
+  "receivedDate",
+  "receivedBy",
+  "signingLatitude",
+  "signingLongitude",
+  "signingLocationCapturedAt",
+] as const;
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -128,6 +140,17 @@ export async function GET(request: Request, context: RouteContext) {
     const url = new URL(request.url);
     const applicationId = url.searchParams.get("applicationId")?.trim() ?? "";
     const autoPrint = url.searchParams.get("autoprint") === "1";
+
+    const rawSigningContext: Record<string, string> = {};
+    for (const name of SIGNING_CONTEXT_QUERY_PARAMS) {
+      const value = url.searchParams.get(name);
+      if (value !== null) rawSigningContext[name] = value;
+    }
+    const signingContextResult = parseSigningContext(rawSigningContext);
+    if (!signingContextResult.ok) {
+      return errorPage(400, true, "Ngữ cảnh ký không hợp lệ", signingContextResult.error, "Kiểm tra lại Ngày ký / Địa điểm ký rồi thử lại.");
+    }
+    const signingContext = signingContextResult.context;
 
     if (!applicationId) {
       return errorPage(
@@ -227,6 +250,8 @@ export async function GET(request: Request, context: RouteContext) {
       currentDate: new Date(),
       mergeIndex: 1,
       mergeCount: 1,
+      // H3 — resolved ONCE for this print render, mirroring the preview routes.
+      signingContext,
     };
 
     // Build the SAME immutable snapshot shape a job freezes and render it with

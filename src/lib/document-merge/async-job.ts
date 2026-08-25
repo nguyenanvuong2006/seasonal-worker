@@ -39,6 +39,7 @@ import { extractUniquePlaceholders } from "./placeholder-extractor.ts";
 import { loadDailyApplicationRecords } from "./record-loader.ts";
 import { resolveHtmlFieldValues } from "./html-pipeline.ts";
 import { validateRequiredFields, type MergeContext } from "./data-resolver.ts";
+import { parseSigningContext, toJsonSigningContext } from "./signing-context.ts";
 import type { MergeTemplateField } from "@/db/schema";
 
 export interface AsyncJobRecordsInput {
@@ -56,6 +57,13 @@ export interface CreateAsyncJobInput {
   mergeMode?: "ONE_DOCUMENT" | "INDIVIDUAL_DOCUMENTS";
   dispatchToApplicant?: boolean;
   engine?: DocumentMergeEngine;
+  /**
+   * H3 — Signing Context (Phase 3/17): resolved ONCE by the caller and
+   * frozen into this job's immutable metadata below. Every record in this
+   * job — 1 or 130 — reads the SAME frozen context; the worker NEVER calls
+   * `new Date()` to derive a signing date per record (see worker/src/index.ts).
+   */
+  signingContext?: unknown;
 }
 
 export interface CreateAsyncJobResult {
@@ -99,6 +107,14 @@ export async function createAsyncMergeJob(input: CreateAsyncJobInput): Promise<C
   if (!recordIds?.length) {
     throw new AsyncJobValidationError("Cần chọn ít nhất 1 hồ sơ để merge.", 400);
   }
+
+  // H3 — Signing Context is resolved and validated ONCE here, before any
+  // record is planned, then frozen verbatim into job.metadata below (Phase 3).
+  const signingContextResult = parseSigningContext(input.signingContext);
+  if (!signingContextResult.ok) {
+    throw new AsyncJobValidationError(signingContextResult.error, 400);
+  }
+  const signingContext = signingContextResult.context;
   if (entityType !== "daily_applications") {
     throw new AsyncJobValidationError(
       `Async engine (Phase 1) chỉ hỗ trợ daily_applications; nhận được "${entityType}".`,
@@ -310,7 +326,7 @@ export async function createAsyncMergeJob(input: CreateAsyncJobInput): Promise<C
         .filter((item) => requiredByTemplate.has(item.templateId))
         .map((item) => item.recordId);
       const recordData = await loadDailyApplicationRecords([...new Set(recordsNeedingCheck)]);
-      const context: MergeContext = { currentUserId: input.createdBy, currentDate: new Date() };
+      const context: MergeContext = { currentUserId: input.createdBy, currentDate: new Date(), signingContext };
 
       const missingByPlaceholder = new Map<string, number>();
       for (const item of planned) {
@@ -368,6 +384,10 @@ export async function createAsyncMergeJob(input: CreateAsyncJobInput): Promise<C
         // Freeze the merge clock as well as HTML/CSS/mappings. A retry cannot
         // change signature/computed dates or pagination after the job exists.
         renderedAt: new Date().toISOString(),
+        // H3 — the SAME frozen Signing Context every record in this job reads
+        // for COMPUTED placeholders (Ngay_ky_day/month/year, Dia_diem_ky, ...).
+        // Never re-derived per record; the worker only ever consumes this.
+        signingContext: toJsonSigningContext(signingContext),
         // IMMUTABLE CANONICAL SNAPSHOT — the single document definition this
         // job will ever render. Both Preview and the Cloud Run HTML_PDF worker
         // read exactly this object via renderCanonicalDocument(); neither may

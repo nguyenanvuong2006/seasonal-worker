@@ -146,7 +146,7 @@ type Context = {
     ctx: { params: Promise<{ id: string; versionId: string }> },
   ) => Promise<{ status: number; body: Record<string, unknown> }>;
   db: FakeDb;
-  renderCalls: { templateVersion: number; mappings: { placeholder: string; sourcePath: string | null }[] }[];
+  renderCalls: { templateVersion: number; mappings: { placeholder: string; sourcePath: string | null }[]; context: Record<string, unknown> }[];
   loaderCalls: string[][];
   requiredIds: string[];
 };
@@ -230,14 +230,18 @@ function makeContext(opts: Options = {}): Context {
               formatting: input.formatting,
               allowUnpublished: Boolean(input.allowUnpublishedForVerification),
             }),
-            renderCanonicalDocument: (snapshot: {
-              htmlBody: string;
-              templateId: string;
-              templateVersion: number;
-              printCss: string | null;
-              mappings: { placeholder: string; sourcePath: string | null }[];
-            }) => {
-              renderCalls.push({ templateVersion: snapshot.templateVersion, mappings: snapshot.mappings });
+            renderCanonicalDocument: (
+              snapshot: {
+                htmlBody: string;
+                templateId: string;
+                templateVersion: number;
+                printCss: string | null;
+                mappings: { placeholder: string; sourcePath: string | null }[];
+              },
+              _recordData: unknown,
+              context: Record<string, unknown>,
+            ) => {
+              renderCalls.push({ templateVersion: snapshot.templateVersion, mappings: snapshot.mappings, context });
               return {
                 html: `<!DOCTYPE html><html><body>${snapshot.htmlBody}</body></html>`,
                 unreplaced: [],
@@ -567,6 +571,34 @@ test("template without active mapping → 422 (never renders raw placeholders)",
   assert.equal(res.body.code, "MAPPING_MISSING");
   assert.equal(ctx.renderCalls.length, 0);
   assert.equal(ctx.db.writes.length, 0);
+});
+
+test("H3: a Signing Context supplied in the request body reaches renderCanonicalDocument's context and is echoed back in the response", async () => {
+  const ctx = makeContext();
+  const signingContext = { signingDate: "2026-08-26", signingLocation: "Đà Lạt" };
+  const res = await ctx.POST(requestFor({ applicationId: "app-1", signingContext }), params());
+
+  assert.equal(res.status, 200);
+  assert.equal(ctx.renderCalls.length, 1);
+  const passedContext = ctx.renderCalls[0].context.signingContext as { signingDate: string; signingLocation: string };
+  assert.equal(passedContext.signingDate, "2026-08-26");
+  assert.equal(passedContext.signingLocation, "Đà Lạt");
+  assert.equal((res.body.signingContext as { signingDate: string }).signingDate, "2026-08-26");
+});
+
+test("H3: an omitted Signing Context resolves to the all-null empty context — never blocks Preview", async () => {
+  const ctx = makeContext();
+  const res = await ctx.POST(requestFor({ applicationId: "app-1" }), params());
+  assert.equal(res.status, 200);
+  const passedContext = ctx.renderCalls[0].context.signingContext as { signingDate: unknown };
+  assert.equal(passedContext.signingDate, null);
+});
+
+test("H3: a malformed Signing Context is a controlled 400, not a 500 or a render", async () => {
+  const ctx = makeContext();
+  const res = await ctx.POST(requestFor({ applicationId: "app-1", signingContext: { signingDate: "not-a-date" } }), params());
+  assert.equal(res.status, 400);
+  assert.equal(ctx.renderCalls.length, 0);
 });
 
 test("preview uses the SHARED canonical renderer + the SAME record loader as the worker", async () => {

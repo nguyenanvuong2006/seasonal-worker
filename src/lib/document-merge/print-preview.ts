@@ -96,9 +96,26 @@ export function buildPrintViewUrl(input: {
   versionId: string;
   applicationId: string;
   autoPrint?: boolean;
+  /**
+   * H3 — the SAME Signing Context the operator confirmed/used for the
+   * on-screen Preview, carried through as query params so the print view
+   * renders identical COMPUTED placeholders (never re-guessed/defaulted).
+   */
+  signingContext?: {
+    signingDate?: string | null;
+    signingLocation?: string | null;
+    documentDate?: string | null;
+    receivedDate?: string | null;
+    receivedBy?: string | null;
+  };
 }): string {
   const params = new URLSearchParams({ applicationId: input.applicationId });
   if (input.autoPrint) params.set("autoprint", PRINT_VIEW_AUTO_PRINT);
+  if (input.signingContext) {
+    for (const [key, value] of Object.entries(input.signingContext)) {
+      if (typeof value === "string" && value.trim()) params.set(key, value);
+    }
+  }
   const path = PRINT_VIEW_PATH.replace(":templateId", encodeURIComponent(input.templateId)).replace(
     ":versionId",
     encodeURIComponent(input.versionId),

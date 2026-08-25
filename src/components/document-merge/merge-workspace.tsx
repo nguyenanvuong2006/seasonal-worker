@@ -26,6 +26,7 @@ import {
   normalizePreviewResponse,
   type SafePreviewResult,
 } from "@/lib/document-merge/preview-response";
+import { ALLOWED_IDENTIFIERS, parseFormula, resolveFormula } from "@/lib/document-merge/formula-dsl";
 
 type MergeTemplate = {
   id: string;
@@ -96,10 +97,30 @@ const SOURCE_TYPES = [
   "DYNAMIC_ANSWER",
   "RELATED_FIELD",
   "COMPUTED_FIELD",
+  "COMPUTED",
   "SYSTEM_FIELD",
   "STATIC_TEXT",
   "CHECKBOX_OPTION",
 ];
+
+// H3 — Safe Formula DSL V1 (COMPUTED source type). Purely client-side,
+// dependency-free validation/preview — never sent to a server, never a
+// JS eval: parseFormula/resolveFormula only ever tokenize -> parse ->
+// validate -> evaluate against the closed 8-function whitelist.
+const COMPUTED_FUNCTIONS_HELP =
+  "day(x) · month(x) · year(x) · formatDate(x, \"dd/MM/yyyy\") · upper(x) · trim(x) · coalesce(a,b,...) · concat(a,b,...)";
+
+/** Synthetic sample values for "Thử công thức" — never real candidate/PII data. */
+const COMPUTED_SAMPLE_CONTEXT: Record<(typeof ALLOWED_IDENTIFIERS)[number], string | null> = {
+  SigningDate: "2026-08-26",
+  SigningLocation: "Đà Lạt",
+  DocumentDate: "2026-08-20",
+  ReceivedDate: "2026-08-15",
+  ReceivedBy: "Nguyễn Văn A",
+  SigningLatitude: null,
+  SigningLongitude: null,
+  SigningLocationCapturedAt: null,
+};
 
 const FORMAT_TYPES = [
   ["RAW", "Nguyên gốc"],
@@ -125,6 +146,28 @@ function isMappedField(field: MergeField): boolean {
   if (field.isOrphaned) return false;
   if (field.sourceType === "STATIC_TEXT") return true;
   return Boolean(field.sourceField || field.sourcePath);
+}
+
+/**
+ * COMPUTED formula validation + "Thử công thức" preview — Phase 22/23.
+ * Runs entirely client-side against synthetic Signing Context sample values
+ * (never a real candidate's data); never a JS editor, never an eval mode.
+ */
+function ComputedFormulaStatus({ expression }: { expression: string }) {
+  const trimmed = expression.trim();
+  if (!trimmed) {
+    return <p className="mt-1 text-[10px] text-slate-400">Nhập công thức, ví dụ: year(SigningDate)</p>;
+  }
+  const parsed = parseFormula(trimmed);
+  if (!parsed.ok) {
+    return <p className="mt-1 text-[10px] font-semibold text-red-600">✕ {parsed.error.message}</p>;
+  }
+  const tried = resolveFormula(trimmed, COMPUTED_SAMPLE_CONTEXT);
+  return (
+    <p className="mt-1 text-[10px] font-semibold text-emerald-700">
+      ✓ Công thức hợp lệ{tried.ok ? ` · Kết quả mẫu: "${tried.value}"` : ""}
+    </p>
+  );
 }
 
 function DiagnosticBox({ diagnostic }: { diagnostic: Diagnostic }) {
@@ -410,6 +453,14 @@ function MappingInspector({ template }: { template: MergeTemplate | undefined })
 
           {message && <p className="mt-2 rounded-lg bg-slate-50 p-2 text-[11px] text-slate-600">{message}</p>}
           {dirty && <p className="mt-2 text-[11px] font-semibold text-amber-700">Có thay đổi mapping chưa lưu.</p>}
+          {fields.some((field) => field.sourceType === "COMPUTED") && (
+            <div className="mt-2 rounded-lg border border-emerald-200 bg-emerald-50/60 p-2 text-[10px] text-emerald-900">
+              <p className="font-bold">Source Type = COMPUTED — Công thức (Safe Formula DSL V1)</p>
+              <p className="mt-1">Nhập vào ô Source Path. 8 hàm được hỗ trợ: {COMPUTED_FUNCTIONS_HELP}</p>
+              <p className="mt-1">Biến Signing Context: {ALLOWED_IDENTIFIERS.join(", ")}</p>
+              <p className="mt-1 text-emerald-700/80">Không hỗ trợ JavaScript/eval — công thức chỉ được phép dùng các hàm và biến ở trên.</p>
+            </div>
+          )}
 
           <datalist id={`merge-fields-${template.id}`}>
             {catalog.filter((item) => item.isMergeable).map((item) => (
@@ -469,16 +520,18 @@ function MappingInspector({ template }: { template: MergeTemplate | undefined })
                             list={`merge-fields-${template.id}`}
                             value={field.sourceField ?? ""}
                             onChange={(event) => updateField(field.id, { sourceField: event.target.value || null })}
-                            className="w-full rounded border border-slate-200 px-2 py-1.5 font-mono"
+                            disabled={field.sourceType === "COMPUTED"}
+                            className="w-full rounded border border-slate-200 px-2 py-1.5 font-mono disabled:bg-slate-50 disabled:text-slate-300"
                           />
                         </td>
                         <td className="px-2 py-1.5">
                           <input
                             value={field.sourcePath ?? ""}
                             onChange={(event) => updateField(field.id, { sourcePath: event.target.value || null })}
-                            placeholder="vd: customAnswers.email"
+                            placeholder={field.sourceType === "COMPUTED" ? "vd: year(SigningDate)" : "vd: customAnswers.email"}
                             className="w-full rounded border border-slate-200 px-2 py-1.5 font-mono"
                           />
+                          {field.sourceType === "COMPUTED" && <ComputedFormulaStatus expression={field.sourcePath ?? ""} />}
                         </td>
                         <td className="px-2 py-1.5">
                           <select

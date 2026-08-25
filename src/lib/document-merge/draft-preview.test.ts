@@ -117,7 +117,7 @@ test("data scope: a scoped caller cannot preview a candidate outside the scope",
   assert.equal(isCandidateInScope(["dept-1"], null), false);
 });
 
-test("request parsing trusts ONLY applicationId — template/version come from the path", () => {
+test("request parsing trusts ONLY applicationId (+ optional signingContext) — template/version come from the path", () => {
   const ok = parseDraftPreviewRequest({
     applicationId: "  app-1  ",
     templateId: "attacker-template",
@@ -125,14 +125,33 @@ test("request parsing trusts ONLY applicationId — template/version come from t
     version: 999,
   });
   assert.equal(ok.ok, true);
-  assert.deepEqual(ok.ok && ok.value, { applicationId: "app-1" });
-  assert.equal(Object.keys(ok.ok ? ok.value : {}).length, 1, "no client-supplied id is carried through");
+  assert.equal(ok.ok && ok.value.applicationId, "app-1");
+  assert.equal(Object.keys(ok.ok ? ok.value : {}).length, 2, "only applicationId + signingContext are carried through — no client-supplied id");
+  // No signingContext supplied -> resolves to the all-null empty context, never a hard failure.
+  assert.equal(ok.ok && ok.value.signingContext.signingDate, null);
 
   for (const bad of [{}, { applicationId: "" }, { applicationId: 7 }, null, "x", []]) {
     const res = parseDraftPreviewRequest(bad);
     assert.equal(res.ok, false, `${JSON.stringify(bad)} must be rejected`);
     assert.equal(!res.ok && res.error.code, "APPLICATION_REQUIRED");
   }
+});
+
+test("H3: request parsing accepts and normalizes an explicit signingContext", () => {
+  const ok = parseDraftPreviewRequest({
+    applicationId: "app-1",
+    signingContext: { signingDate: "2026-08-26", signingLocation: "  Đà Lạt  " },
+  });
+  assert.equal(ok.ok, true);
+  if (!ok.ok) return;
+  assert.equal(ok.value.signingContext.signingDate, "2026-08-26");
+  assert.equal(ok.value.signingContext.signingLocation, "Đà Lạt");
+});
+
+test("H3: a malformed signingContext is a controlled 400-shaped error, not a thrown exception", () => {
+  const res = parseDraftPreviewRequest({ applicationId: "app-1", signingContext: { signingDate: "26/08/2026" } });
+  assert.equal(res.ok, false);
+  assert.equal(!res.ok && res.error.code, "SIGNING_CONTEXT_INVALID");
 });
 
 test("mapping summary counts total/mapped/required for the operator panel", () => {

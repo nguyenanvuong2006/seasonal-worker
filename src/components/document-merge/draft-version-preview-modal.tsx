@@ -61,6 +61,36 @@ type PreviewResult = {
 
 type Problem = { code: string; error: string; action?: string; details?: string };
 
+/**
+ * H3 — "Thông tin tạo tài liệu" (Signing Context, Phase 16). Operator sets
+ * these ONCE per Preview call; the same values are echoed back by the API
+ * and reused for the print view, so COMPUTED placeholders (Ngay_ky_day,
+ * Dia_diem_ky, Nam_thue, ...) never drift between screen and print.
+ */
+type SigningContextInput = {
+  signingDate: string;
+  signingLocation: string;
+  documentDate: string;
+  receivedDate: string;
+  receivedBy: string;
+};
+
+const EMPTY_SIGNING_CONTEXT_INPUT: SigningContextInput = {
+  signingDate: "",
+  signingLocation: "",
+  documentDate: "",
+  receivedDate: "",
+  receivedBy: "",
+};
+
+function signingContextBody(input: SigningContextInput): Record<string, string> {
+  const body: Record<string, string> = {};
+  for (const [key, value] of Object.entries(input)) {
+    if (value.trim()) body[key] = value.trim();
+  }
+  return body;
+}
+
 const asString = (value: unknown, fallback = ""): string => (typeof value === "string" ? value : fallback);
 const asArray = (value: unknown): string[] =>
   Array.isArray(value) ? value.filter((item): item is string => typeof item === "string") : [];
@@ -113,6 +143,9 @@ export function DraftVersionPreviewModal({
   /** The candidate id that produced the CURRENT renderedHtml (so the print view
    *  never drifts if the operator picks another candidate without re-rendering). */
   const [previewApplicationId, setPreviewApplicationId] = useState<string | null>(null);
+  const [signingContext, setSigningContext] = useState<SigningContextInput>(EMPTY_SIGNING_CONTEXT_INPUT);
+  /** The Signing Context that actually produced the CURRENT renderedHtml (for the print view). */
+  const [renderedSigningContext, setRenderedSigningContext] = useState<SigningContextInput>(EMPTY_SIGNING_CONTEXT_INPUT);
   const searchSeq = useRef(0);
 
   const isDraft = version.status !== "PUBLISHED";
@@ -156,7 +189,7 @@ export function DraftVersionPreviewModal({
         {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ applicationId: selected.id }),
+          body: JSON.stringify({ applicationId: selected.id, signingContext: signingContextBody(signingContext) }),
         },
       );
       let data: Record<string, unknown> = {};
@@ -183,6 +216,9 @@ export function DraftVersionPreviewModal({
       // Remember WHICH candidate produced this preview so the print view always
       // targets the document actually on screen, never a later selection.
       setPreviewApplicationId(selected.id);
+      // Same for Signing Context — the print view must reuse the EXACT values
+      // that produced the on-screen render, not whatever is in the inputs now.
+      setRenderedSigningContext(signingContext);
     } catch (error) {
       setResult(null);
       setPreviewApplicationId(null);
@@ -221,7 +257,13 @@ export function DraftVersionPreviewModal({
     if (!canOpenPrintView(result, previewApplicationId, selected?.id)) return;
     const applicationId = previewApplicationId ?? selected?.id;
     if (!applicationId) return;
-    const url = buildPrintViewUrl({ templateId, versionId: version.id, applicationId, autoPrint });
+    const url = buildPrintViewUrl({
+      templateId,
+      versionId: version.id,
+      applicationId,
+      autoPrint,
+      signingContext: signingContextBody(renderedSigningContext),
+    });
     window.open(url, "_blank", "noopener,noreferrer");
   };
 
@@ -322,6 +364,51 @@ export function DraftVersionPreviewModal({
                 Không tìm thấy ứng viên nào trong phạm vi dữ liệu của bạn.
               </p>
             )}
+          </div>
+
+          <div className="rounded-lg border border-slate-200 p-3">
+            <p className="text-[11px] font-semibold text-slate-600">Thông tin tạo tài liệu (Signing Context)</p>
+            <p className="mt-0.5 text-[10px] text-slate-400">
+              Dùng cho các placeholder tính toán (Ngay_ky_day/month/year, Dia_diem_ky, Nam_thue, Ngay_tiep_nhan...).
+              Chỉ cần điền khi mẫu có mapping COMPUTED.
+            </p>
+            <div className="mt-2 grid grid-cols-2 gap-2 sm:grid-cols-4">
+              <label className="text-[10px] text-slate-500">
+                Ngày ký
+                <input
+                  type="date"
+                  value={signingContext.signingDate}
+                  onChange={(e) => setSigningContext((s) => ({ ...s, signingDate: e.target.value }))}
+                  className="mt-0.5 w-full rounded border border-slate-200 px-2 py-1.5 text-xs"
+                />
+              </label>
+              <label className="text-[10px] text-slate-500">
+                Địa điểm ký
+                <input
+                  value={signingContext.signingLocation}
+                  onChange={(e) => setSigningContext((s) => ({ ...s, signingLocation: e.target.value }))}
+                  placeholder="vd: Đà Lạt"
+                  className="mt-0.5 w-full rounded border border-slate-200 px-2 py-1.5 text-xs"
+                />
+              </label>
+              <label className="text-[10px] text-slate-500">
+                Ngày tiếp nhận
+                <input
+                  type="date"
+                  value={signingContext.receivedDate}
+                  onChange={(e) => setSigningContext((s) => ({ ...s, receivedDate: e.target.value }))}
+                  className="mt-0.5 w-full rounded border border-slate-200 px-2 py-1.5 text-xs"
+                />
+              </label>
+              <label className="text-[10px] text-slate-500">
+                Người tiếp nhận
+                <input
+                  value={signingContext.receivedBy}
+                  onChange={(e) => setSigningContext((s) => ({ ...s, receivedBy: e.target.value }))}
+                  className="mt-0.5 w-full rounded border border-slate-200 px-2 py-1.5 text-xs"
+                />
+              </label>
+            </div>
           </div>
 
           <div className="flex flex-wrap items-center gap-2">

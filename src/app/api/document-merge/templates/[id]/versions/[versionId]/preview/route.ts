@@ -85,7 +85,7 @@ export async function POST(request: Request, context: RouteContext) {
     if (!parsed.ok) {
       return NextResponse.json(parsed.error, { status: 400 });
     }
-    const { applicationId } = parsed.value;
+    const { applicationId, signingContext } = parsed.value;
 
     const [template] = await db
       .select()
@@ -182,6 +182,9 @@ export async function POST(request: Request, context: RouteContext) {
       currentDate: new Date(),
       mergeIndex: 1,
       mergeCount: 1,
+      // H3 — resolved ONCE for this Preview call, exactly like a merge job
+      // freezes it once for the whole batch (see async-job.ts).
+      signingContext,
     };
 
     // Build the SAME immutable snapshot shape a job freezes and render it with
@@ -227,6 +230,9 @@ export async function POST(request: Request, context: RouteContext) {
       mappingSummary: summarizePreviewMappings(mappings),
       renderedHtml: rendered.html,
       printCss: snapshot.printCss,
+      // H3 — echo back exactly what Signing Context this render used, so the
+      // operator can see it was applied (never silently defaulted/guessed).
+      signingContext,
       engine: "HTML_PDF",
       renderer: "renderCanonicalDocument (shared Preview + HTML_PDF worker renderer)",
       applicationId,

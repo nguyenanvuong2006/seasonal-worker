@@ -39,6 +39,32 @@ const MAPPINGS: CanonicalMapping[] = [
 const RECORD = { id: "app-1", fullName: "Nguyễn Thị Ánh Dương" };
 const CONTEXT = { currentUserName: "admin", currentDate: new Date("2026-08-23T00:00:00Z"), mergeIndex: 1, mergeCount: 1 };
 
+const COMPUTED_MAPPINGS: CanonicalMapping[] = [
+  ...MAPPINGS,
+  {
+    placeholder: "Ngay_ky_day",
+    sourceType: "COMPUTED",
+    sourceEntity: null,
+    sourceField: null,
+    sourcePath: "day(SigningDate)",
+    optionValue: null,
+    formatType: null,
+    fallbackValue: null,
+    isRequired: false,
+  },
+  {
+    placeholder: "Nam_thue",
+    sourceType: "COMPUTED",
+    sourceEntity: null,
+    sourceField: null,
+    sourcePath: "year(SigningDate)",
+    optionValue: null,
+    formatType: null,
+    fallbackValue: null,
+    isRequired: false,
+  },
+];
+
 test("worker imports the canonical renderer and no static template body", () => {
   assert.match(workerSource, /renderCanonicalDocument/);
   assert.match(workerSource, /canonical-document\.ts/);
@@ -85,6 +111,28 @@ test("TEST A/B/C: worker output is byte-identical to Preview for the same snapsh
   assert.equal(preview.templateId, worker.templateId, "TEST C: templateId parity");
   assert.equal(preview.templateVersion, worker.templateVersion, "TEST C: templateVersion parity");
   assert.deepEqual(preview.missingFields, worker.missingFields);
+  assert.equal(preview.valid, worker.valid);
+});
+
+test("H3: worker output is byte-identical to Preview for COMPUTED placeholders driven by a frozen Signing Context", () => {
+  const snapshot = canonicalSnapshotFixture(COMPUTED_MAPPINGS, {
+    htmlBody: `<div class="paper"><p><<Ho_ten>> ký ngày <<Ngay_ky_day>>, năm thuế <<Nam_thue>></p></div>`,
+    printCss: "",
+  });
+  const contextWithSigningContext = { ...CONTEXT, signingContext: { signingDate: "2026-08-26", signingLocation: null, documentDate: null, receivedDate: null, receivedBy: null, signingLatitude: null, signingLongitude: null, signingLocationCapturedAt: null } };
+
+  // Preview renders the in-memory snapshot directly.
+  const preview = renderCanonicalDocument(snapshot, RECORD, contextWithSigningContext);
+  // Worker re-hydrates the identical snapshot from job metadata JSON — the
+  // SAME parseCanonicalSnapshot() call processItem() uses.
+  const worker = renderCanonicalDocument(
+    parseCanonicalSnapshot(JSON.parse(JSON.stringify(snapshot)), snapshot.templateId),
+    RECORD,
+    contextWithSigningContext,
+  );
+
+  assert.equal(preview.html, worker.html, "TEST A: HTML parity for COMPUTED placeholders");
+  assert.match(preview.html, /ký ngày 26, năm thuế 2026/);
   assert.equal(preview.valid, worker.valid);
 });
 

@@ -28,6 +28,7 @@ import * as normalizerModule from "./full-document-normalizer.ts";
 import * as securityModule from "./ai-template-security.ts";
 import * as analysisHashModule from "./analysis-hash.ts";
 import * as unresolvedGuardModule from "./unresolved-placeholder-guard.ts";
+import * as signingContextModule from "./signing-context.ts";
 
 const ROUTE_PATH = "src/app/api/document-merge/templates/[id]/versions/[versionId]/unsaved-preview/route.ts";
 const routeSource = readFileSync(new URL(`../../../${ROUTE_PATH}`, import.meta.url), "utf8");
@@ -102,7 +103,7 @@ type Options = {
 type Context = {
   POST: (req: Request, ctx: { params: Promise<{ id: string; versionId: string }> }) => Promise<{ status: number; body: Record<string, unknown> }>;
   db: FakeDb;
-  renderCalls: { templateVersion: number; htmlBody: string; printCss: string | null }[];
+  renderCalls: { templateVersion: number; htmlBody: string; printCss: string | null; context: Record<string, unknown> }[];
   loaderCalls: string[][];
   requiredIds: string[];
 };
@@ -174,8 +175,12 @@ function makeContext(opts: Options = {}): Context {
               mappings: input.mappings,
               formatting: input.formatting,
             }),
-            renderCanonicalDocument: (snapshot: { htmlBody: string; templateId: string; templateVersion: number; printCss: string | null }) => {
-              renderCalls.push({ templateVersion: snapshot.templateVersion, htmlBody: snapshot.htmlBody, printCss: snapshot.printCss });
+            renderCanonicalDocument: (
+              snapshot: { htmlBody: string; templateId: string; templateVersion: number; printCss: string | null },
+              _recordData: unknown,
+              context: Record<string, unknown>,
+            ) => {
+              renderCalls.push({ templateVersion: snapshot.templateVersion, htmlBody: snapshot.htmlBody, printCss: snapshot.printCss, context });
               // Mirrors the REAL renderer's contract for this stub: whatever
               // <<...>> survives is "unreplaced" — since this stub does not
               // actually substitute, every placeholder literally present in
@@ -212,6 +217,8 @@ function makeContext(opts: Options = {}): Context {
           return analysisHashModule;
         case "@/lib/document-merge/unresolved-placeholder-guard":
           return unresolvedGuardModule;
+        case "@/lib/document-merge/signing-context":
+          return signingContextModule;
         default:
           throw new Error(`Unexpected require("${id}") — route must not depend on this module.`);
       }
@@ -391,6 +398,34 @@ test("DEFECT A FIX: a fully-resolved preview has unresolvedPlaceholderWarning ==
   const res = await ctx.POST(requestFor({ applicationId: "app-1", rawHtml }), params());
   assert.equal(res.status, 200);
   assert.equal(res.body.unresolvedPlaceholderWarning, null);
+});
+
+test("H3: a Signing Context supplied in the request body reaches renderCanonicalDocument's context and is echoed back in the response", async () => {
+  const ctx = makeContext();
+  const rawHtml = `<html><body><<Ngay_ky_day>></body></html>`;
+  const signingContext = { signingDate: "2026-08-26", signingLocation: "Đà Lạt" };
+  const res = await ctx.POST(requestFor({ applicationId: "app-1", rawHtml, signingContext }), params());
+
+  assert.equal(res.status, 200);
+  assert.equal(ctx.renderCalls.length, 1);
+  const passed = ctx.renderCalls[0].context.signingContext as { signingDate: string };
+  assert.equal(passed.signingDate, "2026-08-26");
+  assert.equal((res.body.signingContext as { signingDate: string }).signingDate, "2026-08-26");
+});
+
+test("H3: an omitted Signing Context resolves to the all-null empty context — never blocks unsaved Preview", async () => {
+  const ctx = makeContext();
+  const res = await ctx.POST(requestFor({ applicationId: "app-1", rawHtml: "<<Ho_ten>>" }), params());
+  assert.equal(res.status, 200);
+  const passed = ctx.renderCalls[0].context.signingContext as { signingDate: unknown };
+  assert.equal(passed.signingDate, null);
+});
+
+test("H3: a malformed Signing Context is a controlled 400, never rendered", async () => {
+  const ctx = makeContext();
+  const res = await ctx.POST(requestFor({ applicationId: "app-1", rawHtml: "<<Ho_ten>>", signingContext: { signingDate: "bad" } }), params());
+  assert.equal(res.status, 400);
+  assert.equal(ctx.renderCalls.length, 0);
 });
 
 test("route is nodejs runtime + force-dynamic and exposes POST only", () => {

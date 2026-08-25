@@ -30,12 +30,13 @@ export async function POST(request: Request) {
 
   try {
     const body = await request.json();
-    const { templateId, autoRoute, mergeMode, dispatchToApplicant, records } = body as {
+    const { templateId, autoRoute, mergeMode, dispatchToApplicant, records, signingContext } = body as {
       templateId?: string;
       autoRoute?: boolean;
       mergeMode?: "ONE_DOCUMENT" | "INDIVIDUAL_DOCUMENTS";
       dispatchToApplicant?: boolean;
       records?: { entityType: string; recordIds: string[] };
+      signingContext?: unknown;
     };
 
     if (!records?.recordIds?.length) {
@@ -51,6 +52,9 @@ export async function POST(request: Request) {
       records: { entityType: records.entityType || "daily_applications", recordIds: records.recordIds },
       createdBy: guard.session.username,
       scopeDeptIds: scope,
+      // H3 — resolved once by the caller (Preview/UI) and frozen ONCE into
+      // this job's immutable metadata by createAsyncMergeJob itself.
+      signingContext,
     });
 
     await writeAudit(guard.session, "CREATE_MERGE_JOB", "merge_jobs", {

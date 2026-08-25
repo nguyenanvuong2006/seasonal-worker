@@ -68,6 +68,7 @@ import { and, eq } from "drizzle-orm";
 import { getDbIdentity } from "../../src/lib/document-merge/db-identity.ts";
 import { runClaimProbe, claimExistingJobItem } from "../../src/lib/document-merge/queue-diagnostics.ts";
 import { shouldBlockRestrictedWorkerRequest } from "../../src/lib/document-merge/worker-diag-gate.ts";
+import { EMPTY_SIGNING_CONTEXT, type SigningContext } from "../../src/lib/document-merge/signing-context.ts";
 import { runOverlayE2EJob } from "../../src/lib/document-merge/pdf-overlay/worker-overlay-e2e.ts";
 import { getHtmlTemplateContractByKey } from "../../src/document-templates/registry.ts";
 
@@ -245,6 +246,12 @@ interface JobContext {
   recordCount: number;
   dispatchToApplicant: boolean;
   templates: Record<string, TemplateSnapshot>;
+  /**
+   * H3 — frozen ONCE at job creation (createAsyncMergeJob → job.metadata.
+   * signingContext). Every item in this job reads this SAME value; the
+   * worker NEVER calls `new Date()`/geolocation to derive it per record.
+   */
+  signingContext: SigningContext;
 }
 
 /**
@@ -300,6 +307,8 @@ async function processItem(item: QueueItem, jobCtx: JobContext): Promise<void> {
     currentDate: jobCtx.renderedAt,
     mergeIndex: item.sortOrder,
     mergeCount: jobCtx.recordCount,
+    // H3 — the SAME frozen Signing Context for every item in this job.
+    signingContext: jobCtx.signingContext,
   };
   // THE canonical render function — byte-identical to what Preview produces
   // for the same snapshot + same candidate.
@@ -437,10 +446,15 @@ export async function runJob(jobId: string): Promise<{ processed: number; failed
     templates?: Record<string, TemplateSnapshot>;
     renderedAt?: string;
     dispatchToApplicant?: boolean;
+    signingContext?: Partial<SigningContext>;
   };
   const templates = metadata.templates ?? {};
   const parsedRenderedAt = metadata.renderedAt ? new Date(metadata.renderedAt) : new Date(job.createdAt);
   const renderedAt = Number.isNaN(parsedRenderedAt.getTime()) ? new Date(job.createdAt) : parsedRenderedAt;
+  // H3 — consume the FROZEN Signing Context verbatim. It was validated once
+  // at job creation (parseSigningContext in createAsyncMergeJob); the worker
+  // never re-derives or re-validates it against the wall clock.
+  const signingContext: SigningContext = { ...EMPTY_SIGNING_CONTEXT, ...(metadata.signingContext ?? {}) };
   const jobCtx: JobContext = {
     jobId,
     createdBy: job.createdBy,
@@ -448,6 +462,7 @@ export async function runJob(jobId: string): Promise<{ processed: number; failed
     recordCount: job.recordCount,
     dispatchToApplicant: metadata.dispatchToApplicant === true,
     templates,
+    signingContext,
   };
 
   const jobStartedAt = Date.now();
