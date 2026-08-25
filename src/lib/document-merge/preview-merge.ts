@@ -8,83 +8,15 @@ import {
   replaceMultiplePlaceholders,
 } from "./placeholder-extractor.ts";
 import { PAGE_BREAK_TEXT } from "./google-docs-service.ts";
+import {
+  FALLBACK_PLACEHOLDER_MAP,
+  CUSTOM_ANSWER_PLACEHOLDER_MAP,
+} from "./placeholder-aliases.ts";
 
-/** Common Vietnamese / English placeholder aliases → record field. */
-export const FALLBACK_PLACEHOLDER_MAP: Record<string, string> = {
-  Ho_ten: "fullName",
-  HoTen: "fullName",
-  ho_ten: "fullName",
-  fullName: "fullName",
-  Full_Name: "fullName",
-  So_CCCD: "cccd",
-  SoCCCD: "cccd",
-  CCCD: "cccd",
-  cccd: "cccd",
-  Ngay_sinh: "dob",
-  NgaySinh: "dob",
-  dob: "dob",
-  Date_of_birth: "dob",
-  Gioi_tinh: "gender",
-  GioiTinh: "gender",
-  gender: "gender",
-  So_dien_thoai: "phone",
-  SoDienThoai: "phone",
-  Dien_thoai: "phone",
-  phone: "phone",
-  // ADDRESS SEMANTICS — permanentAddress and residentialAddress are two
-  // DIFFERENT business fields and must never alias into one another.
-  //
-  //   Địa chỉ thường trú  (permanent / hộ khẩu)  -> permanentAddress
-  //   Địa chỉ cư trú      (current residence)    -> residentialAddress
-  //   Địa chỉ tạm trú     (temporary residence)  -> residentialAddress
-  //
-  // Equal values are allowed when a worker genuinely lives at their permanent
-  // address, but a BLANK field must stay blank — it may never be filled from
-  // the other one. `dia_chi_cu_tru` previously pointed at permanentAddress,
-  // which printed the wrong address (e.g. "Quảng Ngãi" instead of the actual
-  // residence "Đơn Dương") into the tax-registration page.
-  Dia_chi: "residentialAddress",
-  DiaChi: "residentialAddress",
-  Dia_chi_hien_tai: "residentialAddress",
-  residentialAddress: "residentialAddress",
-  Dia_chi_thuong_tru: "permanentAddress",
-  dia_chi_cu_tru: "residentialAddress",
-  Dia_chi_tam_tru: "residentialAddress",
-  permanentAddress: "permanentAddress",
-  Ngay_cap_CCCD: "dateOfIssue",
-  Noi_cap_CCCD: "placeOfIssue",
-  Code: "code",
-  Email: "email",
-  Dia_diem_ky: "location",
-  Ngay_dang_ky: "regDate",
-  NgayDangKy: "regDate",
-  regDate: "regDate",
-  Ngay_nhan_viec: "startingDate",
-  NgayNhanViec: "startingDate",
-  Ngay_tiep_nhan: "startingDate",
-  startingDate: "startingDate",
-  Bo_phan: "deptName",
-  BoPhan: "deptName",
-  deptName: "deptName",
-  Nhom: "groupName",
-  groupName: "groupName",
-  Ma_DW: "dwCode",
-  dwCode: "dwCode",
-  IT_CODE: "itCode",
-  itCode: "itCode",
-};
-
-/** Placeholder aliases whose source lives in daily_applications.customAnswers. */
-const CUSTOM_ANSWER_PLACEHOLDER_MAP: Record<string, string> = {
-  Ten_truong: "ten_truong",
-  Cong_viec_hien_tai_khac: "cong_viec_hien_tai_khac",
-  So_tai_khoan: "so_tai_khoan",
-  Ten_ngan_hang: "ten_ngan_hang",
-  Cong_ty_thu_nhap_khac: "cong_ty_thu_nhap_khac",
-  Dia_diem_thu_nhap_khac: "dia_diem_thu_nhap_khac",
-  Cong_viec_khac: "cong_viec_khac",
-  So_dinh_danh_cu: "so_dinh_danh_cu",
-};
+// Re-exported for backward compatibility (existing callers / tests import these
+// aliases from preview-merge.ts). The authoritative definitions now live in the
+// dependency-free placeholder-aliases.ts, which the Template Diff Engine reuses.
+export { FALLBACK_PLACEHOLDER_MAP, CUSTOM_ANSWER_PLACEHOLDER_MAP };
 
 function readPath(record: Record<string, unknown>, path: string): unknown {
   const parts = path.split(".");
