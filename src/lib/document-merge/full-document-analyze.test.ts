@@ -7,6 +7,25 @@ function mappingFor(placeholder: string): MappingSemantics {
   return toMappingSemantics({ placeholder, sourceType: "CORE_FIELD", sourcePath: placeholder, isRequired: false, isOrphaned: false });
 }
 
+test("PHASE 14 FIX: reproduces and fixes the exact operator-reported anomaly (49 total, 0 unchanged, 0 added, 49 removed) — malformed early empty <body> no longer discards the pasted content", () => {
+  const placeholders = Array.from({ length: 49 }, (_, i) => `Field_${String(i + 1).padStart(2, "0")}`);
+  const baseHtml = `<div class="page">${placeholders.map((p) => `<p><<${p}>></p>`).join("")}</div>`;
+  const mappings = placeholders.map((p) => mappingFor(p));
+  // The malformed shape that reproduced the anomaly: a stray, EMPTY <body>
+  // pair before the real content, itself wrapped in a second <body> tag.
+  const malformedRawHtml = `<!DOCTYPE html><html><head><style>.page{width:210mm}</style></head><body></body>some stray text<body><div class="page">${placeholders
+    .map((p) => `<p><<${p}>></p>`)
+    .join("")}</div></body></html>`;
+
+  const result = analyzeFullDocument({ rawHtml: malformedRawHtml, baseHtml, baseMappings: mappings, currentMappings: mappings });
+
+  assert.equal(result.placeholders.total, 49);
+  assert.equal(result.placeholders.unchanged, 49, "the SAME 49 placeholders, re-pasted with malformed wrapper markup, must report unchanged");
+  assert.equal(result.placeholders.added, 0);
+  assert.equal(result.placeholders.removed, 0, "the real content must never be silently discarded as 'removed'");
+  assert.equal(result.mappingsAffected, 0);
+});
+
 test("DIFF 7: unchanged placeholders across a full-document re-paste -> zero remapping requested", () => {
   const placeholders = ["Ho_ten", "Dia_chi_thuong_tru", "So_CCCD"];
   const baseHtml = `<div>${placeholders.map((p) => `<<${p}>>`).join("")}</div>`;
@@ -104,4 +123,17 @@ test("security/layout analysis still runs on the NORMALIZED body (script tag ins
   const rawHtml = `<html><body><script>evil()</script><<Ho_ten>></body></html>`;
   const result = analyzeFullDocument({ rawHtml, baseHtml: `<<Ho_ten>>`, baseMappings: [mappingFor("Ho_ten")], currentMappings: [mappingFor("Ho_ten")] });
   assert.ok(result.security.errors.some((e) => e.code === "SCRIPT_TAG"));
+});
+
+test("PHASE 14 FIX regression / SECURITY 36: the multi-body 'first non-empty span' selection cannot be used to bypass security scanning — a script hidden in the SELECTED span is still blocked, and an empty decoy span before it changes nothing", () => {
+  const rawHtml = `<html><body></body>decoy<body><script>evil()</script><<Ho_ten>></body></html>`;
+  const result = analyzeFullDocument({ rawHtml, baseHtml: `<<Ho_ten>>`, baseMappings: [mappingFor("Ho_ten")], currentMappings: [mappingFor("Ho_ten")] });
+  assert.match(result.normalizedHtmlBody, /<script>evil\(\)<\/script>/);
+  assert.ok(result.security.errors.some((e) => e.code === "SCRIPT_TAG"));
+});
+
+test("SECURITY 35: inline event handler (onclick) remains blocked in full-document paste mode", () => {
+  const rawHtml = `<html><body><div onclick="steal()"><<Ho_ten>></div></body></html>`;
+  const result = analyzeFullDocument({ rawHtml, baseHtml: `<<Ho_ten>>`, baseMappings: [mappingFor("Ho_ten")], currentMappings: [mappingFor("Ho_ten")] });
+  assert.ok(result.security.errors.some((e) => e.code === "INLINE_EVENT_HANDLER"));
 });

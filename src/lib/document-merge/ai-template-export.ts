@@ -157,6 +157,21 @@ Với BẤT KỲ phần tử nào chứa placeholder (dữ liệu ứng viên), 
 - Nếu cần ngắt trang có kiểm soát, dùng \`break-inside\`/\`page-break-inside\` GIỚI HẠN vào 1 class cụ thể (vd \`.signature-block { break-inside: avoid; }\`) — KHÔNG áp dụng toàn cục (vd \`td { break-inside: avoid; }\`) vì có thể ép 1 khối chứa dữ liệu dài không được ngắt trang.
 - Vùng KHÔNG chứa dữ liệu động (ô ảnh 3x4, khoảng trắng chữ ký) được phép có \`height\` cố định bình thường — đây không phải vấn đề.
 
+## 6b. Đường viền bảng (table border) — GIỮ ĐÚNG Ý ĐỊNH THIẾT KẾ
+
+Hệ thống MẶC ĐỊNH vẽ viền 1px cho MỌI \`<td>\`/\`<th>\` trong MỌI \`<table>\` — kể cả khi \`template.html\`/\`print.css\` không khai báo border nào. Đây là hành vi có chủ đích để các bảng dữ liệu chính thức (mẫu đơn, bảng khai) luôn có lưới rõ ràng khi in.
+
+- Nếu bạn dùng \`<table>\` CHỈ để canh layout (ví dụ đặt cạnh nhau khối "Người lao động" / "Đại diện công ty" ở phần chữ ký, hoặc canh ngày/tháng/năm) và KHÔNG muốn hiển thị đường viền, PHẢI thêm \`class="no-border"\` vào đúng thẻ \`<table>\` đó. Hệ thống đã có sẵn quy tắc \`.no-border, .no-border th, .no-border td { border: none; }\` — không cần tự viết CSS này.
+- **KHÔNG** viết một quy tắc CSS toàn cục kiểu \`table, td, th { border: none; }\` hay tương tự trong \`print.css\` — quy tắc toàn cục sẽ xoá viền của MỌI bảng khác trong tài liệu, kể cả các bảng dữ liệu chính thức cần viền.
+- Bảng dữ liệu chính thức (không phải bảng layout) thì GIỮ NGUYÊN không thêm class gì — viền mặc định là đúng ý định.
+
+## 6c. Chiều rộng trang (page width) — PHÂN BIỆT KHỔ TRANG vs NỘI DUNG BÊN TRONG
+
+Khổ giấy A4 vật lý là 210mm; sau margin 12mm mỗi bên, vùng có thể in chỉ còn khoảng 186mm.
+
+- Khối trang ngoài cùng (thường mang class \`page\` hoặc \`paper\`) ĐƯỢC PHÉP khai báo \`width: 210mm\` — đó là khổ giấy, không phải lỗi.
+- **KHÔNG** đặt \`width: 210mm\` (hay bất kỳ giá trị cố định nào ≥190mm) cho bảng/khối NẰM BÊN TRONG khối trang đó — nội dung bên trong phải dùng \`width: 100%\` (hoặc để trống, mặc định), để tự co giãn theo vùng in thực tế thay vì tràn ra ngoài khi in.
+
 ## 7. Sau khi chỉnh sửa
 
 Trả lại ĐẦY ĐỦ \`template.html\` và \`print.css\` (không phải diff/patch từng phần) để operator dán trực tiếp vào ô "Sửa HTML/CSS" của hệ thống, sau đó bấm **"Phân tích thay đổi"** (Analyze) để xem placeholder/mapping/layout bị ảnh hưởng TRƯỚC KHI lưu — quy trình này KHÔNG tự động lưu hay xuất bản bất cứ điều gì.

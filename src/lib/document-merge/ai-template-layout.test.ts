@@ -85,6 +85,58 @@ test("layout: percentage width never triggers the A4-width warning", () => {
   assert.equal(codesOf(warnings).filter((c) => c === "TABLE_WIDTH_EXCEEDS_A4").length, 0);
 });
 
+/* -------------------------------------------------------------------- *
+ * PHASE 8/9 (width model) — PAGE_CONTAINER (.page/.paper) vs CONTENT.
+ * The outer A4 page wrapper legitimately spans ~210mm (the physical sheet);
+ * only content NESTED inside it must fit the ~186mm printable area.
+ * ------------------------------------------------------------------- */
+
+test("width 20: outer .page at 210mm is the physical A4 sheet — not falsely warned", () => {
+  const html = `<div class="page" style="width:210mm"><p>static</p></div>`;
+  const warnings = analyzeTemplateLayout(html, "");
+  assert.equal(codesOf(warnings).filter((c) => c === "TABLE_WIDTH_EXCEEDS_A4").length, 0);
+});
+
+test("width: outer .paper (v7 authoring-shell page marker) at 210mm is also not falsely warned", () => {
+  const html = `<div class="paper" style="width:210mm"><p>static</p></div>`;
+  const warnings = analyzeTemplateLayout(html, "");
+  assert.equal(codesOf(warnings).filter((c) => c === "TABLE_WIDTH_EXCEEDS_A4").length, 0);
+});
+
+test("width 21: a nested child of width 210mm INSIDE a .page (child itself has no page/paper class) is warned", () => {
+  const html = `<div class="page" style="width:210mm"><table style="width:210mm"><tr><td>static</td></tr></table></div>`;
+  const warnings = analyzeTemplateLayout(html, "");
+  const widthWarnings = warnings.filter((w) => w.code === "TABLE_WIDTH_EXCEEDS_A4");
+  // Exactly the nested <table>, not the outer .page.
+  assert.equal(widthWarnings.length, 1);
+  assert.equal(widthWarnings[0].tagName, "table");
+});
+
+test("width: a .page far beyond the true A4 physical width (e.g. 250mm) is still warned — the page-container exemption is not unlimited", () => {
+  const html = `<div class="page" style="width:250mm"><p>static</p></div>`;
+  const warnings = analyzeTemplateLayout(html, "");
+  assert.ok(codesOf(warnings).includes("TABLE_WIDTH_EXCEEDS_A4"));
+});
+
+test("width 22: width:100% content nested inside a 210mm .page is safe and not warned", () => {
+  const html = `<div class="page" style="width:210mm"><table style="width:100%"><tr><td>static</td></tr></table></div>`;
+  const warnings = analyzeTemplateLayout(html, "");
+  assert.equal(codesOf(warnings).filter((c) => c === "TABLE_WIDTH_EXCEEDS_A4").length, 0);
+});
+
+test("width 23: box-sizing:border-box does not change the width-model evaluation — outer occupied width is still the declared width", () => {
+  const bordered = `<table style="width:200mm;box-sizing:border-box;padding:10mm"><tr><td>static</td></tr></table>`;
+  const warningsBordered = analyzeTemplateLayout(bordered, "");
+  assert.ok(
+    codesOf(warningsBordered).includes("TABLE_WIDTH_EXCEEDS_A4"),
+    "box-sizing:border-box must not exempt a 200mm content element from the printable-width check — the OUTER box is still 200mm",
+  );
+
+  const contentBox = `<table style="width:200mm;box-sizing:content-box"><tr><td>static</td></tr></table>`;
+  const warningsContentBox = analyzeTemplateLayout(contentBox, "");
+  assert.ok(codesOf(warningsContentBox).includes("TABLE_WIDTH_EXCEEDS_A4"));
+});
+
 test("layout: broad/global break-inside:avoid warns", () => {
   const css = `td { break-inside: avoid; }`;
   const warnings = analyzeTemplateLayout("<table><tr><td>x</td></tr></table>", css);

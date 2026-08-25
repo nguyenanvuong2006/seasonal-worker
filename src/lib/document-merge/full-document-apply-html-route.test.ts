@@ -306,6 +306,22 @@ test("42. SINGLE DRAFT — more than one DRAFT version for the template fails cl
   assert.equal(ctx.updateCalls.length, 0);
 });
 
+test("Phase 15: SINGLE DRAFT guard response is operator-safe — names the ambiguous versions and a non-destructive next step, without archiving/deleting anything", async () => {
+  const ctx = makeContext({
+    versions: [makeVersion(9, "DRAFT", "ver-9"), makeVersion(10, "DRAFT", "ver-10")],
+    draftVersions: [makeVersion(9, "DRAFT", "ver-9"), makeVersion(10, "DRAFT", "ver-10")],
+  });
+  const rawHtml = `<<Ho_ten>>`;
+  const res = await ctx.POST(requestFor({ rawHtml, analysisHash: hashFor(rawHtml) }), params("tpl-1", "ver-10"));
+  assert.equal(res.status, 409);
+  assert.deepEqual(res.body.draftVersions, [9, 10]);
+  assert.match(String(res.body.error), /2 bản nháp/);
+  assert.match(String(res.body.action), /Archive/);
+  // Never destructive — no write of any kind, whichever DRAFT was targeted.
+  assert.equal(ctx.updateCalls.length, 0);
+  assert.equal(ctx.db.writes.length, 0);
+});
+
 test("new placeholders are reported but never auto-mapped (Phase 14) — no mapping write, response surfaces the count", async () => {
   const ctx = makeContext({ fields: [{ placeholder: "Ho_ten" }] });
   const rawHtml = `<<Ho_ten>><<Ngay_sinh>>`;

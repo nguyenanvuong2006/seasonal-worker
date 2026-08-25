@@ -162,6 +162,30 @@ function toMillimeters(value: string): number | null {
 const A4_PRINTABLE_WIDTH_MM = 210 - 12 - 12;
 const WIDTH_WARNING_THRESHOLD_MM = A4_PRINTABLE_WIDTH_MM + 4; // small tolerance before warning
 
+/**
+ * Physical A4 page width. An element that IS the page wrapper itself (see
+ * PAGE_CONTAINER_CLASSES below) legitimately spans this width — it is the
+ * printed sheet, not content that must additionally fit inside the printable
+ * area after margins. Distinct, wider tolerance than WIDTH_WARNING_THRESHOLD_MM.
+ */
+const A4_PAGE_WIDTH_MM = 210;
+const PAGE_WIDTH_WARNING_THRESHOLD_MM = A4_PAGE_WIDTH_MM + 4;
+
+/**
+ * Elements carrying one of these classes are treated as the physical A4 page
+ * container — the SAME class convention `countCanonicalPages()` (in
+ * canonical-document.ts) already uses to count pages ("the historical
+ * canonical body used `.page`; the operator-provided test(2).html body (v7)
+ * uses the authoring shell's `.paper` marker. Both are recognised"). A
+ * `.page`/`.paper` element at ~210mm is the page itself, not a content block
+ * that must fit inside the printable width — see PHASE 8 (A4 width model).
+ */
+const PAGE_CONTAINER_CLASSES = new Set(["page", "paper"]);
+
+function isPageContainerElement(el: { classes: string[] }): boolean {
+  return el.classes.some((c) => PAGE_CONTAINER_CLASSES.has(c));
+}
+
 /** "Broad" selector = would match many/most elements, making a break-inside:avoid dangerous. */
 function isBroadSelector(selector: string): boolean {
   return splitSelectorChain(selector).some((chunk) => {
@@ -231,12 +255,25 @@ export function analyzeTemplateLayout(html: string, css: string): LayoutWarning[
     const width = decl.get("width");
     if (width && isFixedLength(width)) {
       const mm = toMillimeters(width);
-      if (mm !== null && mm > WIDTH_WARNING_THRESHOLD_MM) {
-        warnings.push({
-          code: "TABLE_WIDTH_EXCEEDS_A4",
-          message: `<${frame.tagName}> có width=${width} (~${mm.toFixed(0)}mm), vượt vùng in A4 (~${A4_PRINTABLE_WIDTH_MM}mm sau margin 12mm mỗi bên) — nội dung có thể bị cắt khi in.`,
-          tagName: frame.tagName,
-        });
+      if (mm !== null) {
+        // PAGE_CONTAINER (.page/.paper — the A4 sheet itself) is legitimately
+        // ~210mm; only CONTENT/DYNAMIC_CONTENT_BLOCK elements must fit inside
+        // the printable area (~186mm after 12mm margins each side).
+        if (isPageContainerElement(frame)) {
+          if (mm > PAGE_WIDTH_WARNING_THRESHOLD_MM) {
+            warnings.push({
+              code: "TABLE_WIDTH_EXCEEDS_A4",
+              message: `<${frame.tagName}> (khối trang .page/.paper) có width=${width} (~${mm.toFixed(0)}mm), vượt cả khổ giấy A4 vật lý (~${A4_PAGE_WIDTH_MM}mm) — kiểm tra lại kích thước khối trang.`,
+              tagName: frame.tagName,
+            });
+          }
+        } else if (mm > WIDTH_WARNING_THRESHOLD_MM) {
+          warnings.push({
+            code: "TABLE_WIDTH_EXCEEDS_A4",
+            message: `<${frame.tagName}> có width=${width} (~${mm.toFixed(0)}mm), vượt vùng in A4 (~${A4_PRINTABLE_WIDTH_MM}mm sau margin 12mm mỗi bên) — nội dung có thể bị cắt khi in.`,
+            tagName: frame.tagName,
+          });
+        }
       }
     }
   };

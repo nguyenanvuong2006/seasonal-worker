@@ -46,6 +46,7 @@ import { isCandidateInScope, selectPreviewMappings } from "@/lib/document-merge/
 import { injectPrintTooling } from "@/lib/document-merge/print-preview";
 import { normalizeFullHtmlDocument } from "@/lib/document-merge/full-document-normalizer";
 import { analyzeTemplateSecurity } from "@/lib/document-merge/ai-template-security";
+import { buildUnresolvedPlaceholderTitle } from "@/lib/document-merge/unresolved-placeholder-guard";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -211,6 +212,10 @@ export async function POST(request: Request, context: RouteContext) {
         versionStatus: `${version.status} · CHƯA LƯU`,
         fullName: typeof recordData.fullName === "string" ? recordData.fullName : undefined,
         cccd: typeof recordData.cccd === "string" ? recordData.cccd : undefined,
+        // DEFECT A / Phase 11 (print parity): the SAME guard unsaved-preview
+        // uses, so an operator can never print/save a PDF with unresolved
+        // placeholders without a prominent warning here too.
+        warning: buildUnresolvedPlaceholderTitle(rendered.unreplaced),
       },
       { autoPrint },
     );

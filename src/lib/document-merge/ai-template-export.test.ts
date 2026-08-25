@@ -116,6 +116,29 @@ test("README-AI: documents placeholder syntax, case-sensitivity, and layout rule
   assert.match(readme, /A4/);
 });
 
+test("README-AI (Defect B/C fix): documents the border-fidelity and page-width contract so the AI stops generating the two observed production defects", () => {
+  const manifest = buildTemplateManifest({
+    templateId: "tpl-1",
+    templateName: "Đăng ký tập nghề",
+    documentKind: "B",
+    version: 8,
+    status: "PUBLISHED",
+    htmlBody: SAMPLE_HTML,
+    mappings: [mapping()],
+    mappingSource: DRAFT_PREVIEW_MAPPING_SOURCE.SNAPSHOT,
+  });
+  const readme = buildReadmeAi(manifest);
+  // Border fidelity: the default-border behavior and the .no-border escape
+  // hatch are both documented, plus an explicit ban on a global override.
+  assert.match(readme, /no-border/);
+  assert.match(readme, /viền 1px/);
+  assert.match(readme, /KHÔNG[\s\S]*table,\s*td,\s*th\s*\{\s*border:\s*none/, "must explicitly WARN against a global border-removal rule, not silently omit the topic");
+  // Page width model: page container vs nested content width distinction.
+  assert.match(readme, /210mm/);
+  assert.match(readme, /186mm/);
+  assert.match(readme, /width:\s*100%/);
+});
+
 test("README-AI: lists every placeholder from the manifest", () => {
   const manifest = buildTemplateManifest({
     templateId: "tpl-1",

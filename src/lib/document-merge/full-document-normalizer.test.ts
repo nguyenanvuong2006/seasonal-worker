@@ -106,6 +106,63 @@ test("self-closing-looking <body/> (selfClosing true) is not treated as an open 
   assert.doesNotThrow(() => normalizeFullHtmlDocument(doc));
 });
 
+/* -------------------------------------------------------------------- *
+ * PHASE 14 FIX — "49 removed, 0 added" anomaly.
+ *
+ * ROOT CAUSE (confirmed by direct reproduction): a malformed AI response
+ * with an early, EMPTY <body></body> pair before the REAL content (itself
+ * wrapped in a second <body> tag) caused the old "first <body> open, first
+ * </body> after it" rule to extract NOTHING — every real placeholder
+ * silently vanished from the analyzed "current" body, and the (correct)
+ * diff engine then reported the base's placeholders as 100% REMOVED with
+ * 0 ADDED, exactly matching the operator's report. This was a normalizer
+ * extraction bug, NOT a diff-engine bug, NOT a base-version-selection bug,
+ * and NOT a UI wording issue — buildTemplateDiff/analyzeTemplate/
+ * analyzeFullDocument's base/current argument order was code-reviewed and
+ * confirmed correct throughout.
+ * ------------------------------------------------------------------- */
+
+test("PHASE 14 FIX: an early EMPTY <body></body> before the REAL content (wrapped in a second <body>) no longer discards the real content", () => {
+  const doc = `<!DOCTYPE html><html><head><style>.page{width:210mm}</style></head><body></body>some stray text<body><div class="page"><<Ho_ten>><<Dia_chi_thuong_tru>></div></body></html>`;
+  const result = normalizeFullHtmlDocument(doc);
+  assert.match(result.htmlBody, /<<Ho_ten>>/);
+  assert.match(result.htmlBody, /<<Dia_chi_thuong_tru>>/);
+  assert.equal(result.warnings.some((w) => w.code === "MULTIPLE_BODY_TAGS_FOUND"), true);
+});
+
+test("PHASE 14 FIX: immediately-nested <body><body>...</body></body> (no stray text between) still extracts the real inner content, not the literal text of the second open tag", () => {
+  const doc = `<body><body><div><<Ho_ten>></div></body></body>`;
+  const result = normalizeFullHtmlDocument(doc);
+  assert.match(result.htmlBody, /<<Ho_ten>>/);
+  assert.doesNotMatch(result.htmlBody, /^<body>$/);
+});
+
+test("PHASE 14 FIX: three <body> tags, only the LAST one non-empty, still finds the real content", () => {
+  const doc = `<body></body><body>   </body><body><<Ho_ten>></body>`;
+  const result = normalizeFullHtmlDocument(doc);
+  assert.match(result.htmlBody, /<<Ho_ten>>/);
+});
+
+test("DEFECT B AUDIT: the normalizer never touches CSS content — .no-border class/rule and border declarations pass through byte-for-byte", () => {
+  const doc = `<!DOCTYPE html>
+<html><head><style>
+.no-border, .no-border th, .no-border td { border: none; }
+.official-table, .official-table td { border: 2px solid #000; }
+</style></head>
+<body>
+<table class="no-border"><tr><td>Người lao động</td><td>Đại diện công ty</td></tr></table>
+<table class="official-table"><tr><td>Mẫu chính thức</td></tr></table>
+</body></html>`;
+  const result = normalizeFullHtmlDocument(doc);
+  assert.match(result.extractedCss, /\.no-border,\s*\.no-border th,\s*\.no-border td\s*\{\s*border:\s*none;\s*\}/);
+  assert.match(result.extractedCss, /\.official-table,\s*\.official-table td\s*\{\s*border:\s*2px solid #000;\s*\}/);
+  assert.match(result.htmlBody, /class="no-border"/);
+  assert.match(result.htmlBody, /class="official-table"/);
+  // No injected border rule of any kind — the normalizer is a pure
+  // extraction, never a CSS author.
+  assert.doesNotMatch(result.extractedCss, /(^|\n)\s*table\s*,?\s*td\s*,?\s*th\s*\{\s*border/);
+});
+
 test("realistic AI-revised full document: doctype + head + multiple styles + body with many placeholders", () => {
   const doc = `<!DOCTYPE html>
 <html lang="vi">
