@@ -9,6 +9,11 @@
  * - Upload qua StorageProvider (không hardcode Drive).
  * - Ghi output_pdf/zip_url + file_id vào merge_jobs.
  * - KHÔNG giữ PDF tổng/ZIP 3 năm nếu individual PDFs đã lưu.
+ *
+ * HARDENING (no-schema phase):
+ * - Bounded retry for retriable FILE_NOT_FOUND (eventual consistency)
+ * - Safe logging (jobId, itemId, attempt, provider, errorCode – no PII)
+ * - Do NOT retry auth/permission/invalid metadata
  */
 
 import { and, eq } from "drizzle-orm";
@@ -63,6 +68,24 @@ export type FinalizeResult = {
   itemCount: number;
 };
 
+function isRetriableFileNotFoundError(error: unknown): boolean {
+  const msg = error instanceof Error ? error.message : String(error);
+  if (msg.includes("GOOGLE_DRIVE_AUTH_FAILED")) return false;
+  if (msg.includes("GOOGLE_DRIVE_AUTH_MISSING")) return false;
+  if (msg.includes("GOOGLE_DRIVE_FOLDER_CREATE_401") || msg.includes("GOOGLE_DRIVE_FOLDER_CREATE_403")) return false;
+  if (msg.includes("GOOGLE_DRIVE_FOLDER_LOOKUP_401") || msg.includes("GOOGLE_DRIVE_FOLDER_LOOKUP_403")) return false;
+  if (msg.includes("GOOGLE_DRIVE_FILE_LOOKUP_401") || msg.includes("GOOGLE_DRIVE_FILE_LOOKUP_403")) return false;
+  if (msg.includes("GOOGLE_DRIVE_UPLOAD_401") || msg.includes("GOOGLE_DRIVE_UPLOAD_403")) return false;
+  if (msg.includes("GOOGLE_DRIVE_DOWNLOAD_401") || msg.includes("GOOGLE_DRIVE_DOWNLOAD_403")) return false;
+  if (msg.includes("GOOGLE_DRIVE_FILE_NOT_FOUND")) return true;
+  if (msg.includes("FILE_NOT_FOUND") && !msg.includes("AUTH")) return true;
+  return false;
+}
+
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
 /**
  * Finalize job: gộp PDF cá nhân (theo sort_order) → PDF tổng + ZIP → upload.
  * Gọi khi job hết pending items (worker loop break).
@@ -93,12 +116,75 @@ export async function finalizeBatchOutputs(
   const documentType = opts.documentType || job.templateNameSnapshot || "Tai-lieu-merge";
 
   // Download từng PDF cá nhân (theo storageKey — không phụ thuộc URL).
+  // HARDENING: bounded retry for FILE_NOT_FOUND (eventual consistency)
   const downloaded: { filename: string; bytes: Uint8Array }[] = [];
+  const maxAttempts = 3;
+  const backoffs = [500, 1000, 2000];
+
   for (const item of items) {
     if (!item.storageKey) {
       throw new BatchFinalizeError(`ITEM_MISSING_STORAGE_KEY: item ${item.id}`);
     }
-    const bytes = await storage.get(item.storageKey);
+
+    let lastError: unknown = null;
+    let bytes: Buffer | null = null;
+
+    for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+      try {
+        const b = await storage.get(item.storageKey);
+        bytes = b;
+        if (attempt > 1) {
+          console.log(
+            JSON.stringify({
+              event: "batch_finalize_retry_success",
+              jobId,
+              itemId: item.id,
+              attempt,
+              provider: storage.name,
+            }),
+          );
+        }
+        break;
+      } catch (error) {
+        lastError = error;
+        const msg = error instanceof Error ? error.message : String(error);
+        const retriable = isRetriableFileNotFoundError(error);
+
+        if (!retriable || attempt === maxAttempts) {
+          console.log(
+            JSON.stringify({
+              event: "batch_finalize_get_failed",
+              jobId,
+              itemId: item.id,
+              attempt,
+              provider: storage.name,
+              errorCode: msg.slice(0, 200),
+              retriable,
+            }),
+          );
+          throw error;
+        }
+
+        console.log(
+          JSON.stringify({
+            event: "batch_finalize_retry",
+            jobId,
+            itemId: item.id,
+            attempt,
+            provider: storage.name,
+            errorCode: msg.slice(0, 200),
+            nextBackoffMs: backoffs[attempt - 1] ?? 2000,
+          }),
+        );
+
+        await sleep(backoffs[attempt - 1] ?? 2000);
+      }
+    }
+
+    if (!bytes) {
+      throw lastError instanceof Error ? lastError : new Error(String(lastError));
+    }
+
     downloaded.push({ filename: item.filename ?? `${padSequence(item.sortOrder)}.pdf`, bytes });
   }
 
