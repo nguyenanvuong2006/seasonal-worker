@@ -14,6 +14,12 @@ import { readFileSync } from "node:fs";
 import vm from "node:vm";
 import ts from "typescript";
 import { createFakeDb, drizzleStub, makeTable, type FakeDb, type QueryCall } from "../../../lib/test-support/fake-drizzle.ts";
+import { loadModule } from "../../../lib/test-support/load-module.ts";
+
+// Real, pure module (no DB/server-only deps) — loaded via the sandbox so the
+// route's resolveDataAccessMode()-driven message selection runs against the
+// actual production logic, not a hand-copied stub that could drift.
+const dataScopeModule = loadModule(new URL("../../../lib/data-scope.ts", import.meta.url), { stubs: {} });
 
 const routeSource = readFileSync(new URL("./route.ts", import.meta.url), "utf8");
 const jsSource = ts.transpileModule(routeSource, {
@@ -30,7 +36,12 @@ type Context = {
   db: FakeDb;
 };
 
-function makeContext(opts: { guardResult: { ok: true; session: { id: string; username: string; fullName: string; role: string; deptId: string | null } } | { ok: false; status: number; error: string }; scope: string[] | null }): Context {
+function makeContext(opts: {
+  guardResult: { ok: true; session: { id: string; username: string; fullName: string; role: string; deptId: string | null } } | { ok: false; status: number; error: string };
+  scope: string[] | null;
+  dwRows?: Record<string, unknown>[];
+}): Context {
+  const dwRows = opts.dwRows ?? [];
   const db = createFakeDb({
     respond: (call: QueryCall) => {
       if (call.root === "select" && call.table === "dw_data") {
@@ -39,7 +50,7 @@ function makeContext(opts: { guardResult: { ok: true; session: { id: string; use
         // a projection argument (the count) or bare (the rows).
         const selectOp = call.ops.find((o) => o.fn === "select");
         const isCount = Boolean(selectOp && selectOp.args.length > 0);
-        return isCount ? [{ total: 0 }] : [];
+        return isCount ? [{ total: dwRows.length }] : dwRows;
       }
       return undefined;
     },
@@ -75,6 +86,8 @@ function makeContext(opts: { guardResult: { ok: true; session: { id: string; use
           return { normalizePersonName: (s: string) => s };
         case "@/lib/validators":
           return { CCCD_ERROR_MESSAGE: "CCCD không hợp lệ.", isValidCccd: () => true };
+        case "@/lib/data-scope":
+          return dataScopeModule;
         default:
           throw new Error(`Unexpected require("${id}") — route must not depend on this module.`);
       }
@@ -144,4 +157,44 @@ test("RBAC role-rename: a scoped-but-non-empty department list is ALSO scope-den
   assert.equal(res.status, 403);
   const body = JSON.parse(res.body);
   assert.match(body.error, /Data Scope/);
+});
+
+/* ------------------------------------------------------------------ *
+ * EXACT REPORTED SCENARIO (DW Data Data Scope defect) — tranmai's role
+ * "ADMINISTRATION" ("C&B - Code DW"), not ADMIN, not DEPT_MANAGER,
+ * dw.view/dw.edit/dw.delete + data_scope.unrestricted all granted, DW
+ * rows carry no department key at all (dw_data has no such column).
+ * getUserScope() resolving to null (GLOBAL) must reach real rows with
+ * NO department-key Data Scope error, whether there are rows or not.
+ * ------------------------------------------------------------------ */
+
+test("Phase 7 — exact real-world scenario: ADMINISTRATION + data_scope.unrestricted (GLOBAL) + DW rows WITHOUT a department key -> 200, rows returned, no Data Scope error", async () => {
+  const ctx = makeContext({
+    guardResult: { ok: true, session: { id: "u1", username: "tranmai", fullName: "Trần Mai", role: "ADMINISTRATION", deptId: "dept-cb" } },
+    scope: null, // getUserScope() = null once data_scope.unrestricted is granted (see rbac-role-rename.test.ts)
+    dwRows: [
+      { id: "w1", fullName: "Nguyễn Văn A", cccd: "012345678901", code: "DW001" }, // no departmentId field anywhere — dw_data has none
+      { id: "w2", fullName: "Trần Thị B", cccd: "012345678902", code: "DW002" },
+    ],
+  });
+  const res = await ctx.GET(new Request("http://localhost/api/workers"));
+  assert.equal(res.status, 200, res.body);
+  const body = JSON.parse(res.body);
+  assert.equal(body.total, 2);
+  assert.equal(body.rows.length, 2);
+  assert.ok(!("error" in body), "a GLOBAL user must never see a Data Scope error");
+});
+
+test("Phase 7 — GLOBAL user with ZERO DW rows still gets 200 + empty rows, never a permission/Data Scope error (GLOBAL_ZERO_ROWS)", async () => {
+  const ctx = makeContext({
+    guardResult: { ok: true, session: { id: "u1", username: "tranmai", fullName: "Trần Mai", role: "ADMINISTRATION", deptId: "dept-cb" } },
+    scope: null,
+    dwRows: [],
+  });
+  const res = await ctx.GET(new Request("http://localhost/api/workers"));
+  assert.equal(res.status, 200);
+  const body = JSON.parse(res.body);
+  assert.deepEqual(body.rows, []);
+  assert.equal(body.total, 0);
+  assert.ok(!("error" in body));
 });

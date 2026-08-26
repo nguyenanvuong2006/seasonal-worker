@@ -3,6 +3,7 @@ import { and, asc, desc, eq, ilike, isNull, or, sql } from "drizzle-orm";
 import { db } from "@/db";
 import { dailyApplications, dwData } from "@/db/schema";
 import { getUserScope, requirePermission, writeAudit, type Session } from "@/lib/auth";
+import { resolveDataAccessMode } from "@/lib/data-scope";
 import { getFieldDefinitions } from "@/lib/metadata";
 import { normalizePersonName } from "@/lib/person-name";
 import { CCCD_ERROR_MESSAGE, isValidCccd } from "@/lib/validators";
@@ -10,12 +11,23 @@ import { CCCD_ERROR_MESSAGE, isValidCccd } from "@/lib/validators";
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
-// Ánh xạ database_field (khai báo ở /admin/field-definitions) -> cột Drizzle thật của bảng dw_data.
-// Chỉ những field text nào có mặt ở đây mới có thể được bật "Tìm kiếm" cho màn hình DW Data.
-async function scopedDwDataDenied(session: Session): Promise<boolean> {
-  // DW Data has no department key. Until canonical ownership exists, a restricted scope must
-  // fail closed rather than exposing company-wide identities.
-  return (await getUserScope(session)) !== null;
+// DW Data has NO department key column at all — it cannot be filtered by department.
+// GLOBAL (getUserScope() === null, e.g. via data_scope.unrestricted) is always allowed —
+// the absence of a department key only matters for a RESTRICTED account, which can never
+// be resolved against a table with no department key to check it against. NONE ([]) and
+// SCOPED (non-empty array) get distinct messages since they are different account states,
+// but both fail closed the same way for this specific, department-key-less table.
+function scopedDwDataDeniedMessage(scope: string[] | null): string | null {
+  const mode = resolveDataAccessMode(scope);
+  if (mode === "GLOBAL") return null;
+  if (mode === "SCOPED") {
+    return "DW Data không có department key nên không hỗ trợ tài khoản bị giới hạn Data Scope theo bộ phận cụ thể.";
+  }
+  return "DW Data không có department key nên không khả dụng với tài khoản bị giới hạn Data Scope.";
+}
+
+async function scopedDwDataDenied(session: Session): Promise<string | null> {
+  return scopedDwDataDeniedMessage(await getUserScope(session));
 }
 
 const DW_SEARCHABLE_COLUMNS = {
@@ -33,7 +45,8 @@ const DW_SEARCHABLE_COLUMNS = {
 export async function GET(req: Request) {
   const guard = await requirePermission(["ADMIN", "HR_RECRUITER", "HR_DIRECTOR"], "dw.view");
   if (!guard.ok) return NextResponse.json({ error: guard.error }, { status: guard.status });
-  if (await scopedDwDataDenied(guard.session)) return NextResponse.json({ error: "DW Data không có department key nên không khả dụng với tài khoản bị giới hạn Data Scope." }, { status: 403 });
+  const denyMessage = await scopedDwDataDenied(guard.session);
+  if (denyMessage) return NextResponse.json({ error: denyMessage }, { status: 403 });
 
   const url = new URL(req.url);
   const q = (url.searchParams.get("q") || "").trim();
@@ -77,7 +90,8 @@ export async function GET(req: Request) {
 export async function PATCH(req: Request) {
   const guard = await requirePermission(["ADMIN", "HR_RECRUITER"], "dw.edit");
   if (!guard.ok) return NextResponse.json({ error: guard.error }, { status: guard.status });
-  if (await scopedDwDataDenied(guard.session)) return NextResponse.json({ error: "DW Data không khả dụng với tài khoản bị giới hạn Data Scope." }, { status: 403 });
+  const denyMessage = await scopedDwDataDenied(guard.session);
+  if (denyMessage) return NextResponse.json({ error: denyMessage }, { status: 403 });
 
   const body = await req.json();
   if (!body.id) return NextResponse.json({ error: "Thiếu ID." }, { status: 400 });
@@ -130,7 +144,8 @@ export async function PATCH(req: Request) {
 export async function DELETE(req: Request) {
   const guard = await requirePermission(["ADMIN"], "dw.edit");
   if (!guard.ok) return NextResponse.json({ error: guard.error }, { status: guard.status });
-  if (await scopedDwDataDenied(guard.session)) return NextResponse.json({ error: "DW Data không khả dụng với tài khoản bị giới hạn Data Scope." }, { status: 403 });
+  const denyMessage = await scopedDwDataDenied(guard.session);
+  if (denyMessage) return NextResponse.json({ error: denyMessage }, { status: 403 });
   const id = new URL(req.url).searchParams.get("id");
   if (!id) return NextResponse.json({ error: "Thiếu ID." }, { status: 400 });
   await db

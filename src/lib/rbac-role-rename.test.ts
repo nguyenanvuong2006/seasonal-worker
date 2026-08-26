@@ -376,6 +376,49 @@ test("RBAC role-rename: an explicit user_department_scopes assignment always win
 });
 
 /* ------------------------------------------------------------------ *
+ * EXACT REPORTED RUNTIME BUG — DW Data Data Scope defect for tranmai.
+ * tranmai's "C&B - Code DW" role (ADMINISTRATION) is granted
+ * data_scope.unrestricted via the batch permission editor, but her user
+ * row's LEGACY `deptId` column is non-null (she organizationally belongs
+ * to the C&B department — an org-chart placement, not an explicit Data
+ * Scope grant). getUserScope() used to check the legacy `deptId` fallback
+ * BEFORE the data_scope.unrestricted capability, so any role with a
+ * non-null deptId was wrongly forced into a SCOPED array even after being
+ * granted unrestricted access — and DW Data (which has no department key
+ * column to filter by) then fail-closed denied with "không có department
+ * key". The fix reorders getUserScope(): explicit user_department_scopes
+ * still wins first, then data_scope.unrestricted, and ONLY THEN the
+ * legacy deptId fallback.
+ * ------------------------------------------------------------------ */
+
+test("RBAC role-rename: tranmai's exact reported Data Scope defect — deptId set (org-chart placement) + data_scope.unrestricted granted + NO explicit user_department_scopes -> GLOBAL (null), never scoped by the legacy deptId column", async () => {
+  const { mod } = loadAuth({
+    users: [baseUser("ADMINISTRATION", { deptId: "dept-cb" })],
+    rolePermissionRows: [
+      { role: "ADMINISTRATION", permissionKey: "dw.view", allowed: true },
+      { role: "ADMINISTRATION", permissionKey: "dw.edit", allowed: true },
+      { role: "ADMINISTRATION", permissionKey: "dw.delete", allowed: true },
+      { role: "ADMINISTRATION", permissionKey: "data_scope.unrestricted", allowed: true },
+    ],
+  });
+  const session: Session = { id: USER_ID, username: "tranmai", fullName: "Trần Mai", role: "ADMINISTRATION", deptId: "dept-cb" };
+  assert.equal(
+    await mod.getUserScope(session),
+    null,
+    "data_scope.unrestricted must win over the legacy deptId column when there is no explicit user_department_scopes row",
+  );
+});
+
+test("RBAC role-rename: same deptId-set account WITHOUT data_scope.unrestricted still falls back to the legacy deptId scope (behaviour preserved for genuinely scoped roles)", async () => {
+  const { mod } = loadAuth({
+    users: [baseUser("ADMINISTRATION", { deptId: "dept-cb" })],
+    rolePermissionRows: [{ role: "ADMINISTRATION", permissionKey: "dw.view", allowed: true }],
+  });
+  const session: Session = { id: USER_ID, username: "tranmai", fullName: "Trần Mai", role: "ADMINISTRATION", deptId: "dept-cb" };
+  assertScopeEquals(await mod.getUserScope(session), ["dept-cb"], "without data_scope.unrestricted, the legacy deptId fallback must still apply — this defense-in-depth is unchanged");
+});
+
+/* ------------------------------------------------------------------ *
  * "Mutable role name changed repeatedly -> no authorization behaviour
  * change" — proven structurally: neither hasPermission() nor
  * getUserScope() ever read roles.name for a decision, under ANY value.

@@ -267,9 +267,18 @@ export async function getUserScope(session: Session): Promise<string[] | null> {
 
   if (rows.length > 0) return rows.map((r) => r.departmentId);
 
-  // Legacy fallback (chưa gán scope nào): deptId cột cũ → scope đơn.
+  // Không có scope tường minh nào: quyền `data_scope.unrestricted` (WHERE) phải được
+  // xét TRƯỚC deptId cột cũ. `users.deptId` chỉ là vị trí phòng ban trên sơ đồ tổ
+  // chức (ai thuộc phòng nào) — KHÔNG phải là một scope hạn chế được gán tường minh.
+  // Trước đây nhánh deptId này chạy trước, nên bất kỳ role nào có deptId khác null
+  // (ví dụ "ADMINISTRATION" / "C&B - Code DW" thuộc phòng C&B) đều bị coi là SCOPED
+  // dù đã được cấp data_scope.unrestricted — DW Data (không có cột phòng ban để lọc)
+  // từ chối luôn thay vì cho phép GLOBAL.
+  if (await hasPermission(session.role, "data_scope.unrestricted")) return null;
+
+  // Legacy fallback (chưa gán scope nào, không có unrestricted): deptId cột cũ → scope đơn.
   if (session.deptId) return [session.deptId];
-  return (await hasPermission(session.role, "data_scope.unrestricted")) ? null : [];
+  return [];
 }
 
 /**
