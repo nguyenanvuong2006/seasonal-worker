@@ -35,6 +35,32 @@ export const dynamic = "force-dynamic";
 
 type RouteContext = { params: Promise<{ id: string; versionId: string }> };
 
+/**
+ * Build an ASCII-only slug for the legacy `filename=` parameter.
+ *
+ * `Content-Disposition` is transmitted over the wire as Latin-1/ByteString, so a
+ * `filename=` value carrying Vietnamese Unicode (e.g. `Đăng-ký-tập-nghề`) makes
+ * real Web `Response` construction and Node's `http.setHeader` throw
+ * (TypeError / ERR_INVALID_CHAR) and turn the request into an HTTP 500. This
+ * helper strips diacritics and transliterates đ/Đ so `filename=` stays pure
+ * ASCII. The full Unicode name is preserved losslessly in `filename*=`.
+ */
+function asciiFileNameSegment(value: string): string {
+  return value
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .replace(/đ/g, "d")
+    .replace(/Đ/g, "D")
+    .replace(/[^a-zA-Z0-9]+/g, "-")
+    .replace(/-+/g, "-")
+    .replace(/^-|-$/g, "")
+    .slice(0, 80) || "template";
+}
+
+/**
+ * Build a Unicode-preserving slug used only inside the RFC 5987 `filename*=`
+ * parameter (already percent-encoded, so it can carry Vietnamese characters).
+ */
 function safeFileNameSegment(value: string): string {
   return value
     .normalize("NFC")
@@ -69,36 +95,50 @@ export async function GET(_request: Request, context: RouteContext) {
     return NextResponse.json({ error: "Phiên bản này chưa có nội dung HTML để xuất gói AI." }, { status: 400 });
   }
 
-  const fields = await db
-    .select()
-    .from(mergeTemplateFields)
-    .where(and(eq(mergeTemplateFields.templateId, templateId), eq(mergeTemplateFields.isOrphaned, false)));
+  try {
+    const fields = await db
+      .select()
+      .from(mergeTemplateFields)
+      .where(and(eq(mergeTemplateFields.templateId, templateId), eq(mergeTemplateFields.isOrphaned, false)));
 
-  const { mappings, source } = selectPreviewMappings(version, fields);
+    const { mappings, source } = selectPreviewMappings(version, fields);
 
-  const manifest = buildTemplateManifest({
-    templateId,
-    templateName: template.name,
-    documentKind: template.documentKind,
-    version: version.version,
-    status: version.status,
-    htmlBody: version.htmlBody,
-    mappings,
-    mappingSource: source,
-  });
+    const manifest = buildTemplateManifest({
+      templateId,
+      templateName: template.name,
+      documentKind: template.documentKind,
+      version: version.version,
+      status: version.status,
+      htmlBody: version.htmlBody,
+      mappings,
+      mappingSource: source,
+    });
 
-  const files = buildAiExportFiles(manifest, version.htmlBody, version.printCss ?? "");
-  const zipBuffer = await buildAiExportZip(files);
+    const files = buildAiExportFiles(manifest, version.htmlBody, version.printCss ?? "");
+    const zipBuffer = await buildAiExportZip(files);
 
-  const filename = `${safeFileNameSegment(template.name)}-v${version.version}-ai-package.zip`;
+    // ASCII-safe display name for `filename=`; the exact Vietnamese name is
+    // carried losslessly in RFC 5987 `filename*=UTF-8''...` (percent-encoded).
+    const asciiName = `${asciiFileNameSegment(template.name)}-v${version.version}-ai-package.zip`;
+    const utf8Name = `${safeFileNameSegment(template.name)}-v${version.version}-ai-package.zip`;
 
-  return new NextResponse(new Uint8Array(zipBuffer), {
-    status: 200,
-    headers: {
-      "Content-Type": "application/zip",
-      "Content-Disposition": `attachment; filename="${filename}"`,
-      "Content-Length": String(zipBuffer.length),
-      "Cache-Control": "no-store",
-    },
-  });
+    return new NextResponse(new Uint8Array(zipBuffer), {
+      status: 200,
+      headers: {
+        "Content-Type": "application/zip",
+        "Content-Disposition": `attachment; filename="${asciiName}"; filename*=UTF-8''${encodeURIComponent(utf8Name)}`,
+        "Content-Length": String(zipBuffer.length),
+        "Cache-Control": "no-store",
+      },
+    });
+  } catch (error) {
+    // Controlled 500: log safe diagnostic metadata only (never the stack trace,
+    // DB errors, secrets, template HTML, or candidate data).
+    console.error(`[ai-export] unexpected export failure template=${templateId} version=${versionId}`, {
+      errorName: error instanceof Error ? error.name : typeof error,
+      templateId,
+      versionId,
+    });
+    return NextResponse.json({ error: "Không thể tạo gói AI export. Vui lòng thử lại." }, { status: 500 });
+  }
 }
