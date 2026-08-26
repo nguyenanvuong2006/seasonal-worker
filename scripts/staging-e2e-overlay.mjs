@@ -84,6 +84,14 @@ const client = new pg.Client({
 await client.connect();
 const q = async (sql, params = []) => (await client.query(sql, params)).rows;
 
+// PR5 root-cause hardening: schema preflight TRƯỚC khi seed/query overlay. Thiếu
+// bảng/cột → fail nhanh SCHEMA_MISMATCH (operator biết chính xác migration nào
+// thiếu) thay vì để /run-overlay nổ lỗi mờ giữa vòng. Cùng contract worker dùng.
+const { checkOverlaySchema, formatOverlaySchemaMismatch } = await import("../src/lib/document-merge/pdf-overlay/required-schema.ts");
+const schemaCheck = await checkOverlaySchema(async (sqlText) => (await client.query(sqlText)).rows);
+if (!schemaCheck.ok) fail(formatOverlaySchemaMismatch(schemaCheck));
+console.log(`✅ SCHEMA_OK: /run-overlay schema sẵn sàng (preflight — ${schemaCheck.requiredTableCount} bảng).`);
+
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 const check = (label, ok, detail = "") =>
   console.log(`  ${ok ? "✅" : "❌"} ${label}${detail ? ` — ${detail}` : ""}`);
