@@ -88,3 +88,26 @@ test("legal text is preserved byte-for-byte (spot-check of key passages)", () =>
     assert.ok(V12.includes(passage), `v12 thiếu đoạn pháp lý: ${passage}`);
   }
 });
+
+const V12_MIGRATION = readFileSync(
+  join(REPO_ROOT, "migrations", "2026-08-26-trainee-registration-v12-layout-draft.sql"),
+  "utf8",
+);
+
+test("v12 DRAFT migration inserts version 12 as DRAFT, never publishes, never mutates", () => {
+  // DRAFT only — no publish pointer, no html_enabled flip, no jobs.
+  assert.match(V12_MIGRATION, /, 12, 'DRAFT',/);
+  assert.match(V12_MIGRATION, /'\[\]'::jsonb/);
+  assert.doesNotMatch(V12_MIGRATION, /current_published_version/);
+  assert.doesNotMatch(V12_MIGRATION, /html_enabled/);
+  assert.doesNotMatch(V12_MIGRATION, /\b(DROP|DELETE|TRUNCATE)\b/i);
+});
+
+test("v12 DRAFT migration is guarded (WHERE NOT EXISTS) and ends with a read-only SELECT", () => {
+  assert.match(V12_MIGRATION, /WHERE NOT EXISTS\s*\(/);
+  assert.match(V12_MIGRATION, /existing\.version = 12 OR existing\.source_docx_name/);
+  // Verification SELECT must not write anything.
+  const verification = V12_MIGRATION.slice(V12_MIGRATION.lastIndexOf("SELECT"));
+  assert.match(verification, /SELECT version, status, mapping_snapshot/);
+  assert.doesNotMatch(verification, /\b(INSERT|UPDATE|DELETE|DROP)\b/i);
+});
