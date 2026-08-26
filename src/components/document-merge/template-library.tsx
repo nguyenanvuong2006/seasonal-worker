@@ -22,6 +22,7 @@ import {
   DraftVersionPreviewModal,
   type PreviewVersionTarget,
 } from "@/components/document-merge/draft-version-preview-modal";
+import { PublishChecklistModal } from "@/components/document-merge/publish-checklist-modal";
 import {
   DraftVersionEditorModal,
   VersionCloneConfirmModal,
@@ -150,6 +151,8 @@ export function TemplateLibrary({ onSelectForMerge }: { onSelectForMerge: (templ
   const [highlightVersionId, setHighlightVersionId] = useState<string | null>(null);
   // DRAFT VERSION PREVIEW — read-only "Xem trước"; never publishes.
   const [previewVersion, setPreviewVersion] = useState<PreviewVersionTarget | null>(null);
+  /** Version chờ xác nhận qua PublishChecklistModal trước khi publish/rollback thật. */
+  const [publishChecklistTarget, setPublishChecklistTarget] = useState<{ version: TemplateVersion; action: "publish" | "rollback" } | null>(null);
   const [syncingGoogleDoc, setSyncingGoogleDoc] = useState(false);
   const [draftHtml, setDraftHtml] = useState("");
   const [draftCss, setDraftCss] = useState("");
@@ -245,10 +248,23 @@ export function TemplateLibrary({ onSelectForMerge }: { onSelectForMerge: (templ
     setForm(EMPTY_FORM);
   };
 
-  const runVersionAction = async (version: TemplateVersion, action: "publish" | "archive" | "rollback") => {
-    if (!editing) return;
+  /**
+   * archive: still a plain window.confirm — Lưu trữ never publishes content,
+   * so the richer PublishChecklistModal (Phase 7) is not required for it.
+   * publish/rollback: NEVER call this with a window.confirm gate anymore —
+   * both always go through PublishChecklistModal first (see
+   * openPublishChecklist / the modal's onConfirmed below), which itself
+   * calls this function with skipConfirm=true after the operator has
+   * completed the machine checks + all 5 checkboxes.
+   */
+  const runVersionAction = async (
+    version: TemplateVersion,
+    action: "publish" | "archive" | "rollback",
+    skipConfirm = false,
+  ): Promise<boolean> => {
+    if (!editing) return false;
     const label = action === "publish" ? "Xuất bản" : action === "archive" ? "Lưu trữ" : "Khôi phục";
-    if (!window.confirm(`${label} version ${version.version} của "${editing.name}"?`)) return;
+    if (!skipConfirm && !window.confirm(`${label} version ${version.version} của "${editing.name}"?`)) return false;
     setVersionAction(`${action}:${version.id}`);
     try {
       const res = await fetch(
@@ -259,8 +275,10 @@ export function TemplateLibrary({ onSelectForMerge }: { onSelectForMerge: (templ
       if (!res.ok) throw new Error(data.error || `Không ${label.toLowerCase()} được version.`);
       await loadVersions(editing.id);
       await loadTemplates();
+      return true;
     } catch (err) {
       alert(err instanceof Error ? err.message : `Không ${label.toLowerCase()} được version.`);
+      return false;
     } finally {
       setVersionAction(null);
     }
@@ -851,8 +869,8 @@ export function TemplateLibrary({ onSelectForMerge }: { onSelectForMerge: (templ
                             {version.status !== "PUBLISHED" && (
                               <button
                                 disabled={versionAction !== null}
-                                onClick={() => runVersionAction(version, "publish")}
-                                title="Publish — version PUBLISHED trở thành bản render cho batch HTML/PDF (chỉ 1 version PUBLISHED/template)."
+                                onClick={() => setPublishChecklistTarget({ version, action: "publish" })}
+                                title="Publish — version PUBLISHED trở thành bản render cho batch HTML/PDF (chỉ 1 version PUBLISHED/template). Mở checklist xác nhận trước khi xuất bản."
                                 className="rounded-lg bg-emerald-700 px-2.5 py-1.5 text-[10px] font-bold text-white hover:bg-emerald-800 disabled:opacity-50"
                               >
                                 Xuất bản phiên bản
@@ -861,8 +879,8 @@ export function TemplateLibrary({ onSelectForMerge }: { onSelectForMerge: (templ
                             {version.status === "PUBLISHED" && (
                               <button
                                 disabled={versionAction !== null}
-                                onClick={() => runVersionAction(version, "rollback")}
-                                title="Publish lại version này (no-op nếu đã PUBLISHED)."
+                                onClick={() => setPublishChecklistTarget({ version, action: "rollback" })}
+                                title="Publish lại version này (no-op nếu đã PUBLISHED). Mở checklist xác nhận trước khi xuất bản lại."
                                 className="rounded-lg border border-emerald-200 bg-emerald-50 px-2.5 py-1.5 text-[10px] font-bold text-emerald-700 hover:bg-emerald-100 disabled:opacity-50"
                               >
                                 Xuất bản lại
@@ -881,8 +899,8 @@ export function TemplateLibrary({ onSelectForMerge }: { onSelectForMerge: (templ
                             {version.status === "ARCHIVED" && (
                               <button
                                 disabled={versionAction !== null}
-                                onClick={() => runVersionAction(version, "rollback")}
-                                title="Khôi phục: publish lại version ARCHIVED này làm bản hiện hành."
+                                onClick={() => setPublishChecklistTarget({ version, action: "rollback" })}
+                                title="Khôi phục: publish lại version ARCHIVED này làm bản hiện hành. Mở checklist xác nhận trước khi xuất bản lại."
                                 className="rounded-lg border border-slate-200 px-2.5 py-1.5 text-[10px] font-semibold text-slate-600 hover:bg-slate-50 disabled:opacity-50"
                               >
                                 Khôi phục
@@ -1008,6 +1026,22 @@ export function TemplateLibrary({ onSelectForMerge }: { onSelectForMerge: (templ
           templateName={editing.name}
           version={previewVersion}
           onClose={() => setPreviewVersion(null)}
+        />
+      )}
+
+      {editing && publishChecklistTarget && (
+        <PublishChecklistModal
+          templateId={editing.id}
+          templateName={editing.name}
+          target={publishChecklistTarget.version}
+          currentPublishedVersionId={versions.find((v) => v.status === "PUBLISHED")?.id ?? null}
+          currentPublishedVersionNumber={versions.find((v) => v.status === "PUBLISHED")?.version ?? null}
+          action={publishChecklistTarget.action}
+          onClose={() => setPublishChecklistTarget(null)}
+          onConfirmed={async () => {
+            const ok = await runVersionAction(publishChecklistTarget.version, publishChecklistTarget.action, true);
+            if (ok) setPublishChecklistTarget(null);
+          }}
         />
       )}
 

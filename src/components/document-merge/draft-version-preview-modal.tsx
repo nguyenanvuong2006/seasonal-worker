@@ -17,13 +17,14 @@
  * byte-for-byte. The document itself is never restyled here.
  */
 
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { AlertTriangle, Eye, ExternalLink, FileText, Printer, Search, X } from "lucide-react";
 import {
   buildPrintViewUrl,
   canOpenPrintView,
   hasRenderedPreview,
 } from "@/lib/document-merge/print-preview";
+import { decoratePreviewForA4Sheets } from "@/lib/document-merge/preview-a4-decoration";
 
 export type PreviewVersionTarget = {
   id: string;
@@ -139,6 +140,10 @@ export function DraftVersionPreviewModal({
   const [selected, setSelected] = useState<Candidate | null>(null);
   const [rendering, setRendering] = useState(false);
   const [result, setResult] = useState<PreviewResult | null>(null);
+  // Preview-only, screen-media A4 sheet boundaries ("Trang N" labels) — never
+  // fed back into the renderer; the canonical HTML used for the real merge/PDF
+  // is untouched. See preview-a4-decoration.ts for why this is an approximation.
+  const decoratedPreviewHtml = useMemo(() => (result ? decoratePreviewForA4Sheets(result.renderedHtml) : ""), [result]);
   const [problem, setProblem] = useState<Problem | null>(null);
   /** The candidate id that produced the CURRENT renderedHtml (so the print view
    *  never drifts if the operator picks another candidate without re-rendering). */
@@ -477,12 +482,18 @@ export function DraftVersionPreviewModal({
                   {[...new Set([...result.unreplaced, ...result.missingFields])].join(", ")}
                 </p>
               )}
+              <p className="text-[10px] text-slate-400">
+                Xem trước bên dưới đóng khung từng trang theo tỉ lệ A4 để dễ phân biệt — đây là bản{" "}
+                <b>GẦN ĐÚNG</b> (trình duyệt không phân trang khi hiển thị màn hình thường như khi in thật). Nếu một
+                trang bị tràn nội dung dài hơn 1 trang A4 thật, hãy dùng <b>In / Lưu PDF TEST</b> bên dưới — PDF thật
+                mới là nguồn xác thực cuối cùng.
+              </p>
               <iframe
                 id="draft-preview-frame"
                 title={`Bản xem trước v${result.version}`}
                 sandbox="allow-modals"
-                srcDoc={result.renderedHtml}
-                className="h-[600px] w-full rounded-lg border border-slate-200 bg-white"
+                srcDoc={decoratedPreviewHtml}
+                className="h-[600px] w-full rounded-lg border border-slate-200 bg-slate-500"
               />
             </div>
           )}
