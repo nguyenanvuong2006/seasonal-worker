@@ -11,6 +11,12 @@
  * - storage_key = đường dẫn tương đối (vd Candidate Documents/2026/08/17/....pdf)
  *   → Neon giữ key, không hardcode URL.
  * - Không expose secret: token chỉ ở server/worker.
+ *
+ * HARDENING (no-schema phase):
+ * - ensureFolderPath single-flight: concurrent callers share one Promise per path
+ * - READ path never creates folders: resolveFolderPath (read-only)
+ * - findFolderByName throws on non-2xx (auth/rate-limit/5xx) instead of returning null
+ * - findFileId uses read-only resolver and propagates errors, only returns null for genuine not-found
  */
 
 import type { StorageProvider, StoredObject } from "./types.ts";
@@ -114,6 +120,7 @@ export class GoogleDriveStorageProvider implements StorageProvider {
   readonly name = "google_drive";
   private readonly rootFolderId: string | null;
   private folderCache = new Map<string, string>(); // path → folder id
+  private folderInflight = new Map<string, Promise<string>>(); // path → in-flight creation promise (single-flight)
 
   constructor() {
     this.rootFolderId = process.env.GOOGLE_DRIVE_ROOT_FOLDER_ID?.trim() || null;
@@ -126,14 +133,18 @@ export class GoogleDriveStorageProvider implements StorageProvider {
     const q = `mimeType='${FOLDER_MIME}' and name='${name.replace(/'/g, "\\'")}' and trashed=false${
       parentId ? ` and '${parentId}' in parents` : ""
     }`;
-    const res = await driveFetch(`${DRIVE_API}/files?q=${encodeURIComponent(q)}&fields=files(id,name)&pageSize=5`);
-    if (!res.ok) return null;
+    const res = await driveFetch(`${DRIVE_API}/files?q=${encodeURIComponent(q)}&fields=files(id,name)&pageSize=5&supportsAllDrives=true`);
+    if (!res.ok) {
+      const detail = await res.text().catch(() => "");
+      // Propagate auth / rate-limit / 5xx – do NOT convert to not-found
+      throw new Error(`GOOGLE_DRIVE_FOLDER_LOOKUP_${res.status}: ${detail.slice(0, 500)}`);
+    }
     const data = (await res.json()) as { files?: { id: string }[] };
     return data.files?.[0]?.id ?? null;
   }
 
   private async createFolder(name: string, parentId: string | null): Promise<string> {
-    const res = await driveFetch(`${DRIVE_API}/files?fields=id`, {
+    const res = await driveFetch(`${DRIVE_API}/files?fields=id&supportsAllDrives=true`, {
       method: "POST",
       body: JSON.stringify({
         name,
@@ -149,30 +160,90 @@ export class GoogleDriveStorageProvider implements StorageProvider {
     return data.id;
   }
 
-  /** Đảm bảo chuỗi folder theo storage_key; trả folder id của thư mục chứa file. */
+  /** WRITE PATH: Đảm bảo chuỗi folder theo storage_key; trả folder id của thư mục chứa file. Single-flight. */
   private async ensureFolderPath(pathParts: string[]): Promise<string> {
     let parentId: string | null = this.rootFolderId;
     let acc = "";
     for (const part of pathParts) {
       acc = acc ? `${acc}/${part}` : part;
+
       const cached = this.folderCache.get(acc);
       if (cached) {
         parentId = cached;
         continue;
       }
-      let id = parentId ? await this.findFolderByName(part, parentId) : null;
-      if (!id) {
-        if (parentId === null && acc === pathParts[0]) {
-          // Root 'Seasonal Worker Documents' — tìm hoặc tạo dưới My Drive.
-          id = (await this.findFolderByName(part, null)) ?? (await this.createFolder(part, null));
+
+      const inflight = this.folderInflight.get(acc);
+      if (inflight) {
+        parentId = await inflight;
+        continue;
+      }
+
+      const currentParentId = parentId;
+      const currentAcc = acc;
+      const currentPart = part;
+      const isRootFirst = currentParentId === null && currentAcc === pathParts[0];
+
+      const creationPromise = (async (): Promise<string> => {
+        let id: string | null = null;
+        if (isRootFirst) {
+          id = await this.findFolderByName(currentPart, null);
+          if (!id) id = await this.createFolder(currentPart, null);
         } else {
-          id = await this.createFolder(part, parentId);
+          id = currentParentId ? await this.findFolderByName(currentPart, currentParentId) : null;
+          if (!id) id = await this.createFolder(currentPart, currentParentId);
+        }
+        return id;
+      })();
+
+      this.folderInflight.set(acc, creationPromise);
+      try {
+        const id = await creationPromise;
+        this.folderCache.set(acc, id);
+        parentId = id;
+      } finally {
+        this.folderInflight.delete(acc);
+      }
+    }
+    if (!parentId) throw new Error("GOOGLE_DRIVE_ROOT_MISSING");
+    return parentId;
+  }
+
+  /** READ PATH: resolve existing folder chain only – never creates. Returns null if any segment missing. Single-flight aware. */
+  private async resolveFolderPath(pathParts: string[]): Promise<string | null> {
+    let parentId: string | null = this.rootFolderId;
+    let acc = "";
+    for (const part of pathParts) {
+      acc = acc ? `${acc}/${part}` : part;
+
+      const cached = this.folderCache.get(acc);
+      if (cached) {
+        parentId = cached;
+        continue;
+      }
+
+      const inflight = this.folderInflight.get(acc);
+      if (inflight) {
+        try {
+          parentId = await inflight;
+          continue;
+        } catch {
+          // inflight creation failed – fall through to read-only lookup which will propagate or return null
         }
       }
+
+      let id: string | null;
+      if (parentId === null && acc === pathParts[0]) {
+        id = await this.findFolderByName(part, null);
+      } else {
+        id = parentId ? await this.findFolderByName(part, parentId) : null;
+      }
+
+      if (!id) return null;
+
       this.folderCache.set(acc, id);
       parentId = id;
     }
-    if (!parentId) throw new Error("GOOGLE_DRIVE_ROOT_MISSING");
     return parentId;
   }
 
@@ -227,22 +298,23 @@ export class GoogleDriveStorageProvider implements StorageProvider {
     };
   }
 
-  /** Tìm file theo key (folder path + name). */
+  /** READ-ONLY: Tìm file theo key (folder path + name) – never creates folders. Propagates auth/5xx, returns null only for genuine not-found. */
   private async findFileId(key: string): Promise<{ id: string; size?: number; sha256?: string } | null> {
     const { dirParts, filename } = this.splitKey(key);
-    try {
-      const folderId = await this.ensureFolderPath(dirParts);
-      const q = `name='${filename.replace(/'/g, "\\'")}' and trashed=false and '${folderId}' in parents`;
-      const res = await driveFetch(
-        `${DRIVE_API}/files?q=${encodeURIComponent(q)}&fields=files(id,size,sha256Checksum)&pageSize=10&supportsAllDrives=true`,
-      );
-      if (!res.ok) return null;
-      const data = (await res.json()) as { files?: { id: string; size?: string; sha256Checksum?: string }[] };
-      const file = data.files?.[0];
-      return file ? { id: file.id, size: Number(file.size ?? 0), sha256: file.sha256Checksum ?? undefined } : null;
-    } catch {
-      return null;
+    const folderId = await this.resolveFolderPath(dirParts);
+    if (!folderId) return null; // folder chain does not exist → file cannot exist, do not create
+
+    const q = `name='${filename.replace(/'/g, "\\'")}' and trashed=false and '${folderId}' in parents`;
+    const res = await driveFetch(
+      `${DRIVE_API}/files?q=${encodeURIComponent(q)}&fields=files(id,size,sha256Checksum)&pageSize=10&supportsAllDrives=true`,
+    );
+    if (!res.ok) {
+      const detail = await res.text().catch(() => "");
+      throw new Error(`GOOGLE_DRIVE_FILE_LOOKUP_${res.status}: ${detail.slice(0, 500)}`);
     }
+    const data = (await res.json()) as { files?: { id: string; size?: string; sha256Checksum?: string }[] };
+    const file = data.files?.[0];
+    return file ? { id: file.id, size: Number(file.size ?? 0), sha256: file.sha256Checksum ?? undefined } : null;
   }
 
   async get(key: string): Promise<Buffer> {
