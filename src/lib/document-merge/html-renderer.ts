@@ -146,6 +146,31 @@ th { font-weight: 700; text-align: center; }
 [data-template-code] { display: none !important; }
 `;
 
+/**
+ * Layout capability utilities (v12) — opt-in, class-scoped CSS. No existing
+ * template references these classes, so appending them to the shared print
+ * CSS is a no-op for every already-PUBLISHED template.
+ */
+export const LAYOUT_UTILITY_CSS = `
+.equal-columns-2 {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  column-gap: 8mm;
+  align-items: baseline;
+}
+.equal-columns-2 > * { min-width: 0; }
+.keep-with-next-small {
+  break-after: avoid;
+  page-break-after: avoid;
+}
+.variable-length {
+  overflow-wrap: anywhere;
+  word-break: normal;
+  white-space: normal;
+  min-width: 0;
+}
+`;
+
 /** Wrap trusted body + CSS into a Unicode A4 document suitable for Playwright. */
 export function wrapHtmlDocument(bodyHtml: string, css: string): string {
   return `<!DOCTYPE html>
@@ -153,7 +178,7 @@ export function wrapHtmlDocument(bodyHtml: string, css: string): string {
 <head>
 <meta charset="utf-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1" />
-<style>${A4_PRINT_CSS}\n${css}</style>
+<style>${A4_PRINT_CSS}\n${LAYOUT_UTILITY_CSS}\n${css}</style>
 </head>
 <body>${stripPreviewOnlyMarkup(bodyHtml)}</body>
 </html>`;
