@@ -39,7 +39,8 @@
  * snapshot).
  */
 
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
+import { decoratePreviewForA4Sheets } from "@/lib/document-merge/preview-a4-decoration";
 import {
   AlertTriangle,
   CheckCircle2,
@@ -409,6 +410,11 @@ export function DraftVersionEditorModal({
   const [selectedCandidate, setSelectedCandidate] = useState<PreviewCandidate | null>(null);
   const [previewing, setPreviewing] = useState(false);
   const [previewResult, setPreviewResult] = useState<UnsavedPreviewResult | null>(null);
+  // Preview-only, screen-media A4 sheet boundaries — see preview-a4-decoration.ts.
+  const decoratedPreviewHtml = useMemo(
+    () => (previewResult ? decoratePreviewForA4Sheets(previewResult.renderedHtml) : ""),
+    [previewResult],
+  );
   const [previewError, setPreviewError] = useState<string | null>(null);
   const [signingContext, setSigningContext] = useState<SigningContextInput>(EMPTY_SIGNING_CONTEXT_INPUT);
   /** The Signing Context that actually produced the CURRENT previewResult (for print parity). */
@@ -991,11 +997,15 @@ export function DraftVersionEditorModal({
                     Trường bắt buộc còn thiếu dữ liệu (ứng viên chưa có giá trị): {previewResult.missingFields.join(", ")}
                   </p>
                 )}
+                <p className="text-[10px] text-slate-400">
+                  Đóng khung theo tỉ lệ A4 để dễ phân biệt trang — đây là bản <b>GẦN ĐÚNG</b>; dùng{" "}
+                  <b>In / Lưu PDF TEST</b> bên dưới để xem bản in thật.
+                </p>
                 <iframe
                   title="Bản xem trước chưa lưu"
                   sandbox="allow-modals"
-                  srcDoc={previewResult.renderedHtml}
-                  className="h-[500px] w-full rounded-lg border border-slate-200 bg-white"
+                  srcDoc={decoratedPreviewHtml}
+                  className="h-[500px] w-full rounded-lg border border-slate-200 bg-slate-500"
                 />
               </div>
             )}
