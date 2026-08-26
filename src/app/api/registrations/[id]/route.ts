@@ -12,7 +12,7 @@ import { CCCD_ERROR_MESSAGE, isValidCccd, normalizeCccd } from "@/lib/validators
 import { assertNoOtherActiveSession, confirmResignationAndAssign, EmploymentRuleError } from "@/lib/employment";
 import { validateStartingDateInput } from "@/lib/employment-lifecycle";
 import { resolveDisplayName } from "@/lib/display-name";
-import { resolveAssignmentActor } from "@/lib/assignment-actor";
+import { resolveAssignmentActorWrite } from "@/lib/assignment-actor";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -119,7 +119,7 @@ export async function PATCH(req: Request, ctx: { params: Promise<{ id: string }>
 
     // ASSIGNMENT ACTOR (freeze) — chỉ khi xếp việc THẬT (non-APPROVED → APPROVED). Các save
     // không liên quan (sửa note/CCCD/...) KHÔNG ghi đè 3 trường này.
-    const assignmentActor = resolveAssignmentActor({
+    const assignmentActor = resolveAssignmentActorWrite({
       previousStatus: existing.status,
       nextStatus: typeof patch.status === "string" ? patch.status : null,
       username: guard.session.username,
@@ -170,6 +170,7 @@ export async function PATCH(req: Request, ctx: { params: Promise<{ id: string }>
             return NextResponse.json({ error: "Cần chọn Bộ phận mới trước khi xác nhận nghỉ & xếp việc." }, { status: 400 });
           }
           try {
+            const assignedByDisplayName = resolveDisplayName({ fullName: guard.session.fullName, username: guard.session.username });
             const result = await confirmResignationAndAssign({
               workerId: linkedForGuard.workerId,
               newSessionId: linkedForGuard.id,
@@ -178,7 +179,7 @@ export async function PATCH(req: Request, ctx: { params: Promise<{ id: string }>
               startingDate: (patch.startingDate as string | null) ?? today,
               reason: reason ?? "Xác nhận nghỉ bộ phận cũ khi xếp việc mới",
               confirmedBy: guard.session.username,
-              assignedByDisplayName: resolveDisplayName({ fullName: guard.session.fullName, username: guard.session.username }),
+              assignedByDisplayName,
             });
             await writeAudit(guard.session, "CONFIRM_RESIGNATION_AND_ASSIGN", "employment_sessions", {
               dailyApplicationId: id,
@@ -188,6 +189,9 @@ export async function PATCH(req: Request, ctx: { params: Promise<{ id: string }>
               actualResignationDate,
               newDeptId,
               reason,
+              // ASSIGNMENT ACTOR AUDIT — safe identifiers (username + display name).
+              assignedBy: guard.session.username,
+              assignedByDisplayName,
             });
             const [row] = await db.select().from(dailyApplications).where(eq(dailyApplications.id, id));
             return NextResponse.json({ success: true, row, employment: result });
@@ -303,11 +307,24 @@ export async function PATCH(req: Request, ctx: { params: Promise<{ id: string }>
         .filter((k) => k !== "updatedAt")
         .map((k) => [k, (existing as Record<string, unknown>)[k]]),
     );
+    // ASSIGNMENT ACTOR AUDIT — record safe actor identifiers (username +
+    // display name) so reassignment history is preserved without expanding PII.
+    // `existing` holds the OLD frozen actor; `assignmentActor` holds the NEW one
+    // (only present on a genuine non-APPROVED → APPROVED transition).
+    const actorAudit = assignmentActor
+      ? {
+          previousAssignedBy: (existing as Record<string, unknown>).assignedBy ?? null,
+          previousAssignedByDisplayName: (existing as Record<string, unknown>).assignedByDisplayName ?? null,
+          assignedBy: assignmentActor.assignedBy,
+          assignedByDisplayName: assignmentActor.assignedByDisplayName,
+        }
+      : undefined;
     await writeAudit(guard.session, "INLINE_EDIT", "daily_applications", {
       id,
       before: beforeSnapshot,
       after: patch,
       reason,
+      ...(actorAudit ? { assignmentActor: actorAudit } : {}),
     });
     return NextResponse.json({ success: true, row: updated });
   } catch (error) {

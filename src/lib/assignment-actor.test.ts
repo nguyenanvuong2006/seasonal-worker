@@ -8,7 +8,7 @@
  */
 import test from "node:test";
 import assert from "node:assert/strict";
-import { resolveAssignmentActor } from "./assignment-actor.ts";
+import { isAssignmentActorWriteEnabled, resolveAssignmentActor, resolveAssignmentActorWrite } from "./assignment-actor.ts";
 
 test("assignment freezes actor: non-APPROVED → APPROVED (User A)", () => {
   const actor = resolveAssignmentActor({
@@ -62,4 +62,44 @@ test("displayName preferred over username via centralized resolver (Vietnamese U
   });
   assert.equal(actor?.assignedByDisplayName, "Trần Mai");
   assert.equal(actor?.assignedBy, "tranmai");
+});
+
+// --- Deploy-order rollout gate (PR #114 pre-merge blocker #2) ----------
+
+test("isAssignmentActorWriteEnabled defaults to OFF (fail-closed)", () => {
+  delete process.env.ASSIGNMENT_ACTOR_WRITE_ENABLED;
+  assert.equal(isAssignmentActorWriteEnabled(), false);
+});
+
+test("isAssignmentActorWriteEnabled is ON only when set to exactly '1'", () => {
+  process.env.ASSIGNMENT_ACTOR_WRITE_ENABLED = "1";
+  assert.equal(isAssignmentActorWriteEnabled(), true);
+  process.env.ASSIGNMENT_ACTOR_WRITE_ENABLED = "true";
+  assert.equal(isAssignmentActorWriteEnabled(), false);
+  delete process.env.ASSIGNMENT_ACTOR_WRITE_ENABLED;
+});
+
+test("resolveAssignmentActorWrite returns null while the gate is OFF (no write before migration)", () => {
+  delete process.env.ASSIGNMENT_ACTOR_WRITE_ENABLED;
+  assert.equal(
+    resolveAssignmentActorWrite({ previousStatus: "PENDING", nextStatus: "APPROVED", username: "a", fullName: "A" }),
+    null,
+  );
+});
+
+test("resolveAssignmentActorWrite freezes actor once the gate is ON", () => {
+  process.env.ASSIGNMENT_ACTOR_WRITE_ENABLED = "1";
+  try {
+    const actor = resolveAssignmentActorWrite({
+      previousStatus: "PENDING",
+      nextStatus: "APPROVED",
+      username: "anvuong",
+      fullName: "Nguyễn An Vượng",
+    });
+    assert.ok(actor);
+    assert.equal(actor.assignedBy, "anvuong");
+    assert.equal(actor.assignedByDisplayName, "Nguyễn An Vượng");
+  } finally {
+    delete process.env.ASSIGNMENT_ACTOR_WRITE_ENABLED;
+  }
 });
