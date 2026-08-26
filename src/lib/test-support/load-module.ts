@@ -82,6 +82,10 @@ export function loadModule(url: URL, options: LoadOptions): Record<string, unkno
     URL,
     Headers,
     AbortController,
+    // Modules signing/verifying tokens (jose) or doing raw byte encoding
+    // (auth.ts's secretKey()) need these standard Web globals too.
+    TextEncoder,
+    TextDecoder,
   });
 
   vm.runInContext(js, context);

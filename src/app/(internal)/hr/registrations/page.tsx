@@ -3,6 +3,7 @@ import { and, asc, eq, inArray, sql } from "drizzle-orm";
 import { db } from "@/db";
 import { dailyApplications, departments, dwData } from "@/db/schema";
 import { getSession, getUserScope, hasPermission } from "@/lib/auth";
+import { resolveDataAccessMode } from "@/lib/data-scope";
 import { todayStr } from "@/lib/helpers";
 import RegistrationsGrid from "@/components/registrations-grid";
 import DailyApplicationScoped from "@/components/daily-application-scoped";
@@ -19,8 +20,13 @@ export default async function HrRegistrationsPage() {
 
   // Ngườu dùng CÓ Data Scope (Quản lý bộ phận) chỉ thấy bộ phận được phân quyền —
   // dropdown bộ lọc và toàn bộ số liệu đều thu hẹp theo scope.
+  // RBAC role-rename audit fix — GLOBAL/SCOPED/NONE thay vì 1 boolean "scoped":
+  // trước đây `scope !== null` gộp chung "có bộ phận cụ thể được cấp" (SCOPED,
+  // đúng là Quản lý bộ phận) với "chưa được cấp bộ phận nào" (NONE — có thể là
+  // vai trò chưa cấu hình Data Scope, KHÔNG có nghĩa họ là Department Manager).
   const scope = await getUserScope(session);
   const scoped = scope !== null;
+  const mode = resolveDataAccessMode(scope);
 
   // EMPLOYMENT LIFECYCLE (#8-C) — quyền "Xác nhận nghỉ & xếp việc mới" (server enforce lại độc lập).
   const canConfirmResignation = await hasPermission(session.role, "employment.resignation.confirm");
@@ -72,15 +78,19 @@ export default async function HrRegistrationsPage() {
         eyebrow={<SectionLabel>Recruitment Operations</SectionLabel>}
         title="Daily Application — Tiếp nhận & Xếp việc Tập nghề"
         description={
-          scoped
+          mode === "SCOPED"
             ? "Bộ lọc và danh sách chỉ hiển thị trong Data Scope được cấp cho tài khoản của bạn."
-            : "Mặc định chỉ hiện DW hôm nay. Tick ô “Xem khoảng ngày” để tra cứu & xuất kết quả các ngày trước. Cột DW Data tự động đối chiếu 3 tầng (CCCD → Tên+Năm sinh → Tên+SĐT)."
+            : mode === "NONE"
+              ? "Tài khoản của bạn chưa được cấp Data Scope (bộ phận) nào — chưa có dữ liệu để hiển thị. Liên hệ Admin để được gán Data Scope tại /admin/data-scopes."
+              : "Mặc định chỉ hiện DW hôm nay. Tick ô “Xem khoảng ngày” để tra cứu & xuất kết quả các ngày trước. Cột DW Data tự động đối chiếu 3 tầng (CCCD → Tên+Năm sinh → Tên+SĐT)."
         }
         actions={
           <>
             <Badge tone="gray">Sheet: Daily Application</Badge>
-            {scoped ? (
+            {mode === "SCOPED" ? (
               <Badge tone="purple" dot>Chế độ Quản lý bộ phận — chỉ bộ phận phân quyền</Badge>
+            ) : mode === "NONE" ? (
+              <Badge tone="amber" dot>Chưa được cấp Data Scope — chưa có bộ phận nào hiển thị</Badge>
             ) : (
               <>
                 <Badge tone="gold" dot>Inline edit như Google Sheet</Badge>
@@ -104,7 +114,7 @@ export default async function HrRegistrationsPage() {
       />
 
       {scoped ? (
-        <DailyApplicationScoped departments={depts} initialFrom={todayStr()} />
+        <DailyApplicationScoped departments={depts} initialFrom={todayStr()} mode={mode === "NONE" ? "NONE" : "SCOPED"} />
       ) : (
         <RegistrationsGrid departments={depts} canEdit canConfirmResignation={canConfirmResignation} />
       )}

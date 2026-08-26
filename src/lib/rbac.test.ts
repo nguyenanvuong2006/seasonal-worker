@@ -1,5 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
+import { readFileSync, readdirSync } from "node:fs";
+import { fileURLToPath } from "node:url";
 import {
   BASELINE_ROLE_PERMISSIONS,
   BASELINE_ROLE_KEYS,
@@ -63,6 +65,75 @@ test("catalog: mọi key legacy map đều trỏ tới key có trong catalog", (
     assert.ok(targets.length > 0, `${legacy} must map to >= 1 new key`);
     for (const t of targets) assert.ok(catalogKeys.has(t), `${legacy} -> ${t} not in catalog`);
   }
+});
+
+/* ============================================================
+   CATALOG CONSISTENCY AUDIT (Batch Permission Editor bug: "planning.columns.
+   manage" was live in the DB — inserted directly by a migration — and
+   actively enforced by requirePermission()/hasPermission() call sites, but
+   was NEVER added to PERMISSION_CATALOG. GET /api/admin/permissions reads
+   the DB `permissions` table (so it displayed the toggle) while
+   toggle/batch_update_permissions validated against getCatalogPermission()
+   (which didn't know it) — a route could enforce a permission the catalog
+   had no record of at all. This scans every ROUTE/SERVICE source file for
+   every permission key literal actually passed to requirePermission()/
+   hasPermission()/requireRoleAndPermission() and asserts each one exists in
+   PERMISSION_CATALOG — the single canonical source GET and POST both read.
+   A future migration or route that introduces a new enforced permission
+   key without adding it here fails this test immediately, instead of
+   surfacing as "Permission key không hợp lệ" the first time an admin tries
+   to save it.
+   ============================================================ */
+test("catalog consistency: every permission key literal enforced by requirePermission()/hasPermission() in src/ exists in PERMISSION_CATALOG", () => {
+  const srcDir = fileURLToPath(new URL("../", import.meta.url)); // .../src
+  const catalogKeys = new Set(allKeys);
+  const found = new Map<string, string>(); // key -> first file it was found in
+
+  const CALL_PATTERNS = [
+    /requirePermission\(\s*\[[^\]]*\]\s*,\s*"([a-zA-Z0-9_.]+)"/g,
+    /requireRoleAndPermission\(\s*(?:\[[^\]]*\]|\.\.\.[A-Za-z0-9_]+)\s*,\s*"([a-zA-Z0-9_.]+)"/g,
+    /hasPermission\(\s*[^,()]+\s*,\s*"([a-zA-Z0-9_.]+)"/g,
+  ];
+
+  function walk(dir: string) {
+    for (const entry of readdirSync(dir, { withFileTypes: true })) {
+      if (entry.name === "node_modules" || entry.name.startsWith(".")) continue;
+      const full = `${dir}/${entry.name}`;
+      if (entry.isDirectory()) {
+        walk(full);
+        continue;
+      }
+      if (!/\.(ts|tsx)$/.test(entry.name) || entry.name.endsWith(".test.ts")) continue;
+      // rbac-catalog.ts/rbac.ts/auth.ts define these functions — their own
+      // parameter names ("permissionKey") are not string literals and never
+      // match; nothing to exclude specially there.
+      const source = readFileSync(full, "utf8");
+      for (const pattern of CALL_PATTERNS) {
+        for (const m of source.matchAll(pattern)) {
+          const key = m[1];
+          if (!found.has(key)) found.set(key, full.slice(srcDir.length));
+        }
+      }
+    }
+  }
+  walk(srcDir.replace(/\/$/, ""));
+
+  assert.ok(found.size > 30, `sanity check: expected to find dozens of enforced permission keys, found ${found.size}`);
+
+  const missing = [...found.entries()].filter(([key]) => !catalogKeys.has(key));
+  assert.deepEqual(
+    missing,
+    [],
+    `permission key(s) enforced in code but missing from PERMISSION_CATALOG: ${missing.map(([k, f]) => `${k} (${f})`).join(", ")}`,
+  );
+});
+
+test("RBAC role-rename audit: data_scope.unrestricted baseline is EXACTLY ADMIN + HR_RECRUITER (locks getUserScope()'s pre-existing default, no accidental broadening to other roles)", () => {
+  const grantedTo = Object.entries(BASELINE_ROLE_PERMISSIONS)
+    .filter(([, keys]) => keys.includes("data_scope.unrestricted"))
+    .map(([role]) => role)
+    .sort();
+  assert.deepEqual(grantedTo, ["ADMIN", "HR_RECRUITER"]);
 });
 
 test("HR_DIRECTOR (mục G): business authority — có hồ sơ/planning/workforce/export/audit; KHÔNG quản trị", () => {

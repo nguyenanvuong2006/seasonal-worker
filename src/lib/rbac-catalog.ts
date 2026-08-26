@@ -83,6 +83,22 @@ export const PERMISSION_CATALOG: readonly CatalogPermission[] = [
   { key: "planning.edit", name: "Sửa Planning (revise)", group: "planning" },
   { key: "planning.activate", name: "Kích hoạt Planning", group: "planning" },
   { key: "planning.import", name: "Import/Export Recruitment Requests", group: "planning" },
+  // CATALOG CONSISTENCY FIX (Batch Permission Editor audit) — 3 quyền này đã
+  // được INSERT thẳng vào bảng `permissions`/`role_permissions` bởi migration
+  // 2026-08-17-planning-recruitment-upgrade.sql (Phần 5) và ĐÃ được các route
+  // Planning thật enforce (planning/column-config/route.ts, planning/reallocate/
+  // route.ts, task-center/route.ts) từ trước — nhưng KHÔNG BAO GIỜ được thêm
+  // vào PERMISSION_CATALOG này. Vì GET /api/admin/permissions hiển thị quyền
+  // từ DB (đã có 3 dòng này) nhưng toggle/batch_update_permissions validate
+  // qua getCatalogPermission() (KHÔNG biết 3 key này) + KEY_RE (chỉ cho tối đa
+  // 1 dấu chấm, trong khi "planning.columns.manage" có 2 dấu chấm) — mọi lần
+  // lưu (đơn lẻ hay batch) có đụng tới 1 trong 3 quyền này đều bị từ chối
+  // "Permission key không hợp lệ". Thêm vào đây để catalog LÀ nguồn chân lý
+  // DUY NHẤT mà cả GET (hiển thị) và POST (validate) đều đối chiếu — không có
+  // catalog frontend/backend tách biệt.
+  { key: "planning.reallocate", name: "Chuyển phân bổ DW sang yêu cầu khác", group: "planning" },
+  { key: "planning.columns.manage", name: "Cấu hình cột bảng Planning", group: "planning" },
+  { key: "planning.comment", name: "Bình luận / ghi chú yêu cầu", group: "planning" },
   // WORKFORCE REQUEST LINKAGE — quyền gắn liền kiến trúc Workforce Request.
   // planning.overallocate MẶC ĐỊNH KHÔNG NẰM TRONG BASELINE (fail-closed): admin cấp
   // tại /admin/permissions khi business cần cho phép vượt tổng nhu cầu (mục 6).
@@ -116,6 +132,13 @@ export const PERMISSION_CATALOG: readonly CatalogPermission[] = [
   // Data Scope
   { key: "data_scope.view", name: "Xem cấu hình Data Scope", group: "data_scope" },
   { key: "data_scope.manage", name: "Gán / gỡ Data Scope", group: "data_scope" },
+  // RBAC ROLE-RENAME AUDIT FIX — Data Scope mặc định (KHÔNG hardcode "role ===
+  // ADMIN || role === HR_RECRUITER" ở getUserScope()). Vai trò nào cần được coi
+  // "không giới hạn theo bộ phận" khi CHƯA được gán Data Scope tường minh (vd vai
+  // trò tra cứu DW Data toàn công ty như trước đây là "Administration") thì admin
+  // cấp quyền này ở /admin/permissions — giống hệt cách dw.view được cấp — KHÔNG
+  // cần sửa code, KHÔNG phụ thuộc role.key/role.name cụ thể nào.
+  { key: "data_scope.unrestricted", name: "Không giới hạn Data Scope theo bộ phận (mặc định khi chưa gán)", group: "data_scope" },
   // Phân quyền & Nhật ký
   { key: "rbac.view", name: "Xem cấu hình Phân quyền", group: "rbac" },
   { key: "rbac.manage", name: "Quản lý Vai trò & Phân quyền", group: "rbac" },
@@ -262,6 +285,9 @@ export const BASELINE_ROLE_PERMISSIONS: Readonly<Record<string, readonly string[
     "planning.edit",
     "planning.activate",
     "planning.import",
+    // Khớp migration 2026-08-17-planning-recruitment-upgrade.sql (Phần 5).
+    "planning.reallocate",
+    "planning.comment",
     "workforce_request.view",
     "workforce_request.allocate",
     "workforce_request.comment",
@@ -288,11 +314,18 @@ export const BASELINE_ROLE_PERMISSIONS: Readonly<Record<string, readonly string[
     "document_merge.execute",
     "document_merge.history.view",
     "document_merge.history.delete",
+    // Preserves the EXACT existing getUserScope() default: HR_RECRUITER with no
+    // explicit user_department_scopes rows is unrestricted (null), same as before
+    // this permission existed — see auth.ts getUserScope().
+    "data_scope.unrestricted",
   ],
   DEPT_MANAGER: [
     "registrations.view",
     "planning.view",
     "planning.request",
+    // Khớp migration 2026-08-17-planning-recruitment-upgrade.sql (Phần 5) —
+    // DEPT_MANAGER chỉ được BÌNH LUẬN, không import/sửa/tái phân bổ/cấu hình cột.
+    "planning.comment",
     "workforce_request.view",
     "workforce_request.comment",
     "workforce_movements.view",
