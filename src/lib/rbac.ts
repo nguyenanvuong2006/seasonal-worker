@@ -185,20 +185,28 @@ export async function listRolePermissionMatrix() {
   return rows;
 }
 
-/** Gán / gỡ 1 quyền cho 1 role (upsert) — trả về action audit tương ứng. */
+/**
+ * Gán / gỡ 1 quyền cho 1 role (upsert) — trả về action audit tương ứng.
+ *
+ * `client` mặc định là `db` (dùng cho toggle đơn lẻ, hành vi không đổi) — Batch
+ * Permission Editor truyền vào `tx` (từ `db.transaction()`) để MỌI upsert của
+ * cùng 1 lần lưu chạy trong CÙNG một transaction: lỗi ở bất kỳ dòng nào rollback
+ * toàn bộ, không bao giờ để role ở trạng thái quyền nửa vời.
+ */
 export async function upsertRolePermission(
   roleKey: string,
   permissionKey: string,
   allowed: boolean,
+  client: Pick<typeof db, "select" | "update" | "insert"> = db,
 ): Promise<"ASSIGN_PERMISSION_TO_ROLE" | "REMOVE_PERMISSION_FROM_ROLE"> {
-  const [existing] = await db
+  const [existing] = await client
     .select()
     .from(rolePermissions)
     .where(and(eq(rolePermissions.role, roleKey), eq(rolePermissions.permissionKey, permissionKey)));
   if (existing) {
-    await db.update(rolePermissions).set({ allowed }).where(eq(rolePermissions.id, existing.id));
+    await client.update(rolePermissions).set({ allowed }).where(eq(rolePermissions.id, existing.id));
   } else {
-    await db.insert(rolePermissions).values({ role: roleKey, permissionKey, allowed });
+    await client.insert(rolePermissions).values({ role: roleKey, permissionKey, allowed });
   }
   return allowed ? "ASSIGN_PERMISSION_TO_ROLE" : "REMOVE_PERMISSION_FROM_ROLE";
 }

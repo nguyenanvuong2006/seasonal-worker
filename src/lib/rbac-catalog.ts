@@ -401,4 +401,28 @@ export const RBAC_AUDIT_ACTIONS = [
   "ASSIGN_PERMISSION_TO_ROLE",
   "REMOVE_PERMISSION_FROM_ROLE",
   "UPDATE_PERMISSION",
+  "BATCH_UPDATE_ROLE_PERMISSIONS",
 ] as const;
+
+/**
+ * BATCH PERMISSION EDITOR — "bulk enable" safety net.
+ * ---------------------------------------------------------------------
+ * "Bật tất cả" / "Bật cả nhóm" must NEVER silently sweep a system-
+ * administration capability onto a business role (e.g. a role literally
+ * named "C&B - Code DW" ending up with rbac.manage or users.manage just
+ * because someone clicked "enable everything"). These keys are excluded
+ * from any BLANKET enable action; the client shows why. This does NOT
+ * block an admin from granting one of these individually — a deliberate,
+ * one-by-one toggle for a specific role is still allowed and still goes
+ * through the exact same requirePermission(["ADMIN"], "rbac.manage") gate
+ * as every other permission change.
+ */
+export const BULK_ENABLE_PROTECTED_PERMISSION_KEYS: ReadonlySet<string> = new Set([
+  "users.manage",
+  "rbac.manage",
+  "data_scope.manage",
+  "backup.manage",
+  "branding.manage",
+  "system.view",
+  "workflow.manage",
+]);

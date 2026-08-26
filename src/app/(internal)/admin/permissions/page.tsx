@@ -1,8 +1,19 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { Badge, Button, Card, CardContent, CardHeader, FormField, Input, Modal, toast } from "@/components/ui";
-import { Copy, Loader2, Pencil, Plus, Power, ShieldCheck } from "lucide-react";
+import { Badge, Button, Card, CardContent, CardHeader, ConfirmDialog, FormField, Input, Modal, toast } from "@/components/ui";
+import { Copy, Lock, Loader2, Pencil, Plus, Power, RotateCcw, Save, ShieldCheck } from "lucide-react";
+import { BULK_ENABLE_PROTECTED_PERMISSION_KEYS } from "@/lib/rbac-catalog";
+import {
+  applyBulk,
+  buildBatchChanges,
+  computeChangedKeys,
+  effectiveAllowed,
+  resetToBaseline,
+  shouldConfirmDiscard,
+  toggleOne as toggleOnePure,
+  type PermissionMap,
+} from "@/lib/rbac-batch-editor";
 
 type RoleRow = {
   id: string;
@@ -29,7 +40,7 @@ type LoadData = {
 const TABS = [
   { key: "roles", label: "Vai trò (Roles)" },
   { key: "permissions", label: "Danh mục quyền (Permissions)" },
-  { key: "matrix", label: "Ma trận quyền" },
+  { key: "matrix", label: "Chỉnh sửa quyền theo vai trò" },
 ] as const;
 
 export default function PermissionsPage() {
@@ -75,29 +86,134 @@ export default function PermissionsPage() {
     void load();
   }, [load]);
 
-  const isAllowed = useMemo(() => {
-    const map = new Map<string, boolean>();
-    for (const m of data?.matrix ?? []) map.set(`${m.role}:${m.permissionKey}`, m.allowed);
-    return (role: string, key: string) => {
-      if (role === "ADMIN") return true; // bypass cứng
-      const v = map.get(`${role}:${key}`);
-      return v ?? false; // fail-closed: chưa cấu hình = từ chối
-    };
+  /* ================================================================
+   * BATCH PERMISSION EDITOR (tab "matrix") — local dirty-state model.
+   * Toggling a permission ONLY updates `draft` (client state). Nothing is
+   * sent to the server, and the page never refetches, until the admin
+   * explicitly clicks "Lưu thay đổi". `baseline` is the last-known-persisted
+   * state for the SELECTED role, used both to compute what's dirty and to
+   * restore on "Hủy thay đổi".
+   * ================================================================ */
+  const editableRoles = useMemo(() => (data?.roles ?? []).filter((r) => r.key !== "ADMIN"), [data]);
+
+  const [selectedRole, setSelectedRole] = useState<string>("");
+  const [baseline, setBaseline] = useState<PermissionMap>(new Map());
+  const [draft, setDraft] = useState<PermissionMap>(new Map());
+  const [savingBatch, setSavingBatch] = useState(false);
+  // Discard-confirmation targets: set when the admin tries to switch role/tab
+  // while dirty; the actual switch only happens if they confirm.
+  const [pendingRoleKey, setPendingRoleKey] = useState<string | null>(null);
+  const [pendingTabKey, setPendingTabKey] = useState<(typeof TABS)[number]["key"] | null>(null);
+
+  // Default to the first editable, active role once data loads.
+  useEffect(() => {
+    if (!data || selectedRole) return;
+    const first = editableRoles.find((r) => r.isActive) ?? editableRoles[0];
+    if (first) setSelectedRole(first.key);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [data]);
 
-  const toggle = async (role: string, key: string) => {
-    const next = !isAllowed(role, key);
-    const res = await fetch("/api/admin/permissions", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ action: "toggle", role, permissionKey: key, allowed: next }),
-    });
-    const json = await res.json().catch(() => ({}));
-    if (!res.ok) {
-      toast({ title: json.error ?? "Thao tác thất bại.", variant: "destructive" });
+  // Re-derive baseline/draft from the (possibly just-saved) matrix whenever the
+  // selected role actually changes — never while the admin is mid-edit.
+  useEffect(() => {
+    if (!selectedRole || !data) return;
+    const map = new Map<string, boolean>();
+    for (const m of data.matrix) if (m.role === selectedRole) map.set(m.permissionKey, m.allowed);
+    setBaseline(map);
+    setDraft(new Map(map));
+  }, [selectedRole, data]);
+
+  const changedKeys = useMemo(() => computeChangedKeys(baseline, draft), [baseline, draft]);
+  const isDirty = changedKeys.length > 0;
+
+  const selectedRoleRow = editableRoles.find((r) => r.key === selectedRole) ?? null;
+  const roleEditingDisabled = !selectedRoleRow || !selectedRoleRow.isActive;
+
+  // Hard navigation / refresh / tab close while dirty — native browser prompt.
+  useEffect(() => {
+    if (!isDirty) return;
+    const handler = (e: BeforeUnloadEvent) => {
+      e.preventDefault();
+      e.returnValue = "";
+    };
+    window.addEventListener("beforeunload", handler);
+    return () => window.removeEventListener("beforeunload", handler);
+  }, [isDirty]);
+
+  /** In-app "leave the editor" guard shared by role switch and tab switch. */
+  const requestRoleChange = (roleKey: string) => {
+    if (shouldConfirmDiscard(selectedRole, roleKey, isDirty)) {
+      setPendingRoleKey(roleKey);
       return;
     }
-    await load();
+    if (roleKey !== selectedRole) setSelectedRole(roleKey);
+  };
+
+  const requestTabChange = (nextTab: (typeof TABS)[number]["key"]) => {
+    const dirtyHere = tab === "matrix" && isDirty;
+    if (shouldConfirmDiscard(tab, nextTab, dirtyHere)) {
+      setPendingTabKey(nextTab);
+      return;
+    }
+    if (nextTab !== tab) setTab(nextTab);
+  };
+
+  const toggleOne = (key: string) => {
+    if (roleEditingDisabled) return;
+    setDraft((prev) => toggleOnePure(prev, key));
+  };
+
+  /** "Bật cả nhóm"/"Tắt cả nhóm" and "Bật tất cả"/"Tắt tất cả" share this. */
+  const setBulk = (keys: string[], allowed: boolean) => {
+    if (roleEditingDisabled) return;
+    let excludedCount = 0;
+    let excludedList: string[] = [];
+    setDraft((prev) => {
+      const { next, excluded } = applyBulk(prev, keys, allowed, BULK_ENABLE_PROTECTED_PERMISSION_KEYS);
+      excludedCount = excluded.length;
+      excludedList = excluded;
+      return next;
+    });
+    if (excludedCount > 0) {
+      toast({
+        title: `Đã bỏ qua ${excludedCount} quyền quản trị hệ thống (${excludedList.join(", ")}) — bật thủ công nếu chắc chắn cần cấp.`,
+      });
+    }
+  };
+
+  const cancelBatch = () => {
+    setDraft(resetToBaseline(baseline));
+  };
+
+  const saveBatch = async () => {
+    if (!selectedRole || !isDirty) return;
+    setSavingBatch(true);
+    const changes = buildBatchChanges(baseline, draft);
+    try {
+      const res = await fetch("/api/admin/permissions", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ action: "batch_update_permissions", role: selectedRole, changes }),
+      });
+      const json = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        toast({ title: json.error ?? "Lưu thay đổi thất bại.", variant: "destructive" });
+        return;
+      }
+      // Merge the confirmed changes into local state — no full reload.
+      setData((prev) => {
+        if (!prev) return prev;
+        const matrixMap = new Map(prev.matrix.map((m) => [`${m.role}:${m.permissionKey}`, m] as const));
+        for (const c of changes) {
+          matrixMap.set(`${selectedRole}:${c.permissionKey}`, { role: selectedRole, permissionKey: c.permissionKey, allowed: c.allowed });
+        }
+        return { ...prev, matrix: [...matrixMap.values()] };
+      });
+      setBaseline(new Map(draft));
+      toast({ title: `Đã lưu ${changes.length} thay đổi cho vai trò ${selectedRole}.` });
+    } finally {
+      setSavingBatch(false);
+    }
   };
 
   const createRole = async () => {
@@ -218,7 +334,7 @@ export default function PermissionsPage() {
         {TABS.map((t) => (
           <button
             key={t.key}
-            onClick={() => setTab(t.key)}
+            onClick={() => requestTabChange(t.key)}
             className={`rounded-full px-4 py-1.5 text-[12.5px] font-bold transition ${
               tab === t.key ? "bg-primary text-white" : "bg-primary-tint text-primary hover:bg-primary/15"
             }`}
@@ -339,57 +455,153 @@ export default function PermissionsPage() {
             </div>
           )}
 
-          {/* ================= TAB 3: MA TRẬN QUYỀN ================= */}
+          {/* ================= TAB 3: CHỈNH SỬA QUYỀN THEO VAI TRÒ (Batch Edit) ================= */}
           {tab === "matrix" && (
-            <Card className="p-0">
-              <CardHeader title="Ma trận Vai trò × Quyền (fail-closed)" />
-              <CardContent className="overflow-x-auto p-0">
-                <table className="w-full text-sm">
-                  <thead className="bg-primary-tint text-primary">
-                    <tr>
-                      <th className="px-3 py-2 text-left text-[11px] uppercase">Quyền</th>
-                      {(data?.roles ?? []).map((r) => (
-                        <th key={r.id} className="px-3 py-2 text-center text-[11px] uppercase">
-                          {r.key}
-                          {!r.isActive ? <span className="block text-[10px] text-red-500">(đã tắt)</span> : null}
-                        </th>
+            <div className="space-y-4">
+              <Card className="p-4">
+                <div className="flex flex-wrap items-end justify-between gap-3">
+                  <FormField label="Vai trò đang chỉnh sửa" className="min-w-[280px]">
+                    <select
+                      value={selectedRole}
+                      onChange={(e) => requestRoleChange(e.target.value)}
+                      className="h-11 w-full rounded-xl border-2 border-border-strong px-2 font-semibold"
+                    >
+                      {editableRoles.map((r) => (
+                        <option key={r.id} value={r.key}>
+                          {r.key} — {r.name}
+                          {!r.isActive ? " (đã tắt)" : ""}
+                        </option>
                       ))}
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {(data?.permissions ?? []).map((p) => (
-                      <tr key={p.key} className="border-t">
-                        <td className="px-3 py-2">
-                          <p className="font-mono text-[11.5px] font-bold text-primary">{p.key}</p>
-                          <p className="text-[12px] text-fg-secondary">{p.name}</p>
-                        </td>
-                        {(data?.roles ?? []).map((r) => (
-                          <td key={r.id} className="px-3 py-2 text-center">
-                            <button
-                              onClick={() => toggle(r.key, p.key)}
-                              disabled={r.key === "ADMIN" || !r.isActive}
-                              title={r.key === "ADMIN" ? "ADMIN luôn có toàn quyền (bypass)" : undefined}
-                              className={`h-6 w-11 rounded-full transition disabled:cursor-not-allowed disabled:opacity-40 ${
-                                isAllowed(r.key, p.key) ? "bg-emerald-500" : "bg-border-strong"
-                              }`}
+                    </select>
+                  </FormField>
+
+                  {isDirty ? (
+                    <Badge tone="amber" className="h-fit">
+                      Bạn có {changedKeys.length} thay đổi chưa lưu
+                    </Badge>
+                  ) : (
+                    <Badge tone="gray" className="h-fit">
+                      Không có thay đổi
+                    </Badge>
+                  )}
+
+                  <div className="flex items-center gap-2">
+                    <Button variant="ghost" onClick={cancelBatch} disabled={!isDirty || savingBatch}>
+                      <RotateCcw className="h-4 w-4" aria-hidden /> Hủy thay đổi
+                    </Button>
+                    <Button variant="primary" onClick={saveBatch} disabled={!isDirty} loading={savingBatch}>
+                      <Save className="h-4 w-4" aria-hidden /> Lưu thay đổi
+                    </Button>
+                  </div>
+                </div>
+
+                {roleEditingDisabled && selectedRoleRow && !selectedRoleRow.isActive ? (
+                  <p className="mt-3 rounded-lg bg-danger-tint px-3 py-2 text-[12.5px] font-semibold text-danger">
+                    Vai trò {selectedRoleRow.key} đang bị TẮT — bật lại ở tab “Vai trò (Roles)” trước khi chỉnh quyền.
+                  </p>
+                ) : (
+                  <div className="mt-3 flex flex-wrap gap-2">
+                    <Button variant="outline" size="sm" onClick={() => setBulk((data?.permissions ?? []).map((p) => p.key), true)} disabled={roleEditingDisabled}>
+                      Bật tất cả
+                    </Button>
+                    <Button variant="outline" size="sm" onClick={() => setBulk((data?.permissions ?? []).map((p) => p.key), false)} disabled={roleEditingDisabled}>
+                      Tắt tất cả
+                    </Button>
+                  </div>
+                )}
+              </Card>
+
+              {permissionsByGroup.map((g) => {
+                const groupKeys = g.perms.map((p) => p.key);
+                return (
+                  <Card key={g.key} className="p-0">
+                    <CardHeader
+                      title={g.label}
+                      right={
+                        <div className="flex items-center gap-2">
+                          <Button variant="ghost" size="sm" onClick={() => setBulk(groupKeys, true)} disabled={roleEditingDisabled}>
+                            Bật cả nhóm
+                          </Button>
+                          <Button variant="ghost" size="sm" onClick={() => setBulk(groupKeys, false)} disabled={roleEditingDisabled}>
+                            Tắt cả nhóm
+                          </Button>
+                        </div>
+                      }
+                    />
+                    <CardContent className="p-0">
+                      <div className="divide-y divide-border">
+                        {g.perms.map((p) => {
+                          const allowed = effectiveAllowed(draft, p.key);
+                          const changed = effectiveAllowed(draft, p.key) !== effectiveAllowed(baseline, p.key);
+                          const protectedKey = BULK_ENABLE_PROTECTED_PERMISSION_KEYS.has(p.key);
+                          return (
+                            <div
+                              key={p.key}
+                              className={`flex items-center justify-between gap-3 px-4 py-2.5 ${changed ? "bg-amber-50" : ""}`}
                             >
-                              <span
-                                className={`block h-5 w-5 translate-x-0.5 rounded-full bg-surface shadow transition ${
-                                  isAllowed(r.key, p.key) ? "translate-x-[22px]" : ""
+                              <div className="min-w-0">
+                                <p className="flex items-center gap-1.5 font-mono text-[12.5px] font-bold text-primary">
+                                  {p.key}
+                                  {protectedKey && <Lock className="h-3 w-3 text-fg-muted" aria-label="Quyền quản trị hệ thống — không nằm trong Bật tất cả/Bật cả nhóm" />}
+                                  {changed && <Badge tone="amber">Đã sửa</Badge>}
+                                </p>
+                                <p className="text-[13px] font-medium text-fg">{p.name}</p>
+                              </div>
+                              <button
+                                onClick={() => toggleOne(p.key)}
+                                disabled={roleEditingDisabled}
+                                className={`h-6 w-11 shrink-0 rounded-full transition disabled:cursor-not-allowed disabled:opacity-40 ${
+                                  allowed ? "bg-emerald-500" : "bg-border-strong"
                                 }`}
-                              />
-                            </button>
-                          </td>
-                        ))}
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-              </CardContent>
-            </Card>
+                              >
+                                <span
+                                  className={`block h-5 w-5 translate-x-0.5 rounded-full bg-surface shadow transition ${
+                                    allowed ? "translate-x-[22px]" : ""
+                                  }`}
+                                />
+                              </button>
+                            </div>
+                          );
+                        })}
+                      </div>
+                    </CardContent>
+                  </Card>
+                );
+              })}
+            </div>
           )}
         </>
       )}
+
+      {/* ============ Confirm: chuyển vai trò khi còn thay đổi chưa lưu ============ */}
+      <ConfirmDialog
+        open={pendingRoleKey !== null}
+        onClose={() => setPendingRoleKey(null)}
+        onConfirm={() => {
+          if (pendingRoleKey) setSelectedRole(pendingRoleKey);
+          setPendingRoleKey(null);
+        }}
+        title="Bỏ thay đổi chưa lưu?"
+        description={`Bạn có ${changedKeys.length} thay đổi chưa lưu cho vai trò ${selectedRole}. Chuyển vai trò khác sẽ làm mất các thay đổi này.`}
+        confirmLabel="Bỏ thay đổi, chuyển vai trò"
+        cancelLabel="Ở lại"
+        danger
+      />
+
+      {/* ============ Confirm: chuyển tab khi còn thay đổi chưa lưu ============ */}
+      <ConfirmDialog
+        open={pendingTabKey !== null}
+        onClose={() => setPendingTabKey(null)}
+        onConfirm={() => {
+          if (pendingTabKey) setTab(pendingTabKey);
+          setPendingTabKey(null);
+        }}
+        title="Bỏ thay đổi chưa lưu?"
+        description={`Bạn có ${changedKeys.length} thay đổi chưa lưu cho vai trò ${selectedRole}. Rời khỏi tab này sẽ làm mất các thay đổi này.`}
+        confirmLabel="Bỏ thay đổi, rời khỏi tab"
+        cancelLabel="Ở lại"
+        danger
+      />
 
       {/* ============ Modal: Tạo vai trò ============ */}
       <Modal open={createOpen} onClose={() => setCreateOpen(false)} title="Tạo vai trò mới" description="Vai trò tuỳ chỉnh bắt đầu với 0 quyền (fail-closed) — gán quyền ở tab Ma trận, hoặc nhân bản từ vai trò có sẵn.">
