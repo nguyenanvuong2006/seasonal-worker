@@ -17,6 +17,7 @@ import {
 } from "lucide-react";
 import { documentKindLabel, extractGoogleDocId } from "@/lib/document-merge/template-routing";
 import { ResizableMappingTable } from "@/components/document-merge/resizable-mapping-table";
+import { TemplateChangeAnalyzer } from "@/components/document-merge/template-change-analyzer";
 import {
   DraftVersionPreviewModal,
   type PreviewVersionTarget,
@@ -913,6 +914,12 @@ export function TemplateLibrary({ onSelectForMerge }: { onSelectForMerge: (templ
                       ))}
                     </div>
                   )}
+
+                  {/* H1 — HỖ TRỢ CẬP NHẬT TEMPLATE BẰNG AI (TemplateChangeAnalyzer).
+                      READ-ONLY: xuất gói AI + phân tích thay đổi. Hiện ngay khi có
+                      bất kỳ version nào (DRAFT/PUBLISHED/ARCHIVED) — KHÔNG giấu
+                      sau feature flag, KHÔNG yêu cầu DRAFT, KHÔNG ghi DB. */}
+                  <TemplateChangeAnalyzer templateId={editing.id} versions={versions} />
 
                   <div className="mt-4 rounded-xl border border-slate-200 bg-white p-3">
                     <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
