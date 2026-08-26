@@ -128,6 +128,14 @@ test("catalog consistency: every permission key literal enforced by requirePermi
   );
 });
 
+test("RBAC role-rename audit: data_scope.unrestricted baseline is EXACTLY ADMIN + HR_RECRUITER (locks getUserScope()'s pre-existing default, no accidental broadening to other roles)", () => {
+  const grantedTo = Object.entries(BASELINE_ROLE_PERMISSIONS)
+    .filter(([, keys]) => keys.includes("data_scope.unrestricted"))
+    .map(([role]) => role)
+    .sort();
+  assert.deepEqual(grantedTo, ["ADMIN", "HR_RECRUITER"]);
+});
+
 test("HR_DIRECTOR (mục G): business authority — có hồ sơ/planning/workforce/export/audit; KHÔNG quản trị", () => {
   const d = new Set(BASELINE_ROLE_PERMISSIONS.HR_DIRECTOR);
   for (const allowed of ["registrations.view", "registrations.export", "dw.view", "worker_profile.view", "planning.view", "workforce_movements.view", "history.view", "audit.view", "dashboard.view", "global_search.use"]) {

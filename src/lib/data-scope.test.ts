@@ -4,6 +4,7 @@ import {
   canAggregateTransferIn,
   canAggregateTransferOut,
   movementScopeVisibility,
+  resolveDataAccessMode,
   scopeAllowsDepartment,
 } from "./data-scope.ts";
 
@@ -41,6 +42,25 @@ test("resignation is visible only from source scope", () => {
 
 test("cross-scope department request fails closed", () => {
   assert.equal(scopeAllowsDepartment(["packing"], "camp-a"), false);
+});
+
+/* ------------------------------------------------------------------ *
+ * RBAC role-rename audit (Phase 5) — resolveDataAccessMode() must be the
+ * ONLY thing a page uses to decide its access-mode banner. It is driven
+ * purely by the resolved DepartmentScope value, never by role identity.
+ * ------------------------------------------------------------------ */
+
+test("resolveDataAccessMode: null scope is GLOBAL", () => {
+  assert.equal(resolveDataAccessMode(null), "GLOBAL");
+});
+
+test("resolveDataAccessMode: a real, non-empty department list is SCOPED (the legitimate Department Manager experience)", () => {
+  assert.equal(resolveDataAccessMode(["packing"]), "SCOPED");
+  assert.equal(resolveDataAccessMode(["packing", "harvest"]), "SCOPED");
+});
+
+test("resolveDataAccessMode: an empty array is NONE, distinct from SCOPED — this is what stops a non-manager role from being mislabeled 'Department Manager mode'", () => {
+  assert.equal(resolveDataAccessMode([]), "NONE");
 });
 
 test("AI tool/service layer derives scope from Session and exposes no scope argument", async () => {

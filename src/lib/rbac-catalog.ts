@@ -132,6 +132,13 @@ export const PERMISSION_CATALOG: readonly CatalogPermission[] = [
   // Data Scope
   { key: "data_scope.view", name: "Xem cấu hình Data Scope", group: "data_scope" },
   { key: "data_scope.manage", name: "Gán / gỡ Data Scope", group: "data_scope" },
+  // RBAC ROLE-RENAME AUDIT FIX — Data Scope mặc định (KHÔNG hardcode "role ===
+  // ADMIN || role === HR_RECRUITER" ở getUserScope()). Vai trò nào cần được coi
+  // "không giới hạn theo bộ phận" khi CHƯA được gán Data Scope tường minh (vd vai
+  // trò tra cứu DW Data toàn công ty như trước đây là "Administration") thì admin
+  // cấp quyền này ở /admin/permissions — giống hệt cách dw.view được cấp — KHÔNG
+  // cần sửa code, KHÔNG phụ thuộc role.key/role.name cụ thể nào.
+  { key: "data_scope.unrestricted", name: "Không giới hạn Data Scope theo bộ phận (mặc định khi chưa gán)", group: "data_scope" },
   // Phân quyền & Nhật ký
   { key: "rbac.view", name: "Xem cấu hình Phân quyền", group: "rbac" },
   { key: "rbac.manage", name: "Quản lý Vai trò & Phân quyền", group: "rbac" },
@@ -307,6 +314,10 @@ export const BASELINE_ROLE_PERMISSIONS: Readonly<Record<string, readonly string[
     "document_merge.execute",
     "document_merge.history.view",
     "document_merge.history.delete",
+    // Preserves the EXACT existing getUserScope() default: HR_RECRUITER with no
+    // explicit user_department_scopes rows is unrestricted (null), same as before
+    // this permission existed — see auth.ts getUserScope().
+    "data_scope.unrestricted",
   ],
   DEPT_MANAGER: [
     "registrations.view",

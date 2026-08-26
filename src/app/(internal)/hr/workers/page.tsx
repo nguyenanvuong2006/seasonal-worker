@@ -42,7 +42,16 @@ export default function DwDataPage() {
         if (query) params.set("q", query);
         const res = await fetch(`/api/workers?${params}`);
         if (!res.ok) {
-          toast({ title: "Không có quyền truy cập DW Data", variant: "destructive" });
+          // RBAC role-rename audit fix — show the REAL backend reason instead of
+          // a fixed generic string: a missing capability ("Từ chối truy cập...")
+          // and a valid-permission-but-no-accessible-Data-Scope response ("DW
+          // Data không có department key...") are different situations an
+          // operator/admin needs to tell apart, not the same opaque toast.
+          const body = await res.json().catch(() => null);
+          toast({
+            title: typeof body?.error === "string" && body.error.trim() ? body.error : "Không thể tải DW Data.",
+            variant: "destructive",
+          });
           return;
         }
         const d = await res.json();
