@@ -258,26 +258,43 @@ export async function getSessionPermissionKeys(session: Session): Promise<string
    hasPermission() để admin cấp `data_scope.unrestricted` cho BẤT KỲ vai trò
    nào cần mặc định không giới hạn, không cần sửa code, không phụ thuộc
    role.key/role.name cụ thể nào ngoài 2 vai trò legacy giữ nguyên hành vi.
+
+   THỨ TỰ ƯU TIÊN CHÍNH THỨC (Dynamic RBAC V2 audit — data_scope.unrestricted
+   là quyền TỐI CAO, không phải giá trị mặc định khi thiếu cấu hình):
+     1. data_scope.unrestricted (hasPermission)  → null (GLOBAL), LUÔN LUÔN,
+        bất kể user_department_scopes hay users.deptId đang chứa gì.
+     2. user_department_scopes tường minh         → [ids] (SCOPED).
+     3. users.deptId (cột cũ, fallback di trú)     → [deptId] (SCOPED).
+     4. Không có gì                                → [] (NONE).
+   Trước đây bước 1 và 2 bị đảo ngược thứ tự (scope tường minh được đọc TRƯỚC,
+   "always wins" — coi như admin gán scope cụ thể là chủ ý thu hẹp GLOBAL).
+   Điều đó gây ra chính sự cố thực tế: tài khoản "ADMINISTRATION" / "C&B - Code
+   DW" (tranmai) được cấp `data_scope.unrestricted=true` NHƯNG cũng có 71 dòng
+   user_department_scopes còn sót lại (gán trước đó / thao tác quản trị khác)
+   — nhánh cũ đọc 71 dòng này trước, trả về SCOPED thay vì GLOBAL, dù quyền
+   `data_scope.unrestricted` đã được cấp rõ ràng. `data_scope.unrestricted` là
+   một QUYỀN (capability) admin CHỦ ĐỘNG cấp qua batch permission editor — ý
+   nghĩa của nó là "vai trò này luôn nhìn thấy toàn công ty", không phải "chỉ
+   khi chưa ai gán department nào khác". Vì vậy nó phải thắng TUYỆT ĐỐI, không
+   bị hạ cấp bởi bất kỳ dữ liệu department nào còn sót trong bảng scope.
    ============================================================ */
 export async function getUserScope(session: Session): Promise<string[] | null> {
+  // (1) data_scope.unrestricted thắng tuyệt đối — kể cả khi có user_department_scopes
+  // hoặc users.deptId. Đây là quyền admin chủ động cấp, không phải giá trị mặc định.
+  if (await hasPermission(session.role, "data_scope.unrestricted")) return null;
+
+  // (2) Scope tường minh (không có unrestricted): admin đã gán cụ thể user này
+  // thấy được những department nào.
   const rows = await db
     .select({ departmentId: userDepartmentScopes.departmentId })
     .from(userDepartmentScopes)
     .where(eq(userDepartmentScopes.userId, session.id));
-
   if (rows.length > 0) return rows.map((r) => r.departmentId);
 
-  // Không có scope tường minh nào: quyền `data_scope.unrestricted` (WHERE) phải được
-  // xét TRƯỚC deptId cột cũ. `users.deptId` chỉ là vị trí phòng ban trên sơ đồ tổ
-  // chức (ai thuộc phòng nào) — KHÔNG phải là một scope hạn chế được gán tường minh.
-  // Trước đây nhánh deptId này chạy trước, nên bất kỳ role nào có deptId khác null
-  // (ví dụ "ADMINISTRATION" / "C&B - Code DW" thuộc phòng C&B) đều bị coi là SCOPED
-  // dù đã được cấp data_scope.unrestricted — DW Data (không có cột phòng ban để lọc)
-  // từ chối luôn thay vì cho phép GLOBAL.
-  if (await hasPermission(session.role, "data_scope.unrestricted")) return null;
-
-  // Legacy fallback (chưa gán scope nào, không có unrestricted): deptId cột cũ → scope đơn.
+  // (3) Legacy fallback (chưa gán scope nào, không có unrestricted): deptId cột cũ → scope đơn.
   if (session.deptId) return [session.deptId];
+
+  // (4) Không có gì cả — safety net.
   return [];
 }
 
@@ -326,6 +343,32 @@ export async function requirePermission(
     return { ok: false, status: 403, error: "Tài khoản của bạn không có quyền thực hiện thao tác này." };
   }
   return { ok: true, session };
+}
+
+/**
+ * DYNAMIC RBAC V2 AUDIT — biến thể của requirePermission() cho route mà nhiều
+ * permission ĐỘC LẬP cùng cho phép truy cập (ví dụ: liệt kê Document Merge
+ * templates hữu ích cho cả người có `document_merge.view` LẪN người chỉ có
+ * `document_merge.templates.manage` — 2 quyền không phụ thuộc lẫn nhau, không
+ * quyền nào là "quyền cha" của quyền kia). Cùng 2 lớp bảo vệ như
+ * requirePermission() (roles[] cho 3 vai trò LEGACY + hasPermission()), chỉ
+ * khác ở chỗ CHỈ CẦN 1 trong các permissionKeys được cấp là đủ.
+ */
+export async function requireAnyPermission(
+  roles: Role[],
+  permissionKeys: string[],
+): Promise<{ ok: true; session: Session } | { ok: false; status: number; error: string }> {
+  const session = await getSession();
+  if (!session) {
+    return { ok: false, status: 401, error: "Chưa đăng nhập. Vui lòng đăng nhập lại." };
+  }
+  if (LEGACY_ROLES.includes(session.role) && !roles.includes(session.role)) {
+    return { ok: false, status: 403, error: "Từ chối truy cập! Quyền hạn không hợp lệ." };
+  }
+  for (const key of permissionKeys) {
+    if (await hasPermission(session.role, key)) return { ok: true, session };
+  }
+  return { ok: false, status: 403, error: "Tài khoản của bạn không có quyền thực hiện thao tác này." };
 }
 
 /** @deprecated Tên cũ — giữ alias để không phá các route đang dùng; dùng requirePermission() cho code mới. */
