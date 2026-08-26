@@ -251,6 +251,8 @@ export async function confirmResignationAndAssign(input: {
   startingDate?: string | null; // default = hôm nay VN — không nhận quá khứ
   reason?: string | null;
   confirmedBy: string;
+  /** Tên hiển thị của người xếp việc (đóng băng actor). Fallback = confirmedBy (username). */
+  assignedByDisplayName?: string | null;
 }): Promise<{ endedSessionId: string; movementId: string; newSessionId: string }> {
   const today = todayStr();
   const startingDate = input.startingDate || today;
@@ -302,6 +304,12 @@ export async function confirmResignationAndAssign(input: {
       });
 
       // 4 — mở session B (APPROVED). Sau khi A vừa ENDED, invariant "1 ACTIVE" giữ vững.
+      // ASSIGNMENT ACTOR freeze — đóng băng ai xếp việc vào session mới.
+      const assignmentActor = {
+        assignedBy: input.confirmedBy,
+        assignedByDisplayName: input.assignedByDisplayName?.trim() || input.confirmedBy,
+        assignedAt: new Date(),
+      };
       await tx
         .update(employmentSessions)
         .set({
@@ -309,6 +317,7 @@ export async function confirmResignationAndAssign(input: {
           deptId: input.newDeptId,
           startingDate,
           startDateSource: "ASSIGNMENT",
+          ...assignmentActor,
         })
         .where(eq(employmentSessions.id, input.newSessionId));
 
@@ -316,7 +325,7 @@ export async function confirmResignationAndAssign(input: {
       if (target.dailyApplicationId) {
         await tx
           .update(dailyApplications)
-          .set({ status: "APPROVED", deptId: input.newDeptId, startingDate, updatedAt: new Date() })
+          .set({ status: "APPROVED", deptId: input.newDeptId, startingDate, updatedAt: new Date(), ...assignmentActor })
           .where(eq(dailyApplications.id, target.dailyApplicationId));
       }
 

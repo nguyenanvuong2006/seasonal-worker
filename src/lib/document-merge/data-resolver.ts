@@ -119,6 +119,7 @@ function datePart(value: unknown, part: 'day' | 'month' | 'year'): string {
  */
 export function resolveSystemField(
   field: MergeTemplateField,
+  recordData: RecordData,
   context: MergeContext
 ): string {
   const systemType = field.sourceField as SystemFieldType;
@@ -132,7 +133,15 @@ export function resolveSystemField(
     case 'CURRENT_USER':
       return context.currentUserId ?? '';
     case 'CURRENT_USER_NAME':
-      return context.currentUserName ?? '';
+      // ASSIGNMENT ACTOR — "Người tiếp nhận" (Nguoi_tiep_nhan) là người đã XẾP VIỆC,
+      // không phải người thực hiện thao tác merge. Ưu tiên assignedByDisplayName đã đóng
+      // băng trên record; fallback về merge operator cho dữ liệu cũ/chưa có actor.
+      {
+        const assigned = typeof recordData.assignedByDisplayName === 'string'
+          ? recordData.assignedByDisplayName.trim()
+          : '';
+        return assigned || context.currentUserName || '';
+      }
     case 'MERGE_INDEX':
       return String(context.mergeIndex ?? 0);
     case 'MERGE_COUNT':
@@ -291,7 +300,7 @@ export function resolveFieldValue(
   
   switch (sourceType) {
     case 'SYSTEM_FIELD':
-      return resolveSystemField(field, context);
+      return resolveSystemField(field, recordData, context);
     case 'COMPUTED_FIELD':
       return resolveComputedField(field, recordData, context);
     case 'COMPUTED':

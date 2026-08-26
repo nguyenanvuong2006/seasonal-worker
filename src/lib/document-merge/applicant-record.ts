@@ -25,6 +25,9 @@ export type ApplicantMergeSources = {
     startingDate?: string | null;
     customAnswers?: Record<string, string> | null;
     noteWorker?: string | null;
+    assignedBy?: string | null;
+    assignedByDisplayName?: string | null;
+    assignedAt?: Date | string | null;
   };
   department?: {
     deptName?: string | null;
@@ -99,6 +102,9 @@ export function buildApplicantMergeRecord(sources: ApplicantMergeSources): Recor
     status: application.status ?? null,
     regDate: application.regDate ?? null,
     startingDate: application.startingDate ?? null,
+    assignedBy: application.assignedBy ?? null,
+    assignedByDisplayName: application.assignedByDisplayName ?? null,
+    assignedAt: application.assignedAt ?? null,
     deptName: department?.deptName ?? null,
     groupName: department?.groupName ?? null,
     vnName: department?.vnName ?? null,

@@ -218,6 +218,11 @@ export const dailyApplications = pgTable(
     requestId: uuid("request_id").references(() => recruitmentRequests.id, { onDelete: "set null" }),
     status: varchar("status", { length: 24 }).notNull().default("PENDING"),
     startingDate: date("starting_date"),
+    // ASSIGNMENT ACTOR (freeze) — ai đã thực hiện "xếp việc" (non-APPROVED → APPROVED).
+    // Chỉ ghi tại thời điểm chuyển trạng thái xếp việc THẬT; không ghi đè khi save không liên quan.
+    assignedBy: varchar("assigned_by", { length: 64 }),
+    assignedByDisplayName: varchar("assigned_by_display_name", { length: 160 }),
+    assignedAt: timestamp("assigned_at", { withTimezone: true }),
     appointmentList: varchar("appointment_list", { length: 60 }),
     noteWorker: text("note_worker"),
     vaccine: varchar("vaccine", { length: 60 }),
@@ -610,6 +615,11 @@ export const employmentSessions = pgTable(
     regDate: date("reg_date").notNull(),
     status: varchar("status", { length: 40 }).notNull().default("PENDING"), // đồng bộ với workflow_stages.stageKey
     startingDate: date("starting_date"),
+    // ASSIGNMENT ACTOR (freeze) — ai đã thực hiện "xếp việc" (non-APPROVED → APPROVED).
+    // Chỉ ghi tại thời điểm chuyển trạng thái xếp việc THẬT; không ghi đè khi save không liên quan.
+    assignedBy: varchar("assigned_by", { length: 64 }),
+    assignedByDisplayName: varchar("assigned_by_display_name", { length: 160 }),
+    assignedAt: timestamp("assigned_at", { withTimezone: true }),
     endDate: date("end_date"), // rời việc/kết thúc đợt làm (nếu có)
     // EMPLOYMENT LIFECYCLE — vì sao/ai/lúc nào kết thúc đợt làm việc (audit-able, không suy đoán từ status).
     endReason: varchar("end_reason", { length: 40 }), // RESIGNATION | TRANSFER | RECONCILIATION | OTHER

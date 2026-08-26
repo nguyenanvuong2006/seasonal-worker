@@ -11,6 +11,7 @@ import { todayStr } from "@/lib/helpers";
 import { CCCD_ERROR_MESSAGE, isValidCccd, normalizeCccd } from "@/lib/validators";
 import { assertNoOtherActiveSession, confirmResignationAndAssign, EmploymentRuleError } from "@/lib/employment";
 import { validateStartingDateInput } from "@/lib/employment-lifecycle";
+import { resolveDisplayName } from "@/lib/display-name";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -115,6 +116,17 @@ export async function PATCH(req: Request, ctx: { params: Promise<{ id: string }>
     const today = todayStr();
     const isAssigning = patch.status === "APPROVED" && existing.status !== "APPROVED";
 
+    // ASSIGNMENT ACTOR (freeze) — khi chuyển non-APPROVED → APPROVED (xếp việc THẬT), đóng băng
+    // "ai đã xếp việc" vào daily_applications + employment_sessions. Chỉ ghi tại thời điểm này;
+    // các save không liên quan (sửa note/CCCD/...) KHÔNG ghi đè 3 trường này.
+    const assignmentActor = isAssigning
+      ? {
+          assignedBy: guard.session.username,
+          assignedByDisplayName: resolveDisplayName({ fullName: guard.session.fullName, username: guard.session.username }),
+          assignedAt: new Date(),
+        }
+      : null;
+
     // RULE #11 — KHÔNG backdate tuỳ ý: sửa startingDate về quá khứ phải qua
     // START_DATE_CORRECTION_REQUEST (POST /api/employment/start-date-corrections) để Admin duyệt.
     if (typeof patch.startingDate === "string" && patch.startingDate !== existing.startingDate) {
@@ -167,6 +179,7 @@ export async function PATCH(req: Request, ctx: { params: Promise<{ id: string }>
               startingDate: (patch.startingDate as string | null) ?? today,
               reason: reason ?? "Xác nhận nghỉ bộ phận cũ khi xếp việc mới",
               confirmedBy: guard.session.username,
+              assignedByDisplayName: resolveDisplayName({ fullName: guard.session.fullName, username: guard.session.username }),
             });
             await writeAudit(guard.session, "CONFIRM_RESIGNATION_AND_ASSIGN", "employment_sessions", {
               dailyApplicationId: id,
@@ -224,7 +237,10 @@ export async function PATCH(req: Request, ctx: { params: Promise<{ id: string }>
         }
       }
 
-      const [updatedRow] = await tx.update(dailyApplications).set(patch).where(eq(dailyApplications.id, id)).returning();
+      const dailyPatch: Record<string, unknown> = { ...patch };
+      // ASSIGNMENT ACTOR freeze — chỉ khi xếp việc THẬT (non-APPROVED → APPROVED).
+      if (assignmentActor) Object.assign(dailyPatch, assignmentActor);
+      const [updatedRow] = await tx.update(dailyApplications).set(dailyPatch).where(eq(dailyApplications.id, id)).returning();
       if (!updatedRow) throw new Error("Không tìm thấy hồ sơ.");
 
       // DIGITAL WORKER FILE (#10) — đồng bộ trạng thái/bộ phận/ngày bắt đầu sang employment_sessions
@@ -239,6 +255,11 @@ export async function PATCH(req: Request, ctx: { params: Promise<{ id: string }>
       if ("status" in patch) sessionPatch.status = patch.status;
       if ("deptId" in patch) sessionPatch.deptId = patch.deptId;
       if ("startingDate" in patch) sessionPatch.startingDate = patch.startingDate;
+      if (assignmentActor) {
+        sessionPatch.assignedBy = assignmentActor.assignedBy;
+        sessionPatch.assignedByDisplayName = assignmentActor.assignedByDisplayName;
+        sessionPatch.assignedAt = assignmentActor.assignedAt;
+      }
       if (linkedSession && Object.keys(sessionPatch).length > 0) {
         // EMPLOYMENT LIFECYCLE — kiểm tra invariant "1 ACTIVE/worker" LẦN NỮA bên trong
         // transaction (guard phía trên chạy ngoài transaction — 2 request đồng thời có thể
