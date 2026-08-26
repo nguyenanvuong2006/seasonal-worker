@@ -2,7 +2,7 @@ import { NextResponse } from "next/server";
 import { and, eq, inArray, isNull, or } from "drizzle-orm";
 import { db } from "@/db";
 import { recruitmentRequests } from "@/db/schema";
-import { getUserScope, requirePermission, writeAudit } from "@/lib/auth";
+import { getUserScope, hasPermission, requirePermission, writeAudit } from "@/lib/auth";
 import { scopeAllowsDepartment } from "@/lib/data-scope";
 import { getRecruitmentRequest, batchUpdateStatus, softDeleteRecruitmentRequests } from "@/lib/recruitment-request";
 import { listOpenAllocationsForRequest } from "@/lib/planning-reallocation";
@@ -81,6 +81,14 @@ export async function GET(_req: Request, ctx: { params: Promise<{ id: string }> 
   // tiết snapshot/quit/current để Admin/Recruiter audit.
   const kpi = await computeRecruitmentKpis(id);
 
+  // RBAC role-rename audit fix — this hint must match the PATCH/DELETE handlers'
+  // real gate below (requirePermission([...], "planning.edit")). A hardcoded
+  // role === "ADMIN" || role === "HR_RECRUITER" check silently disagrees with
+  // hasPermission() the moment any OTHER role is granted planning.edit via the
+  // permission matrix — it would keep hiding edit controls for a role that the
+  // PATCH endpoint would actually accept.
+  const canEdit = await hasPermission(guard.session.role, "planning.edit");
+
   return NextResponse.json({
     row,
     lineage: {
@@ -91,7 +99,7 @@ export async function GET(_req: Request, ctx: { params: Promise<{ id: string }> 
     },
     openAllocations: allocations,
     kpi,
-    canEdit: guard.session.role === "ADMIN" || guard.session.role === "HR_RECRUITER",
+    canEdit,
   });
 }
 

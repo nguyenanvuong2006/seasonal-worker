@@ -38,9 +38,19 @@ type AppRow = {
 export default function DailyApplicationScoped({
   departments,
   initialFrom,
+  mode = "SCOPED",
 }: {
   departments: Dept[];
   initialFrom?: string;
+  /**
+   * RBAC role-rename audit fix — "SCOPED" (real departments assigned, the
+   * legitimate Department Manager experience) vs "NONE" (Data Scope not
+   * configured at all for this account: zero departments is a configuration
+   * gap, not a manager's normal filtered view). Only changes copy — the
+   * query/render logic is identical either way, since both cases already
+   * correctly resolve to zero visible departments/rows.
+   */
+  mode?: "SCOPED" | "NONE";
 }) {
   const [from, setFrom] = useState(() => initialFrom ?? todayStr());
   const [to, setTo] = useState(() => initialFrom ?? todayStr());
@@ -140,7 +150,11 @@ export default function DailyApplicationScoped({
             <EmptyState
               icon={<ClipboardList className="h-5 w-5" aria-hidden />}
               title="Không có DW nào"
-              description="Không có người tập nghề nào trong bộ phận được phân quyền cho khoảng ngày đã chọn."
+              description={
+                mode === "NONE"
+                  ? "Tài khoản của bạn chưa được cấp Data Scope (bộ phận) nào — không phải do khoảng ngày đã chọn."
+                  : "Không có người tập nghề nào trong bộ phận được phân quyền cho khoảng ngày đã chọn."
+              }
             />
           ) : (
             <div className="overflow-x-auto">
