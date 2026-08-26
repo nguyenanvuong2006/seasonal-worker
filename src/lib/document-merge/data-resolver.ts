@@ -62,6 +62,7 @@ export type SystemFieldType =
   | 'CURRENT_DATETIME'
   | 'CURRENT_USER'
   | 'CURRENT_USER_NAME'
+  | 'ASSIGNED_BY_DISPLAY_NAME'
   | 'MERGE_COUNT'
   | 'MERGE_INDEX';
 
@@ -133,15 +134,17 @@ export function resolveSystemField(
     case 'CURRENT_USER':
       return context.currentUserId ?? '';
     case 'CURRENT_USER_NAME':
-      // ASSIGNMENT ACTOR — "Người tiếp nhận" (Nguoi_tiep_nhan) là người đã XẾP VIỆC,
-      // không phải người thực hiện thao tác merge. Ưu tiên assignedByDisplayName đã đóng
-      // băng trên record; fallback về merge operator cho dữ liệu cũ/chưa có actor.
-      {
-        const assigned = typeof recordData.assignedByDisplayName === 'string'
-          ? recordData.assignedByDisplayName.trim()
-          : '';
-        return assigned || context.currentUserName || '';
-      }
+      // Merge operator (unchanged historical semantics). Nguoi_tiep_nhan no longer
+      // uses this field — it now maps to ASSIGNED_BY_DISPLAY_NAME below.
+      return context.currentUserName ?? '';
+    case 'ASSIGNED_BY_DISPLAY_NAME':
+      // ASSIGNMENT ACTOR — "Người tiếp nhận" (Nguoi_tiep_nhan) is the person who
+      // XẾP VIỆC (assigned the worker), frozen at assignment time — never the merge
+      // operator. Historical rows without an assignment actor resolve to EMPTY
+      // (they must NOT leak the merge operator).
+      return typeof recordData.assignedByDisplayName === 'string'
+        ? recordData.assignedByDisplayName.trim()
+        : '';
     case 'MERGE_INDEX':
       return String(context.mergeIndex ?? 0);
     case 'MERGE_COUNT':
@@ -390,6 +393,7 @@ export const SYSTEM_FIELD_DEFINITIONS: {
   { key: 'CURRENT_DATETIME', label: 'Ngày giờ hiện tại', description: 'Thời điểm thực hiện merge' },
   { key: 'CURRENT_USER', label: 'ID người dùng', description: 'ID của người thực hiện merge' },
   { key: 'CURRENT_USER_NAME', label: 'Tên người dùng', description: 'Tên của người thực hiện merge' },
+  { key: 'ASSIGNED_BY_DISPLAY_NAME', label: 'Tên người xếp việc', description: 'Tên hiển thị của người đã xếp việc (assignedByDisplayName) — "Người tiếp nhận"' },
   { key: 'MERGE_INDEX', label: 'Số thứ tự', description: 'Số thứ tự trong batch merge' },
   { key: 'MERGE_COUNT', label: 'Tổng số bản ghi', description: 'Tổng số bản ghi được merge' },
 ];

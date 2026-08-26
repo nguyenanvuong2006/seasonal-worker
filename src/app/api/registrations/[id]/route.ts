@@ -12,6 +12,7 @@ import { CCCD_ERROR_MESSAGE, isValidCccd, normalizeCccd } from "@/lib/validators
 import { assertNoOtherActiveSession, confirmResignationAndAssign, EmploymentRuleError } from "@/lib/employment";
 import { validateStartingDateInput } from "@/lib/employment-lifecycle";
 import { resolveDisplayName } from "@/lib/display-name";
+import { resolveAssignmentActor } from "@/lib/assignment-actor";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -116,16 +117,14 @@ export async function PATCH(req: Request, ctx: { params: Promise<{ id: string }>
     const today = todayStr();
     const isAssigning = patch.status === "APPROVED" && existing.status !== "APPROVED";
 
-    // ASSIGNMENT ACTOR (freeze) — khi chuyển non-APPROVED → APPROVED (xếp việc THẬT), đóng băng
-    // "ai đã xếp việc" vào daily_applications + employment_sessions. Chỉ ghi tại thời điểm này;
-    // các save không liên quan (sửa note/CCCD/...) KHÔNG ghi đè 3 trường này.
-    const assignmentActor = isAssigning
-      ? {
-          assignedBy: guard.session.username,
-          assignedByDisplayName: resolveDisplayName({ fullName: guard.session.fullName, username: guard.session.username }),
-          assignedAt: new Date(),
-        }
-      : null;
+    // ASSIGNMENT ACTOR (freeze) — chỉ khi xếp việc THẬT (non-APPROVED → APPROVED). Các save
+    // không liên quan (sửa note/CCCD/...) KHÔNG ghi đè 3 trường này.
+    const assignmentActor = resolveAssignmentActor({
+      previousStatus: existing.status,
+      nextStatus: typeof patch.status === "string" ? patch.status : null,
+      username: guard.session.username,
+      fullName: guard.session.fullName,
+    });
 
     // RULE #11 — KHÔNG backdate tuỳ ý: sửa startingDate về quá khứ phải qua
     // START_DATE_CORRECTION_REQUEST (POST /api/employment/start-date-corrections) để Admin duyệt.

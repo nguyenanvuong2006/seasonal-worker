@@ -220,6 +220,7 @@ export function buildFieldCatalogFromDefinitions(
   // System fields
   const systemFields: { key: string; label: string; desc: string }[] = [
     { key: 'CURRENT_USER_NAME', label: 'Người thực hiện', desc: 'Tên người dùng hiện tại' },
+    { key: 'ASSIGNED_BY_DISPLAY_NAME', label: 'Người xếp việc', desc: 'Tên hiển thị của người đã xếp việc (Người tiếp nhận)' },
     { key: 'MERGE_INDEX', label: 'STT trong batch', desc: 'Số thứ tự bản ghi' },
     { key: 'MERGE_COUNT', label: 'Tổng số bản ghi', desc: 'Tổng số bản ghi trong batch' },
   ];
