@@ -10,6 +10,7 @@ import { loadActiveRules, runRules } from "@/lib/rule-engine";
 import { queueNotification } from "@/lib/notifications";
 import { autoAllocateInternship } from "@/lib/planning";
 import { isValidCccd, normalizeCccd } from "@/lib/validators";
+import { resolveAssignmentActorWrite } from "@/lib/assignment-actor";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -57,6 +58,19 @@ export async function POST(req: Request) {
     if (deptId && !scopeAllowsDepartment(scope, deptId)) {
       return NextResponse.json({ error: "Bộ phận đích nằm ngoài Data Scope được cấp." }, { status: 403 });
     }
+
+    // ASSIGNMENT ACTOR freeze — same centralized semantics as the inline PATCH
+    // (non-APPROVED → APPROVED only). Every record that survives into `targets`
+    // is guaranteed to be a real transition (filtered by status !== finalStatus),
+    // so a single actor applies uniformly to the whole batch. Null for
+    // REJECTED/WAITLIST (those must NOT overwrite the actor) and while the
+    // deploy-order rollout gate is still OFF.
+    const assignmentActor = resolveAssignmentActorWrite({
+      previousStatus: null,
+      nextStatus: finalStatus,
+      username: guard.session.username,
+      fullName: guard.session.fullName,
+    });
 
     const result = await db.transaction(async (tx) => {
       // BƯỚC 0/4 — Duyệt hồ sơ (#1 yêu cầu nghiệp vụ): phân loại RÕ RÀNG từng ID thay vì âm thầm
@@ -140,6 +154,9 @@ export async function POST(req: Request) {
           isImported: finalStatus === "APPROVED" ? true : undefined,
           ...(deptId ? { deptId } : {}),
           ...(finalStatus === "APPROVED" ? { startingDate: today } : {}),
+          // ASSIGNMENT ACTOR freeze — only on a real non-APPROVED → APPROVED
+          // transition (assignmentActor is null otherwise).
+          ...(assignmentActor ?? {}),
           updatedAt: new Date(),
         })
         .where(inArray(dailyApplications.id, targets.map((t) => t.id)))
@@ -154,6 +171,9 @@ export async function POST(req: Request) {
           // RULE #10 — DEFAULT START DATE = hôm nay (Asia/Ho_Chi_Minh) tại thời điểm Recruiter
           // xếp việc, KHÔNG phải reg_date của application (application_date ≠ employment_start_date).
           ...(finalStatus === "APPROVED" ? { startingDate: today, startDateSource: "ASSIGNMENT" } : {}),
+          // ASSIGNMENT ACTOR freeze — keep employment_sessions consistent with
+          // daily_applications (same actor, same transition).
+          ...(assignmentActor ?? {}),
         })
         .where(inArray(employmentSessions.dailyApplicationId, targets.map((t) => t.id)))
         .returning({ id: employmentSessions.id, deptId: employmentSessions.deptId, startingDate: employmentSessions.startingDate });
@@ -227,6 +247,11 @@ export async function POST(req: Request) {
       updated: result.updated,
       skipped: result.results.filter((r) => !r.ok).length,
       departmentId: deptId,
+      // ASSIGNMENT ACTOR AUDIT — safe operator identifiers for the assignment
+      // event (username + display name), no PII expansion.
+      ...(assignmentActor
+        ? { assignedBy: assignmentActor.assignedBy, assignedByDisplayName: assignmentActor.assignedByDisplayName }
+        : {}),
     });
 
     return NextResponse.json({

@@ -65,6 +65,9 @@ export async function loadDailyApplicationRecords(recordIds: string[]): Promise<
           regDate: row.application.regDate,
           startingDate: row.application.startingDate,
           customAnswers: row.application.customAnswers,
+          assignedBy: row.application.assignedBy,
+          assignedByDisplayName: row.application.assignedByDisplayName,
+          assignedAt: row.application.assignedAt,
         },
         department: {
           deptName: row.deptName,

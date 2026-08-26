@@ -11,6 +11,8 @@ import { todayStr } from "@/lib/helpers";
 import { CCCD_ERROR_MESSAGE, isValidCccd, normalizeCccd } from "@/lib/validators";
 import { assertNoOtherActiveSession, confirmResignationAndAssign, EmploymentRuleError } from "@/lib/employment";
 import { validateStartingDateInput } from "@/lib/employment-lifecycle";
+import { resolveDisplayName } from "@/lib/display-name";
+import { resolveAssignmentActorWrite } from "@/lib/assignment-actor";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -115,6 +117,15 @@ export async function PATCH(req: Request, ctx: { params: Promise<{ id: string }>
     const today = todayStr();
     const isAssigning = patch.status === "APPROVED" && existing.status !== "APPROVED";
 
+    // ASSIGNMENT ACTOR (freeze) — chỉ khi xếp việc THẬT (non-APPROVED → APPROVED). Các save
+    // không liên quan (sửa note/CCCD/...) KHÔNG ghi đè 3 trường này.
+    const assignmentActor = resolveAssignmentActorWrite({
+      previousStatus: existing.status,
+      nextStatus: typeof patch.status === "string" ? patch.status : null,
+      username: guard.session.username,
+      fullName: guard.session.fullName,
+    });
+
     // RULE #11 — KHÔNG backdate tuỳ ý: sửa startingDate về quá khứ phải qua
     // START_DATE_CORRECTION_REQUEST (POST /api/employment/start-date-corrections) để Admin duyệt.
     if (typeof patch.startingDate === "string" && patch.startingDate !== existing.startingDate) {
@@ -159,6 +170,7 @@ export async function PATCH(req: Request, ctx: { params: Promise<{ id: string }>
             return NextResponse.json({ error: "Cần chọn Bộ phận mới trước khi xác nhận nghỉ & xếp việc." }, { status: 400 });
           }
           try {
+            const assignedByDisplayName = resolveDisplayName({ fullName: guard.session.fullName, username: guard.session.username });
             const result = await confirmResignationAndAssign({
               workerId: linkedForGuard.workerId,
               newSessionId: linkedForGuard.id,
@@ -167,6 +179,7 @@ export async function PATCH(req: Request, ctx: { params: Promise<{ id: string }>
               startingDate: (patch.startingDate as string | null) ?? today,
               reason: reason ?? "Xác nhận nghỉ bộ phận cũ khi xếp việc mới",
               confirmedBy: guard.session.username,
+              assignedByDisplayName,
             });
             await writeAudit(guard.session, "CONFIRM_RESIGNATION_AND_ASSIGN", "employment_sessions", {
               dailyApplicationId: id,
@@ -176,6 +189,9 @@ export async function PATCH(req: Request, ctx: { params: Promise<{ id: string }>
               actualResignationDate,
               newDeptId,
               reason,
+              // ASSIGNMENT ACTOR AUDIT — safe identifiers (username + display name).
+              assignedBy: guard.session.username,
+              assignedByDisplayName,
             });
             const [row] = await db.select().from(dailyApplications).where(eq(dailyApplications.id, id));
             return NextResponse.json({ success: true, row, employment: result });
@@ -224,7 +240,10 @@ export async function PATCH(req: Request, ctx: { params: Promise<{ id: string }>
         }
       }
 
-      const [updatedRow] = await tx.update(dailyApplications).set(patch).where(eq(dailyApplications.id, id)).returning();
+      const dailyPatch: Record<string, unknown> = { ...patch };
+      // ASSIGNMENT ACTOR freeze — chỉ khi xếp việc THẬT (non-APPROVED → APPROVED).
+      if (assignmentActor) Object.assign(dailyPatch, assignmentActor);
+      const [updatedRow] = await tx.update(dailyApplications).set(dailyPatch).where(eq(dailyApplications.id, id)).returning();
       if (!updatedRow) throw new Error("Không tìm thấy hồ sơ.");
 
       // DIGITAL WORKER FILE (#10) — đồng bộ trạng thái/bộ phận/ngày bắt đầu sang employment_sessions
@@ -239,6 +258,11 @@ export async function PATCH(req: Request, ctx: { params: Promise<{ id: string }>
       if ("status" in patch) sessionPatch.status = patch.status;
       if ("deptId" in patch) sessionPatch.deptId = patch.deptId;
       if ("startingDate" in patch) sessionPatch.startingDate = patch.startingDate;
+      if (assignmentActor) {
+        sessionPatch.assignedBy = assignmentActor.assignedBy;
+        sessionPatch.assignedByDisplayName = assignmentActor.assignedByDisplayName;
+        sessionPatch.assignedAt = assignmentActor.assignedAt;
+      }
       if (linkedSession && Object.keys(sessionPatch).length > 0) {
         // EMPLOYMENT LIFECYCLE — kiểm tra invariant "1 ACTIVE/worker" LẦN NỮA bên trong
         // transaction (guard phía trên chạy ngoài transaction — 2 request đồng thời có thể
@@ -283,11 +307,24 @@ export async function PATCH(req: Request, ctx: { params: Promise<{ id: string }>
         .filter((k) => k !== "updatedAt")
         .map((k) => [k, (existing as Record<string, unknown>)[k]]),
     );
+    // ASSIGNMENT ACTOR AUDIT — record safe actor identifiers (username +
+    // display name) so reassignment history is preserved without expanding PII.
+    // `existing` holds the OLD frozen actor; `assignmentActor` holds the NEW one
+    // (only present on a genuine non-APPROVED → APPROVED transition).
+    const actorAudit = assignmentActor
+      ? {
+          previousAssignedBy: (existing as Record<string, unknown>).assignedBy ?? null,
+          previousAssignedByDisplayName: (existing as Record<string, unknown>).assignedByDisplayName ?? null,
+          assignedBy: assignmentActor.assignedBy,
+          assignedByDisplayName: assignmentActor.assignedByDisplayName,
+        }
+      : undefined;
     await writeAudit(guard.session, "INLINE_EDIT", "daily_applications", {
       id,
       before: beforeSnapshot,
       after: patch,
       reason,
+      ...(actorAudit ? { assignmentActor: actorAudit } : {}),
     });
     return NextResponse.json({ success: true, row: updated });
   } catch (error) {
