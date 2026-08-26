@@ -382,3 +382,82 @@ test("batch_update_permissions: a duplicated permissionKey in one payload is app
   assert.equal(body.enabledCount, 0);
   assert.equal(body.disabledCount, 1);
 });
+
+/* ------------------------------------------------------------------ *
+ * PERMISSION CATALOG CONSISTENCY — "planning.columns.manage" bug.
+ *
+ * planning.reallocate / planning.columns.manage / planning.comment were
+ * inserted directly into the `permissions`/`role_permissions` tables by
+ * migrations/2026-08-17-planning-recruitment-upgrade.sql, so GET returned
+ * them and the UI rendered toggles for them — but they were never added to
+ * PERMISSION_CATALOG (rbac-catalog.ts), so getCatalogPermission() didn't
+ * know them and batch/toggle validation rejected any save touching one of
+ * them with "Permission key không hợp lệ". Fixed by adding all three to
+ * PERMISSION_CATALOG (see src/lib/rbac.test.ts's whole-source-tree catalog
+ * consistency audit for the general-case regression test).
+ * ------------------------------------------------------------------ */
+
+test("batch_update_permissions: a batch that touches planning.columns.manage (the exact reported bug) now succeeds", async () => {
+  const ctx = makeContext({ roleRows: ROLE_ROWS, rolePermissionRows: [] });
+  const res = await ctx.POST(
+    postRequest({
+      action: "batch_update_permissions",
+      role: "ADMINISTRATION",
+      changes: [
+        { permissionKey: "dw.view", allowed: true },
+        { permissionKey: "planning.columns.manage", allowed: true },
+        { permissionKey: "planning.reallocate", allowed: true },
+        { permissionKey: "planning.comment", allowed: true },
+      ],
+    }),
+  );
+  assert.equal(res.status, 200);
+  const body = JSON.parse(res.body);
+  assert.equal(body.applied, 4);
+  assert.equal(ctx.invalidateCalls, 1);
+  assert.equal(ctx.auditCalls.length, 1);
+});
+
+test("batch_update_permissions: EVERY permission in the canonical catalog can be saved for one role in a single batch (whole-catalog 'Bật tất cả' scenario)", async () => {
+  const ctx = makeContext({ roleRows: ROLE_ROWS, rolePermissionRows: [] });
+  const changes = rbacCatalog.PERMISSION_CATALOG.map((p) => ({ permissionKey: p.key, allowed: true }));
+  const res = await ctx.POST(postRequest({ action: "batch_update_permissions", role: "ADMINISTRATION", changes }));
+  assert.equal(res.status, 200, res.body);
+  const body = JSON.parse(res.body);
+  assert.equal(body.applied, rbacCatalog.PERMISSION_CATALOG.length);
+  assert.equal(ctx.invalidateCalls, 1);
+  assert.equal(ctx.auditCalls.length, 1);
+});
+
+test("batch_update_permissions: a genuinely unknown deeply-dotted key is still rejected — catalog membership gates it, not just the key-shape regex", async () => {
+  const ctx = makeContext({ roleRows: ROLE_ROWS, rolePermissionRows: [] });
+  const res = await ctx.POST(
+    postRequest({
+      action: "batch_update_permissions",
+      role: "ADMINISTRATION",
+      changes: [{ permissionKey: "totally.fake.permission.key", allowed: true }],
+    }),
+  );
+  assert.equal(res.status, 400);
+  assert.equal(ctx.db.writes.length, 0);
+});
+
+/* ------------------------------------------------------------------ *
+ * PHASE 4 — the 28-change scenario: an invalid key anywhere in the batch
+ * is rejected BEFORE db.transaction() is ever opened (validation runs over
+ * the whole payload first), so there is nothing to roll back — zero writes
+ * are ever attempted, not "written then undone".
+ * ------------------------------------------------------------------ */
+
+test("batch_update_permissions: a 28-change batch with ONE invalid key rejects the WHOLE batch pre-transaction — zero writes attempted, zero transactions opened", async () => {
+  const ctx = makeContext({ roleRows: ROLE_ROWS, rolePermissionRows: [] });
+  const validKeys = rbacCatalog.PERMISSION_CATALOG.slice(0, 27).map((p) => p.key);
+  const changes = [...validKeys.map((permissionKey) => ({ permissionKey, allowed: true })), { permissionKey: "not.a.real.permission", allowed: true }];
+  assert.equal(changes.length, 28);
+  const res = await ctx.POST(postRequest({ action: "batch_update_permissions", role: "ADMINISTRATION", changes }));
+  assert.equal(res.status, 400);
+  assert.equal(ctx.db.writes.length, 0, "no write of any kind must be attempted — the invalid key is caught before db.transaction() opens");
+  assert.equal(ctx.db.transactions, 0, "db.transaction() must never be entered when validation fails");
+  assert.equal(ctx.invalidateCalls, 0);
+  assert.equal(ctx.auditCalls.length, 0);
+});
