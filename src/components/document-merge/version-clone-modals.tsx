@@ -11,16 +11,26 @@
  *    API gọi: POST /api/document-merge/templates/:id/versions/:vid/clone
  *    (server tự load version nguồn theo URL — client không gửi HTML).
  *
- * 2. DraftVersionEditorModal — "Sửa HTML/CSS" cho version DRAFT. H1: textarea
- *    HTML body + Print CSS, PATCH về endpoint version detail ("Lưu bản nháp",
- *    không revalidate). H2 thêm bên trên workflow dành cho người dùng không
- *    rành kỹ thuật: dán MỘT tài liệu HTML hoàn chỉnh do AI tạo -> Phân tích
- *    (POST ai-analyze, đã mở rộng normalize+hash) -> Xem trước CHƯA LƯU với
- *    ứng viên thật (POST unsaved-preview, zero DB writes) -> mở bản in TEST
- *    (POST unsaved-print, hidden-form-submit-to-new-tab) -> Áp dụng vào bản
- *    nháp (POST apply-html: revalidate lại toàn bộ server-side, ghi ĐÚNG MỘT
- *    version DRAFT, không đổi mapping/publish). Server reject (409) nếu
- *    version đã rời DRAFT hoặc nội dung đã đổi sau lần Phân tích gần nhất.
+ * 2. DraftVersionEditorModal — "Sửa HTML/CSS" cho version DRAFT. Luôn nạp
+ *    đúng nội dung của versionId tường minh đang sửa (KHÔNG BAO GIỜ đọc
+ *    current_published_version) — H1 mode ("HTML / CSS nâng cao", MẶC ĐỊNH
+ *    khi mở): 2 textarea HTML body + Print CSS, useState khởi tạo thẳng từ
+ *    version.htmlBody/printCss, PATCH về endpoint version detail ("Lưu bản
+ *    nháp", không revalidate). H2 mode ("Dán HTML hoàn chỉnh", dành cho
+ *    người dùng không rành kỹ thuật, đổi tab bằng nút bấm) khởi đầu RỖNG (là
+ *    một paste TARGET) nhưng có nút "Nạp HTML hiện tại" — composeFullHtmlDocument()
+ *    trong draft-editor-preload.ts — để nạp sẵn html_body+print_css hiện có
+ *    của bản nháp vào ô dán, sửa tiếp thay vì dán mới từ đầu: dán/nạp MỘT tài
+ *    liệu HTML hoàn chỉnh -> Phân tích (POST ai-analyze, đã mở rộng
+ *    normalize+hash) -> Xem trước CHƯA LƯU với ứng viên thật (POST
+ *    unsaved-preview, zero DB writes) -> mở bản in TEST (POST unsaved-print,
+ *    hidden-form-submit-to-new-tab) -> Áp dụng vào bản nháp (POST apply-html:
+ *    revalidate lại toàn bộ server-side, ghi ĐÚNG MỘT version DRAFT, không
+ *    đổi mapping/publish). Server reject (409) nếu version đã rời DRAFT hoặc
+ *    nội dung đã đổi sau lần Phân tích gần nhất. Nút "Khôi phục nội dung đã
+ *    lưu" (chỉ local, KHÔNG gọi API) bỏ mọi sửa đổi CHƯA LƯU ở cả hai mode và
+ *    nạp lại đúng nội dung DRAFT lúc mở editor; đóng editor (nút X hoặc Hủy)
+ *    khi có sửa đổi CHƯA LƯU sẽ hỏi xác nhận trước (isDraftEditorDirty()).
  *
  * 3. ApplyToDraftConfirmModal — xác nhận trước khi Áp dụng, văn bản cố định
  *    nhắc rõ: đang sửa BẢN NHÁP, phiên bản đang xuất bản KHÔNG đổi, thao tác
@@ -41,6 +51,7 @@
 
 import { useEffect, useMemo, useRef, useState } from "react";
 import { decoratePreviewForA4Sheets } from "@/lib/document-merge/preview-a4-decoration";
+import { composeFullHtmlDocument, isDraftEditorDirty } from "@/lib/document-merge/draft-editor-preload";
 import {
   AlertTriangle,
   CheckCircle2,
@@ -51,7 +62,9 @@ import {
   Eye,
   ExternalLink,
   FileCode2,
+  FileDown,
   Printer,
+  RotateCcw,
   Save,
   Search,
   Trash2,
@@ -391,10 +404,53 @@ export function DraftVersionEditorModal({
   // the SAME Analyze -> Preview -> Apply pipeline below via `effectiveHtml`/
   // `effectiveCss` — the server normalizer treats a bare fragment (advanced
   // mode) as a pass-through, so nothing about the advanced editor changes.
-  const [mode, setMode] = useState<PasteMode>("paste");
+  // Default to "advanced": html/css are ALREADY preloaded from the explicit
+  // DRAFT `version` prop below — opening straight into "paste" (an empty
+  // paste TARGET, by design) hid that preloaded content behind a tab click,
+  // which is exactly what read as "the editor is empty" to an operator.
+  const [mode, setMode] = useState<PasteMode>("advanced");
   const [rawPaste, setRawPaste] = useState("");
   const effectiveHtml = mode === "paste" ? rawPaste : html;
   const effectiveCss = mode === "paste" ? "" : css;
+
+  // Preload / unsaved-changes tracking. "HTML / CSS nâng cao" is already
+  // preloaded above (useState(version.htmlBody ?? "") / printCss) — never
+  // from current_published_version, always from the explicit DRAFT `version`
+  // passed in. `baselineRawPaste` tracks the paste box separately: it starts
+  // empty (paste mode is a paste TARGET, not auto-filled) and only advances
+  // when the operator explicitly loads content into it below, so a load
+  // action itself never counts as a dirty edit.
+  const baselineHtml = version.htmlBody ?? "";
+  const baselineCss = version.printCss ?? "";
+  const [baselineRawPaste, setBaselineRawPaste] = useState("");
+  const dirty = isDraftEditorDirty({ html, css, rawPaste, baselineHtml, baselineCss, baselineRawPaste });
+
+  /** "Nạp HTML hiện tại" — compose one complete document from the DRAFT's
+   * currently SAVED html_body + print_css into the paste box, for manual
+   * editing. Never reads from the (possibly edited, unsaved) advanced-mode
+   * textareas — always from the saved DRAFT content the modal was opened with. */
+  const loadCurrentIntoPaste = () => {
+    const composed = composeFullHtmlDocument(baselineHtml, baselineCss);
+    setRawPaste(composed);
+    setBaselineRawPaste(composed);
+  };
+
+  /** "Khôi phục nội dung đã lưu" — discard ALL local unsaved edits (both
+   * modes) and reload the current DRAFT exactly as it was when this editor
+   * opened. Local-only; makes no network request and writes nothing. */
+  const restoreSavedContent = () => {
+    setHtml(baselineHtml);
+    setCss(baselineCss);
+    setRawPaste("");
+    setBaselineRawPaste("");
+  };
+
+  const requestClose = () => {
+    if (dirty && !window.confirm("Có thay đổi CHƯA LƯU trong bản nháp. Đóng và bỏ các thay đổi này?")) {
+      return;
+    }
+    onCancel();
+  };
 
   // ANALYZE (H1, extended H2) — READ-ONLY: chỉ gọi POST ai-analyze để xem
   // impact, KHÔNG Apply/Save/Preview/Publish nội dung chưa lưu. Không tự chạy
@@ -624,7 +680,7 @@ export function DraftVersionEditorModal({
           </div>
           <button
             type="button"
-            onClick={onCancel}
+            onClick={requestClose}
             disabled={saving}
             className="rounded-lg p-1 text-slate-400 hover:bg-slate-100 hover:text-slate-600 disabled:opacity-50"
             aria-label="Đóng"
@@ -649,10 +705,23 @@ export function DraftVersionEditorModal({
           </div>
         )}
 
-        {/* H2 — Cập nhật Template bằng HTML: chọn giữa dán CẢ tài liệu (mặc định,
-            dành cho người dùng không rành kỹ thuật) và editor tách HTML/CSS (H1). */}
+        {/* H2 — Cập nhật Template bằng HTML: chọn giữa dán CẢ tài liệu (dành cho
+            người dùng không rành kỹ thuật, có nút "Nạp HTML hiện tại" để nạp sẵn
+            nội dung đang lưu) và editor tách HTML/CSS (H1, mặc định khi mở —
+            đã nạp sẵn html_body/print_css của bản nháp đang sửa). */}
         <div className="mt-4 rounded-xl border border-slate-200 p-3">
-          <p className="text-[11px] font-bold text-slate-700">Cập nhật Template bằng HTML</p>
+          <div className="flex items-center justify-between gap-2">
+            <p className="text-[11px] font-bold text-slate-700">Cập nhật Template bằng HTML</p>
+            <button
+              type="button"
+              onClick={restoreSavedContent}
+              disabled={!dirty || conflict || saving}
+              title="Bỏ mọi thay đổi CHƯA LƯU ở cả hai chế độ và tải lại đúng nội dung bản nháp hiện có trên server."
+              className="inline-flex items-center gap-1.5 rounded-lg border border-slate-300 px-2.5 py-1 text-[10px] font-bold text-slate-600 hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-40"
+            >
+              <RotateCcw className="h-3 w-3" /> Khôi phục nội dung đã lưu
+            </button>
+          </div>
           <div className="mt-2 flex gap-2">
             <button
               type="button"
@@ -677,8 +746,21 @@ export function DraftVersionEditorModal({
           </div>
 
           {mode === "paste" ? (
-            <label className="mt-3 block text-[11px] font-semibold text-slate-600">
-              Dán toàn bộ nội dung HTML do AI tạo (cả tài liệu — bao gồm {"<html>"}, {"<style>"}, {"<body>"}):
+            <div className="mt-3">
+              <div className="flex items-center justify-between gap-2">
+                <label className="text-[11px] font-semibold text-slate-600">
+                  Dán toàn bộ nội dung HTML do AI tạo (cả tài liệu — bao gồm {"<html>"}, {"<style>"}, {"<body>"}):
+                </label>
+                <button
+                  type="button"
+                  onClick={loadCurrentIntoPaste}
+                  disabled={conflict}
+                  title="Tạo một tài liệu HTML hoàn chỉnh từ html_body + print_css hiện có của bản nháp này, để sửa trực tiếp thay vì dán mới."
+                  className="inline-flex shrink-0 items-center gap-1.5 rounded-lg border border-emerald-300 bg-emerald-50 px-2.5 py-1 text-[10px] font-bold text-emerald-700 hover:bg-emerald-100"
+                >
+                  <FileDown className="h-3 w-3" /> Nạp HTML hiện tại
+                </button>
+              </div>
               <textarea
                 value={rawPaste}
                 onChange={(e) => setRawPaste(e.target.value)}
@@ -689,12 +771,14 @@ export function DraftVersionEditorModal({
                 className="mt-1 w-full rounded-lg border border-slate-300 px-3 py-2 font-mono text-[11px] outline-none focus:border-emerald-600 disabled:bg-slate-50"
               />
               <span className="mt-1 block font-normal text-[10px] text-slate-400">
-                Không cần tự tách HTML/CSS — hệ thống tự nhận diện thẻ {"<body>"} và các thẻ {"<style>"}. Stylesheet
-                ngoài (link href) sẽ bị bỏ qua và báo trong kết quả phân tích, không bao giờ được tải về. Mặc định mọi
-                bảng (table) có đường viền — nếu cần một bảng chỉ để canh layout (ví dụ khối chữ ký/ngày ký) KHÔNG
-                hiển thị viền, thêm <code>class=&quot;no-border&quot;</code> vào thẻ {"<table>"} đó.
+                Bấm <b>Nạp HTML hiện tại</b> để nạp sẵn nội dung bản nháp v{version.version} đang lưu (không tự
+                nạp khi mở editor). Không cần tự tách HTML/CSS — hệ thống tự nhận diện thẻ {"<body>"} và các thẻ{" "}
+                {"<style>"}. Stylesheet ngoài (link href) sẽ bị bỏ qua và báo trong kết quả phân tích, không bao giờ
+                được tải về. Mặc định mọi bảng (table) có đường viền — nếu cần một bảng chỉ để canh layout (ví dụ
+                khối chữ ký/ngày ký) KHÔNG hiển thị viền, thêm <code>class=&quot;no-border&quot;</code> vào thẻ{" "}
+                {"<table>"} đó.
               </span>
-            </label>
+            </div>
           ) : (
             <div className="mt-3 grid gap-3">
               <label className="text-[11px] font-semibold text-slate-600">
@@ -1033,7 +1117,7 @@ export function DraftVersionEditorModal({
         <div className="mt-4 flex justify-end gap-2">
           <button
             type="button"
-            onClick={onCancel}
+            onClick={requestClose}
             disabled={saving || applying}
             className="rounded-lg border border-slate-300 bg-white px-4 py-2 text-xs font-semibold text-slate-700 hover:bg-slate-50 disabled:opacity-50"
           >
