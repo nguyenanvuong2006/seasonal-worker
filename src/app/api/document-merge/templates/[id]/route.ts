@@ -11,7 +11,7 @@
 
 import { NextResponse } from 'next/server';
 import { eq, and } from 'drizzle-orm';
-import { requirePermission } from '@/lib/auth';
+import { requireAnyPermission, requirePermission } from '@/lib/auth';
 import { db } from '@/db';
 import { mergeTemplates, mergeTemplateFields, mergeJobs, documentHistory } from '@/db/schema';
 import { extractUniquePlaceholders } from '@/lib/document-merge/placeholder-extractor';
@@ -21,8 +21,11 @@ import { extractGoogleDocId } from '@/lib/document-merge/template-routing';
 
 type RouteContext = { params: Promise<{ id: string }> };
 
+// Same reasoning as templates/route.ts GET — reading a template detail is needed by
+// a templates.manage-only user (Templates/PDF Mapper tabs) just as much as by a
+// plain document_merge.view holder.
 export async function GET(_request: Request, context: RouteContext) {
-  const guard = await requirePermission(['ADMIN', 'HR_RECRUITER', 'HR_DIRECTOR', 'HR_SUPPORT'], 'document_merge.view');
+  const guard = await requireAnyPermission(['ADMIN', 'HR_RECRUITER', 'HR_DIRECTOR', 'HR_SUPPORT'], ['document_merge.view', 'document_merge.templates.manage']);
   if (!guard.ok) {
     return NextResponse.json({ error: guard.error }, { status: guard.status });
   }

@@ -8,13 +8,18 @@
 
 import { NextResponse } from 'next/server';
 import { eq, desc } from 'drizzle-orm';
-import { requirePermission } from '@/lib/auth';
+import { requireAnyPermission, requirePermission } from '@/lib/auth';
 import { db } from '@/db';
 import { mergeTemplates, mergeTemplateFields } from '@/db/schema';
 import { extractGoogleDocId } from '@/lib/document-merge/template-routing';
 
+// Dynamic RBAC V2 audit (Document Merge module visibility): listing templates is
+// useful both to a plain viewer (document_merge.view) AND to someone who can only
+// MANAGE templates (document_merge.templates.manage) — a templates.manage-only
+// grant must still be able to open the Templates tab and see the list to manage,
+// not just POST blind creates. Neither permission is a "parent" of the other.
 export async function GET() {
-  const guard = await requirePermission(['ADMIN', 'HR_RECRUITER', 'HR_DIRECTOR', 'HR_SUPPORT'], 'document_merge.view');
+  const guard = await requireAnyPermission(['ADMIN', 'HR_RECRUITER', 'HR_DIRECTOR', 'HR_SUPPORT'], ['document_merge.view', 'document_merge.templates.manage']);
   if (!guard.ok) {
     return NextResponse.json({ error: guard.error }, { status: guard.status });
   }

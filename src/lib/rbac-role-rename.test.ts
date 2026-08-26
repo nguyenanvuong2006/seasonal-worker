@@ -365,14 +365,75 @@ test("RBAC role-rename: DEPT_MANAGER (a legacy, genuinely scoped role) is NOT ac
   assertScopeEquals(await mod.getUserScope(session), []);
 });
 
-test("RBAC role-rename: an explicit user_department_scopes assignment always wins over the capability default, for any role", async () => {
+test("Dynamic RBAC V2 audit: data_scope.unrestricted now OUTRANKS an explicit user_department_scopes assignment — GLOBAL is a capability grant, not a default that explicit scope rows can narrow", async () => {
   const { mod } = loadAuth({
     users: [baseUser("ADMINISTRATION")],
     rolePermissionRows: [{ role: "ADMINISTRATION", permissionKey: "data_scope.unrestricted", allowed: true }],
     scopeRows: [{ userId: USER_ID, departmentId: "dept-1" }],
   });
   const session: Session = { id: USER_ID, username: "tranmai", fullName: "Trần Mai", role: "ADMINISTRATION", deptId: null };
-  assertScopeEquals(await mod.getUserScope(session), ["dept-1"], "an explicit assignment always takes precedence, even for a role with unrestricted-by-default");
+  assert.equal(
+    await mod.getUserScope(session),
+    null,
+    "data_scope.unrestricted must win over ANY leftover explicit scope rows — it is an active capability grant, not a fallback default",
+  );
+});
+
+test("Dynamic RBAC V2 audit: WITHOUT data_scope.unrestricted, an explicit user_department_scopes assignment is still SCOPED exactly as before (precedence change only affects the unrestricted case)", async () => {
+  const { mod } = loadAuth({
+    users: [baseUser("ADMINISTRATION")],
+    rolePermissionRows: [],
+    scopeRows: [{ userId: USER_ID, departmentId: "dept-1" }],
+  });
+  const session: Session = { id: USER_ID, username: "tranmai", fullName: "Trần Mai", role: "ADMINISTRATION", deptId: null };
+  assertScopeEquals(await mod.getUserScope(session), ["dept-1"], "explicit scope rows still apply normally for a role that lacks data_scope.unrestricted");
+});
+
+/* ------------------------------------------------------------------ *
+ * ISSUE A (Dynamic RBAC V2 audit) — the 71-explicit-scope regression.
+ * Before the latest audit, tranmai's real account had data_scope.unrestricted
+ * = true AND 71 leftover user_department_scopes rows (later cleared by the
+ * administrator). Because the old getUserScope() read explicit scope rows
+ * BEFORE checking data_scope.unrestricted, this exact combination resolved
+ * to SCOPED (the 71 department IDs), not GLOBAL — even though the account
+ * had been explicitly granted unrestricted, company-wide access. Prior test
+ * runs against the (by-then-cleared) live account could never have caught
+ * this: they only ever exercised deptId != null + unrestricted, never
+ * "explicit scopes non-empty + unrestricted". This test locks in the fixed,
+ * canonical precedence with the exact reported shape (71 rows + deptId set).
+ * ------------------------------------------------------------------ */
+
+test("ISSUE A — exact regression: data_scope.unrestricted=true + 71 explicit user_department_scopes rows + deptId != null -> GLOBAL (null); explicit scopes must NOT reduce GLOBAL access", async () => {
+  const scopeRows = Array.from({ length: 71 }, (_, i) => ({ userId: USER_ID, departmentId: `dept-${i + 1}` }));
+  const { mod } = loadAuth({
+    users: [baseUser("ADMINISTRATION", { deptId: "dept-cb" })],
+    rolePermissionRows: [
+      { role: "ADMINISTRATION", permissionKey: "dw.view", allowed: true },
+      { role: "ADMINISTRATION", permissionKey: "data_scope.unrestricted", allowed: true },
+    ],
+    scopeRows,
+  });
+  const session: Session = { id: USER_ID, username: "tranmai", fullName: "Trần Mai", role: "ADMINISTRATION", deptId: "dept-cb" };
+  assert.equal(
+    await mod.getUserScope(session),
+    null,
+    "71 explicit department scopes + data_scope.unrestricted=true + deptId != null must still resolve to GLOBAL — the exact combination the previous audit could not have exercised, since the live scopes had already been cleared",
+  );
+});
+
+test("ISSUE A — companion: data_scope.unrestricted=false + explicit user_department_scopes rows -> SCOPED (the restriction still works normally when unrestricted is NOT granted)", async () => {
+  const scopeRows = Array.from({ length: 5 }, (_, i) => ({ userId: USER_ID, departmentId: `dept-${i + 1}` }));
+  const { mod } = loadAuth({
+    users: [baseUser("ADMINISTRATION", { deptId: "dept-cb" })],
+    rolePermissionRows: [{ role: "ADMINISTRATION", permissionKey: "dw.view", allowed: true }],
+    scopeRows,
+  });
+  const session: Session = { id: USER_ID, username: "tranmai", fullName: "Trần Mai", role: "ADMINISTRATION", deptId: "dept-cb" };
+  assertScopeEquals(
+    await mod.getUserScope(session),
+    scopeRows.map((r) => r.departmentId),
+    "without data_scope.unrestricted, explicit scope rows must still produce SCOPED exactly as before",
+  );
 });
 
 /* ------------------------------------------------------------------ *
@@ -386,9 +447,8 @@ test("RBAC role-rename: an explicit user_department_scopes assignment always win
  * non-null deptId was wrongly forced into a SCOPED array even after being
  * granted unrestricted access — and DW Data (which has no department key
  * column to filter by) then fail-closed denied with "không có department
- * key". The fix reorders getUserScope(): explicit user_department_scopes
- * still wins first, then data_scope.unrestricted, and ONLY THEN the
- * legacy deptId fallback.
+ * key". data_scope.unrestricted is now checked FIRST of all — before
+ * explicit user_department_scopes AND before the legacy deptId fallback.
  * ------------------------------------------------------------------ */
 
 test("RBAC role-rename: tranmai's exact reported Data Scope defect — deptId set (org-chart placement) + data_scope.unrestricted granted + NO explicit user_department_scopes -> GLOBAL (null), never scoped by the legacy deptId column", async () => {
