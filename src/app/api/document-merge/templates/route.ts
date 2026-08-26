@@ -8,36 +8,48 @@
 
 import { NextResponse } from 'next/server';
 import { eq, desc } from 'drizzle-orm';
-import { requireAnyPermission, requirePermission } from '@/lib/auth';
+import { hasPermission, requireAnyPermission, requirePermission } from '@/lib/auth';
 import { db } from '@/db';
 import { mergeTemplates, mergeTemplateFields } from '@/db/schema';
 import { extractGoogleDocId } from '@/lib/document-merge/template-routing';
 
-// Dynamic RBAC V2 audit (Document Merge module visibility): listing templates is
-// useful both to a plain viewer (document_merge.view) AND to someone who can only
-// MANAGE templates (document_merge.templates.manage) — a templates.manage-only
-// grant must still be able to open the Templates tab and see the list to manage,
-// not just POST blind creates. Neither permission is a "parent" of the other.
+// Dynamic RBAC V2 audit (Document Merge module visibility + execute dependency
+// graph): listing templates is useful to a plain viewer (document_merge.view),
+// someone who can only MANAGE templates (document_merge.templates.manage — needs
+// the list to pick what to manage), AND someone who can only EXECUTE merges
+// (document_merge.execute — the Merge workspace's template selector calls this
+// exact route; an execute-only grant must still see eligible templates to merge
+// with). None of these three is a "parent" of the others.
 export async function GET() {
-  const guard = await requireAnyPermission(['ADMIN', 'HR_RECRUITER', 'HR_DIRECTOR', 'HR_SUPPORT'], ['document_merge.view', 'document_merge.templates.manage']);
+  const guard = await requireAnyPermission(['ADMIN', 'HR_RECRUITER', 'HR_DIRECTOR', 'HR_SUPPORT'], ['document_merge.view', 'document_merge.templates.manage', 'document_merge.execute']);
   if (!guard.ok) {
     return NextResponse.json({ error: guard.error }, { status: guard.status });
   }
   
   try {
+    // Mission requirement (execute-dependency audit) — an execute-only caller
+    // (no document_merge.view/templates.manage) must only see templates that
+    // are actually eligible to merge with (isActive). Draft/inactive templates
+    // are administrative-only data, irrelevant to picking a template to
+    // execute a merge with, and must not leak to an execute-only role.
+    const canSeeAllTemplates =
+      (await hasPermission(guard.session.role, 'document_merge.view')) ||
+      (await hasPermission(guard.session.role, 'document_merge.templates.manage'));
+
     const templates = await db
       .select()
       .from(mergeTemplates)
       .orderBy(desc(mergeTemplates.updatedAt));
-    
+    const visibleTemplates = canSeeAllTemplates ? templates : templates.filter((t) => t.isActive);
+
     // Lấy số placeholders cho mỗi template
     const templatesWithCounts = await Promise.all(
-      templates.map(async (template) => {
+      visibleTemplates.map(async (template) => {
         const fields = await db
           .select()
           .from(mergeTemplateFields)
           .where(eq(mergeTemplateFields.templateId, template.id));
-        
+
         return {
           ...template,
           placeholderCount: fields.filter(f => !f.isOrphaned).length,
@@ -46,7 +58,7 @@ export async function GET() {
         };
       })
     );
-    
+
     return NextResponse.json(templatesWithCounts);
   } catch (error) {
     console.error('[document-merge/templates] GET error:', error);

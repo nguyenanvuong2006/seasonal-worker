@@ -8,7 +8,7 @@
 
 import { NextResponse } from 'next/server';
 import { and, eq } from 'drizzle-orm';
-import { requirePermission } from '@/lib/auth';
+import { requireAnyPermission, requirePermission } from '@/lib/auth';
 import { db } from '@/db';
 import { mergeTemplateFields, mergeTemplates } from '@/db/schema';
 
@@ -139,9 +139,15 @@ export async function PUT(request: Request, context: RouteContext) {
  * để bảo toàn lịch sử/cấu hình nếu placeholder được thêm lại, nhưng KHÔNG trả
  * về editor/merge workspace. Vì vậy UI chỉ hiển thị placeholder còn tồn tại
  * trong tài liệu merge hiện tại.
+ *
+ * Đọc mapping là dependency BẮT BUỘC của execute (Mapping Inspector trong
+ * Merge workspace tự động gọi route này ngay khi chọn template) — không chỉ
+ * document_merge.view mới cần đọc, cả document_merge.execute (chạy merge) lẫn
+ * document_merge.templates.manage (đang xây mapping) đều cần — 3 quyền này
+ * độc lập, không có quyền nào là "cha" của quyền còn lại.
  */
 export async function GET(_request: Request, context: RouteContext) {
-  const guard = await requirePermission(['ADMIN', 'HR_RECRUITER', 'HR_DIRECTOR', 'HR_SUPPORT'], 'document_merge.view');
+  const guard = await requireAnyPermission(['ADMIN', 'HR_RECRUITER', 'HR_DIRECTOR', 'HR_SUPPORT'], ['document_merge.view', 'document_merge.execute', 'document_merge.templates.manage']);
   if (!guard.ok) {
     return NextResponse.json({ error: guard.error }, { status: guard.status });
   }

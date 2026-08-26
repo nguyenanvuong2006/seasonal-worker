@@ -109,7 +109,14 @@ function DocumentMergeContent({ permissions, role }: { permissions: string[]; ro
 
       <main className="mx-auto max-w-7xl px-4 py-6 sm:px-6 lg:px-8">
         {activeTab === "templates" && canSeeTab("templates", permSet, role) && <TemplateLibrary onSelectForMerge={selectForMerge} />}
-        {activeTab === "merge" && canSeeTab("merge", permSet, role) && <MergeWorkspace selectedTemplateId={selectedTemplateId} onSelectTemplateId={setSelectedTemplateId} onSwitchToHistory={() => canSeeTab("history", permSet, role) && setActiveTab("history")} />}
+        {activeTab === "merge" && canSeeTab("merge", permSet, role) && (
+          <MergeWorkspace
+            selectedTemplateId={selectedTemplateId}
+            onSelectTemplateId={setSelectedTemplateId}
+            onSwitchToHistory={() => canSeeTab("history", permSet, role) && setActiveTab("history")}
+            canManageTemplates={permSet.has("document_merge.templates.manage")}
+          />
+        )}
         {activeTab === "history" && canSeeTab("history", permSet, role) && <HistoryTab canDelete={permSet.has("document_merge.history.delete")} />}
         {activeTab === "fields" && canSeeTab("fields", permSet, role) && <FieldsTab />}
         {activeTab === "pdfmapper" && canSeeTab("pdfmapper", permSet, role) && <PdfMapperTab selectedTemplateId={selectedTemplateId} onSelectTemplateId={setSelectedTemplateId} />}

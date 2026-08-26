@@ -34,8 +34,9 @@ type Context = {
   anyPermissionCalls: { roles: string[]; keys: string[] }[];
 };
 
-function makeContext(opts: { guardResult: Guard; templateRows?: Record<string, unknown>[] }): Context {
+function makeContext(opts: { guardResult: Guard; templateRows?: Record<string, unknown>[]; grantedPermissions?: string[] }): Context {
   const anyPermissionCalls: { roles: string[]; keys: string[] }[] = [];
+  const granted = new Set(opts.grantedPermissions ?? []);
   const db = createFakeDb({
     respond: (call: QueryCall) => {
       if (call.root === "select" && call.table === "merge_templates") return opts.templateRows ?? [];
@@ -66,6 +67,7 @@ function makeContext(opts: { guardResult: Guard; templateRows?: Record<string, u
               anyPermissionCalls.push({ roles, keys });
               return opts.guardResult;
             },
+            hasPermission: async (_role: string, key: string) => granted.has(key),
             writeAudit: async () => undefined,
           };
         case "@/lib/document-merge/template-routing":
@@ -97,23 +99,27 @@ function makeContext(opts: { guardResult: Guard; templateRows?: Record<string, u
   return { GET: exported.GET, POST: exported.POST, db, anyPermissionCalls };
 }
 
-test("GET templates: requireAnyPermission is called with [document_merge.view, document_merge.templates.manage] — neither alone is required, both are accepted", async () => {
+test("GET templates: requireAnyPermission is called with [document_merge.view, document_merge.templates.manage, document_merge.execute] — none of the three alone is required, any is accepted", async () => {
   const ctx = makeContext({ guardResult: { ok: true, session: { id: "u1", username: "u", role: "HR_SUPPORT" } } });
   const res = await ctx.GET();
   assert.equal(res.status, 200);
   assert.equal(ctx.anyPermissionCalls.length, 1);
-  assert.deepEqual(Array.from(ctx.anyPermissionCalls[0].keys), ["document_merge.view", "document_merge.templates.manage"]);
+  assert.deepEqual(Array.from(ctx.anyPermissionCalls[0].keys), ["document_merge.view", "document_merge.templates.manage", "document_merge.execute"]);
 });
 
-test("GET templates: templates.manage-only grant (view=false) must still succeed — this is the exact 'child permission ineffective without parent' bug for the Templates tab's own data fetch", async () => {
+test("GET templates: templates.manage-only grant (view=false) must still succeed and see even an INACTIVE template — this is the exact 'child permission ineffective without parent' bug for the Templates tab's own data fetch", async () => {
   // requireAnyPermission itself decides pass/fail; here we simulate the "only
   // templates.manage granted" outcome by returning ok:true, matching what the
   // real requireAnyPermission would do once EITHER key is present.
-  const ctx = makeContext({ guardResult: { ok: true, session: { id: "u1", username: "u", role: "HR_SUPPORT" } }, templateRows: [{ id: "tpl-1", name: "Mẫu A" }] });
+  const ctx = makeContext({
+    guardResult: { ok: true, session: { id: "u1", username: "u", role: "HR_SUPPORT" } },
+    templateRows: [{ id: "tpl-1", name: "Mẫu A", isActive: false }],
+    grantedPermissions: ["document_merge.templates.manage"],
+  });
   const res = await ctx.GET();
   assert.equal(res.status, 200);
   const body = JSON.parse(res.body);
-  assert.equal(body.length, 1);
+  assert.equal(body.length, 1, "a manage-capable caller must see inactive/draft templates too, to manage them");
   assert.equal(body[0].name, "Mẫu A");
 });
 
@@ -133,6 +139,80 @@ test("POST templates (create) still independently requires document_merge.templa
   assert.equal(res.status, 201, res.body);
   // requireAnyPermission must NOT be involved in POST — only the plain, single-key requirePermission.
   assert.equal(ctx.anyPermissionCalls.length, 0);
+});
+
+/* ------------------------------------------------------------------ *
+ * DOCUMENT MERGE EXECUTE-DEPENDENCY AUDIT — an execute-only grant
+ * (document_merge.execute=true, templates.manage=false, view=false) must be
+ * able to list ELIGIBLE (active) templates to run a merge with, since the
+ * Merge workspace's template selector calls exactly this endpoint. It must
+ * NOT see draft/inactive templates — those are administrative-only data.
+ * ------------------------------------------------------------------ */
+
+test("Regression 1 — execute=true, templates.manage=false: eligible template list returns 200 (root cause of the reported bug)", async () => {
+  const ctx = makeContext({
+    guardResult: { ok: true, session: { id: "u1", username: "tranmai", role: "ADMINISTRATION" } },
+    templateRows: [{ id: "tpl-active", name: "Template A", isActive: true }],
+    grantedPermissions: ["document_merge.execute"],
+  });
+  const res = await ctx.GET();
+  assert.equal(res.status, 200, res.body);
+  assert.equal(ctx.anyPermissionCalls.length, 1);
+  assert.deepEqual(Array.from(ctx.anyPermissionCalls[0].keys), ["document_merge.view", "document_merge.templates.manage", "document_merge.execute"]);
+});
+
+test("Regression — execute-only sees ONLY active/eligible templates, never drafts/inactive (administrative-only data)", async () => {
+  const ctx = makeContext({
+    guardResult: { ok: true, session: { id: "u1", username: "tranmai", role: "ADMINISTRATION" } },
+    templateRows: [
+      { id: "tpl-active", name: "Template A", isActive: true },
+      { id: "tpl-draft", name: "Draft Template", isActive: false },
+    ],
+    grantedPermissions: ["document_merge.execute"],
+  });
+  const res = await ctx.GET();
+  assert.equal(res.status, 200);
+  const body = JSON.parse(res.body);
+  assert.equal(body.length, 1, "only the ACTIVE template must be returned to an execute-only caller");
+  assert.equal(body[0].id, "tpl-active");
+});
+
+test("Regression — a view or templates.manage holder still sees BOTH active and inactive templates (unchanged, full visibility)", async () => {
+  const ctx = makeContext({
+    guardResult: { ok: true, session: { id: "u1", username: "admin2", role: "HR_DIRECTOR" } },
+    templateRows: [
+      { id: "tpl-active", name: "Template A", isActive: true },
+      { id: "tpl-draft", name: "Draft Template", isActive: false },
+    ],
+    grantedPermissions: ["document_merge.view"],
+  });
+  const res = await ctx.GET();
+  const body = JSON.parse(res.body);
+  assert.equal(body.length, 2);
+});
+
+test("Regression 6/7/8 — execute-only still CANNOT create a template (POST rejected, mutation permission unaffected)", async () => {
+  const ctx = makeContext({
+    guardResult: { ok: false, status: 403, error: "Tài khoản của bạn không có quyền thực hiện thao tác này." },
+  });
+  const req = new Request("http://localhost/api/document-merge/templates", {
+    method: "POST",
+    body: JSON.stringify({ name: "Mẫu mới", googleDocId: "doc-xyz" }),
+  });
+  const res = await ctx.POST(req);
+  assert.equal(res.status, 403);
+});
+
+test("Regression 11 — no role-name hardcoding: execute-only works identically for ADMINISTRATION and for HR_RECRUITER (a legacy role), same permission key drives both", async () => {
+  for (const role of ["ADMINISTRATION", "HR_RECRUITER", "HR_SUPPORT"]) {
+    const ctx = makeContext({
+      guardResult: { ok: true, session: { id: "u1", username: "u", role } },
+      templateRows: [{ id: "tpl-active", name: "Template A", isActive: true }],
+      grantedPermissions: ["document_merge.execute"],
+    });
+    const res = await ctx.GET();
+    assert.equal(res.status, 200, `role=${role} must succeed — only the permission key matters, never the role name`);
+  }
 });
 
 /* ------------------------------------------------------------------ *
@@ -222,20 +302,55 @@ function makeDetailContext(opts: { guardResult: Guard; templateRow?: Record<stri
     Promise,
   });
   vm.runInContext(detailJsSource, context);
-  const exported = moduleObj.exports as { GET: (req: Request, ctx: { params: Promise<{ id: string }> }) => Promise<{ status: number; body: string }> };
-  return { GET: exported.GET, anyPermissionCalls };
+  const exported = moduleObj.exports as {
+    GET: (req: Request, ctx: { params: Promise<{ id: string }> }) => Promise<{ status: number; body: string }>;
+    PUT: (req: Request, ctx: { params: Promise<{ id: string }> }) => Promise<{ status: number; body: string }>;
+    DELETE: (req: Request, ctx: { params: Promise<{ id: string }> }) => Promise<{ status: number; body: string }>;
+  };
+  return { GET: exported.GET, PUT: exported.PUT, DELETE: exported.DELETE, anyPermissionCalls };
 }
 
-test("GET template detail ([id]): requireAnyPermission called with [document_merge.view, document_merge.templates.manage]", async () => {
+test("GET template detail ([id]): requireAnyPermission called with [document_merge.view, document_merge.templates.manage, document_merge.execute]", async () => {
   const ctx = makeDetailContext({ guardResult: { ok: true, session: { id: "u1", username: "u", role: "HR_SUPPORT" } }, templateRow: { id: "tpl-1", name: "Mẫu A" } });
   const res = await ctx.GET(new Request("http://localhost/api/document-merge/templates/tpl-1"), { params: Promise.resolve({ id: "tpl-1" }) });
   assert.equal(res.status, 200, res.body);
   assert.equal(ctx.anyPermissionCalls.length, 1);
-  assert.deepEqual(Array.from(ctx.anyPermissionCalls[0].keys), ["document_merge.view", "document_merge.templates.manage"]);
+  assert.deepEqual(Array.from(ctx.anyPermissionCalls[0].keys), ["document_merge.view", "document_merge.templates.manage", "document_merge.execute"]);
 });
 
 test("GET template detail ([id]): no matching permission -> 403", async () => {
   const ctx = makeDetailContext({ guardResult: { ok: false, status: 403, error: "Tài khoản của bạn không có quyền thực hiện thao tác này." } });
   const res = await ctx.GET(new Request("http://localhost/api/document-merge/templates/tpl-1"), { params: Promise.resolve({ id: "tpl-1" }) });
+  assert.equal(res.status, 403);
+});
+
+test("Regression 2 — execute=true, templates.manage=false: template execution detail returns 200", async () => {
+  const ctx = makeDetailContext({
+    guardResult: { ok: true, session: { id: "u1", username: "tranmai", role: "ADMINISTRATION" } },
+    templateRow: { id: "tpl-active", name: "Template A", isActive: true },
+  });
+  const res = await ctx.GET(new Request("http://localhost/api/document-merge/templates/tpl-active"), { params: Promise.resolve({ id: "tpl-active" }) });
+  assert.equal(res.status, 200, res.body);
+  assert.deepEqual(Array.from(ctx.anyPermissionCalls[0].keys), ["document_merge.view", "document_merge.templates.manage", "document_merge.execute"]);
+});
+
+/* ------------------------------------------------------------------ *
+ * Mission Section 7 — with only document_merge.execute granted, template
+ * MUTATION endpoints must still reject. PUT/DELETE on templates/[id] use
+ * plain requirePermission('document_merge.templates.manage') — untouched
+ * by the GET-side execute-dependency fix.
+ * ------------------------------------------------------------------ */
+
+test("Regression 7 — execute-only: PATCH/PUT edit template rejected (403)", async () => {
+  const ctx = makeDetailContext({ guardResult: { ok: false, status: 403, error: "Tài khoản của bạn không có quyền thực hiện thao tác này." } });
+  const req = new Request("http://localhost/api/document-merge/templates/tpl-1", { method: "PUT", body: JSON.stringify({ name: "Đổi tên" }) });
+  const res = await ctx.PUT(req, { params: Promise.resolve({ id: "tpl-1" }) });
+  assert.equal(res.status, 403);
+});
+
+test("Regression 8 — execute-only: DELETE template rejected (403)", async () => {
+  const ctx = makeDetailContext({ guardResult: { ok: false, status: 403, error: "Tài khoản của bạn không có quyền thực hiện thao tác này." } });
+  const req = new Request("http://localhost/api/document-merge/templates/tpl-1", { method: "DELETE" });
+  const res = await ctx.DELETE(req, { params: Promise.resolve({ id: "tpl-1" }) });
   assert.equal(res.status, 403);
 });

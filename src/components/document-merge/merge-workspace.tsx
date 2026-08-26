@@ -267,7 +267,7 @@ class PreviewErrorBoundary extends Component<
   }
 }
 
-function MappingInspector({ template }: { template: MergeTemplate | undefined }) {
+function MappingInspector({ template, canManage }: { template: MergeTemplate | undefined; canManage: boolean }) {
   const [open, setOpen] = useState(true);
   const [fields, setFields] = useState<MergeField[]>([]);
   const [catalog, setCatalog] = useState<CatalogField[]>([]);
@@ -432,25 +432,34 @@ function MappingInspector({ template }: { template: MergeTemplate | undefined })
               <option value="ORPHANED">Orphaned</option>
               <option value="REQUIRED">Required</option>
             </select>
-            <button
-              type="button"
-              onClick={() => void scan()}
-              disabled={scanning}
-              className="inline-flex items-center justify-center gap-1.5 rounded-lg border border-slate-200 px-3 py-2 text-xs font-semibold text-slate-700 disabled:opacity-50"
-            >
-              <RefreshCw className={`h-3.5 w-3.5 ${scanning ? "animate-spin" : ""}`} />
-              {scanning ? "Đang quét..." : "Quét lại Google Docs"}
-            </button>
-            <button
-              type="button"
-              onClick={() => void save()}
-              disabled={!dirty || saving}
-              className="inline-flex items-center justify-center gap-1.5 rounded-lg bg-emerald-700 px-3 py-2 text-xs font-bold text-white disabled:opacity-40"
-            >
-              <Save className="h-3.5 w-3.5" /> {saving ? "Đang lưu..." : "Lưu Mapping"}
-            </button>
+            {canManage && (
+              <>
+                <button
+                  type="button"
+                  onClick={() => void scan()}
+                  disabled={scanning}
+                  className="inline-flex items-center justify-center gap-1.5 rounded-lg border border-slate-200 px-3 py-2 text-xs font-semibold text-slate-700 disabled:opacity-50"
+                >
+                  <RefreshCw className={`h-3.5 w-3.5 ${scanning ? "animate-spin" : ""}`} />
+                  {scanning ? "Đang quét..." : "Quét lại Google Docs"}
+                </button>
+                <button
+                  type="button"
+                  onClick={() => void save()}
+                  disabled={!dirty || saving}
+                  className="inline-flex items-center justify-center gap-1.5 rounded-lg bg-emerald-700 px-3 py-2 text-xs font-bold text-white disabled:opacity-40"
+                >
+                  <Save className="h-3.5 w-3.5" /> {saving ? "Đang lưu..." : "Lưu Mapping"}
+                </button>
+              </>
+            )}
           </div>
 
+          {!canManage && (
+            <p className="mt-2 rounded-lg bg-slate-50 p-2 text-[11px] text-slate-500">
+              Chỉ xem — cần quyền Quản lý Templates để chỉnh sửa mapping.
+            </p>
+          )}
           {message && <p className="mt-2 rounded-lg bg-slate-50 p-2 text-[11px] text-slate-600">{message}</p>}
           {dirty && <p className="mt-2 text-[11px] font-semibold text-amber-700">Có thay đổi mapping chưa lưu.</p>}
           {fields.some((field) => field.sourceType === "COMPUTED") && (
@@ -510,7 +519,8 @@ function MappingInspector({ template }: { template: MergeTemplate | undefined })
                           <select
                             value={field.sourceType}
                             onChange={(event) => updateField(field.id, { sourceType: event.target.value })}
-                            className="w-full rounded border border-slate-200 px-2 py-1.5"
+                            disabled={!canManage}
+                            className="w-full rounded border border-slate-200 px-2 py-1.5 disabled:bg-slate-50 disabled:text-slate-400"
                           >
                             {SOURCE_TYPES.map((item) => <option key={item} value={item}>{item}</option>)}
                           </select>
@@ -520,7 +530,7 @@ function MappingInspector({ template }: { template: MergeTemplate | undefined })
                             list={`merge-fields-${template.id}`}
                             value={field.sourceField ?? ""}
                             onChange={(event) => updateField(field.id, { sourceField: event.target.value || null })}
-                            disabled={field.sourceType === "COMPUTED"}
+                            disabled={!canManage || field.sourceType === "COMPUTED"}
                             className="w-full rounded border border-slate-200 px-2 py-1.5 font-mono disabled:bg-slate-50 disabled:text-slate-300"
                           />
                         </td>
@@ -529,7 +539,8 @@ function MappingInspector({ template }: { template: MergeTemplate | undefined })
                             value={field.sourcePath ?? ""}
                             onChange={(event) => updateField(field.id, { sourcePath: event.target.value || null })}
                             placeholder={field.sourceType === "COMPUTED" ? "vd: year(SigningDate)" : "vd: customAnswers.email"}
-                            className="w-full rounded border border-slate-200 px-2 py-1.5 font-mono"
+                            disabled={!canManage}
+                            className="w-full rounded border border-slate-200 px-2 py-1.5 font-mono disabled:bg-slate-50 disabled:text-slate-400"
                           />
                           {field.sourceType === "COMPUTED" && <ComputedFormulaStatus expression={field.sourcePath ?? ""} />}
                         </td>
@@ -537,7 +548,8 @@ function MappingInspector({ template }: { template: MergeTemplate | undefined })
                           <select
                             value={field.formatType ?? "RAW"}
                             onChange={(event) => updateField(field.id, { formatType: event.target.value })}
-                            className="w-full rounded border border-slate-200 px-2 py-1.5"
+                            disabled={!canManage}
+                            className="w-full rounded border border-slate-200 px-2 py-1.5 disabled:bg-slate-50 disabled:text-slate-400"
                           >
                             {FORMAT_TYPES.map(([value, label]) => <option key={value} value={value}>{label}</option>)}
                           </select>
@@ -546,7 +558,7 @@ function MappingInspector({ template }: { template: MergeTemplate | undefined })
                           <input
                             value={field.optionValue ?? ""}
                             onChange={(event) => updateField(field.id, { optionValue: event.target.value || null })}
-                            disabled={field.sourceType !== "CHECKBOX_OPTION"}
+                            disabled={!canManage || field.sourceType !== "CHECKBOX_OPTION"}
                             className="w-full rounded border border-slate-200 px-2 py-1.5 disabled:bg-slate-50 disabled:text-slate-300"
                           />
                         </td>
@@ -555,7 +567,8 @@ function MappingInspector({ template }: { template: MergeTemplate | undefined })
                             type="checkbox"
                             checked={field.isRequired}
                             onChange={(event) => updateField(field.id, { isRequired: event.target.checked })}
-                            className="accent-emerald-700"
+                            disabled={!canManage}
+                            className="accent-emerald-700 disabled:opacity-50"
                           />
                         </td>
                       </tr>
@@ -575,10 +588,13 @@ export function MergeWorkspace({
   selectedTemplateId,
   onSelectTemplateId,
   onSwitchToHistory,
+  canManageTemplates = false,
 }: {
   selectedTemplateId: string;
   onSelectTemplateId: (id: string) => void;
   onSwitchToHistory: () => void;
+  /** document_merge.templates.manage — gates the Mapping Inspector's edit controls (Scan/Save/editable table). Consuming a template to execute a merge never needs this. */
+  canManageTemplates?: boolean;
 }) {
   const [templates, setTemplates] = useState<MergeTemplate[]>([]);
   const [templateId, setTemplateId] = useState(selectedTemplateId);
@@ -968,7 +984,7 @@ export function MergeWorkspace({
         </div>
       )}
 
-      <MappingInspector template={effectiveTemplate} />
+      <MappingInspector template={effectiveTemplate} canManage={canManageTemplates} />
 
       <div className="grid gap-5 lg:grid-cols-2">
         <section className="space-y-4 rounded-xl border border-slate-200/80 bg-white p-4 shadow-xs">

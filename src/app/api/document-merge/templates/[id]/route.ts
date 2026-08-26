@@ -21,11 +21,12 @@ import { extractGoogleDocId } from '@/lib/document-merge/template-routing';
 
 type RouteContext = { params: Promise<{ id: string }> };
 
-// Same reasoning as templates/route.ts GET — reading a template detail is needed by
-// a templates.manage-only user (Templates/PDF Mapper tabs) just as much as by a
-// plain document_merge.view holder.
+// Same reasoning as templates/route.ts GET — reading a template detail (incl. its
+// mapping) is needed by a templates.manage-only user (Templates/PDF Mapper tabs),
+// a plain document_merge.view holder, AND an execute-only user (Merge workspace
+// needs to read the selected template's detail/mapping to run the merge).
 export async function GET(_request: Request, context: RouteContext) {
-  const guard = await requireAnyPermission(['ADMIN', 'HR_RECRUITER', 'HR_DIRECTOR', 'HR_SUPPORT'], ['document_merge.view', 'document_merge.templates.manage']);
+  const guard = await requireAnyPermission(['ADMIN', 'HR_RECRUITER', 'HR_DIRECTOR', 'HR_SUPPORT'], ['document_merge.view', 'document_merge.templates.manage', 'document_merge.execute']);
   if (!guard.ok) {
     return NextResponse.json({ error: guard.error }, { status: guard.status });
   }
