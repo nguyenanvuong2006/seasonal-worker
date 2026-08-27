@@ -27,9 +27,11 @@ import {
   DraftVersionEditorModal,
   VersionCloneConfirmModal,
   VersionDeleteConfirmModal,
+  VersionHtmlViewerModal,
   type CloneVersionTarget,
   type DraftEditTarget,
   type VersionDeleteTarget,
+  type VersionHtmlViewTarget,
 } from "@/components/document-merge/version-clone-modals";
 
 type Template = {
@@ -147,6 +149,8 @@ export function TemplateLibrary({ onSelectForMerge }: { onSelectForMerge: (templ
   const [deleting, setDeleting] = useState(false);
   /** Version DRAFT đang mở editor "Sửa HTML/CSS". */
   const [editDraftVersion, setEditDraftVersion] = useState<DraftEditTarget | null>(null);
+  /** Version PUBLISHED/ARCHIVED đang mở viewer chỉ đọc "Xem HTML/CSS". */
+  const [viewHtmlVersion, setViewHtmlVersion] = useState<VersionHtmlViewTarget | null>(null);
   /** Version vừa clone/lưu — highlight trong danh sách. */
   const [highlightVersionId, setHighlightVersionId] = useState<string | null>(null);
   // DRAFT VERSION PREVIEW — read-only "Xem trước"; never publishes.
@@ -720,6 +724,12 @@ export function TemplateLibrary({ onSelectForMerge }: { onSelectForMerge: (templ
                           : "Chưa có version HTML được publish (batch vẫn dùng Google Docs)."}
                       </p>
                       <p className="mt-1 text-[11px] text-slate-400">
+                        Bản nháp (DRAFT): bấm <b>Sửa HTML/CSS</b> (cạnh Xem trước) → sửa <b>HTML hiện tại</b> +{" "}
+                        <b>Print CSS hiện tại</b> → <b>Lưu bản nháp</b> (PATCH trực tiếp, editor không đóng) →{" "}
+                        <b>Xem trước A4</b> với dữ liệu thật → Lưu lại nhiều lần nếu cần. PUBLISHED/ARCHIVED là bất
+                        biến — chỉ xem được ở chế độ chỉ đọc (Xem HTML/CSS).
+                      </p>
+                      <p className="mt-1 text-[11px] text-slate-400">
                         Xuất bản sẽ bị chặn nếu có placeholder chưa từng mapping, hoặc placeholder đang bật
                         &quot;bắt buộc&quot; mà chưa có nguồn dữ liệu/giá trị mặc định. Placeholder không bắt buộc
                         luôn được phép để trống (không cần gán dữ liệu giả) — vào tab Mapping để đổi trạng thái
@@ -810,6 +820,55 @@ export function TemplateLibrary({ onSelectForMerge }: { onSelectForMerge: (templ
                             >
                               Xem trước
                             </button>
+                            {/* SỬA HTML/CSS — NGAY CẠNH "Xem trước", CHỈ DRAFT.
+                                Mở DraftVersionEditorModal nạp thẳng
+                                html_body/print_css của ĐÚNG versionId này
+                                (không qua current_published_version, không tạo
+                                version mới); Lưu = PATCH, editor không đóng. */}
+                            {version.status === "DRAFT" && (
+                              <button
+                                type="button"
+                                disabled={versionAction !== null}
+                                onClick={() => {
+                                  setHighlightVersionId(null);
+                                  setEditDraftVersion({
+                                    id: version.id,
+                                    version: version.version,
+                                    status: version.status,
+                                    htmlBody: version.htmlBody,
+                                    printCss: version.printCss,
+                                  });
+                                }}
+                                title="Sửa HTML/CSS của bản DRAFT này: nạp HTML + Print CSS hiện tại, Lưu bản nháp (PATCH), Xem trước A4 rồi Lưu lại nhiều lần. Server chỉ cho phép UPDATE khi version còn là DRAFT."
+                                className="rounded-lg border border-amber-300 bg-amber-50 px-2.5 py-1.5 text-[10px] font-bold text-amber-700 hover:bg-amber-100 disabled:opacity-50"
+                              >
+                                Sửa HTML/CSS
+                              </button>
+                            )}
+                            {/* XEM HTML/CSS — CHỈ ĐỌC cho PUBLISHED/ARCHIVED
+                                (những version KHÔNG có nút sửa). Viewer thuần
+                                presentational: hiển thị html_body/print_css đã
+                                lưu của chính versionId này, không gọi API,
+                                không ghi DB. Muốn sửa → "Tạo bản nháp". */}
+                            {version.status !== "DRAFT" && (
+                              <button
+                                type="button"
+                                disabled={versionAction !== null}
+                                onClick={() => {
+                                  setViewHtmlVersion({
+                                    id: version.id,
+                                    version: version.version,
+                                    status: version.status,
+                                    htmlBody: version.htmlBody,
+                                    printCss: version.printCss,
+                                  });
+                                }}
+                                title="Xem HTML/CSS đã lưu của phiên bản này ở chế độ chỉ đọc. PUBLISHED/ARCHIVED là bất biến — muốn sửa hãy tạo bản nháp từ phiên bản này."
+                                className="rounded-lg border border-slate-300 bg-white px-2.5 py-1.5 text-[10px] font-bold text-slate-700 hover:bg-slate-50 disabled:opacity-50"
+                              >
+                                Xem HTML/CSS
+                              </button>
+                            )}
                             {/* TẢI GÓI AI (H1) — export template.html + print.css +
                                 template-manifest.json + README-AI.md dạng ZIP, để đưa
                                 cho AI chỉnh sửa. READ-ONLY — chỉ GET, không ghi DB. */}
@@ -846,26 +905,6 @@ export function TemplateLibrary({ onSelectForMerge }: { onSelectForMerge: (templ
                             >
                               Tạo bản nháp từ phiên bản này
                             </button>
-                            {version.status === "DRAFT" && (
-                              <button
-                                type="button"
-                                disabled={versionAction !== null}
-                                onClick={() => {
-                                  setHighlightVersionId(null);
-                                  setEditDraftVersion({
-                                    id: version.id,
-                                    version: version.version,
-                                    status: version.status,
-                                    htmlBody: version.htmlBody,
-                                    printCss: version.printCss,
-                                  });
-                                }}
-                                title="Sửa HTML/CSS của bản DRAFT này (server chỉ cho phép UPDATE khi version còn là DRAFT)."
-                                className="rounded-lg border border-amber-300 bg-amber-50 px-2.5 py-1.5 text-[10px] font-bold text-amber-700 hover:bg-amber-100 disabled:opacity-50"
-                              >
-                                Sửa HTML/CSS
-                              </button>
-                            )}
                             {version.status !== "PUBLISHED" && (
                               <button
                                 disabled={versionAction !== null}
@@ -1072,10 +1111,21 @@ export function TemplateLibrary({ onSelectForMerge }: { onSelectForMerge: (templ
           version={editDraftVersion}
           onCancel={() => setEditDraftVersion(null)}
           onSaved={(versionId) => {
-            setEditDraftVersion(null);
+            // LƯU THÀNH CÔNG → KHÔNG ĐÓNG EDITOR: giữ DraftVersionEditorModal
+            // mở để operator tiếp tục vòng sửa → Xem trước A4 → Lưu nhiều lần
+            // trên cùng versionId DRAFT. Chỉ refresh danh sách phiên bản phía
+            // sau (danh sách mới có nội dung vừa lưu) + highlight card.
             setHighlightVersionId(versionId);
             void loadVersions(editing.id);
           }}
+        />
+      )}
+
+      {editing && viewHtmlVersion && (
+        <VersionHtmlViewerModal
+          templateName={editing.name}
+          version={viewHtmlVersion}
+          onClose={() => setViewHtmlVersion(null)}
         />
       )}
     </div>
