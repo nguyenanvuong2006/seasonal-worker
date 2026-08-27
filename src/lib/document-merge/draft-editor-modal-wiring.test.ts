@@ -69,8 +69,11 @@ test("DraftVersionEditorModal: opens on the mode that shows the preloaded html/c
 test("DraftVersionEditorModal: 'Nạp HTML hiện tại' composes from the DRAFT's saved html/css (baselineHtml/baselineCss), never from current_published_version", () => {
   assert.match(modalSource, /Nạp HTML hiện tại/);
   assert.match(modalCode, /composeFullHtmlDocument\(baselineHtml,\s*baselineCss\)/);
-  assert.match(modalCode, /const baselineHtml = version\.htmlBody \?\? "";/);
-  assert.match(modalCode, /const baselineCss = version\.printCss \?\? "";/);
+  // Baselines live in state (not derived from the prop) so a successful save
+  // can advance them in place — that is what keeps the modal open for
+  // repeated save loops. They are still seeded from the explicit DRAFT prop.
+  assert.match(modalCode, /const \[baselineHtml, setBaselineHtml\] = useState\(version\.htmlBody \?\? ""\);/);
+  assert.match(modalCode, /const \[baselineCss, setBaselineCss\] = useState\(version\.printCss \?\? ""\);/);
 });
 
 test("DraftVersionEditorModal: 'Khôi phục nội dung đã lưu' is local-only — its handler body makes no network request", () => {
@@ -98,6 +101,6 @@ test("DraftVersionEditorModal: closing (X button and 'Hủy' button) both route 
   assert.doesNotMatch(modalCode, /onClick=\{onCancel\}/);
 });
 
-test("DraftVersionEditorModal: Save/Apply success paths close via onSaved directly (a genuine save is not a 'discard', no confirm needed)", () => {
+test("DraftVersionEditorModal: Save/Apply success paths report via onSaved(version.id) — the parent keeps the editor open (see draft-editor-save-loop.test.ts)", () => {
   assert.match(modalCode, /onSaved\(version\.id\);/);
 });

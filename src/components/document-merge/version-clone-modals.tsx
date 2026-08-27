@@ -13,7 +13,11 @@
  *
  * 2. DraftVersionEditorModal — "Sửa HTML/CSS" cho version DRAFT. Luôn nạp
  *    đúng nội dung của versionId tường minh đang sửa (KHÔNG BAO GIỜ đọc
- *    current_published_version) — H1 mode ("HTML / CSS nâng cao", MẶC ĐỊNH
+ *    current_published_version, KHÔNG tạo version mới) — workflow tối giản
+ *    cho operator: HTML hiện tại + Print CSS hiện tại → Lưu bản nháp →
+ *    Xem trước A4 → sửa tiếp → Lưu lại NHIỀU LẦN trong cùng một phiên mở
+ *    (Lưu thành công KHÔNG đóng modal — baseline được nâng lên đúng nội dung
+ *    vừa ghi) — H1 mode ("HTML / CSS nâng cao", MẶC ĐỊNH
  *    khi mở): 2 textarea HTML body + Print CSS, useState khởi tạo thẳng từ
  *    version.htmlBody/printCss, PATCH về endpoint version detail ("Lưu bản
  *    nháp", không revalidate). H2 mode ("Dán HTML hoàn chỉnh", dành cho
@@ -31,6 +35,16 @@
  *    lưu" (chỉ local, KHÔNG gọi API) bỏ mọi sửa đổi CHƯA LƯU ở cả hai mode và
  *    nạp lại đúng nội dung DRAFT lúc mở editor; đóng editor (nút X hoặc Hủy)
  *    khi có sửa đổi CHƯA LƯU sẽ hỏi xác nhận trước (isDraftEditorDirty()).
+ *    "Xem trước A4" LUÔN khả dụng (không cần Phân tích trước): render ĐÚNG
+ *    HTML/CSS đang soạn — kể cả CHƯA Lưu, CHƯA Publish — với dữ liệu một ứng
+ *    viên thật (unsaved-preview, zero DB writes), đóng khung trang A4; ghi rõ
+ *    preview chỉ GẦN ĐÚNG, "In / Lưu PDF TEST" mới là kết quả chuẩn.
+ *
+ * 2b. VersionHtmlViewerModal — "Xem HTML/CSS" CHỈ ĐỌC cho version
+ *    PUBLISHED/ARCHIVED (những version không bao giờ có nút sửa). Hiển thị
+ *    đúng html_body/print_css ĐÃ LƯU của versionId được chọn — dữ liệu đã có
+ *    sẵn trong danh sách phiên bản nên viewer KHÔNG gọi API, KHÔNG ghi DB.
+ *    Muốn sửa: "Tạo bản nháp từ phiên bản này" rồi mở editor trên bản DRAFT.
  *
  * 3. ApplyToDraftConfirmModal — xác nhận trước khi Áp dụng, văn bản cố định
  *    nhắc rõ: đang sửa BẢN NHÁP, phiên bản đang xuất bản KHÔNG đổi, thao tác
@@ -52,6 +66,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { decoratePreviewForA4Sheets } from "@/lib/document-merge/preview-a4-decoration";
 import { composeFullHtmlDocument, isDraftEditorDirty } from "@/lib/document-merge/draft-editor-preload";
+import { normalizeFullHtmlDocument } from "@/lib/document-merge/full-document-normalizer";
 import {
   AlertTriangle,
   CheckCircle2,
@@ -399,6 +414,20 @@ export function DraftVersionEditorModal({
   const [error, setError] = useState<string | null>(null);
   const [conflict, setConflict] = useState(false);
 
+  /**
+   * Baseline = nội dung DRAFT ĐÃ LƯU mà editor đang dựa vào. Khởi tạo THẲNG
+   * từ html_body/print_css của chính versionId được mở (không bao giờ từ
+   * current_published_version, không tạo version mới). Nằm trong STATE (không
+   * derive từ prop) để sau mỗi lần ghi thành công ("Lưu bản nháp" / "Áp dụng
+   * vào bản nháp") baseline được NÂNG lên đúng nội dung vừa ghi mà không cần
+   * remount modal — đó chính là cơ chế giữ modal mở sau khi Save để operator
+   * tiếp tục sửa → Xem trước A4 → Lưu lại nhiều lần trên cùng một versionId.
+   */
+  const [baselineHtml, setBaselineHtml] = useState(version.htmlBody ?? "");
+  const [baselineCss, setBaselineCss] = useState(version.printCss ?? "");
+  /** Thông báo "đã lưu thành công" — chỉ hiện khi KHÔNG còn sửa đổi chưa lưu. */
+  const [savedNotice, setSavedNotice] = useState<string | null>(null);
+
   // H2 — "Dán HTML hoàn chỉnh" (paste ONE complete AI-generated document) vs
   // "HTML / CSS nâng cao" (H1's existing split editor, above). Both modes feed
   // the SAME Analyze -> Preview -> Apply pipeline below via `effectiveHtml`/
@@ -413,17 +442,19 @@ export function DraftVersionEditorModal({
   const effectiveHtml = mode === "paste" ? rawPaste : html;
   const effectiveCss = mode === "paste" ? "" : css;
 
-  // Preload / unsaved-changes tracking. "HTML / CSS nâng cao" is already
-  // preloaded above (useState(version.htmlBody ?? "") / printCss) — never
-  // from current_published_version, always from the explicit DRAFT `version`
-  // passed in. `baselineRawPaste` tracks the paste box separately: it starts
+  // Preload / unsaved-changes tracking. "HTML / CSS nâng cao" is preloaded
+  // from the explicit DRAFT `version` prop (html/css + baselines seeded via
+  // useState above — never from current_published_version). Baselines live in
+  // state (see comment there) so a successful save advances them in place —
+  // save → keep editing → save again, modal never remounts.
+  // `baselineRawPaste` tracks the paste box separately: it starts
   // empty (paste mode is a paste TARGET, not auto-filled) and only advances
   // when the operator explicitly loads content into it below, so a load
   // action itself never counts as a dirty edit.
-  const baselineHtml = version.htmlBody ?? "";
-  const baselineCss = version.printCss ?? "";
   const [baselineRawPaste, setBaselineRawPaste] = useState("");
   const dirty = isDraftEditorDirty({ html, css, rawPaste, baselineHtml, baselineCss, baselineRawPaste });
+  /** "Đã lưu" chỉ đúng khi không còn gì chưa lưu — tự ẩn khi operator gõ tiếp. */
+  const savedNoticeVisible = savedNotice !== null && !dirty;
 
   /** "Nạp HTML hiện tại" — compose one complete document from the DRAFT's
    * currently SAVED html_body + print_css into the paste box, for manual
@@ -617,6 +648,22 @@ export function DraftVersionEditorModal({
         }
         throw new Error(data.error || "Không áp dụng được vào bản nháp.");
       }
+      // ÁP DỤNG XONG KHÔNG ĐÓNG MODAL — đồng bộ toàn bộ editor về đúng nội
+      // dung đã được ghi. Server normalize y hệt (html_body = body tách ra,
+      // print_css = explicitCss + <style> trừ ra) nên client tính lại bằng
+      // CÙNG hàm normalizeFullHtmlDocument để baseline khớp từng byte; từ đó
+      // vòng sửa → Xem trước A4 → Lưu/Áp dụng tiếp diễn trên cùng versionId.
+      const normalized = normalizeFullHtmlDocument(effectiveHtml);
+      const normalizedPrintCss = [effectiveCss, normalized.extractedCss]
+        .filter((chunk): chunk is string => Boolean(chunk && chunk.trim()))
+        .join("\n\n");
+      setHtml(normalized.htmlBody);
+      setCss(normalizedPrintCss);
+      setRawPaste(effectiveHtml);
+      setBaselineHtml(normalized.htmlBody);
+      setBaselineCss(normalizedPrintCss);
+      setBaselineRawPaste(effectiveHtml);
+      setSavedNotice(`Đã áp dụng vào bản nháp v${version.version} — editor vẫn mở để sửa tiếp.`);
       setApplied(true);
       setShowApplyConfirm(false);
       onSaved(version.id);
@@ -649,6 +696,16 @@ export function DraftVersionEditorModal({
         if (res.status === 409) setConflict(true);
         throw new Error(data.error || "Không lưu được bản nháp.");
       }
+      // LƯU XONG KHÔNG ĐÓNG MODAL — chỉ nâng baseline lên đúng nội dung vừa
+      // ghi. PATCH chỉ UPDATE html_body/print_css của version DRAFT này
+      // (server guard): mapping_snapshot, version number, templateId, status,
+      // current_published_version và các version khác KHÔNG đổi. Operator
+      // tiếp tục sửa → Xem trước A4 → Lưu lại bao nhiêu lần cũng được.
+      setBaselineHtml(html);
+      setBaselineCss(css);
+      setSavedNotice(
+        `Đã lưu bản nháp v${version.version} — editor vẫn mở: sửa tiếp, Xem trước A4 rồi Lưu lại khi cần.`,
+      );
       onSaved(version.id);
     } catch (err) {
       setError(err instanceof Error ? err.message : "Không lưu được bản nháp.");
@@ -702,6 +759,13 @@ export function DraftVersionEditorModal({
                 </p>
               )}
             </div>
+          </div>
+        )}
+
+        {savedNoticeVisible && (
+          <div className="mt-3 flex items-start gap-2 rounded-xl border border-emerald-200 bg-emerald-50 p-3 text-[11px] text-emerald-700">
+            <CheckCircle2 className="mt-0.5 h-4 w-4 shrink-0" />
+            <p>{savedNotice}</p>
           </div>
         )}
 
@@ -782,7 +846,7 @@ export function DraftVersionEditorModal({
           ) : (
             <div className="mt-3 grid gap-3">
               <label className="text-[11px] font-semibold text-slate-600">
-                HTML body (print template A4, chứa placeholder {"<<...>>"})
+                HTML hiện tại (html_body của bản nháp v{version.version} — template in A4, chứa placeholder {"<<...>>"})
                 <textarea
                   value={html}
                   onChange={(e) => setHtml(e.target.value)}
@@ -793,7 +857,7 @@ export function DraftVersionEditorModal({
                 />
               </label>
               <label className="text-[11px] font-semibold text-slate-600">
-                Print CSS (CSS A4 chung được tự thêm)
+                Print CSS hiện tại (print_css — CSS A4 dùng chung khi in/PDF)
                 <textarea
                   value={css}
                   onChange={(e) => setCss(e.target.value)}
@@ -808,15 +872,194 @@ export function DraftVersionEditorModal({
                   type="button"
                   onClick={() => void save()}
                   disabled={saving || conflict}
-                  className="inline-flex items-center gap-1.5 rounded-lg border border-slate-300 px-3 py-1.5 text-[11px] font-bold text-slate-700 hover:bg-slate-50 disabled:opacity-50"
+                  title="Lưu trực tiếp (PATCH) html_body + print_css của version DRAFT này. Không qua Phân tích/Áp dụng, KHÔNG tạo version mới, KHÔNG publish, KHÔNG đổi mapping. Sau khi lưu, editor vẫn mở để sửa tiếp."
+                  className="inline-flex items-center gap-1.5 rounded-lg border border-emerald-300 bg-emerald-50 px-3 py-1.5 text-[11px] font-bold text-emerald-700 hover:bg-emerald-100 disabled:opacity-50"
                 >
                   <Save className="h-3.5 w-3.5" />
-                  {saving ? "Đang lưu..." : "Lưu bản nháp (lưu trực tiếp, không qua Phân tích/Áp dụng)"}
+                  {saving ? "Đang lưu..." : "Lưu bản nháp"}
                 </button>
+                <span className="ml-2 text-[10px] text-slate-400">
+                  Lưu xong editor KHÔNG đóng — sửa tiếp → Xem trước A4 → Lưu lại nhiều lần.
+                </span>
               </div>
             </div>
           )}
         </div>
+
+        {/* XEM TRƯỚC A4 — LUÔN KHẢ DỤNG, không cần Phân tích trước (workflow
+            tối giản: sửa → Lưu bản nháp → Xem trước A4 → sửa tiếp → Lưu lại).
+            Render ĐÚNG HTML/CSS đang soạn ở trên — kể cả CHƯA Lưu, CHƯA Publish
+            — với dữ liệu một ứng viên thật (unsaved-preview: zero DB writes,
+            không tạo job, không publish, không đổi current_published_version),
+            đóng khung trang A4 chỉ để MÔ PHỎNG trên màn hình. */}
+        <div className="mt-4 rounded-xl border border-slate-200 bg-slate-50 p-3">
+          <p className="text-[11px] font-bold text-slate-700">Xem trước A4 (chưa lưu)</p>
+          <p className="mt-1 text-[10px] text-slate-400">
+            Dùng ĐÚNG HTML/CSS đang soạn ở trên — kể cả khi CHƯA bấm Lưu bản nháp và CHƯA Publish — render với
+            dữ liệu thật của một ứng viên để kiểm tra xuống dòng/bảng/chữ ký. Preview chỉ MÔ PHỎNG trang A4, là
+            bản <b>GẦN ĐÚNG</b>; <b>In / Lưu PDF TEST</b> (sau khi preview) mới là <b>KẾT QUẢ CHUẨN</b>.
+          </p>
+
+            <div className="relative mt-2">
+              <Search className="pointer-events-none absolute left-3 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-slate-400" />
+              <input
+                value={candidateQuery}
+                onChange={(e) => setCandidateQuery(e.target.value)}
+                placeholder="Tìm ứng viên: tên, CCCD hoặc số điện thoại"
+                className="w-full rounded-lg border border-slate-300 py-2 pl-9 pr-3 text-xs outline-none focus:border-emerald-600"
+              />
+            </div>
+            {searchingCandidates && <p className="mt-1 text-[11px] text-slate-400">Đang tìm...</p>}
+            {candidates.length > 0 && (
+              <ul className="mt-2 max-h-36 divide-y divide-slate-100 overflow-y-auto rounded-lg border border-slate-200 bg-white">
+                {candidates.map((row) => (
+                  <li key={row.id}>
+                    <button
+                      type="button"
+                      onClick={() => setSelectedCandidate(row)}
+                      className={`flex w-full items-center justify-between gap-3 px-3 py-2 text-left text-xs hover:bg-emerald-50 ${
+                        selectedCandidate?.id === row.id ? "bg-emerald-50" : "bg-white"
+                      }`}
+                    >
+                      <span className="min-w-0">
+                        <span className="block truncate font-semibold text-slate-800">{row.fullName}</span>
+                        <span className="block truncate font-mono text-[10px] text-slate-500">
+                          {row.cccd}
+                          {row.deptName ? ` · ${row.deptName}` : ""}
+                        </span>
+                      </span>
+                      {selectedCandidate?.id === row.id && (
+                        <span className="shrink-0 rounded-full bg-emerald-600 px-2 py-0.5 text-[10px] font-bold text-white">Đã chọn</span>
+                      )}
+                    </button>
+                  </li>
+                ))}
+              </ul>
+            )}
+
+            <div className="mt-3 rounded-lg border border-slate-200 bg-white p-2.5">
+              <p className="text-[11px] font-semibold text-slate-600">Thông tin tạo tài liệu (Signing Context)</p>
+              <p className="mt-0.5 text-[10px] text-slate-400">
+                Dùng cho các placeholder tính toán (Ngay_ky_day/month/year, Dia_diem_ky, Nam_thue, Ngay_tiep_nhan...).
+              </p>
+              <div className="mt-2 grid grid-cols-2 gap-2 sm:grid-cols-4">
+                <label className="text-[10px] text-slate-500">
+                  Ngày ký
+                  <input
+                    type="date"
+                    value={signingContext.signingDate}
+                    onChange={(e) => setSigningContext((s) => ({ ...s, signingDate: e.target.value }))}
+                    className="mt-0.5 w-full rounded border border-slate-200 px-2 py-1.5 text-xs"
+                  />
+                </label>
+                <label className="text-[10px] text-slate-500">
+                  Địa điểm ký
+                  <input
+                    value={signingContext.signingLocation}
+                    onChange={(e) => setSigningContext((s) => ({ ...s, signingLocation: e.target.value }))}
+                    placeholder="vd: Đà Lạt"
+                    className="mt-0.5 w-full rounded border border-slate-200 px-2 py-1.5 text-xs"
+                  />
+                </label>
+                <label className="text-[10px] text-slate-500">
+                  Ngày tiếp nhận
+                  <input
+                    type="date"
+                    value={signingContext.receivedDate}
+                    onChange={(e) => setSigningContext((s) => ({ ...s, receivedDate: e.target.value }))}
+                    className="mt-0.5 w-full rounded border border-slate-200 px-2 py-1.5 text-xs"
+                  />
+                </label>
+                <label className="text-[10px] text-slate-500">
+                  Người tiếp nhận
+                  <input
+                    value={signingContext.receivedBy}
+                    onChange={(e) => setSigningContext((s) => ({ ...s, receivedBy: e.target.value }))}
+                    className="mt-0.5 w-full rounded border border-slate-200 px-2 py-1.5 text-xs"
+                  />
+                </label>
+              </div>
+            </div>
+
+            <div className="mt-3 flex flex-wrap items-center gap-2">
+              <button
+                type="button"
+                onClick={() => void runUnsavedPreview()}
+                disabled={previewing || !selectedCandidate || conflict}
+                className="inline-flex items-center gap-1.5 rounded-lg bg-indigo-700 px-3 py-1.5 text-[11px] font-bold text-white hover:bg-indigo-800 disabled:opacity-50"
+              >
+                <Eye className="h-3.5 w-3.5" /> {previewing ? "Đang dựng..." : "Xem trước A4"}
+              </button>
+              {previewResult && (
+                <>
+                  <button
+                    type="button"
+                    onClick={() => openUnsavedPrintView(true)}
+                    title="Mở hộp thoại in của trình duyệt trên bản xem trước CHƯA LƯU (In / Lưu PDF TEST). Không tạo file trên máy chủ, không lưu, không publish."
+                    className="inline-flex items-center gap-1.5 rounded-lg border border-slate-300 px-3 py-1.5 text-[11px] font-semibold text-slate-700 hover:bg-slate-50"
+                  >
+                    <Printer className="h-3.5 w-3.5" /> In / Lưu PDF TEST
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => openUnsavedPrintView(false)}
+                    title="Mở bản in (print-only view) trong tab riêng rồi dùng Print / Save as PDF của trình duyệt."
+                    className="inline-flex items-center gap-1.5 rounded-lg border border-slate-300 px-3 py-1.5 text-[11px] font-semibold text-slate-600 hover:bg-slate-50"
+                  >
+                    <ExternalLink className="h-3.5 w-3.5" /> Mở bản in
+                  </button>
+                </>
+              )}
+            </div>
+
+            {previewError && (
+              <div className="mt-2 flex items-start gap-2 rounded-lg border border-red-200 bg-red-50 p-2 text-[11px] text-red-700">
+                <AlertTriangle className="mt-0.5 h-3.5 w-3.5 shrink-0" />
+                <p>{previewError}</p>
+              </div>
+            )}
+
+            {previewResult && (
+              <div className="mt-3 space-y-2">
+                {/* DEFECT A FIX — a literal <<placeholder>> can only survive rendering
+                    when it has NO mapping at all (never "optional and blank", which
+                    already resolves to an empty string). Never silently show this as
+                    if it were a successful, complete preview. */}
+                {previewResult.unresolvedPlaceholderWarning && (
+                  <div className="flex items-start gap-2 rounded-lg border border-red-300 bg-red-50 p-2.5 text-[11px] font-semibold text-red-800">
+                    <AlertTriangle className="mt-0.5 h-3.5 w-3.5 shrink-0" />
+                    <p>{previewResult.unresolvedPlaceholderWarning}</p>
+                  </div>
+                )}
+                <dl className="grid grid-cols-2 gap-x-4 gap-y-1 rounded-lg bg-white p-2 text-[11px] sm:grid-cols-4">
+                  <dt className="text-slate-400">Ứng viên</dt>
+                  <dd className="truncate font-semibold text-slate-800">{previewResult.fullName ?? "—"}</dd>
+                  <dt className="text-slate-400">Số trang</dt>
+                  <dd className="font-semibold text-slate-800">{previewResult.pageCount ?? "—"}</dd>
+                  <dt className="text-slate-400">Mapping</dt>
+                  <dd className="font-semibold text-slate-800">
+                    {previewResult.mappingSummary.mapped}/{previewResult.mappingSummary.total}
+                  </dd>
+                </dl>
+                {previewResult.missingFields.length > 0 && (
+                  <p className="rounded-lg bg-amber-50 p-2 text-[11px] text-amber-800">
+                    Trường bắt buộc còn thiếu dữ liệu (ứng viên chưa có giá trị): {previewResult.missingFields.join(", ")}
+                  </p>
+                )}
+                <p className="text-[10px] text-slate-400">
+                  Đóng khung theo tỉ lệ A4 để dễ phân biệt trang — Preview chỉ <b>GẦN ĐÚNG</b> (trình duyệt không
+                  phân trang trên màn hình như khi in thật). <b>In / Lưu PDF TEST</b> bên dưới mới là{" "}
+                  <b>KẾT QUẢ CHUẨN</b> — hãy kiểm tra PDF TEST trước khi Publish.
+                </p>
+                <iframe
+                  title="Bản xem trước chưa lưu"
+                  sandbox="allow-modals"
+                  srcDoc={decoratedPreviewHtml}
+                  className="h-[500px] w-full rounded-lg border border-slate-200 bg-slate-500"
+                />
+              </div>
+            )}
+          </div>
 
         {/* PHÂN TÍCH THAY ĐỔI (H1, mở rộng H2) — READ-ONLY. So sánh nội dung ĐANG GÕ (chưa lưu)
             với phiên bản v{version.version} hiện có trên server. KHÔNG lưu, KHÔNG
@@ -925,177 +1168,6 @@ export function DraftVersionEditorModal({
           )}
         </div>
 
-        {/* H2 — XEM TRƯỚC VỚI DỮ LIỆU THẬT (Phase 6/7). CHƯA LƯU — zero DB writes,
-            không tạo job, không publish. Chỉ bật sau khi đã Phân tích. */}
-        {analyzeResult && (
-          <div className="mt-4 rounded-xl border border-slate-200 bg-slate-50 p-3">
-            <p className="text-[11px] font-bold text-slate-700">Xem trước với dữ liệu thật (chưa lưu)</p>
-            <p className="mt-1 text-[10px] text-slate-400">
-              Chọn một ứng viên có thật để kiểm tra cách nội dung vừa dán hiển thị với dữ liệu ngắn/dài thực tế —
-              chưa ghi vào bản nháp, chưa tạo job, chưa publish.
-            </p>
-
-            <div className="relative mt-2">
-              <Search className="pointer-events-none absolute left-3 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-slate-400" />
-              <input
-                value={candidateQuery}
-                onChange={(e) => setCandidateQuery(e.target.value)}
-                placeholder="Tìm ứng viên: tên, CCCD hoặc số điện thoại"
-                className="w-full rounded-lg border border-slate-300 py-2 pl-9 pr-3 text-xs outline-none focus:border-emerald-600"
-              />
-            </div>
-            {searchingCandidates && <p className="mt-1 text-[11px] text-slate-400">Đang tìm...</p>}
-            {candidates.length > 0 && (
-              <ul className="mt-2 max-h-36 divide-y divide-slate-100 overflow-y-auto rounded-lg border border-slate-200 bg-white">
-                {candidates.map((row) => (
-                  <li key={row.id}>
-                    <button
-                      type="button"
-                      onClick={() => setSelectedCandidate(row)}
-                      className={`flex w-full items-center justify-between gap-3 px-3 py-2 text-left text-xs hover:bg-emerald-50 ${
-                        selectedCandidate?.id === row.id ? "bg-emerald-50" : "bg-white"
-                      }`}
-                    >
-                      <span className="min-w-0">
-                        <span className="block truncate font-semibold text-slate-800">{row.fullName}</span>
-                        <span className="block truncate font-mono text-[10px] text-slate-500">
-                          {row.cccd}
-                          {row.deptName ? ` · ${row.deptName}` : ""}
-                        </span>
-                      </span>
-                      {selectedCandidate?.id === row.id && (
-                        <span className="shrink-0 rounded-full bg-emerald-600 px-2 py-0.5 text-[10px] font-bold text-white">Đã chọn</span>
-                      )}
-                    </button>
-                  </li>
-                ))}
-              </ul>
-            )}
-
-            <div className="mt-3 rounded-lg border border-slate-200 bg-white p-2.5">
-              <p className="text-[11px] font-semibold text-slate-600">Thông tin tạo tài liệu (Signing Context)</p>
-              <p className="mt-0.5 text-[10px] text-slate-400">
-                Dùng cho các placeholder tính toán (Ngay_ky_day/month/year, Dia_diem_ky, Nam_thue, Ngay_tiep_nhan...).
-              </p>
-              <div className="mt-2 grid grid-cols-2 gap-2 sm:grid-cols-4">
-                <label className="text-[10px] text-slate-500">
-                  Ngày ký
-                  <input
-                    type="date"
-                    value={signingContext.signingDate}
-                    onChange={(e) => setSigningContext((s) => ({ ...s, signingDate: e.target.value }))}
-                    className="mt-0.5 w-full rounded border border-slate-200 px-2 py-1.5 text-xs"
-                  />
-                </label>
-                <label className="text-[10px] text-slate-500">
-                  Địa điểm ký
-                  <input
-                    value={signingContext.signingLocation}
-                    onChange={(e) => setSigningContext((s) => ({ ...s, signingLocation: e.target.value }))}
-                    placeholder="vd: Đà Lạt"
-                    className="mt-0.5 w-full rounded border border-slate-200 px-2 py-1.5 text-xs"
-                  />
-                </label>
-                <label className="text-[10px] text-slate-500">
-                  Ngày tiếp nhận
-                  <input
-                    type="date"
-                    value={signingContext.receivedDate}
-                    onChange={(e) => setSigningContext((s) => ({ ...s, receivedDate: e.target.value }))}
-                    className="mt-0.5 w-full rounded border border-slate-200 px-2 py-1.5 text-xs"
-                  />
-                </label>
-                <label className="text-[10px] text-slate-500">
-                  Người tiếp nhận
-                  <input
-                    value={signingContext.receivedBy}
-                    onChange={(e) => setSigningContext((s) => ({ ...s, receivedBy: e.target.value }))}
-                    className="mt-0.5 w-full rounded border border-slate-200 px-2 py-1.5 text-xs"
-                  />
-                </label>
-              </div>
-            </div>
-
-            <div className="mt-3 flex flex-wrap items-center gap-2">
-              <button
-                type="button"
-                onClick={() => void runUnsavedPreview()}
-                disabled={previewing || !selectedCandidate}
-                className="inline-flex items-center gap-1.5 rounded-lg bg-indigo-700 px-3 py-1.5 text-[11px] font-bold text-white hover:bg-indigo-800 disabled:opacity-50"
-              >
-                <Eye className="h-3.5 w-3.5" /> {previewing ? "Đang dựng..." : "Xem trước với dữ liệu thật"}
-              </button>
-              {previewResult && (
-                <>
-                  <button
-                    type="button"
-                    onClick={() => openUnsavedPrintView(true)}
-                    title="Mở hộp thoại in của trình duyệt trên bản xem trước CHƯA LƯU (In / Lưu PDF TEST). Không tạo file trên máy chủ, không lưu, không publish."
-                    className="inline-flex items-center gap-1.5 rounded-lg border border-slate-300 px-3 py-1.5 text-[11px] font-semibold text-slate-700 hover:bg-slate-50"
-                  >
-                    <Printer className="h-3.5 w-3.5" /> In / Lưu PDF TEST
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => openUnsavedPrintView(false)}
-                    title="Mở bản in (print-only view) trong tab riêng rồi dùng Print / Save as PDF của trình duyệt."
-                    className="inline-flex items-center gap-1.5 rounded-lg border border-slate-300 px-3 py-1.5 text-[11px] font-semibold text-slate-600 hover:bg-slate-50"
-                  >
-                    <ExternalLink className="h-3.5 w-3.5" /> Mở bản in
-                  </button>
-                </>
-              )}
-            </div>
-
-            {previewError && (
-              <div className="mt-2 flex items-start gap-2 rounded-lg border border-red-200 bg-red-50 p-2 text-[11px] text-red-700">
-                <AlertTriangle className="mt-0.5 h-3.5 w-3.5 shrink-0" />
-                <p>{previewError}</p>
-              </div>
-            )}
-
-            {previewResult && (
-              <div className="mt-3 space-y-2">
-                {/* DEFECT A FIX — a literal <<placeholder>> can only survive rendering
-                    when it has NO mapping at all (never "optional and blank", which
-                    already resolves to an empty string). Never silently show this as
-                    if it were a successful, complete preview. */}
-                {previewResult.unresolvedPlaceholderWarning && (
-                  <div className="flex items-start gap-2 rounded-lg border border-red-300 bg-red-50 p-2.5 text-[11px] font-semibold text-red-800">
-                    <AlertTriangle className="mt-0.5 h-3.5 w-3.5 shrink-0" />
-                    <p>{previewResult.unresolvedPlaceholderWarning}</p>
-                  </div>
-                )}
-                <dl className="grid grid-cols-2 gap-x-4 gap-y-1 rounded-lg bg-white p-2 text-[11px] sm:grid-cols-4">
-                  <dt className="text-slate-400">Ứng viên</dt>
-                  <dd className="truncate font-semibold text-slate-800">{previewResult.fullName ?? "—"}</dd>
-                  <dt className="text-slate-400">Số trang</dt>
-                  <dd className="font-semibold text-slate-800">{previewResult.pageCount ?? "—"}</dd>
-                  <dt className="text-slate-400">Mapping</dt>
-                  <dd className="font-semibold text-slate-800">
-                    {previewResult.mappingSummary.mapped}/{previewResult.mappingSummary.total}
-                  </dd>
-                </dl>
-                {previewResult.missingFields.length > 0 && (
-                  <p className="rounded-lg bg-amber-50 p-2 text-[11px] text-amber-800">
-                    Trường bắt buộc còn thiếu dữ liệu (ứng viên chưa có giá trị): {previewResult.missingFields.join(", ")}
-                  </p>
-                )}
-                <p className="text-[10px] text-slate-400">
-                  Đóng khung theo tỉ lệ A4 để dễ phân biệt trang — đây là bản <b>GẦN ĐÚNG</b>; dùng{" "}
-                  <b>In / Lưu PDF TEST</b> bên dưới để xem bản in thật.
-                </p>
-                <iframe
-                  title="Bản xem trước chưa lưu"
-                  sandbox="allow-modals"
-                  srcDoc={decoratedPreviewHtml}
-                  className="h-[500px] w-full rounded-lg border border-slate-200 bg-slate-500"
-                />
-              </div>
-            )}
-          </div>
-        )}
-
         {applyError && (
           <div className="mt-3 flex items-start gap-2 rounded-xl border border-red-200 bg-red-50 p-3 text-[11px] text-red-700">
             <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0" />
@@ -1110,8 +1182,11 @@ export function DraftVersionEditorModal({
         )}
 
         <p className="mt-3 text-[10px] text-slate-400">
-          Chỉ sau khi <b>Phân tích thay đổi</b> thành công mới có thể <b>Áp dụng vào bản nháp</b>. Thao tác này
-          KHÔNG xuất bản template — mapping snapshot chỉ được freeze khi bạn chủ động Xuất bản.
+          Workflow tối giản: <b>HTML/Print CSS hiện tại</b> → <b>Lưu bản nháp</b> (PATCH trực tiếp, editor không
+          đóng) → <b>Xem trước A4</b> (gần đúng) → kiểm tra <b>PDF TEST</b> (kết quả chuẩn) → Lưu lại nếu cần.
+          Riêng <b>Áp dụng vào bản nháp</b> (mode dán HTML hoàn chỉnh) vẫn yêu cầu <b>Phân tích thay đổi</b> trước.
+          Mọi ghi chỉ đụng html_body/print_css của bản DRAFT này — KHÔNG xuất bản; mapping snapshot chỉ được freeze
+          khi bạn chủ động Xuất bản.
         </p>
 
         <div className="mt-4 flex justify-end gap-2">
@@ -1192,6 +1267,99 @@ function ApplyToDraftConfirmModal({
           >
             <CheckSquare className="h-3.5 w-3.5" />
             {applying ? "Đang áp dụng..." : "Áp dụng vào bản nháp"}
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+/* ------------------------------------------------------------------ *
+ * 5. READ-ONLY HTML/CSS VIEWER — "Xem HTML/CSS" (PUBLISHED/ARCHIVED)
+ * ------------------------------------------------------------------ */
+
+export type VersionHtmlViewTarget = {
+  id: string;
+  version: number;
+  status: "DRAFT" | "PUBLISHED" | "ARCHIVED";
+  htmlBody: string | null;
+  printCss: string | null;
+};
+
+/**
+ * "Xem HTML/CSS" — CHỈ ĐỌC, dành cho version PUBLISHED/ARCHIVED (những
+ * version KHÔNG BAO GIỜ có nút sửa: server trả 409 cho mọi ghi lên chúng).
+ *
+ * Hiển thị đúng html_body/print_css ĐÃ LƯU của versionId được chọn — dữ liệu
+ * đã có sẵn trong danh sách phiên bản nên modal này KHÔNG gọi API nào, KHÔNG
+ * ghi DB, KHÔNG publish (thuần presentational). Muốn sửa nội dung: bấm
+ * "Tạo bản nháp từ phiên bản này" rồi mở "Sửa HTML/CSS" trên bản DRAFT mới.
+ */
+export function VersionHtmlViewerModal({
+  templateName,
+  version,
+  onClose,
+}: {
+  templateName: string;
+  version: VersionHtmlViewTarget;
+  onClose: () => void;
+}) {
+  return (
+    <div className="fixed inset-0 z-50 flex items-start justify-center overflow-y-auto bg-slate-900/50 p-4">
+      <div className="my-6 w-full max-w-3xl rounded-2xl bg-white p-5 shadow-xl">
+        <div className="flex items-start justify-between gap-3">
+          <div className="flex items-center gap-2">
+            <span className="rounded-lg bg-slate-100 p-2 text-slate-600">
+              <FileCode2 className="h-4 w-4" />
+            </span>
+            <div>
+              <h3 className="text-sm font-bold text-slate-900">
+                Xem HTML/CSS — phiên bản v{version.version} ({version.status})
+              </h3>
+              <p className="text-[11px] text-slate-500">
+                Chỉ ĐỌC — {templateName}. Version {version.status} là bất biến; muốn sửa hãy bấm{" "}
+                <b>Tạo bản nháp từ phiên bản này</b> rồi mở <b>Sửa HTML/CSS</b> trên bản DRAFT mới.
+              </p>
+            </div>
+          </div>
+          <button
+            type="button"
+            onClick={onClose}
+            className="rounded-lg p-1 text-slate-400 hover:bg-slate-100 hover:text-slate-600"
+            aria-label="Đóng"
+          >
+            <X className="h-4 w-4" />
+          </button>
+        </div>
+
+        <label className="mt-4 block text-[11px] font-semibold text-slate-600">
+          HTML hiện tại (html_body — chỉ đọc)
+          <textarea
+            readOnly
+            value={version.htmlBody ?? ""}
+            rows={14}
+            spellCheck={false}
+            className="mt-1 w-full rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 font-mono text-[11px] text-slate-700 outline-none"
+          />
+        </label>
+        <label className="mt-3 block text-[11px] font-semibold text-slate-600">
+          Print CSS hiện tại (print_css — chỉ đọc)
+          <textarea
+            readOnly
+            value={version.printCss ?? ""}
+            rows={6}
+            spellCheck={false}
+            className="mt-1 w-full rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 font-mono text-[11px] text-slate-700 outline-none"
+          />
+        </label>
+
+        <div className="mt-4 flex justify-end">
+          <button
+            type="button"
+            onClick={onClose}
+            className="rounded-lg border border-slate-300 bg-white px-4 py-2 text-xs font-semibold text-slate-700 hover:bg-slate-50"
+          >
+            Đóng
           </button>
         </div>
       </div>

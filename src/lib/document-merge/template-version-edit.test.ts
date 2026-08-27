@@ -258,6 +258,64 @@ test("edit (race): version rời DRAFT giữa SELECT và UPDATE → UPDATE trả
   assert.equal(eqValue(update, "merge_template_versions.status"), "DRAFT");
 });
 
+test("edit (lặp NHIỀU LẦN): Save liên tục trên cùng versionId — mỗi lần chỉ UPDATE, KHÔNG INSERT (không tạo version mới), version/mapping/status/current_published giữ nguyên", async () => {
+  const db = makeEditDb();
+  const mod = await loadService(db);
+
+  // Operator lưu 3 lần liên tiếp (sửa → Lưu → sửa tiếp → Lưu...) trên CÙNG
+  // versionId — đúng vòng lặp "Lưu bản nháp" giữ modal mở.
+  const first = await mod.updateTemplateVersionDraft("tpl-1", "ver-9", {
+    htmlBody: "<div class=\"page\"><p>lần 1</p></div>",
+    printCss: ".p1{}",
+  });
+  const second = await mod.updateTemplateVersionDraft("tpl-1", "ver-9", {
+    htmlBody: "<div class=\"page\"><p>lần 2 — sửa tiếp</p></div>",
+    printCss: ".p2{}",
+  });
+  const third = await mod.updateTemplateVersionDraft("tpl-1", "ver-9", {
+    htmlBody: "<div class=\"page\"><p>lần 3 — chốt</p></div>",
+    printCss: null,
+  });
+
+  // Version number KHÔNG đổi qua các lần lưu (không có "version mới" nào sinh ra).
+  assert.equal(first.version, 9);
+  assert.equal(second.version, 9);
+  assert.equal(third.version, 9);
+  assert.equal(first.status, "DRAFT");
+  assert.equal(second.status, "DRAFT");
+  assert.equal(third.status, "DRAFT");
+  assert.equal(first.templateId, "tpl-1");
+  assert.equal(third.htmlBody, "<div class=\"page\"><p>lần 3 — chốt</p></div>");
+  assert.equal(third.printCss, null);
+  assert.deepEqual(third.mappingSnapshot, []);
+
+  // Không MỘT lệnh INSERT nào trong cả phiên — Save không bao giờ tạo version mới.
+  assert.equal(db.calls.filter((c) => c.root === "insert").length, 0);
+  assert.equal(db.calls.filter((c) => c.root === "delete").length, 0);
+
+  // Đúng 3 lệnh UPDATE merge_template_versions, mỗi câu đều guard
+  // id+templateId+status='DRAFT' và chỉ set nội dung.
+  const updates = db.writesTo("merge_template_versions");
+  assert.equal(updates.length, 3);
+  for (const update of updates) {
+    assert.equal(eqValue(update, "merge_template_versions.id"), "ver-9");
+    assert.equal(eqValue(update, "merge_template_versions.templateId"), "tpl-1");
+    assert.equal(eqValue(update, "merge_template_versions.status"), "DRAFT");
+    const set = argOf(update, "set") as Record<string, unknown>;
+    assert.deepEqual(Object.keys(set).sort(), ["htmlBody", "printCss", "updatedAt"]);
+    assert.equal(set.status, undefined);
+    assert.equal(set.version, undefined);
+    assert.equal(set.mappingSnapshot, undefined);
+    assert.equal(set.publishedAt, undefined);
+    assert.equal(set.archivedAt, undefined);
+  }
+
+  // current_published_version (merge_templates) + mapping dùng chung bất động.
+  assert.equal(db.writesTo("merge_templates").length, 0, "current_published_version bất động qua nhiều lần lưu");
+  assert.equal(db.writesTo("merge_template_fields").length, 0);
+  assert.equal(db.writesTo("document_history").length, 0);
+});
+
 /* ==================================================================== *
  * PART 2 — ROUTE: PATCH /versions/[versionId]
  * ==================================================================== */
