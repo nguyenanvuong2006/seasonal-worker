@@ -157,6 +157,13 @@ export function TemplateLibrary({ onSelectForMerge }: { onSelectForMerge: (templ
   const [previewVersion, setPreviewVersion] = useState<PreviewVersionTarget | null>(null);
   /** Version chờ xác nhận qua PublishChecklistModal trước khi publish/rollback thật. */
   const [publishChecklistTarget, setPublishChecklistTarget] = useState<{ version: TemplateVersion; action: "publish" | "rollback" } | null>(null);
+  /**
+   * Lỗi hiển thị NGAY TRONG panel "Phiên bản Template" (bên trong modal
+   * "Sửa Template"). Bắt buộc phải tách khỏi `error` toàn cục: `error` render
+   * ở gốc component, NGOÀI overlay fixed của modal → khi modal đang mở thì
+   * operator không nhìn thấy, và một click "thất bại" sẽ trông như im lặng.
+   */
+  const [versionPanelError, setVersionPanelError] = useState<string | null>(null);
   const [syncingGoogleDoc, setSyncingGoogleDoc] = useState(false);
   const [draftHtml, setDraftHtml] = useState("");
   const [draftCss, setDraftCss] = useState("");
@@ -317,6 +324,46 @@ export function TemplateLibrary({ onSelectForMerge }: { onSelectForMerge: (templ
     } finally {
       setCloning(false);
     }
+  };
+
+  /**
+   * MỞ PUBLISH CHECKLIST — điểm vào DUY NHẤT của nút "Xuất bản phiên bản"
+   * (DRAFT) và "Khôi phục" (ARCHIVED).
+   *
+   * BUG PRODUCTION ĐÃ SỬA (v16 DRAFT: nút hiện ra, bấm KHÔNG có gì xảy ra —
+   * không modal, không lỗi, không request):
+   *   Nút trước đây có `disabled={versionAction !== null}`. `versionAction`
+   *   là latch dùng chung cho MỌI version action (publish/archive/rollback/
+   *   delete). Chỉ cần MỘT request trước đó chưa kết thúc (mạng treo, tab
+   *   ngủ, request bị huỷ giữa chừng...) là latch còn nguyên → nút publish
+   *   bị disabled. Mà style disabled duy nhất là `disabled:opacity-50` trên
+   *   nền emerald-700 đậm → mắt thường KHÔNG phân biệt được, nên operator
+   *   thấy nút "bình thường" nhưng trình duyệt nuốt click: đúng triệu chứng
+   *   "bấm không có gì xảy ra, im lặng tuyệt đối".
+   *
+   * QUY TẮC MỚI (Phase 4): nút card KHÔNG BAO GIỜ bị pre-disable bởi
+   * validation hay bởi latch — click LUÔN cho phản hồi nhìn thấy được:
+   *   A. mở PublishChecklistModal (đường đi bình thường), HOẶC
+   *   B. hiện lỗi rõ ràng nếu thật sự chưa mở được lúc này.
+   * Việc quyết định có được publish hay không thuộc về checklist (và cuối
+   * cùng là backend) — chỉ nút Confirm trong checklist mới bị disable bởi
+   * machine blockers.
+   */
+  const openPublishChecklist = (version: TemplateVersion, action: "publish" | "rollback") => {
+    setHighlightVersionId(null);
+    if (versionAction !== null) {
+      // KHÔNG im lặng: nói rõ vì sao chưa mở được và đang vướng thao tác nào.
+      // Dùng versionPanelError (hiển thị NGAY trong panel phiên bản, bên
+      // trong modal "Sửa Template") — `error` toàn cục nằm NGOÀI overlay
+      // fixed nên sẽ bị modal che, tức là vẫn "im lặng" với operator.
+      setVersionPanelError(
+        `Chưa mở được checklist vì đang có thao tác khác chạy trên phiên bản (${versionAction}). ` +
+          "Đợi thao tác đó xong rồi bấm lại — chưa có gì bị thay đổi.",
+      );
+      return;
+    }
+    setVersionPanelError(null);
+    setPublishChecklistTarget({ version, action });
   };
 
   /**
@@ -747,6 +794,27 @@ export function TemplateLibrary({ onSelectForMerge }: { onSelectForMerge: (templ
                     </button>
                   </div>
 
+                  {/* PHẢN HỒI LUÔN NHÌN THẤY ĐƯỢC — nằm trong panel phiên bản
+                      (bên trong modal "Sửa Template"), không bị overlay che.
+                      Mọi click "Xuất bản phiên bản"/"Khôi phục" không mở được
+                      checklist đều phải để lại thông báo ở đây, không im lặng. */}
+                  {versionPanelError && (
+                    <div
+                      role="alert"
+                      className="mt-3 flex items-start justify-between gap-3 rounded-xl border border-amber-300 bg-amber-50 p-3 text-xs font-semibold text-amber-800"
+                    >
+                      <span>{versionPanelError}</span>
+                      <button
+                        type="button"
+                        onClick={() => setVersionPanelError(null)}
+                        className="shrink-0 rounded-md px-2 py-0.5 text-amber-700 hover:bg-amber-100"
+                        aria-label="Đóng thông báo"
+                      >
+                        <X className="h-3.5 w-3.5" />
+                      </button>
+                    </div>
+                  )}
+
                   {versionsLoading ? (
                     <div className="mt-3 rounded-xl bg-white p-6 text-center text-xs text-slate-500">Đang tải phiên bản...</div>
                   ) : (
@@ -919,10 +987,10 @@ export function TemplateLibrary({ onSelectForMerge }: { onSelectForMerge: (templ
                                 ARCHIVED đi qua nút "Khôi phục" bên dưới. */}
                             {version.status === "DRAFT" && (
                               <button
-                                disabled={versionAction !== null}
-                                onClick={() => setPublishChecklistTarget({ version, action: "publish" })}
+                                type="button"
+                                onClick={() => openPublishChecklist(version, "publish")}
                                 title="Xuất bản version DRAFT này — version PUBLISHED trở thành bản render cho batch HTML/PDF (chỉ 1 version PUBLISHED/template). Mở checklist xác nhận (HTML/CSS, placeholder/mapping, A4/PDF, trạng thái) trước khi xuất bản."
-                                className="rounded-lg bg-emerald-700 px-2.5 py-1.5 text-[10px] font-bold text-white hover:bg-emerald-800 disabled:opacity-50"
+                                className="rounded-lg bg-emerald-700 px-2.5 py-1.5 text-[10px] font-bold text-white hover:bg-emerald-800"
                               >
                                 Xuất bản phiên bản
                               </button>
@@ -939,10 +1007,10 @@ export function TemplateLibrary({ onSelectForMerge }: { onSelectForMerge: (templ
                             )}
                             {version.status === "ARCHIVED" && (
                               <button
-                                disabled={versionAction !== null}
-                                onClick={() => setPublishChecklistTarget({ version, action: "rollback" })}
+                                type="button"
+                                onClick={() => openPublishChecklist(version, "rollback")}
                                 title="Khôi phục: publish lại version ARCHIVED này làm bản hiện hành. Mở checklist xác nhận trước khi xuất bản lại."
-                                className="rounded-lg border border-slate-200 px-2.5 py-1.5 text-[10px] font-semibold text-slate-600 hover:bg-slate-50 disabled:opacity-50"
+                                className="rounded-lg border border-slate-200 px-2.5 py-1.5 text-[10px] font-semibold text-slate-600 hover:bg-slate-50"
                               >
                                 Khôi phục
                               </button>

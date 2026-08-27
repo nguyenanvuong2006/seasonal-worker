@@ -123,16 +123,22 @@ test("R1a: version DRAFT (v15-like) render nút 'Xuất bản phiên bản' — 
   assert.equal(guardBefore(libraryCode, labelIdx), "DRAFT");
 });
 
-test("R1b: nút publish chỉ disabled khi có version action đang chạy — KHÔNG gate bởi analyzeResult/preview/mapping snapshot/current_published_version/stale state (repro: không action nào chạy → clickable)", () => {
+test("R1b: nút publish KHÔNG BAO GIỜ bị disabled (kể cả khi versionAction đang chạy) — click luôn tới được handler (bug v16: latch làm click bị nuốt im lặng)", () => {
   const block = publishButtonBlock(libraryCode, buttonLabelIndex(libraryCode, "Xuất bản phiên bản"));
-  assert.match(block, /disabled=\{versionAction !== null\}/, "disabled phải DUY NHẤT là versionAction !== null (in-flight action, luôn reset trong finally)");
-  assert.doesNotMatch(block, /disabled=\{[^}]*\|\|/, "không được ghép thêm điều kiện disabled nào (||)");
+  // BUG PRODUCTION v16: trước đây là `disabled={versionAction !== null}`.
+  // versionAction là latch dùng chung cho mọi version action; chỉ cần một
+  // request trước đó chưa kết thúc là nút chết — mà disabled:opacity-50 trên
+  // nền emerald-700 gần như vô hình → operator thấy nút bình thường nhưng
+  // trình duyệt nuốt click: "bấm không có gì xảy ra".
+  assert.doesNotMatch(block, /disabled=/, "nút publish trên card KHÔNG được có thuộc tính disabled — checklist mới là nơi validate");
   assert.doesNotMatch(block, /analyzeResult|analyzing|previewVersion|mappingSnapshot|currentPublishedVersion|versionsLoading/, "không phụ thuộc sai vào analyzeResult/preview/mapping snapshot/current_published_version/state cũ");
 });
 
 test("R1c: click nút publish MỞ PublishChecklistModal — không window.confirm, không fetch publish trực tiếp", () => {
   const block = publishButtonBlock(libraryCode, buttonLabelIndex(libraryCode, "Xuất bản phiên bản"));
-  assert.match(block, /setPublishChecklistTarget\(\{\s*version,\s*action:\s*"publish"\s*\}\)/);
+  // Click đi qua openPublishChecklist(...) — helper này luôn cho phản hồi
+  // nhìn thấy được (mở checklist HOẶC hiện lỗi trong panel), không im lặng.
+  assert.match(block, /openPublishChecklist\(version,\s*"publish"\)/);
   assert.doesNotMatch(block, /window\.confirm|fetch\(|runVersionAction/);
 });
 
@@ -209,7 +215,7 @@ test("R5b: ARCHIVED không publish trực tiếp — chỉ có 'Khôi phục' (r
   const restoreIdx = buttonLabelIndex(libraryCode, "Khôi phục");
   assert.equal(guardBefore(libraryCode, restoreIdx), "ARCHIVED");
   const block = publishButtonBlock(libraryCode, restoreIdx);
-  assert.match(block, /setPublishChecklistTarget\(\{\s*version,\s*action:\s*"rollback"\s*\}\)/, "khôi phục vẫn phải qua checklist");
+  assert.match(block, /openPublishChecklist\(version,\s*"rollback"\)/, "khôi phục vẫn phải qua checklist");
   assert.doesNotMatch(block, /action:\s*"publish"/, "nút ARCHIVED không được mở checklist với action 'publish'");
 });
 

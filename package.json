@@ -7,9 +7,10 @@
     "start": "next start",
     "lint": "eslint .",
     "typecheck": "tsc --noEmit",
-    "test": "node --test $(find src -name '*.test.ts')",
+    "test": "node --test $(find src -name '*.test.ts') && npm run test:dom",
     "sync:trainee-template": "node scripts/sync-trainee-registration-template.mjs",
-    "report:trainee-template": "node --import tsx scripts/generate-trainee-registration-mapping-report.mjs"
+    "report:trainee-template": "node --import tsx scripts/generate-trainee-registration-mapping-report.mjs",
+    "test:dom": "node --import tsx --test $(find src -name '*.test.tsx')"
   },
   "dependencies": {
     "@pdf-lib/fontkit": "^1.1.1",
@@ -36,6 +37,7 @@
   },
   "devDependencies": {
     "@tailwindcss/postcss": "4.1.17",
+    "@types/jsdom": "^30.0.0",
     "@types/node": "^22.20.1",
     "@types/pg": "8.18.0",
     "@types/react": "19.2.14",
@@ -44,6 +46,7 @@
     "drizzle-kit": "0.31.10",
     "eslint": "9.39.4",
     "eslint-config-next": "16.2.6",
+    "jsdom": "^26.1.0",
     "postcss": "8.5.8",
     "tailwindcss": "4.1.17",
     "tsx": "^4.23.12",
