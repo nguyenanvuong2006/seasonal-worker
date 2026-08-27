@@ -50,6 +50,17 @@ export type TemplateAnalyzeResult = {
   /** H2 fields (có sẵn trong response của route đã merge) — chỉ hiển thị khi có. */
   normalizationWarnings?: { code: string; message: string; href?: string }[];
   externalResourceWarnings?: { code: string; message: string; href?: string }[];
+  /**
+   * PUBLISH CHECKLIST — verdict of the SAME validatePlaceholderCoverage the
+   * backend runs at publish time (live non-orphaned fields vs candidate HTML).
+   * Optional so older callers (TemplateChangeAnalyzer panel) keep working.
+   */
+  placeholderCoverage?: {
+    ok: boolean;
+    issues: { placeholder: string; reason: "UNMAPPED" | "REQUIRED_UNRESOLVABLE" }[];
+    totalPlaceholders: number;
+    mappedFields: number;
+  };
 };
 
 export function TemplateChangeAnalyzer({

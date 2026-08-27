@@ -40,7 +40,7 @@ import { and, eq } from "drizzle-orm";
 import { requirePermission } from "@/lib/auth";
 import { db } from "@/db";
 import { mergeTemplateFields, mergeTemplates, mergeTemplateVersions } from "@/db/schema";
-import { TEMPLATE_VERSION_STATUS } from "@/lib/document-merge/template-versions";
+import { TEMPLATE_VERSION_STATUS, validatePlaceholderCoverage } from "@/lib/document-merge/template-versions";
 import { selectPreviewMappings, toPreviewMappings } from "@/lib/document-merge/draft-preview";
 import { analyzeFullDocument } from "@/lib/document-merge/full-document-analyze";
 
@@ -131,6 +131,20 @@ export async function POST(request: Request, context: RouteContext) {
     currentMappings,
   });
 
+  // PUBLISH CHECKLIST (Phase 7 fix) — expose the SAME placeholder-coverage
+  // verdict the backend enforces inside publishTemplateVersion (live
+  // non-orphaned fields vs the candidate html_body), so the checklist modal
+  // can show the exact blocker (unmapped / required-unresolvable placeholder
+  // names) BEFORE the operator confirms — instead of a silent 400 at publish
+  // time. Pure computation on already-loaded data: still SELECT-only.
+  const coverageIssues = validatePlaceholderCoverage(html, fields.map((field) => ({
+    placeholder: field.placeholder,
+    sourceField: field.sourceField,
+    sourcePath: field.sourcePath,
+    fallbackValue: field.fallbackValue,
+    isRequired: field.isRequired,
+  })));
+
   return NextResponse.json({
     mode: "READ_ONLY_ANALYZE",
     mutated: false,
@@ -148,6 +162,19 @@ export async function POST(request: Request, context: RouteContext) {
     mappingsAffected: result.mappingsAffected,
     security: result.security,
     layoutWarnings: result.layoutWarnings,
+    /**
+     * PUBLISH CHECKLIST — verdict of the exact same
+     * validatePlaceholderCoverage() that publishTemplateVersion runs inside
+     * its transaction (live non-orphaned merge_template_fields vs the
+     * candidate html_body). ok=false ⇔ the publish call would be rejected
+     * with 400; issues carries the specific placeholder names + reasons.
+     */
+    placeholderCoverage: {
+      ok: coverageIssues.length === 0,
+      issues: coverageIssues,
+      totalPlaceholders: result.placeholders.total,
+      mappedFields: fields.length,
+    },
     contentChanges: result.contentChanges,
     diff: {
       summary: result.diff.summary,
