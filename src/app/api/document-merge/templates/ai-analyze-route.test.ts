@@ -14,8 +14,45 @@ import { readFileSync } from "node:fs";
 import vm from "node:vm";
 import ts from "typescript";
 import { createFakeDb, drizzleStub, makeTable, type QueryCall } from "../../../../lib/test-support/fake-drizzle.ts";
+import { loadModule } from "../../../../lib/test-support/load-module.ts";
 import * as draftPreview from "../../../../lib/document-merge/draft-preview.ts";
 import * as fullDocumentAnalyze from "../../../../lib/document-merge/full-document-analyze.ts";
+
+/**
+ * The REAL validatePlaceholderCoverage from template-versions.ts (loaded with
+ * fake-drizzle, no DB) — the route must be tested against the EXACT function
+ * the backend publishTemplateVersion runs, not a reimplementation.
+ */
+type CoverageFn = (
+  html: string,
+  fields: { placeholder: string; sourceField: string | null; sourcePath: string | null; fallbackValue: string | null; isRequired: boolean }[],
+) => { placeholder: string; reason: "UNMAPPED" | "REQUIRED_UNRESOLVABLE" }[];
+
+const realVersionsModule: { validatePlaceholderCoverage: CoverageFn } = await loadModule(
+  new URL("../../../../lib/document-merge/template-versions.ts", import.meta.url),
+  {
+    stubs: {
+      "drizzle-orm": drizzleStub,
+      "@/db": { db: createFakeDb({ respond: () => [] }) },
+      "@/db/schema": {
+        mergeTemplates: makeTable("merge_templates"),
+        mergeTemplateFields: makeTable("merge_template_fields"),
+        mergeTemplateVersions: makeTable("merge_template_versions"),
+        documentHistory: makeTable("document_history"),
+      },
+      "./placeholder-extractor.ts": {
+        extractUniquePlaceholders: (content: string) => {
+          const unique = new Set<string>();
+          for (const m of content.matchAll(/<<\s*([^>]+?)\s*>>|\{\{\s*([^{}]+?)\s*\}\}/g)) {
+            const name = (m[1] ?? m[2] ?? "").trim();
+            if (name) unique.add(name);
+          }
+          return Array.from(unique).sort();
+        },
+      },
+    },
+  },
+) as unknown as { validatePlaceholderCoverage: CoverageFn };
 
 const routeSource = readFileSync(new URL("./[id]/ai-analyze/route.ts", import.meta.url), "utf8");
 const jsSource = ts.transpileModule(routeSource, {
@@ -101,7 +138,11 @@ function makeContext(opts: Options = {}) {
             },
           };
         case "@/lib/document-merge/template-versions":
-          return { TEMPLATE_VERSION_STATUS: { DRAFT: "DRAFT", PUBLISHED: "PUBLISHED", ARCHIVED: "ARCHIVED" } };
+          return {
+            TEMPLATE_VERSION_STATUS: { DRAFT: "DRAFT", PUBLISHED: "PUBLISHED", ARCHIVED: "ARCHIVED" },
+            // REAL coverage function — same code the publish API enforces.
+            validatePlaceholderCoverage: realVersionsModule.validatePlaceholderCoverage,
+          };
         case "@/lib/document-merge/draft-preview":
           return draftPreview;
         case "@/lib/document-merge/full-document-analyze":
@@ -328,6 +369,68 @@ test("ai-analyze (H2): analysisHash is identical for two calls with the same ful
   const { POST: POST3 } = makeContext();
   const res3 = await POST3(postRequest({ html: `<html><body><<Ho_ten>><<Ngay_sinh>></body></html>` }), ctxFor());
   assert.notEqual(res1.body.analysisHash, res3.body.analysisHash);
+});
+
+// ---------------------------------------------------------------
+// PUBLISH CHECKLIST — placeholderCoverage mirrors the backend publish gate.
+// ---------------------------------------------------------------
+
+test("ai-analyze: placeholderCoverage.ok=true when every placeholder in the HTML has a mapping row", async () => {
+  const { POST } = makeContext({ fields: [makeField("Ho_ten"), makeField("Ngay_sinh")] });
+  const res = await POST(postRequest({ html: `<<Ho_ten>><<Ngay_sinh>>` }), ctxFor());
+  assert.equal(res.status, 200);
+  const cov = res.body.placeholderCoverage as { ok: boolean; issues: unknown[]; totalPlaceholders: number; mappedFields: number };
+  assert.equal(cov.ok, true);
+  // Cross-realm (vm sandbox) — compare via JSON, not reference-equality.
+  assert.equal(JSON.stringify(cov.issues), "[]");
+  assert.equal(cov.totalPlaceholders, 2);
+  assert.equal(cov.mappedFields, 2);
+});
+
+test("ai-analyze: placeholderCoverage.ok=false with UNMAPPED names when the HTML contains a placeholder that was never mapped (the v15 blocker)", async () => {
+  const { POST } = makeContext({ fields: [makeField("Ho_ten")] });
+  const res = await POST(postRequest({ html: `<<Ho_ten>><<ABC>><<XYZ>>` }), ctxFor());
+  assert.equal(res.status, 200);
+  const cov = res.body.placeholderCoverage as { ok: boolean; issues: { placeholder: string; reason: string }[]; totalPlaceholders: number };
+  assert.equal(cov.ok, false);
+  assert.equal(
+    JSON.stringify(cov.issues),
+    JSON.stringify([
+      { placeholder: "ABC", reason: "UNMAPPED" },
+      { placeholder: "XYZ", reason: "UNMAPPED" },
+    ]),
+  );
+  assert.equal(cov.totalPlaceholders, 3);
+});
+
+test("ai-analyze: placeholderCoverage flags REQUIRED_UNRESOLVABLE (isRequired=true without any source/fallback)", async () => {
+  const { POST } = makeContext({
+    fields: [makeField("So_hop_dong", { sourcePath: null, isRequired: true })],
+  });
+  const res = await POST(postRequest({ html: `<<So_hop_dong>>` }), ctxFor());
+  const cov = res.body.placeholderCoverage as { ok: boolean; issues: { placeholder: string; reason: string }[] };
+  assert.equal(cov.ok, false);
+  assert.equal(
+    JSON.stringify(cov.issues),
+    JSON.stringify([{ placeholder: "So_hop_dong", reason: "REQUIRED_UNRESOLVABLE" }]),
+  );
+});
+
+test("ai-analyze: optional placeholder (isRequired=false) without a data source is NOT a coverage issue (intentionally blank)", async () => {
+  const { POST } = makeContext({ fields: [makeField("Ten_them", { sourcePath: null, isRequired: false })] });
+  const res = await POST(postRequest({ html: `<<Ten_them>>` }), ctxFor());
+  const cov = res.body.placeholderCoverage as { ok: boolean; issues: unknown[] };
+  assert.equal(cov.ok, true);
+  assert.equal(JSON.stringify(cov.issues), "[]");
+});
+
+test("ai-analyze: placeholderCoverage is still computed for the SELF-DIFF case (baseVersionId = target DRAFT id, no PUBLISHED base)", async () => {
+  const draft = { id: "v-15", templateId: "tpl-1", version: 15, status: "DRAFT", htmlBody: `<<Ho_ten>>`, mappingSnapshot: [] };
+  const { POST } = makeContext({ publishedVersion: draft, fields: [makeField("Ho_ten"), makeField("Chua_quet")] });
+  const res = await POST(postRequest({ html: `<<Ho_ten>><<Chua_quet>>`, baseVersionId: "v-15" }), ctxFor());
+  assert.equal(res.status, 200);
+  const cov = res.body.placeholderCoverage as { ok: boolean; issues: unknown[] };
+  assert.equal(cov.ok, true, "both placeholders have mapping rows — coverage passes even with a DRAFT self-diff base");
 });
 
 test("ai-analyze: deterministic ordering — repeated identical calls return identical diff", async () => {

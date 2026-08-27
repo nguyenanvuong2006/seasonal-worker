@@ -905,24 +905,26 @@ export function TemplateLibrary({ onSelectForMerge }: { onSelectForMerge: (templ
                             >
                               Tạo bản nháp từ phiên bản này
                             </button>
-                            {version.status !== "PUBLISHED" && (
+                            {/* XUẤT BẢN PHIÊN BẢN — CHỈ DRAFT. Nút này KHÔNG
+                                tự validate gì (KHÔNG gate bằng analyzeResult /
+                                mapping snapshot / current_published_version):
+                                disabled duy nhất khi một version action khác
+                                đang chạy (versionAction !== null). Mọi kiểm
+                                tra (HTML/CSS, placeholder/mapping, A4/PDF,
+                                trạng thái) đều nằm TRONG PublishChecklistModal
+                                — mở checklist xong checklist mới quyết định
+                                có cho confirm hay không (hiện rõ lý do cụ thể
+                                khi FAIL). PUBLISHED KHÔNG có nút (re)publish
+                                (backend là no-op — tránh thao tác vô nghĩa);
+                                ARCHIVED đi qua nút "Khôi phục" bên dưới. */}
+                            {version.status === "DRAFT" && (
                               <button
                                 disabled={versionAction !== null}
                                 onClick={() => setPublishChecklistTarget({ version, action: "publish" })}
-                                title="Publish — version PUBLISHED trở thành bản render cho batch HTML/PDF (chỉ 1 version PUBLISHED/template). Mở checklist xác nhận trước khi xuất bản."
+                                title="Xuất bản version DRAFT này — version PUBLISHED trở thành bản render cho batch HTML/PDF (chỉ 1 version PUBLISHED/template). Mở checklist xác nhận (HTML/CSS, placeholder/mapping, A4/PDF, trạng thái) trước khi xuất bản."
                                 className="rounded-lg bg-emerald-700 px-2.5 py-1.5 text-[10px] font-bold text-white hover:bg-emerald-800 disabled:opacity-50"
                               >
                                 Xuất bản phiên bản
-                              </button>
-                            )}
-                            {version.status === "PUBLISHED" && (
-                              <button
-                                disabled={versionAction !== null}
-                                onClick={() => setPublishChecklistTarget({ version, action: "rollback" })}
-                                title="Publish lại version này (no-op nếu đã PUBLISHED). Mở checklist xác nhận trước khi xuất bản lại."
-                                className="rounded-lg border border-emerald-200 bg-emerald-50 px-2.5 py-1.5 text-[10px] font-bold text-emerald-700 hover:bg-emerald-100 disabled:opacity-50"
-                              >
-                                Xuất bản lại
                               </button>
                             )}
                             {version.status !== "PUBLISHED" && version.status !== "ARCHIVED" && (
