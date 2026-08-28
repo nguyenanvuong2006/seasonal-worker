@@ -74,10 +74,50 @@
   background: var(--merge-orange) !important;
 }
 
-/* Template editor is a viewport modal. Keep it above the application sidebar
-   and other fixed navigation so the sticky Placeholder column is never hidden. */
+/* ============================================================
+   DOCUMENT MERGE — THANG Z-INDEX CỦA MODAL (single source of truth)
+   ------------------------------------------------------------
+   Intent gốc (giữ nguyên): modal "Sửa Template" phủ viewport nên phải nằm
+   TRÊN sidebar và fixed nav của ứng dụng (z cao nhất của app chrome là
+   z-[90] trong components/ui.tsx), nếu không cột Placeholder sticky bị che.
+
+   BUG PRODUCTION ĐÃ SỬA — v16 DRAFT, bấm "Xuất bản phiên bản" KHÔNG thấy gì:
+   rule cũ gán MỘT GIÁ TRỊ DUY NHẤT `z-index: 9999 !important` cho MỌI overlay
+   `.fixed.inset-0.z-50`. Nó vô tình dựng lên một CÁI TRẦN: các modal lồng
+   nhau khai báo lớp CAO HƠN vẫn giữ nguyên giá trị Tailwind thật của chúng
+   (`z-[60]` ApplyToDraftConfirmModal = 60, `z-[100]` PublishChecklistModal
+   = 100) nên bị vẽ DƯỚI modal editor đang ở 9999.
+
+   Vì vậy PublishChecklistModal MOUNT và fetch thành công (GET /versions 200
+   + POST /ai-analyze 200 — đúng cặp request production quan sát được) nhưng
+   bị panel `bg-white` phủ kín viewport của modal "Sửa Template" che mất:
+   không thấy checklist, không có POST /publish, không có lỗi console, nút
+   không disabled và pointer-events vẫn auto. Click lần 2 cũng không tạo
+   request nào vì modal chưa từng đóng nên effect deps không đổi.
+
+   QUY TẮC MỚI: nâng CẢ THANG lên trên app chrome nhưng GIỮ NGUYÊN thứ tự
+   tương đối mà component khai báo (50 < 60 < 100). Các modal cùng lớp z-50
+   vẫn bằng điểm nhau nên thứ tự DOM quyết định — hành vi cũ được giữ.
+
+   Thêm modal mới ở lớp z-index nào thì THÊM LỚP ĐÓ VÀO ĐÂY. Guard test
+   `src/lib/document-merge/publish-checklist-visibility.test.tsx` nạp CSS
+   thật (Tailwind của repo + file này) và FAIL nếu có overlay nào bị chôn
+   dưới modal "Sửa Template".
+   ============================================================ */
 .document-merge-parity .fixed.inset-0.z-50 {
-  z-index: 9999 !important;
+  z-index: 9990 !important;
+  isolation: isolate;
+}
+
+/* Modal lồng bên trong modal editor: ApplyToDraftConfirmModal (z-[60]). */
+.document-merge-parity .fixed.inset-0.z-\[60\] {
+  z-index: 9994 !important;
+  isolation: isolate;
+}
+
+/* Cổng xác nhận trên cùng: PublishChecklistModal (z-[100]). */
+.document-merge-parity .fixed.inset-0.z-\[100\] {
+  z-index: 9998 !important;
   isolation: isolate;
 }
 
