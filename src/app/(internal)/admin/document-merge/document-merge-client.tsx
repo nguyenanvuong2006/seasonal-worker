@@ -17,8 +17,13 @@ import {
 import { MergeWorkspace } from "@/components/document-merge/merge-workspace";
 import { TemplateLibrary } from "@/components/document-merge/template-library";
 import { VerificationPanel } from "@/components/document-merge/verification-panel";
-import { PdfMapper } from "@/components/document-merge/pdf-mapper/pdf-mapper";
+import dynamic from "next/dynamic";
 import { canSeeTab, firstPermittedTab, type DocumentMergeTab } from "@/lib/document-merge/module-visibility";
+
+const DynamicPdfMapper = dynamic(
+  () => import("@/components/document-merge/pdf-mapper/pdf-mapper").then((mod) => ({ default: mod.PdfMapper })),
+  { ssr: false }
+);
 
 type TabType = DocumentMergeTab;
 
@@ -159,7 +164,7 @@ function PdfMapperTab({ selectedTemplateId, onSelectTemplateId }: { selectedTemp
     );
   }
 
-  return <PdfMapper templateId={selectedTemplateId} />;
+  return <DynamicPdfMapper templateId={selectedTemplateId} />;
 }
 
 function HistoryTab({ canDelete }: { canDelete: boolean }) {
