@@ -69,6 +69,64 @@ function snapshotCount(value: unknown): number {
   return Array.isArray(value) ? value.length : 0;
 }
 
+/**
+ * Parse a fetch Response body as JSON for the publish gate.
+ *
+ * SILENT-JSON-PARSE-FAILURE FIX (publish-flow regression): the previous code
+ * did `res.json().catch(() => ({}))` for ai-analyze — a body that is not JSON
+ * at all (an HTML 502/gateway page, an empty 200, a truncated stream) was
+ * silently coerced into `{}`. With `res.ok === true` the modal then stored the
+ * junk and crashed during render while reading `result.htmlIssues.length` —
+ * a TypeError thrown from the component body, OUTSIDE the effect's try/catch,
+ * so React unmounted the tree with NO visible message (the production symptom:
+ * checklist opens then goes blank/dead instead of showing an error).
+ *
+ * Contract here: always resolve to the parsed JSON value, or `null` when the
+ * body cannot be parsed / is not a JSON object or array. Callers already
+ * treat `null` / wrong shape as a VISIBLE error (fail closed — confirm stays
+ * blocked, the gate never judges unverified content).
+ */
+async function readJsonObject(res: Response): Promise<unknown> {
+  let parsed: unknown;
+  try {
+    parsed = await res.json();
+  } catch {
+    return null;
+  }
+  if (parsed === null || typeof parsed !== "object") return null;
+  return parsed;
+}
+
+/**
+ * Shape guard for the subset of the ai-analyze response the modal reads during
+ * render. Arrays are required up front so a 2xx body that parsed as JSON but
+ * is missing fields can never reach render and throw a TypeError there —
+ * it is reported as a visible loadError instead.
+ */
+function isAnalyzeResultShape(data: Record<string, unknown>): boolean {
+  return (
+    Array.isArray(data.htmlIssues) &&
+    Array.isArray(data.cssIssues) &&
+    typeof data.htmlValid === "boolean" &&
+    typeof data.cssValid === "boolean" &&
+    typeof data.security === "object" &&
+    data.security !== null &&
+    Array.isArray((data.security as { errors?: unknown }).errors) &&
+    (data.placeholderCoverage === undefined ||
+      (typeof data.placeholderCoverage === "object" &&
+        data.placeholderCoverage !== null &&
+        Array.isArray((data.placeholderCoverage as { issues?: unknown }).issues))) &&
+    (data.layoutWarnings === undefined || Array.isArray(data.layoutWarnings)) &&
+    (data.placeholders === undefined ||
+      (typeof data.placeholders === "object" &&
+        data.placeholders !== null &&
+        ["unchanged", "added", "removed"].every(
+          (k) => typeof (data.placeholders as Record<string, unknown>)[k] === "number",
+        ))) &&
+    (data.mappingsAffected === undefined || typeof data.mappingsAffected === "number")
+  );
+}
+
 export function PublishChecklistModal({
   templateId,
   templateName,
@@ -111,7 +169,9 @@ export function PublishChecklistModal({
         // zero DB writes). The gate must judge the LATEST saved content, not
         // the React snapshot captured when the card button was clicked.
         const listRes = await fetch(`/api/document-merge/templates/${templateId}/versions`, { cache: "no-store" });
-        const listData: unknown = await listRes.json().catch(() => null);
+        // A non-JSON body (proxy/CDN HTML error page) must surface as a visible
+        // error — never silently become null and slip through to a crash later.
+        const listData = await readJsonObject(listRes);
         if (mySeq !== seq.current) return;
         if (!listRes.ok || !Array.isArray(listData)) {
           const errField = (listData as { error?: unknown } | null)?.error;
@@ -145,10 +205,26 @@ export function PublishChecklistModal({
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({ html: fresh.htmlBody, printCss: fresh.printCss ?? null, baseVersionId }),
         });
-        const data = (await res.json().catch(() => ({}))) as Record<string, unknown>;
+        // PUBLISH-FLOW REGRESSION FIX — a 2xx response whose body is not the
+        // expected JSON object (parse failure / HTML gateway page / empty 200)
+        // used to be swallowed into `{}` by `.json().catch(() => ({}))`. It
+        // then passed the `res.ok` check and CRASHED later during render
+        // (`result.htmlIssues.length` on undefined) — outside this try/catch —
+        // so the operator saw a silently blank/dead modal instead of an error.
+        // Fail closed: treat any unparseable/non-object success body as a
+        // VISIBLE error so the catch below shows loadError (confirm stays
+        // blocked — the gate never publishes on unverified content).
+        const data = await readJsonObject(res);
         if (mySeq !== seq.current) return;
         if (!res.ok) {
-          throw new Error(typeof data.error === "string" ? data.error : "Không phân tích được phiên bản trước khi xuất bản.");
+          throw new Error(
+            typeof (data as { error?: unknown } | null)?.error === "string"
+              ? ((data as { error: string }).error)
+              : "Không phân tích được phiên bản trước khi xuất bản.",
+          );
+        }
+        if (data === null || typeof data !== "object" || Array.isArray(data) || !isAnalyzeResultShape(data as Record<string, unknown>)) {
+          throw new Error("Phản hồi phân tích phiên bản không hợp lệ (không phải JSON mong đợi) — vui lòng thử lại.");
         }
         setResult(data as unknown as TemplateAnalyzeResult);
       } catch (err) {
