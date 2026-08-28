@@ -73,6 +73,9 @@ export function loadModule(url: URL, options: LoadOptions): Record<string, unkno
     parseFloat,
     setTimeout,
     clearTimeout,
+    // Worker liveness heartbeat uses an interval during item processing.
+    setInterval,
+    clearInterval,
     // Web globals (Node 18+ via undici) — route.ts thường dùng FormData/File/Request.
     File,
     FormData,

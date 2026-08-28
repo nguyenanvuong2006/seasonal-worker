@@ -35,6 +35,8 @@ import {
   ITEM_STATUS,
   isRetryableItemError,
   isTerminalItemStatus,
+  isTerminalJobStatus,
+  normalizeJobStatus,
   retryBackoffSeconds,
   shouldRetry,
   type ItemStatus,
@@ -146,15 +148,32 @@ export async function recordJobStage(
   }
 }
 
-/** Gia hạn lease cho item đang xử lý (heartbeat). */
-export async function heartbeatItem(itemId: string): Promise<void> {
-  await db
+/**
+ * Gia hạn lease cho item đang xử lý (heartbeat).
+ *
+ * CRITICAL — CAS: chỉ gia hạn khi item VẪN đang PROCESSING. Nếu owner cũ bị
+ * reclaim (PROCESSING → RETRY) rồi được worker khác claim lại, một heartbeat
+ * muộn của owner cũ KHÔNG được kéo dài lease của lượt xử lý mới (đó là cách
+ * xảy ra double-processing). Guard status ở mệnh đề WHERE đảm bảo heartbeat
+ * mồ côi là no-op. Trả về số dòng được gia hạn (1 = còn sở hữu, 0 = đã mất).
+ */
+export async function heartbeatItem(itemId: string): Promise<number> {
+  const rows = await db
     .update(mergeJobRecords)
     .set({ leasedUntil: new Date(Date.now() + ITEM_LEASE_SECONDS * 1000) })
-    .where(eq(mergeJobRecords.id, itemId));
+    .where(and(eq(mergeJobRecords.id, itemId), eq(mergeJobRecords.status, ITEM_STATUS.PROCESSING)))
+    .returning({ id: mergeJobRecords.id });
+  return rows.length;
 }
 
-/** Đánh dấu item COMPLETED + ghi URL/key output. */
+/**
+ * Đánh dấu item COMPLETED + ghi URL/key output.
+ *
+ * CRITICAL — CAS: chỉ chuyển PROCESSING → COMPLETED. Một owner đã bị reclaim
+ * (item về RETRY/QUEUED và do người khác claim) KHÔNG được ghi đè kết quả;
+ * item terminal (COMPLETED/FAILED/CANCELLED) cũng không bị ghi đè. Trả về số
+ * dòng thực sự commit (1 = owner hợp pháp đã commit, 0 = đã mất quyền sở hữu).
+ */
 export async function completeItem(
   itemId: string,
   output: {
@@ -165,8 +184,8 @@ export async function completeItem(
     sha256?: string | null;
     documentHistoryId?: string | null;
   },
-): Promise<void> {
-  await db
+): Promise<number> {
+  const rows = await db
     .update(mergeJobRecords)
     .set({
       status: ITEM_STATUS.COMPLETED,
@@ -181,7 +200,9 @@ export async function completeItem(
       errorCode: null,
       errorMessage: null,
     })
-    .where(eq(mergeJobRecords.id, itemId));
+    .where(and(eq(mergeJobRecords.id, itemId), eq(mergeJobRecords.status, ITEM_STATUS.PROCESSING)))
+    .returning({ id: mergeJobRecords.id });
+  return rows.length;
 }
 
 /**
@@ -359,6 +380,145 @@ export async function finalizeJob(
       updatedAt: new Date(),
     })
     .where(eq(mergeJobs.id, jobId));
+}
+
+// ---------------------------------------------------------------------------
+// GOOGLE_DOCS synchronous merge — ownership + terminal CAS.
+//
+// The legacy engine runs the whole merge inline in one HTTP request. To make
+// stale recovery safe we need (a) a liveness/lease signal refreshed during the
+// long synchronous work, and (b) compare-and-set terminal writes so a request
+// that has lost ownership (watchdog declared it dead, or an operator cancelled)
+// can never overwrite a terminal state nor commit an output reference.
+//
+// We reuse existing columns (NO migration): merge_jobs.updated_at is the job
+// liveness/lease timestamp; merge_job_records carries status/leased_until/
+// started_at per item.
+// ---------------------------------------------------------------------------
+
+/** Liveness lease for the synchronous GOOGLE_DOCS merge (see stale-recovery). */
+export const SYNC_ITEM_LEASE_SECONDS = 60;
+
+/**
+ * Refresh job+item liveness for the active synchronous merge. Cheap, safe to
+ * call around every long external stage. CAS-guarded so a heartbeat from a
+ * request that lost ownership is a no-op (it can not resurrect a dead/cancelled
+ * job). Returns true while this request still owns the active job.
+ */
+export async function touchSyncMerge(jobId: string, itemIds: string[] = []): Promise<boolean> {
+  const now = new Date();
+  const leasedUntil = new Date(now.getTime() + SYNC_ITEM_LEASE_SECONDS * 1000);
+  await db
+    .update(mergeJobs)
+    .set({ updatedAt: now })
+    .where(and(eq(mergeJobs.id, jobId), inArray(mergeJobs.status, ["RUNNING", "PROCESSING"])));
+  if (itemIds.length > 0) {
+    await db
+      .update(mergeJobRecords)
+      .set({ leasedUntil })
+      .where(and(eq(mergeJobRecords.mergeJobId, jobId), eq(mergeJobRecords.status, ITEM_STATUS.PROCESSING)));
+  }
+  return syncMergeOwnsJob(jobId);
+}
+
+/** True iff the synchronous merge still owns an active (non-terminal) job. */
+export async function syncMergeOwnsJob(jobId: string): Promise<boolean> {
+  const [job] = await db
+    .select({ status: mergeJobs.status })
+    .from(mergeJobs)
+    .where(eq(mergeJobs.id, jobId))
+    .limit(1);
+  return Boolean(job) && !isTerminalJobStatus(normalizeJobStatus(job!.status));
+}
+
+/**
+ * CAS job success: RUNNING/PROCESSING → COMPLETED. Returns true only if THIS
+ * request performed the transition. A job already FAILED/CANCELLED (by watchdog
+ * or operator) is NOT overwritten — the success path must then discard its
+ * output instead of committing it.
+ */
+export async function casSyncJobCompleted(
+  jobId: string,
+  fields: { outputDocId?: string | null; outputUrl?: string | null; metadata?: Record<string, unknown> },
+): Promise<boolean> {
+  const rows = await db
+    .update(mergeJobs)
+    .set({
+      status: "COMPLETED",
+      outputDocId: fields.outputDocId ?? null,
+      outputUrl: fields.outputUrl ?? null,
+      completedAt: new Date(),
+      metadata: fields.metadata ?? {},
+      updatedAt: new Date(),
+    })
+    .where(and(eq(mergeJobs.id, jobId), inArray(mergeJobs.status, ["RUNNING", "PROCESSING"])))
+    .returning({ id: mergeJobs.id });
+  return rows.length === 1;
+}
+
+/**
+ * CAS job failure: non-terminal → FAILED. Never overwrites COMPLETED or
+ * CANCELLED. Returns true if this request performed the transition.
+ */
+export async function casSyncJobFailed(jobId: string, errorSummary: string, error: string): Promise<boolean> {
+  const rows = await db
+    .update(mergeJobs)
+    .set({
+      status: "FAILED",
+      errorSummary: errorSummary.slice(0, 500),
+      error,
+      completedAt: new Date(),
+      updatedAt: new Date(),
+    })
+    .where(and(eq(mergeJobs.id, jobId), inArray(mergeJobs.status, ["RUNNING", "PROCESSING", "QUEUED", "PENDING"])))
+    .returning({ id: mergeJobs.id });
+  return rows.length === 1;
+}
+
+/**
+ * CAS item completion for the synchronous merge: PROCESSING → COMPLETED only.
+ * Records that were failed by the watchdog (FAILED) or cancelled (CANCELLED)
+ * stay terminal; the request's COMPLETED write can not resurrect them. Returns
+ * the number of records actually committed.
+ */
+export async function casSyncItemsCompleted(jobId: string): Promise<number> {
+  const rows = await db
+    .update(mergeJobRecords)
+    .set({ status: "COMPLETED", completedAt: new Date(), leasedUntil: null, errorCode: null, errorMessage: null })
+    .where(
+      and(
+        eq(mergeJobRecords.mergeJobId, jobId),
+        inArray(mergeJobRecords.status, [ITEM_STATUS.PROCESSING, "PENDING", "RUNNING", ITEM_STATUS.RETRY]),
+      ),
+    )
+    .returning({ id: mergeJobRecords.id });
+  return rows.length;
+}
+
+/**
+ * CAS item failure for the synchronous merge: non-terminal → FAILED. Records
+ * already COMPLETED (finished earlier in the same batch) or CANCELLED are left
+ * untouched. Returns the number of records failed.
+ */
+export async function casSyncItemsFailed(jobId: string, errorCode: string, errorMessage: string): Promise<number> {
+  const now = new Date();
+  const rows = await db
+    .update(mergeJobRecords)
+    .set({
+      status: ITEM_STATUS.FAILED,
+      errorCode,
+      errorMessage: errorMessage.slice(0, 500),
+      leasedUntil: null,
+      completedAt: now,
+    })
+    .where(
+      and(
+        eq(mergeJobRecords.mergeJobId, jobId),
+        inArray(mergeJobRecords.status, [ITEM_STATUS.PROCESSING, "PENDING", "RUNNING", ITEM_STATUS.RETRY, ITEM_STATUS.QUEUED]),
+      ),
+    )
+    .returning({ id: mergeJobRecords.id });
+  return rows.length;
 }
 
 /** Lấy danh sách item theo sequence — dùng khi gộp PDF tổng (đúng thứ tự user chọn). */
