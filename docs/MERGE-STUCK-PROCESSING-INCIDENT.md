@@ -60,7 +60,11 @@ Recovery actor:
 - GET `/api/document-merge/jobs/[id]` is READ-ONLY (observational) — it never
   fails jobs, reclaims records, or triggers workers. Repeated polling cannot
   mutate RUNNING/PROCESSING/QUEUED/PENDING/RETRY.
-- Recovery runs only via the authenticated daily cron handler
-  (`RECOVER_STALE_MERGE_JOBS` → `recoverStaleMergeJobs`, idempotent, SKIP LOCKED,
-  CAS). UI still shows QUEUED / PROCESSING / COMPLETED / FAILED and Vietnamese
-  guidance.
+- Recovery runs via TWO explicit actors: (1) the authenticated daily cron
+  handler (`RECOVER_STALE_MERGE_JOBS` → `recoverStaleMergeJobs`, idempotent,
+  SKIP LOCKED, CAS), and (2) the interactive merge-write trigger
+  (`runPreMergeStaleRecovery()` at the start of
+  POST `/api/document-merge/merge/execute` — the same sweep runs BEFORE a new
+  job is inserted, so the Vercel Hobby daily-cron cap can never leave a
+  zombie PROCESSING for up to 24 hours again). UI still shows QUEUED /
+  PROCESSING / COMPLETED / FAILED and Vietnamese guidance.

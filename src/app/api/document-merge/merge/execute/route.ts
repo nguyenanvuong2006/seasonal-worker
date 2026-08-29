@@ -38,7 +38,8 @@ import {
   selectTemplateForApplicant,
 } from "@/lib/document-merge/template-routing";
 import { MergeStageTimer } from "@/lib/document-merge/merge-timing";
-import { ITEM_STATUS, JOB_STATUS } from "@/lib/document-merge/queue-types";
+import { ITEM_STATUS } from "@/lib/document-merge/queue-types";
+import { runPreMergeStaleRecovery } from "@/lib/document-merge/pre-merge-recovery";
 import {
   casSyncItemsCompleted,
   casSyncItemsFailed,
@@ -213,6 +214,24 @@ export async function POST(request: Request) {
   const guard = await requirePermission(["ADMIN", "HR_RECRUITER", "HR_SUPPORT"], "document_merge.execute");
   if (!guard.ok) {
     return NextResponse.json({ error: guard.error }, { status: guard.status });
+  }
+
+  // INTERACTIVE STALE-MERGE RECOVERY (hotfix for the 28–29/08 zombie incident):
+  // before creating a new job, close any stale GOOGLE_DOCS jobs left behind by
+  // a previous serverless request that was killed mid-flight. This is the same
+  // liveness/CAS sweep as the cron watchdog, triggered on the merge WRITE path
+  // because the Vercel cron runs only once a day (Hobby cap) — a zombie must
+  // not survive up to 24 hours. It runs BEFORE the new job is inserted, never
+  // touches live jobs, and can never block this merge (helper never throws;
+  // the belt-and-braces catch below guards the route too). The GET job-poll
+  // endpoint stays strictly read-only.
+  try {
+    await runPreMergeStaleRecovery();
+  } catch (recoveryError) {
+    console.error(
+      "[document-merge/merge/execute] pre-merge stale recovery error (merge continues):",
+      recoveryError,
+    );
   }
 
   try {

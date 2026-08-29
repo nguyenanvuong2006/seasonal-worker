@@ -21,10 +21,17 @@
  *    jobs, and reclaimStalledItems()/reclaimAllStalledItems() in queue.ts had
  *    no caller anywhere in the codebase.
  *
- * This module is the missing safety net for BOTH engines. It runs read-time
- * (GET /api/document-merge/jobs/[id] — the UI already polls it every 4s) and
- * from the cron handler. It only touches rows whose staleness proves the
- * owning invocation is gone, so it is idempotent and safe to run repeatedly.
+ * This module is the missing safety net for BOTH engines. It runs only through
+ * the explicit recovery actors:
+ *   - the authenticated cron watchdog (src/lib/scheduler.ts
+ *     RECOVER_STALE_MERGE_JOBS — daily Vercel cron), and
+ *   - the interactive merge-WRITE trigger (src/lib/document-merge/
+ *     pre-merge-recovery.ts, invoked by POST /api/document-merge/merge/execute
+ *     BEFORE a new job is created — because the daily cron alone can leave a
+ *     zombie visible for up to 24 hours).
+ * GET /api/document-merge/jobs/[id] stays strictly read-only. Recovery only
+ * touches rows whose staleness proves the owning invocation is gone, so it is
+ * idempotent and safe to run repeatedly.
  *
  * Every write is a SINGLE conditional SQL statement (no manual BEGIN/COMMIT),
  * which is safe on pooled/PgBouncer transaction-mode connections — the same
