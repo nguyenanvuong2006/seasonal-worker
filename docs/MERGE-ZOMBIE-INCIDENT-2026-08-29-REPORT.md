@@ -161,6 +161,7 @@ ZOMBIE_JOB_FIXED = YES              (legacy zombies failed loudly by the sweep; 
 ## Delivery
 
 - `BRANCH = arena/01a04adb-seasonal-worker`
-- `FINAL_COMMIT_SHA =` (see PR head)
+- `FINAL_COMMIT_SHA = 41f02ec`
 - `PR_URL = https://github.com/nguyenanvuong2006/seasonal-worker/pull/126`
+- `CI_STATUS = PASS` (Vercel checks green)
 - `SAFE_TO_MERGE = YES` (pending review — not auto-merged)
