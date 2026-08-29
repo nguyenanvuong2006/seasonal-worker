@@ -3,10 +3,24 @@
  *
  * POST /api/document-merge/merge/execute
  *
+ * GOOGLE_DOCS engine — ASYNC since the 28–29/08 zombie incident:
+ *   create durable QUEUED job + items → freeze the template/field snapshot
+ *   into job.metadata → trigger the Cloud Run worker (after()) → return 202
+ *   immediately. The worker claims items (FOR UPDATE SKIP LOCKED), heartbeats
+ *   its lease through every Google stage, performs the Docs/Drive work and
+ *   CAS-commits COMPLETED/FAILED (see worker/src/index.ts runGoogleDocsItem).
+ *
+ * WHY: the previous synchronous model performed 5+ sequential Google/Drive
+ * calls inside ONE Vercel request; its bounded worst case (~6 min with retry
+ * amplification) exceeds the platform maxDuration (300s Hobby default/max),
+ * so a slow run could be hard-killed mid-flight — leaving a zombie
+ * RUNNING/PENDING job that only a later recovery actor could close.
+ *
  * Hỗ trợ:
  * - Dual-template auto-route (Tài liệu A = DW Cũ, Tài liệu B = DW Mới)
  * - dispatchToApplicant: ghi link vào daily_applications để /lookup hiển thị
- * - Batch print: mỗi hồ sơ = 1 Google Doc giữ nguyên format, sau đó export + gộp PDF để in
+ * - Batch print: mỗi hồ sơ = 1 Google Doc giữ nguyên format, sau đó export
+ *   + gộp PDF để in (worker thực hiện)
  */
 
 import { NextResponse } from "next/server";
@@ -25,55 +39,47 @@ import {
   type MergeTemplate,
   type MergeTemplateField,
 } from "@/db/schema";
-import { createGoogleDocsService } from "@/lib/document-merge/google-docs-service";
 import { resolveAllFields, validateRequiredFields, type MergeContext } from "@/lib/document-merge/data-resolver";
 import { applyFallbackPlaceholders, buildPreviewContent } from "@/lib/document-merge/preview-merge";
 import { buildApplicantMergeRecord } from "@/lib/document-merge/applicant-record";
-import { mergePdfBuffers } from "@/lib/document-merge/batch-pdf";
-import { exportGoogleDocAsPdf, uploadPdfToDrive } from "@/lib/document-merge/google-drive-pdf";
-import {
-  documentKindLabel,
-  googleDocEditUrl,
-  googleDocPdfUrl,
-  selectTemplateForApplicant,
-} from "@/lib/document-merge/template-routing";
-import { MergeStageTimer } from "@/lib/document-merge/merge-timing";
+import { documentKindLabel, selectTemplateForApplicant } from "@/lib/document-merge/template-routing";
 import { ITEM_STATUS } from "@/lib/document-merge/queue-types";
 import { runPreMergeStaleRecovery } from "@/lib/document-merge/pre-merge-recovery";
-import {
-  casSyncItemsCompleted,
-  casSyncItemsFailed,
-  casSyncJobCompleted,
-  casSyncJobFailed,
-  syncMergeOwnsJob,
-  touchSyncMerge,
-} from "@/lib/document-merge/queue";
+import { triggerPdfWorker } from "@/lib/document-merge/worker-trigger";
 
 type MergeMode = "ONE_DOCUMENT" | "INDIVIDUAL_DOCUMENTS";
-
-/**
- * Raised when the synchronous merge discovers it no longer owns the active job
- * (the stale-recovery watchdog declared it dead, or an operator cancelled it).
- * Distinct from a transient Google/DB error: terminal CAS writes will fail and
- * any irreversible output already created is treated as an orphan (best-effort
- * trashed) rather than committed as a successful second output.
- */
-class OwnershipLostError extends Error {
-  constructor(public phase: string) {
-    super(`OWNERSHIP_LOST at ${phase}`);
-    this.name = "OwnershipLostError";
-  }
-}
 
 interface RecordSelection {
   entityType: "worker_profiles" | "employment_sessions" | "daily_applications";
   recordIds: string[];
 }
 
-type CreatedDocument = {
-  outputDocId: string;
-  outputUrl: string;
-  outputPdfUrl: string;
+/**
+ * Field snapshot frozen into job.metadata.googleDocs.templates[tid].fields —
+ * the worker resolves mapping deterministically from THIS snapshot, never from
+ * the live merge_template_fields table (same immutability guarantee as the
+ * HTML_PDF canonical snapshot).
+ */
+type GoogleDocsFieldSnapshot = {
+  id: string;
+  placeholder: string;
+  sourceType: string;
+  sourceEntity: string | null;
+  sourceField: string | null;
+  sourcePath: string | null;
+  optionValue: string | null;
+  formatType: string | null;
+  fallbackValue: string | null;
+  isRequired: boolean;
+};
+
+type GoogleDocsTemplateSnapshot = {
+  templateId: string;
+  name: string;
+  documentKind: string;
+  googleDocId: string;
+  outputFolderId: string | null;
+  fields: GoogleDocsFieldSnapshot[];
 };
 
 function buildMergeContext(session: Session, index = 1, count = 1): MergeContext {
@@ -191,22 +197,18 @@ function resolveRecordContent(
   return { content: preview.content, fieldValues, missingFields: validation.missingFields };
 }
 
-async function createMergedDocument(
-  title: string,
-  content: string,
-  folderId?: string | null,
-): Promise<CreatedDocument> {
-  // Single-record production merge is intentionally simple and fast:
-  // copy the original Google Docs template and replace all placeholders in one
-  // batchUpdate. This preserves the original formatting and avoids rebuilding
-  // paragraphs/tables for every candidate.
-  const docsService = createGoogleDocsService(process.env.GOOGLE_ACCESS_TOKEN);
-  const outputDocId = await docsService.createDocument(title, content, folderId || undefined);
-  await docsService.updateDocumentContent(outputDocId, content);
+function toFieldSnapshot(field: MergeTemplateField): GoogleDocsFieldSnapshot {
   return {
-    outputDocId,
-    outputUrl: googleDocEditUrl(outputDocId),
-    outputPdfUrl: googleDocPdfUrl(outputDocId),
+    id: field.id,
+    placeholder: field.placeholder,
+    sourceType: field.sourceType,
+    sourceEntity: field.sourceEntity,
+    sourceField: field.sourceField,
+    sourcePath: field.sourcePath,
+    optionValue: field.optionValue,
+    formatType: field.formatType,
+    fallbackValue: field.fallbackValue,
+    isRequired: field.isRequired,
   };
 }
 
@@ -218,13 +220,11 @@ export async function POST(request: Request) {
 
   // INTERACTIVE STALE-MERGE RECOVERY (hotfix for the 28–29/08 zombie incident):
   // before creating a new job, close any stale GOOGLE_DOCS jobs left behind by
-  // a previous serverless request that was killed mid-flight. This is the same
-  // liveness/CAS sweep as the cron watchdog, triggered on the merge WRITE path
-  // because the Vercel cron runs only once a day (Hobby cap) — a zombie must
-  // not survive up to 24 hours. It runs BEFORE the new job is inserted, never
-  // touches live jobs, and can never block this merge (helper never throws;
-  // the belt-and-braces catch below guards the route too). The GET job-poll
-  // endpoint stays strictly read-only.
+  // a previous execution that died (legacy synchronous zombies have PENDING
+  // items that only this sweep can fail). Same liveness/CAS sweep as the cron
+  // watchdog. Runs BEFORE the new job is inserted, never touches live jobs,
+  // and can never block this merge (helper never throws; belt-and-braces catch
+  // below guards the route too). The GET job-poll endpoint stays read-only.
   try {
     await runPreMergeStaleRecovery();
   } catch (recoveryError) {
@@ -367,6 +367,24 @@ export async function POST(request: Request) {
     }
 
     const primaryTemplate = planned[0].template;
+
+    // FREEZE the GOOGLE_DOCS snapshot onto the job. The worker resolves every
+    // record from THIS immutable snapshot — template content, Google Doc id,
+    // output folder and the 49-placeholder mapping — never from live tables.
+    const googleDocsTemplates: Record<string, GoogleDocsTemplateSnapshot> = {};
+    for (const template of planned.map((item) => item.template)) {
+      if (googleDocsTemplates[template.id]) continue;
+      googleDocsTemplates[template.id] = {
+        templateId: template.id,
+        name: template.name,
+        documentKind: template.documentKind,
+        googleDocId: template.googleDocId,
+        outputFolderId: template.outputFolderId ?? null,
+        fields: (fieldsByTemplate.get(template.id) ?? []).map(toFieldSnapshot),
+      };
+    }
+
+    // DURABLE ASYNC JOB — no Google call happens inside this HTTP request.
     const [job] = await db
       .insert(mergeJobs)
       .values({
@@ -375,15 +393,24 @@ export async function POST(request: Request) {
           ? `Auto-route A/B (${planned.length} hồ sơ)`
           : primaryTemplate.name,
         mergeMode: shouldBatchPrint ? "ONE_DOCUMENT" : "INDIVIDUAL_DOCUMENTS",
-        status: "RUNNING",
+        status: "QUEUED",
+        engine: "GOOGLE_DOCS",
         recordCount: planned.length,
         createdBy: guard.session.username,
-        startedAt: new Date(),
         metadata: {
           autoRoute: shouldAutoRoute,
           dispatchToApplicant: shouldDispatch,
           batchPrint: shouldBatchPrint,
           outputStrategy: shouldBatchPrint ? "INDIVIDUAL_DOCS_PLUS_BATCH_PDF" : "INDIVIDUAL_DOCS",
+          renderedAt: new Date().toISOString(),
+          googleDocs: {
+            batchPrint: shouldBatchPrint,
+            dispatchToApplicant: shouldDispatch,
+            outputStrategy: shouldBatchPrint ? "INDIVIDUAL_DOCS_PLUS_BATCH_PDF" : "INDIVIDUAL_DOCS",
+            currentUserId: guard.session.id,
+            currentUserName: guard.session.fullName,
+            templates: googleDocsTemplates,
+          },
         },
       })
       .returning();
@@ -394,335 +421,38 @@ export async function POST(request: Request) {
         sourceEntity: entityType,
         sourceRecordId: item.recordId,
         sortOrder: index,
-        status: "PENDING",
+        templateId: item.template.id,
+        status: ITEM_STATUS.QUEUED,
       })),
     );
 
-    // This is the SYNCHRONOUS Google Docs path — there is no worker/queue claim
-    // step. Establish OWNERSHIP + LIVENESS when execution begins, and keep the
-    // lease fresh around every long external stage.
-    //   - items PENDING → PROCESSING + a 60s leased_until lease
-    //     (real QUEUED → PROCESSING transition the UI can show);
-    //   - touchSyncMerge() refreshes merge_jobs.updated_at (the job's
-    //     last-progress lease) and the items' leased_until — it is CAS-guarded
-    //     to active states, so a request that lost ownership can not resurrect
-    //     a dead/cancelled job.
-    // The stale-recovery watchdog decides liveness from THIS lease (last
-    // progress), never from created_at age — a large healthy batch keeps
-    // heartbeating and is never reclaimed no matter how long it runs.
-    const leaseStartedAt = new Date();
-    const leaseUntil = new Date(leaseStartedAt.getTime() + 60_000);
-    await db
-      .update(mergeJobRecords)
-      .set({ status: ITEM_STATUS.PROCESSING, startedAt: leaseStartedAt, leasedUntil: leaseUntil })
-      .where(eq(mergeJobRecords.mergeJobId, job.id));
-    await db.update(mergeJobs).set({ updatedAt: leaseStartedAt }).where(eq(mergeJobs.id, job.id));
+    // The worker is the ONLY Google Docs executor now: claim (SKIP LOCKED) →
+    // heartbeat lease → template read / copy / batchUpdate / PDF export /
+    // upload → CAS COMPLETED/FAILED. Fire-and-forget via after() — the HTTP
+    // request ends here, well inside the Vercel platform budget.
+    triggerPdfWorker(job.id, request);
 
-    const timer = new MergeStageTimer(job.id);
-    timer.log("google_docs_merge_started", { recordCount: planned.length, batchPrint: shouldBatchPrint });
+    await writeAudit(guard.session, "CREATE_MERGE_JOB", "merge_jobs", {
+      jobId: job.id,
+      engine: "GOOGLE_DOCS",
+      templateId: primaryTemplate.id,
+      autoRoute: shouldAutoRoute,
+      dispatchToApplicant: shouldDispatch,
+      batchPrint: shouldBatchPrint,
+      outputStrategy: shouldBatchPrint ? "INDIVIDUAL_DOCS_PLUS_BATCH_PDF" : "INDIVIDUAL_DOCS",
+      recordCount: planned.length,
+    });
 
-    // Throws OwnershipLostError if the watchdog/cancellation has taken the job
-    // away — checked before any irreversible external work and before commit.
-    const assertOwnership = async (phase: string) => {
-      const owns = await syncMergeOwnsJob(job.id);
-      if (!owns) {
-        timer.log("google_docs_merge_ownership_lost", { phase });
-        throw new OwnershipLostError(phase);
-      }
-    };
-
-    // Refresh liveness around each long stage; abort if we lost the lease.
-    const heartbeat = async (phase: string) => {
-      const alive = await touchSyncMerge(job.id);
-      if (!alive) {
-        timer.log("google_docs_merge_ownership_lost", { phase });
-        throw new OwnershipLostError(phase);
-      }
-    };
-
-    try {
-      await heartbeat("start");
-      const docsService = createGoogleDocsService(process.env.GOOGLE_ACCESS_TOKEN);
-      const templateContentCache = new Map<string, string>();
-      const getTemplateContent = async (googleDocId: string) => {
-        const cached = templateContentCache.get(googleDocId);
-        if (cached !== undefined) return cached;
-        await heartbeat("template_read");
-        const content = await timer.measure("GOOGLE_API", () => docsService.getDocumentContent(googleDocId));
-        templateContentCache.set(googleDocId, content);
-        return content;
-      };
-
-      // Outputs created during this run — tracked so that if ownership is lost
-      // after an irreversible Google/Drive write, the orphaned file can be
-      // best-effort trashed instead of silently left as a second output.
-      const createdFileIds: string[] = [];
-      const trashOrphan = async (fileId: string | null | undefined) => {
-        if (!fileId) return;
-        try {
-          await docsService.trashFile?.(fileId);
-        } catch (e) {
-          console.log(JSON.stringify({ event: "google_docs_orphan_trash_failed", jobId: job.id, fileId: fileId.slice(0, 12), error: e instanceof Error ? e.message.slice(0, 120) : String(e).slice(0, 120) }));
-        }
-      };
-
-      const rendered: { recordId: string; content: string; kind: string; template: MergeTemplate; fullName: string }[] =
-        [];
-
-      for (let index = 0; index < planned.length; index++) {
-        const item = planned[index];
-        // Liveness at the start of every candidate iteration — proves progress
-        // across a long multi-record batch.
-        await heartbeat(`candidate_${index + 1}`);
-        const templateContent = await getTemplateContent(item.template.googleDocId);
-        const fields = fieldsByTemplate.get(item.template.id) ?? [];
-        const context = buildMergeContext(guard.session, index + 1, planned.length);
-        const resolved = timer.measure("MAPPING_RESOLVE", () =>
-          Promise.resolve(resolveRecordContent(templateContent, fields, item.recordData, context)),
-        );
-        rendered.push({
-          recordId: item.recordId,
-          content: (await resolved).content,
-          kind: item.kind,
-          template: item.template,
-          fullName: String(item.recordData.fullName ?? "ung-vien"),
-        });
-      }
-      timer.log("google_docs_merge_rendered", { renderedCount: rendered.length });
-
-      const createdByRecord = new Map<string, CreatedDocument>();
-      const ensureCreated = async (item: (typeof rendered)[number]): Promise<CreatedDocument> => {
-        const existing = createdByRecord.get(item.recordId);
-        if (existing) return existing;
-        // Before the irreversible Google Doc copy: still own the job.
-        await heartbeat("doc_create");
-        const created = await timer.measure("GOOGLE_API", () =>
-          createMergedDocument(
-            `${item.kind}_${item.fullName}_${job.id}_${item.recordId}`,
-            item.content,
-            item.template.outputFolderId,
-          ),
-        );
-        // Post-write ownership check: if the job was taken over while the
-        // external write was in flight, this is an orphan — trash it and abort
-        // rather than committing a second successful output.
-        if (!(await syncMergeOwnsJob(job.id))) {
-          await trashOrphan(created.outputDocId);
-          throw new OwnershipLostError("doc_create_after");
-        }
-        createdFileIds.push(created.outputDocId);
-        createdByRecord.set(item.recordId, created);
-        return created;
-      };
-
-      const dispatched: {
-        applicationId: string;
-        docUrl: string;
-        pdfUrl: string;
-        documentKind: string;
-        templateId: string;
-      }[] = [];
-
-      // Created docs (for dispatch). Links are only written to daily_applications
-      // AFTER the job CAS-commits below (never commit an output we lost).
-      if (shouldDispatch) {
-        for (const item of rendered) {
-          const created = await ensureCreated(item);
-          dispatched.push({
-            applicationId: item.recordId,
-            docUrl: created.outputUrl,
-            pdfUrl: created.outputPdfUrl,
-            documentKind: item.kind,
-            templateId: item.template.id,
-          });
-        }
-      }
-
-      let printUrl: string | null = null;
-      let printDocId: string | null = null;
-      let outputUrl = dispatched[0]?.docUrl ?? "";
-      let outputDocId = "";
-
-      if (shouldBatchPrint) {
-        // Fast path selected for this project:
-        // 1 candidate = 1 exact copy of the source Google Docs template.
-        // Only placeholder replacement writes to Docs. PDF export is read-only.
-        // The PDFs are then merged server-side and uploaded once to Drive.
-        await heartbeat("pdf_export");
-        const individualDocs: CreatedDocument[] = [];
-        for (const item of rendered) individualDocs.push(await ensureCreated(item));
-
-        const pdfBuffers: Uint8Array[] = [];
-        for (const created of individualDocs) {
-          pdfBuffers.push(await timer.measure("DRIVE_PDF", () => exportGoogleDocAsPdf(created.outputDocId)));
-        }
-        const mergedPdf = await timer.measure("DOCUMENT_RENDER", () => mergePdfBuffers(pdfBuffers));
-        await heartbeat("drive_upload");
-        const uploadedPdf = await timer.measure("DRIVE_PDF", () =>
-          uploadPdfToDrive(
-            `In_hang_loat_${planned.length}_${job.id}.pdf`,
-            mergedPdf,
-            primaryTemplate.outputFolderId,
-          ),
-        );
-        // After the long upload: still own the job, otherwise the merged PDF
-        // is an orphan — best-effort trash it and abort.
-        if (!(await syncMergeOwnsJob(job.id))) {
-          await trashOrphan(uploadedPdf.id);
-          throw new OwnershipLostError("drive_upload_after");
-        }
-        createdFileIds.push(uploadedPdf.id);
-
-        printUrl = uploadedPdf.webViewLink || uploadedPdf.webContentLink;
-        printDocId = uploadedPdf.id;
-        outputUrl = printUrl || individualDocs[0]?.outputUrl || "";
-        outputDocId = uploadedPdf.id;
-      } else if (!shouldDispatch && rendered.length > 0) {
-        const created = await ensureCreated(rendered[0]);
-        outputUrl = created.outputUrl;
-        outputDocId = created.outputDocId;
-      }
-
-      const individualDocs = rendered
-        .map((item) => {
-          const created = createdByRecord.get(item.recordId);
-          if (!created) return null;
-          return {
-            recordId: item.recordId,
-            fullName: item.fullName,
-            templateId: item.template.id,
-            documentKind: item.kind,
-            docId: created.outputDocId,
-            docUrl: created.outputUrl,
-            pdfUrl: created.outputPdfUrl,
-          };
-        })
-        .filter(Boolean);
-
-      // Final liveness check before the irreversible commit.
-      await heartbeat("commit");
-
-      // CAS terminal commit: RUNNING/PROCESSING → COMPLETED only. If the
-      // watchdog declared the job FAILED or an operator CANCELLED it while we
-      // were working, this transition fails (0 rows) — we must NOT overwrite a
-      // terminal state and must NOT expose the output as a second success.
-      const committed = await casSyncJobCompleted(job.id, {
-        outputDocId: outputDocId || printDocId || dispatched[0]?.docUrl || null,
-        outputUrl: outputUrl || printUrl || dispatched[0]?.docUrl || null,
-        metadata: {
-          autoRoute: shouldAutoRoute,
-          dispatchToApplicant: shouldDispatch,
-          batchPrint: shouldBatchPrint,
-          outputStrategy: shouldBatchPrint ? "INDIVIDUAL_DOCS_PLUS_BATCH_PDF" : "INDIVIDUAL_DOCS",
-          printUrl,
-          printDocId,
-          dispatched,
-          individualDocs,
-          kinds: rendered.map((item) => item.kind),
-          // PII-free stage durations (ms) — shows where time went for a run.
-          timing: timer.summary(),
-        },
-      });
-
-      if (!committed) {
-        // Lost the race against FAILED/CANCELLED — orphan every output we made
-        // (best effort) and stop. Do not write a COMPLETED, do not link docs.
-        timer.log("google_docs_merge_commit_lost", { createdCount: createdFileIds.length });
-        for (const fid of createdFileIds) await trashOrphan(fid);
-        return NextResponse.json(
-          { error: "Merge job không còn ở trạng thái xử lý (đã bị huỷ hoặc đánh dấu thất bại). Tài liệu tạo dư đã được dọn dẹp; chạy lại merge nếu cần." },
-          { status: 409 },
-        );
-      }
-
-      // The job is now terminally COMPLETED by THIS execution — only then link
-      // outputs to the applicant records (dispatch).
-      if (shouldDispatch) {
-        const sentAt = new Date();
-        for (const item of rendered) {
-          const created = createdByRecord.get(item.recordId)!;
-          await db
-            .update(dailyApplications)
-            .set({
-              mergedDocUrl: created.outputUrl,
-              mergedDocPdfUrl: created.outputPdfUrl,
-              mergedTemplateId: item.template.id,
-              documentSentAt: sentAt,
-              signatureDataUrl: null,
-              signatureConfirmedAt: null,
-              confirmedAnswers: {},
-              updatedAt: sentAt,
-            })
-            .where(eq(dailyApplications.id, item.recordId));
-        }
-      }
-
-      timer.set("OUTPUT_SAVE", 0);
-      timer.log("google_docs_merge_completed");
-
-      // CAS items: PROCESSING → COMPLETED only (failed/cancelled stay terminal).
-      await casSyncItemsCompleted(job.id);
-
-      await writeAudit(guard.session, "EXECUTE_MERGE", "merge_jobs", {
-        jobId: job.id,
-        templateId: primaryTemplate.id,
-        autoRoute: shouldAutoRoute,
-        dispatchToApplicant: shouldDispatch,
-        batchPrint: shouldBatchPrint,
-        outputStrategy: shouldBatchPrint ? "INDIVIDUAL_DOCS_PLUS_BATCH_PDF" : "INDIVIDUAL_DOCS",
-        recordCount: planned.length,
-      });
-
-      return NextResponse.json({
+    return NextResponse.json(
+      {
         success: true,
         jobId: job.id,
-        outputDocId: outputDocId || printDocId,
-        outputUrl: outputUrl || printUrl,
-        printUrl,
-        individualDocs,
-        dispatched,
-        dispatchedCount: dispatched.length,
-        status: "COMPLETED",
-      });
-    } catch (mergeError) {
-      const ownershipLost = mergeError instanceof OwnershipLostError;
-      const errorMessage = mergeError instanceof Error ? mergeError.message : "Unknown error";
-      timer.log("google_docs_merge_failed", {
-        error: errorMessage.slice(0, 200),
-        ownershipLost,
-      });
-
-      if (ownershipLost) {
-        // Another actor (watchdog FAILED or operator CANCELLED) already owns
-        // the terminal state. Do NOT overwrite it, do NOT fail COMPLETED
-        // records, and do NOT return success. Outputs already created were
-        // best-effort trashed at the point ownership was detected.
-        const owns = await syncMergeOwnsJob(job.id);
-        if (!owns) {
-          timer.log("google_docs_merge_aborted_terminal_elsewhere", {});
-          return NextResponse.json(
-            { error: "Merge job đã bị huỷ hoặc đánh dấu thất bại bởi một tiến trình khác. Không ghi đè kết quả." },
-            { status: 409 },
-          );
-        }
-      }
-
-      // CAS failure: non-terminal → FAILED only (never overwrites COMPLETED or
-      // CANCELLED). Items fail only non-terminal records.
-      const summary = ownershipLost
-        ? "Tiến trình merge mất quyền xử lý (job đã bị huỷ/thất bại bởi tiến trình khác)."
-        : errorMessage.slice(0, 500);
-      await casSyncJobFailed(job.id, summary, errorMessage);
-      await casSyncItemsFailed(job.id, ownershipLost ? "OWNERSHIP_LOST" : "GOOGLE_DOCS_MERGE_FAILED", errorMessage);
-
-      await writeAudit(guard.session, "MERGE_FAILED", "merge_jobs", {
-        jobId: job.id,
-        error: errorMessage,
-        ownershipLost,
-      });
-
-      return NextResponse.json({ error: "Merge failed", details: errorMessage }, { status: 500 });
-    }
+        status: "QUEUED",
+        engine: "GOOGLE_DOCS",
+        total: planned.length,
+      },
+      { status: 202 },
+    );
   } catch (error) {
     console.error("[document-merge/merge/execute] POST error:", error);
     return NextResponse.json({ error: "Failed to execute merge" }, { status: 500 });

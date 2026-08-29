@@ -532,6 +532,24 @@ export class RealGoogleDocsService implements GoogleDocsService {
   }
 }
 
+/**
+ * Classify a Google Docs/Drive failure for the async worker: transient errors
+ * (request timeout, network loss, 429 quota, 5xx) may succeed on a retry —
+ * the queue's standard attempt cap still applies. Deterministic errors (403
+ * permission/quota-config, 404 missing template) retrying cannot fix and must
+ * FAIL immediately so operators see the real problem instead of a spinning
+ * queue. Shared by the worker executor (worker/src/index.ts).
+ */
+export function isTransientGoogleDocsError(error: unknown): boolean {
+  const message = error instanceof Error ? `${error.name} ${error.message}` : String(error ?? "");
+  const lower = message.toLowerCase();
+  if (/timed out|timeout|aborted/.test(lower)) return true;
+  if (/fetch failed|econnreset|etimedout|enetunreach|eai_again|socket|network/.test(lower)) return true;
+  if (/(^|\D)(429|500|502|503)(\D|$)/.test(lower)) return true;
+  if (/(^|\D)403(\D|$)/.test(lower)) return false;
+  return false;
+}
+
 export function createGoogleDocsService(accessToken?: string): GoogleDocsService {
   const allowMock = process.env.NODE_ENV === "test" || process.env.DOCUMENT_MERGE_USE_MOCK === "true";
   if (allowMock && !accessToken && !process.env.GOOGLE_SERVICE_ACCOUNT_EMAIL && !process.env.GOOGLE_REFRESH_TOKEN) {

@@ -38,10 +38,15 @@ test("isRetryableItemError: deterministic validation is non-retryable; transient
 
 test("WORKER_STAGES: contains the full pipeline in order, JOB_CLAIMED first", () => {
   assert.equal(WORKER_STAGES[0], "JOB_CLAIMED");
-  assert.equal(WORKER_STAGES[WORKER_STAGES.length - 1], "BATCH_FINALIZE");
+  assert.equal(WORKER_STAGES.includes("BATCH_FINALIZE"), true);
   assert.equal(WORKER_STAGES.includes("CHROMIUM_LAUNCH"), true);
   assert.equal(WORKER_STAGES.includes("STORAGE_UPLOAD"), true);
   assert.equal(WORKER_STAGES.includes("HISTORY_WRITE"), true);
+  // GOOGLE_DOCS async worker stages (sự cố 28–29/08).
+  assert.equal(WORKER_STAGES.includes("GOOGLE_TEMPLATE_READ"), true);
+  assert.equal(WORKER_STAGES.includes("GOOGLE_DOC_CREATE"), true);
+  assert.equal(WORKER_STAGES.includes("GOOGLE_PDF_EXPORT"), true);
+  assert.equal(WORKER_STAGES.includes("GOOGLE_DRIVE_UPLOAD"), true);
   // Không trùng lặp.
   assert.equal(new Set(WORKER_STAGES).size, WORKER_STAGES.length);
 });

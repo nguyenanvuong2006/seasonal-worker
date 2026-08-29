@@ -1,20 +1,20 @@
 /**
- * REGRESSION — POST /api/document-merge/merge/execute triggers the interactive
- * stale-merge recovery BEFORE creating a new job.
+ * REGRESSION — POST /api/document-merge/merge/execute (GOOGLE_DOCS async).
  *
- * The 28–29/08 incident left zombie GOOGLE_DOCS jobs (RUNNING + PENDING rows)
- * because the only recovery actor was the daily Vercel cron. The hotfix runs
- * the same liveness/CAS sweep on the merge WRITE path. These tests transpile
- * the REAL route and prove:
+ * After the 28–29/08 incident the route no longer performs Google Docs/Drive
+ * work inside the HTTP request. It must:
  *
- *   1. runPreMergeStaleRecovery() is invoked BEFORE the new merge_jobs row is
- *      inserted (so it can never touch the job being created);
- *   2. a throwing recovery sweep NEVER blocks a new merge;
- *   3. the one-record GOOGLE_DOCS lifecycle still works at the route level:
- *      items are leased PROCESSING when work starts and the job commits
- *      through the CAS helpers (PENDING → PROCESSING → COMPLETED).
+ *   1. run the pre-merge stale-recovery sweep BEFORE inserting the new job
+ *      (legacy zombie cleanup) and never let a recovery failure block a merge;
+ *   2. create a durable QUEUED job + QUEUED items with a FROZEN googleDocs
+ *      snapshot (template id / googleDocId / outputFolderId / field mapping)
+ *      and trigger the Cloud Run worker (fire-and-forget);
+ *   3. perform ZERO Google API work in-request (the test harness throws if
+ *      the route requires the google-docs-service module);
+ *   4. keep preflight read-only (no job insert, no worker trigger).
  *
  * GET polling stays read-only — covered by job-route-read-only.test.ts.
+ * Worker-side GOOGLE_DOCS execution is covered by worker/src/index.test.ts.
  */
 import test from "node:test";
 import assert from "node:assert/strict";
@@ -28,7 +28,6 @@ import {
   type FakeDb,
   type QueryCall,
 } from "../../../../../lib/test-support/fake-drizzle.ts";
-import * as realQueueTypes from "../../../../../lib/document-merge/queue-types.ts";
 
 const routeSource = readFileSync(new URL("./route.ts", import.meta.url), "utf8");
 const jsSource = ts.transpileModule(routeSource, {
@@ -51,8 +50,22 @@ const ACTIVE_TEMPLATE = {
   name: "Đăng ký tập nghề - Quy định tập nghề",
   isActive: true,
   googleDocId: "google-doc-16",
-  outputFolderId: null,
+  outputFolderId: "folder-1",
   documentKind: "DW_CU",
+};
+
+const FIELD_ROW = {
+  templateId: "tpl-1",
+  id: "field-1",
+  placeholder: "Ho_ten",
+  sourceType: "FIELD",
+  sourceEntity: "daily_applications",
+  sourceField: "fullName",
+  sourcePath: null,
+  optionValue: null,
+  formatType: null,
+  fallbackValue: null,
+  isRequired: false,
 };
 
 type RoutePostResult = { status: number; body: Record<string, unknown> };
@@ -60,9 +73,9 @@ type RoutePostResult = { status: number; body: Record<string, unknown> };
 function loadPost(opts: {
   events: string[];
   recoveryImpl: () => Promise<unknown>;
-}): { POST: (r: Request) => Promise<RoutePostResult>; db: FakeDb; heartbeats: string[] } {
+  workerTrigger?: (jobId: string) => void;
+}): { POST: (r: Request) => Promise<RoutePostResult>; db: FakeDb } {
   const events = opts.events;
-  const heartbeats: string[] = [];
   const db: FakeDb = createFakeDb({
     respond: (call: QueryCall) => {
       if (call.root === "select" && call.table === "merge_templates") return [ACTIVE_TEMPLATE];
@@ -70,7 +83,7 @@ function loadPost(opts: {
         return [{ application: { id: "app-1" }, deptName: null }];
       }
       if (call.root === "select" && call.table === "merge_template_fields") {
-        return [{ templateId: "tpl-1", sourceField: "ho_ten", isOrphaned: false }];
+        return [FIELD_ROW];
       }
       if (call.root === "insert" && call.table === "merge_jobs") {
         events.push("insert-merge-jobs");
@@ -84,28 +97,11 @@ function loadPost(opts: {
     },
   });
 
-  const queue = {
-    touchSyncMerge: async () => {
-      heartbeats.push("touchSyncMerge");
-      return true;
-    },
-    syncMergeOwnsJob: async () => true,
-    casSyncJobCompleted: async () => true,
-    casSyncItemsCompleted: async () => 1,
-    casSyncJobFailed: async () => true,
-    casSyncItemsFailed: async () => 1,
-  };
-
-  const fakeDocs = {
-    getDocumentContent: async () => "MẪU <<Ho_ten>> <<Ngay_sinh>>",
-    createDocument: async () => "doc-out-1",
-    updateDocumentContent: async () => undefined,
-    trashFile: async () => undefined,
-  };
-
   const stubs: Record<string, unknown> = {
     "next/server": {
-      NextResponse: { json: (body: unknown, init?: { status?: number }) => ({ status: init?.status ?? 200, body }) },
+      NextResponse: {
+        json: (body: unknown, init?: { status?: number }) => ({ status: init?.status ?? 200, body }),
+      },
     },
     "drizzle-orm": drizzleStub,
     "@/lib/auth": {
@@ -118,9 +114,6 @@ function loadPost(opts: {
     },
     "@/db": { db },
     "@/db/schema": schemaStub,
-    "@/lib/document-merge/google-docs-service": {
-      createGoogleDocsService: () => fakeDocs,
-    },
     "@/lib/document-merge/data-resolver": {
       resolveAllFields: () => ({}),
       validateRequiredFields: () => ({ missingFields: [] }),
@@ -137,39 +130,28 @@ function loadPost(opts: {
         dwMatch: "MATCHED",
       }),
     },
-    "@/lib/document-merge/batch-pdf": {
-      mergePdfBuffers: async () => new Uint8Array([1]),
-    },
-    "@/lib/document-merge/google-drive-pdf": {
-      exportGoogleDocAsPdf: async () => new Uint8Array([1]),
-      uploadPdfToDrive: async () => ({ id: "pdf-1", webViewLink: "https://drive/pdf-1", webContentLink: "https://drive/pdf-1" }),
-    },
     "@/lib/document-merge/template-routing": {
       documentKindLabel: (k: string) => String(k),
-      googleDocEditUrl: (id: string) => `https://docs.google.com/document/d/${id}/edit`,
-      googleDocPdfUrl: (id: string) => `https://docs.google.com/document/d/${id}/export?format=pdf`,
       selectTemplateForApplicant: () => ({ template: ACTIVE_TEMPLATE, kind: "DW_CU" }),
     },
-    "@/lib/document-merge/merge-timing": {
-      MergeStageTimer: class {
-        measure(_stage: string, fn: () => Promise<unknown>) {
-          return fn();
-        }
-        set() {}
-        log() {}
-        summary() {
-          return {};
-        }
-      },
+    "@/lib/document-merge/queue-types": {
+      ITEM_STATUS: { QUEUED: "QUEUED", PROCESSING: "PROCESSING" },
     },
-    "@/lib/document-merge/queue-types": realQueueTypes,
-    "@/lib/document-merge/queue": queue,
     "@/lib/document-merge/pre-merge-recovery": {
       runPreMergeStaleRecovery: async () => {
         events.push("pre-merge-recovery");
         return opts.recoveryImpl();
       },
     },
+    "@/lib/document-merge/worker-trigger": {
+      triggerPdfWorker: (jobId: string) => {
+        events.push(`worker-trigger:${jobId}`);
+        opts.workerTrigger?.(jobId);
+      },
+    },
+    // NOTE: NO google-docs-service / google-drive-pdf / batch-pdf stub — the
+    // route must not import (or call) any Google module; the harness throws
+    // "Unexpected require" if it does.
   };
 
   const moduleObj = { exports: {} as Record<string, unknown> };
@@ -203,19 +185,20 @@ function loadPost(opts: {
   vm.runInContext(jsSource, context);
 
   const POST = (moduleObj.exports as { POST: (r: Request) => Promise<RoutePostResult> }).POST;
-  return { POST, db, heartbeats };
+  return { POST, db };
 }
 
-function mergeRequest(): Request {
+function mergeRequest(overrides: Record<string, unknown> = {}): Request {
   return new Request("https://app.example/api/document-merge/merge/execute", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({
       templateId: "tpl-1",
       autoRoute: false,
-      batchPrint: false,
+      batchPrint: true,
       dispatchToApplicant: false,
       records: { entityType: "daily_applications", recordIds: ["app-1"] },
+      ...overrides,
     }),
   });
 }
@@ -225,17 +208,14 @@ test("HOTFIX — pre-merge stale recovery runs BEFORE the new merge_jobs row is 
   const { POST } = loadPost({ events, recoveryImpl: async () => ({ syncFailed: 1, recoveredJobIds: ["zombie-1"] }) });
 
   const res = await POST(mergeRequest());
-  assert.equal(res.status, 200, "merge still succeeds after recovering a zombie");
+  assert.equal(res.status, 202);
   assert.equal(res.body.success, true);
 
   const recoveryIdx = events.indexOf("pre-merge-recovery");
   const insertIdx = events.indexOf("insert-merge-jobs");
   assert.ok(recoveryIdx >= 0, "recovery must be triggered on the merge write path");
   assert.ok(insertIdx >= 0, "job creation must happen");
-  assert.ok(
-    recoveryIdx < insertIdx,
-    `recovery (idx ${recoveryIdx}) must run BEFORE job insert (idx ${insertIdx}) — the sweep must never be able to touch the job being created`,
-  );
+  assert.ok(recoveryIdx < insertIdx, "recovery must run BEFORE job insert");
 });
 
 test("HOTFIX — a throwing recovery sweep never blocks a new merge", async () => {
@@ -248,57 +228,81 @@ test("HOTFIX — a throwing recovery sweep never blocks a new merge", async () =
   });
 
   const res = await POST(mergeRequest());
-  assert.equal(res.status, 200, "recovery failure must not fail the merge request");
+  assert.equal(res.status, 202);
   assert.equal(res.body.success, true);
 });
 
-test("LIFECYCLE — one-record GOOGLE_DOCS merge transitions items PENDING → leased PROCESSING → CAS COMPLETED at the route level", async () => {
+test("ASYNC — POST creates a durable QUEUED job with a frozen googleDocs snapshot and returns 202 immediately", async () => {
   const events: string[] = [];
   const { POST, db } = loadPost({ events, recoveryImpl: async () => ({ syncFailed: 0 }) });
 
   const res = await POST(mergeRequest());
-  assert.equal(res.status, 200);
-  assert.equal(res.body.success, true);
-  assert.equal(res.body.status, "COMPLETED");
+  assert.equal(res.status, 202, "job creation returns immediately");
+  assert.equal(res.body.status, "QUEUED");
+  assert.equal(res.body.engine, "GOOGLE_DOCS");
+  assert.ok(typeof res.body.jobId === "string" && res.body.jobId.length > 0);
+  assert.equal(res.body.outputUrl, undefined, "no synchronous output — the worker owns execution");
 
-  // Items are born PENDING (insert values include status "PENDING").
-  const recordInsert = db.writesTo("merge_job_records").find((c) => c.root === "insert");
-  assert.ok(recordInsert, "job records must be inserted");
-  const insertValues = recordInsert.ops.find((o) => o.fn === "values")?.args[0] as Array<{ status: string }>;
-  assert.ok(Array.isArray(insertValues) && insertValues.length === 1);
-  assert.equal(insertValues[0].status, "PENDING", "records start PENDING");
-
-  // Real QUEUED → PROCESSING transition with a 60s lease when work starts.
-  const leaseUpdate = db
-    .writesTo("merge_job_records")
-    .find((c) => c.root === "update" && c.ops.some((o) => o.fn === "set"));
-  assert.ok(leaseUpdate, "records must be leased into PROCESSING before work begins");
-  const leaseSet = leaseUpdate.ops.find((o) => o.fn === "set")?.args[0] as {
+  const jobInsert = db.writesTo("merge_jobs").find((c) => c.root === "insert");
+  assert.ok(jobInsert, "merge job inserted");
+  const jobValues = jobInsert.ops.find((o) => o.fn === "values")?.args[0] as {
     status?: string;
-    startedAt?: Date;
-    leasedUntil?: Date;
+    engine?: string;
+    metadata?: { googleDocs?: Record<string, unknown> };
   };
-  assert.equal(leaseSet.status, "PROCESSING", "records are PROCESSING while the sync request works");
-  assert.ok(leaseSet.leasedUntil instanceof Date, "a lease must be established");
-  assert.equal(leaseSet.leasedUntil.getTime() - leaseSet.startedAt!.getTime(), 60_000, "60s lease");
+  assert.equal(jobValues.status, "QUEUED", "job starts QUEUED (visible lifecycle)");
+  assert.equal(jobValues.engine, "GOOGLE_DOCS");
 
-  // The terminal commit is exclusively via the CAS helper (no direct terminal
-  // write from the route), preserving FAILED/CANCELLED protections.
-  const directTerminal = db.writesTo("merge_jobs").some(
-    (c) =>
-      c.root === "update" &&
-      c.ops.some((o) => o.fn === "set" && (o.args[0] as { status?: string }).status === "COMPLETED"),
-  );
-  assert.equal(directTerminal, false, "route must not write a terminal job status directly (CAS-only)");
+  const googleDocs = jobValues.metadata?.googleDocs as
+    | { batchPrint?: boolean; currentUserName?: string; templates?: Record<string, { googleDocId?: string; outputFolderId?: string | null; fields?: unknown[] }> }
+    | undefined;
+  assert.ok(googleDocs, "googleDocs snapshot frozen into metadata");
+  assert.equal(googleDocs?.batchPrint, true);
+  assert.equal(googleDocs?.currentUserName, "HR Staff");
+  const tpl = googleDocs?.templates?.["tpl-1"];
+  assert.ok(tpl, "template snapshot present");
+  assert.equal(tpl?.googleDocId, "google-doc-16");
+  assert.equal(tpl?.outputFolderId, "folder-1");
+  assert.equal((tpl?.fields ?? []).length, 1, "field mapping snapshot frozen");
+
+  // QUEUED items with templateId — the worker claims them via SKIP LOCKED.
+  const recordInsert = db.writesTo("merge_job_records").find((c) => c.root === "insert");
+  assert.ok(recordInsert, "job records inserted");
+  const recordValues = recordInsert.ops.find((o) => o.fn === "values")?.args[0] as Array<{
+    status?: string;
+    templateId?: string;
+  }>;
+  assert.ok(Array.isArray(recordValues) && recordValues.length === 1);
+  assert.equal(recordValues[0].status, "QUEUED", "items start QUEUED for the worker to claim");
+  assert.equal(recordValues[0].templateId, "tpl-1");
+
+  // Worker trigger fired exactly once with the new job id.
+  assert.ok(events.includes("worker-trigger:job-1"), "worker trigger fired for the new job");
+  assert.equal(events.filter((e) => e.startsWith("worker-trigger:")).length, 1);
 });
 
-test("LIFECYCLE — liveness heartbeats fire around every external stage of the sync request", async () => {
+test("ASYNC — NO Google module is imported or called in-request (zero Google work in the HTTP path)", async () => {
   const events: string[] = [];
-  const { POST, heartbeats } = loadPost({ events, recoveryImpl: async () => ({ syncFailed: 0 }) });
+  const { POST } = loadPost({ events, recoveryImpl: async () => ({ syncFailed: 0 }) });
+  // The vm require-shim throws for any Google module; a passing POST proves
+  // the route performs no Google work (the old synchronous route required
+  // google-docs-service + google-drive-pdf + batch-pdf at module load).
   const res = await POST(mergeRequest());
-  assert.equal(res.status, 200);
+  assert.equal(res.status, 202);
+});
 
-  // heartbeat("start" | "template_read" | "candidate_1" | "doc_create" | "commit")
-  // — the liveness lease that keeps the stale watchdog from touching a live job.
-  assert.ok(heartbeats.length >= 5, `expected a liveness touch around every stage, got ${heartbeats.length}`);
+test("PREFLIGHT stays read-only: 200 valid, no job insert, no worker trigger", async () => {
+  const events: string[] = [];
+  const { POST, db } = loadPost({ events, recoveryImpl: async () => ({ syncFailed: 0 }) });
+
+  const res = await POST(mergeRequest({ preflight: true }));
+  assert.equal(res.status, 200);
+  assert.equal(res.body.preflight, true);
+  assert.equal(res.body.valid, true);
+
+  assert.ok(!events.includes("insert-merge-jobs"), "preflight must not create a job");
+  assert.ok(!events.includes("insert-merge-job-records"), "preflight must not create records");
+  assert.equal(events.filter((e) => e.startsWith("worker-trigger:")).length, 0, "preflight must not trigger the worker");
+  // Recovery still runs before preflight response (cheap, idempotent).
+  assert.ok(events.includes("pre-merge-recovery"));
 });

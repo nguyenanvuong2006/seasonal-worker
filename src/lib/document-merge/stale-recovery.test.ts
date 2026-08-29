@@ -134,7 +134,7 @@ test("HTML_PDF reclaim statement keys on expired item LEASE (r.leased_until), so
   assert.ok(stmt);
   assert.match(stmt, /r\.leased_until/, "reclaim must hinge on the item lease");
   assert.match(stmt, /r\.status = 'PROCESSING'/);
-  assert.match(stmt, /j\.engine = 'HTML_PDF'/);
+  assert.match(stmt, /j\.engine IN \('HTML_PDF', 'GOOGLE_DOCS'\)/, "worker-queue engines (HTML_PDF + async GOOGLE_DOCS) reclaim on expired lease");
 });
 
 test("orphaned QUEUED HTML_PDF job is re-dispatched exactly once", async () => {
@@ -225,4 +225,41 @@ test("LEGACY GAP — the no-live-lease exemption cannot protect a legacy job (no
   // legacy jobs are never hidden from recovery.
   assert.match(stmt, /r\.status = 'PROCESSING'/, "exemption requires a PROCESSING item");
   assert.match(stmt, /r\.leased_until > \?/, "exemption requires a fresh lease (legacy rows have none)");
+});
+
+test("ASYNC MODEL — sync-killed NEVER fails a GOOGLE_DOCS job whose items are worker-claimable (QUEUED/RETRY/PROCESSING)", async () => {
+  const executeCalls: unknown[][] = [];
+  const execute = async (...args: unknown[]) => {
+    executeCalls.push(args);
+    return { rows: [] };
+  };
+  const mod = loadRecovery(execute);
+  await mod.recoverStaleMergeJobs({ now: NOW });
+
+  const stmt = executeCalls.map((c) => sqlTextOf(c[0])).find((t) => tag(t, "recover-sync-killed"));
+  assert.ok(stmt);
+  // Async GOOGLE_DOCS jobs are recoverable by the worker (claim/reclaim) —
+  // the legacy sync-killed predicate must exclude them via this guard.
+  assert.match(stmt, /r2\.status IN \('QUEUED', 'RETRY', 'PROCESSING'\)/, "async-model items excluded from sync-killed");
+  assert.match(stmt, /NOT EXISTS \(/, "exclusion guard present");
+});
+
+test("ASYNC MODEL — orphaned QUEUED GOOGLE_DOCS job (trigger died) is re-dispatched to the worker", async () => {
+  const executeCalls: unknown[][] = [];
+  const execute = async (...args: unknown[]) => {
+    executeCalls.push(args);
+    const text = sqlTextOf(args[0]);
+    if (tag(text, "recover-orphan-dispatch")) return { rows: [{ jobId: "job-gd-orphan" }] };
+    return { rows: [] };
+  };
+  const mod = loadRecovery(execute);
+  const fired: string[] = [];
+
+  const res = await mod.recoverStaleMergeJobs({ now: NOW, fire: (id) => fired.push(id) });
+  assert.deepEqual(JSON.parse(JSON.stringify(res.dispatchJobIds)), ["job-gd-orphan"]);
+  assert.deepEqual(JSON.parse(JSON.stringify(fired)), ["job-gd-orphan"]);
+
+  const stmt = executeCalls.map((c) => sqlTextOf(c[0])).find((t) => tag(t, "recover-orphan-dispatch"));
+  assert.ok(stmt);
+  assert.match(stmt, /j\.engine IN \('HTML_PDF', 'GOOGLE_DOCS'\)/, "orphan re-dispatch covers both worker-queue engines");
 });

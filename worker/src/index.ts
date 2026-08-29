@@ -34,6 +34,8 @@ import { chromium, type Browser, type Page } from "playwright";
 import type { MergeTemplateField } from "../../src/db/schema";
 import {
   allRemainingItemsAwaitingRetry,
+  casSyncJobCompleted,
+  casSyncJobFailed,
   claimItems,
   completeItem,
   failAllNonTerminalItems,
@@ -42,12 +44,27 @@ import {
   hasPendingItems,
   heartbeatItem,
   ITEM_LEASE_SECONDS,
+  listCompletedItemsInOrder,
   markJobProcessing,
+  reclaimStalledItems,
   recomputeJobProgress,
   recordJobStage,
   type QueueItem,
 } from "../../src/lib/document-merge/queue.ts";
 import { shouldRetryClaim, claimRetryDelayMs, type WorkerStage } from "../../src/lib/document-merge/queue-types.ts";
+import {
+  createGoogleDocsService,
+  isTransientGoogleDocsError,
+} from "../../src/lib/document-merge/google-docs-service.ts";
+import { exportGoogleDocAsPdf, uploadPdfToDrive } from "../../src/lib/document-merge/google-drive-pdf.ts";
+import { mergePdfBuffers } from "../../src/lib/document-merge/batch-pdf.ts";
+import {
+  resolveAllFields,
+  validateRequiredFields,
+  type MergeContext,
+} from "../../src/lib/document-merge/data-resolver.ts";
+import { applyFallbackPlaceholders, buildPreviewContent } from "../../src/lib/document-merge/preview-merge.ts";
+import { googleDocEditUrl, googleDocPdfUrl } from "../../src/lib/document-merge/template-routing.ts";
 import {
   CANONICAL_ERROR,
   CANONICAL_ERROR_MESSAGE_VI,
@@ -238,6 +255,42 @@ interface TemplateSnapshot {
 }
 
 // ---------------------------------------------------------------
+// GOOGLE_DOCS async engine — job metadata frozen at creation time
+// (POST /api/document-merge/merge/execute), identical guarantee to the
+// HTML_PDF canonical snapshot: the worker never reads live template tables.
+// ---------------------------------------------------------------
+interface GoogleDocsFieldSnapshot {
+  id: string;
+  placeholder: string;
+  sourceType: string;
+  sourceEntity: string | null;
+  sourceField: string | null;
+  sourcePath: string | null;
+  optionValue: string | null;
+  formatType: string | null;
+  fallbackValue: string | null;
+  isRequired: boolean;
+}
+
+interface GoogleDocsTemplateSnapshot {
+  templateId: string;
+  name: string;
+  documentKind: string;
+  googleDocId: string;
+  outputFolderId: string | null;
+  fields: GoogleDocsFieldSnapshot[];
+}
+
+interface GoogleDocsJobContext {
+  batchPrint: boolean;
+  dispatchToApplicant: boolean;
+  outputStrategy: string;
+  currentUserId?: string | null;
+  currentUserName: string;
+  templates: Record<string, GoogleDocsTemplateSnapshot>;
+}
+
+// ---------------------------------------------------------------
 // Render 1 item
 // ---------------------------------------------------------------
 interface JobContext {
@@ -254,6 +307,10 @@ interface JobContext {
    * worker NEVER calls `new Date()`/geolocation to derive it per record.
    */
   signingContext: SigningContext;
+  /** GOOGLE_DOCS async engine context — null for HTML_PDF jobs. */
+  googleDocs: GoogleDocsJobContext | null;
+  /** Per-invocation cache of the Google Docs template text (GOOGLE_DOCS). */
+  googleDocsContentCache: Map<string, string>;
 }
 
 /**
@@ -304,9 +361,283 @@ async function processItem(item: QueueItem, jobCtx: JobContext): Promise<void> {
   let t = Date.now();
   void t;
   try {
-    await runItemProcessing(item, jobCtx, { templateId, snap, abortSignal: abortController.signal });
+    if (jobCtx.googleDocs) {
+      await runGoogleDocsItem(item, jobCtx, abortController.signal);
+    } else {
+      await runItemProcessing(item, jobCtx, { templateId, snap, abortSignal: abortController.signal });
+    }
   } finally {
     stopHeartbeat();
+  }
+}
+
+/**
+ * GOOGLE_DOCS async item (incident 28–29/08 — moved off the synchronous HTTP
+ * request onto the durable queue): template read → data resolution → Google
+ * Doc copy+batchUpdate → CAS item completion → optional dispatch link.
+ *
+ * Safety (same model as the HTML_PDF path):
+ *   - heartbeat lease around every long Google stage (processItem wrapper);
+ *   - ownership re-check before AND after the irreversible Doc copy; the
+ *     orphaned file is best-effort trashed if the lease was lost;
+ *   - completeItem CAS (PROCESSING → COMPLETED only) — a reclaimed item can
+ *     never be committed twice, so no duplicate successful output;
+ *   - transient Google errors (timeout/network/429/5xx) go to RETRY via
+ *     failItem(retryable: true) with the standard attempt cap; deterministic
+ *     errors (403, missing template/record/fields) fail immediately.
+ */
+async function runGoogleDocsItem(
+  item: QueueItem,
+  jobCtx: JobContext,
+  abortSignal: AbortSignal,
+): Promise<void> {
+  const google = jobCtx.googleDocs;
+  if (!google) throw new Error("GOOGLE_DOCS: missing googleDocs job context");
+  const tpl = google.templates[item.templateId ?? ""] ?? Object.values(google.templates)[0];
+  const guardLost = () => {
+    if (abortSignal.aborted) throw new Error("LEASE_LOST: item reclaimed by another worker attempt");
+  };
+
+  if (!tpl) {
+    await failItem(
+      item.id,
+      {
+        errorCode: "GOOGLE_DOCS_TEMPLATE_MISSING",
+        errorMessage: "Không tìm thấy snapshot template Google Docs của job (metadata.googleDocs.templates).",
+      },
+      { attemptCount: item.attemptCount, retryable: false },
+    );
+    return;
+  }
+
+  const service = createGoogleDocsService();
+  const trashOrphan = async (fileId: string | null | undefined) => {
+    if (!fileId) return;
+    try {
+      await service.trashFile?.(fileId);
+    } catch (error) {
+      console.log(
+        JSON.stringify({
+          event: "google_docs_worker_orphan_trash_failed",
+          jobId: jobCtx.jobId,
+          itemId: item.id,
+          fileId: fileId.slice(0, 12),
+          error: error instanceof Error ? error.message.slice(0, 120) : String(error).slice(0, 120),
+        }),
+      );
+    }
+  };
+
+  let t = Date.now();
+
+  // Template content — one bounded read per template per invocation (cached).
+  let templateContent = jobCtx.googleDocsContentCache.get(tpl.googleDocId);
+  if (templateContent === undefined) {
+    try {
+      templateContent = await service.getDocumentContent(tpl.googleDocId);
+      jobCtx.googleDocsContentCache.set(tpl.googleDocId, templateContent);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      await stage(jobCtx.jobId, item.id, "GOOGLE_TEMPLATE_READ", t, false, "GOOGLE_TEMPLATE_READ_FAILED");
+      await failItem(
+        item.id,
+        { errorCode: "GOOGLE_TEMPLATE_READ_FAILED", errorMessage: message.slice(0, 500) },
+        { attemptCount: item.attemptCount, retryable: isTransientGoogleDocsError(error) },
+      );
+      return;
+    }
+  }
+  await stage(jobCtx.jobId, item.id, "GOOGLE_TEMPLATE_READ", t, true);
+
+  t = Date.now();
+  const records = await loadDailyApplicationRecords([item.sourceRecordId]);
+  const recordData = records.get(item.sourceRecordId);
+  await stage(jobCtx.jobId, item.id, "ITEM_LOADING", t, Boolean(recordData));
+  if (!recordData) {
+    await failItem(
+      item.id,
+      { errorCode: "RECORD_NOT_FOUND", errorMessage: "Không tìm thấy hồ sơ ứng viên." },
+      { attemptCount: item.attemptCount, retryable: false },
+    );
+    return;
+  }
+
+  t = Date.now();
+  const context: MergeContext = {
+    currentUserId: google.currentUserId ?? undefined,
+    currentUserName: google.currentUserName,
+    currentDate: jobCtx.renderedAt,
+    mergeIndex: item.sortOrder,
+    mergeCount: jobCtx.recordCount,
+  };
+  const fields = tpl.fields as unknown as MergeTemplateField[];
+  const mapped = resolveAllFields(fields, recordData, context);
+  const fieldValues = applyFallbackPlaceholders(recordData, mapped);
+  const preview = buildPreviewContent(templateContent, fieldValues);
+  const validation = validateRequiredFields(fields, fieldValues);
+  if (validation.missingFields.length > 0) {
+    const missing = validation.missingFields.slice(0, 20).join(", ");
+    await stage(jobCtx.jobId, item.id, "DATA_RESOLUTION", t, false, "INCOMPLETE");
+    await failItem(
+      item.id,
+      { errorCode: "INCOMPLETE", errorMessage: `Thiếu: ${missing}` },
+      { attemptCount: item.attemptCount, retryable: false },
+    );
+    return;
+  }
+  await stage(jobCtx.jobId, item.id, "DATA_RESOLUTION", t, true);
+
+  // Irreversible Google write — ownership check BEFORE and AFTER the call.
+  guardLost();
+  t = Date.now();
+  const fullName = String(recordData.fullName ?? "ung-vien");
+  const title = `${tpl.documentKind}_${fullName}_${jobCtx.jobId}_${item.sourceRecordId}`;
+  let docId: string;
+  try {
+    docId = await service.createDocument(title, preview.content, tpl.outputFolderId || undefined);
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    const transient = isTransientGoogleDocsError(error);
+    await stage(
+      jobCtx.jobId,
+      item.id,
+      "GOOGLE_DOC_CREATE",
+      t,
+      false,
+      transient ? "GOOGLE_DOCS_TRANSIENT" : "GOOGLE_DOCS_CREATE_FAILED",
+    );
+    await failItem(
+      item.id,
+      { errorCode: transient ? "GOOGLE_DOCS_TRANSIENT" : "GOOGLE_DOCS_CREATE_FAILED", errorMessage: message.slice(0, 500) },
+      { attemptCount: item.attemptCount, retryable: transient },
+    );
+    return;
+  }
+  if (abortSignal.aborted) {
+    await trashOrphan(docId);
+    throw new Error("LEASE_LOST: item reclaimed while the Google Doc was being created");
+  }
+  await stage(jobCtx.jobId, item.id, "GOOGLE_DOC_CREATE", t, true);
+
+  // CAS item completion — only THIS attempt commits the output reference.
+  const committed = await completeItem(item.id, {
+    pdfUrl: googleDocEditUrl(docId),
+    storageKey: docId,
+    filename: title,
+  });
+  if (!committed) {
+    await trashOrphan(docId);
+    throw new Error("LEASE_LOST: item no longer owned at GOOGLE_DOCS commit");
+  }
+
+  // Dispatch link AFTER the owned completion (never link an output the job
+  // did not commit).
+  if (google.dispatchToApplicant) {
+    const sentAt = new Date();
+    await db
+      .update(dailyApplications)
+      .set({
+        mergedDocUrl: googleDocEditUrl(docId),
+        mergedDocPdfUrl: googleDocPdfUrl(docId),
+        mergedTemplateId: item.templateId ?? null,
+        documentSentAt: sentAt,
+        signatureDataUrl: null,
+        signatureConfirmedAt: null,
+        confirmedAnswers: {},
+        updatedAt: sentAt,
+      })
+      .where(eq(dailyApplications.id, item.sourceRecordId));
+  }
+  await stage(jobCtx.jobId, item.id, "ITEM_COMPLETE", t, true);
+}
+
+/**
+ * GOOGLE_DOCS job finalize: after all items are terminal, export each
+ * completed Doc as PDF (read-only), merge and upload once for batch print,
+ * then CAS-commit the job (RUNNING/PROCESSING → COMPLETED only — a watchdog
+ * FAILED or an operator CANCELLED state is never overwritten; the merged PDF
+ * is best-effort trashed on a lost race).
+ */
+async function finalizeGoogleDocsJob(jobId: string, jobCtx: JobContext): Promise<void> {
+  const google = jobCtx.googleDocs;
+  if (!google) return;
+  const finalizeStartedAt = Date.now();
+  try {
+    const completedItems = await listCompletedItemsInOrder(jobId);
+    const firstTemplate = Object.values(google.templates)[0];
+    let outputDocId: string | null = completedItems[0]?.storageKey ?? null;
+    let outputUrl: string | null = completedItems[0]?.pdfUrl ?? null;
+    let printUrl: string | null = null;
+    let printDocId: string | null = null;
+
+    if (google.batchPrint && completedItems.length > 0) {
+      const pdfBuffers: Uint8Array[] = [];
+      for (const item of completedItems) {
+        const docId = item.storageKey;
+        if (!docId) continue;
+        const exportStartedAt = Date.now();
+        pdfBuffers.push(await exportGoogleDocAsPdf(docId));
+        await stage(jobId, "", "GOOGLE_PDF_EXPORT", exportStartedAt, true);
+      }
+      const mergedPdf = await mergePdfBuffers(pdfBuffers);
+      const uploadStartedAt = Date.now();
+      const uploaded = await uploadPdfToDrive(
+        `In_hang_loat_${jobCtx.recordCount}_${jobId}.pdf`,
+        mergedPdf,
+        firstTemplate?.outputFolderId ?? null,
+      );
+      await stage(jobId, "", "GOOGLE_DRIVE_UPLOAD", uploadStartedAt, true);
+      printUrl = uploaded.webViewLink || uploaded.webContentLink;
+      printDocId = uploaded.id;
+      outputDocId = uploaded.id;
+      outputUrl = printUrl || outputUrl;
+    }
+
+    const committed = await casSyncJobCompleted(jobId, {
+      outputDocId,
+      outputUrl,
+      metadata: {
+        engine: "GOOGLE_DOCS",
+        batchPrint: google.batchPrint,
+        dispatchToApplicant: google.dispatchToApplicant,
+        outputStrategy: google.outputStrategy,
+        printUrl,
+        printDocId,
+        individualDocs: completedItems.map((item) => ({
+          itemId: item.id,
+          docId: item.storageKey ?? null,
+          docUrl: item.pdfUrl ?? null,
+        })),
+      },
+    });
+    if (!committed) {
+      // Watchdog FAILED or operator CANCELLED while we worked — never
+      // overwrite a terminal state; best-effort trash the merged PDF.
+      if (printDocId) {
+        try {
+          await createGoogleDocsService().trashFile?.(printDocId);
+        } catch (error) {
+          console.log(
+            JSON.stringify({
+              event: "google_docs_worker_orphan_trash_failed",
+              jobId,
+              fileId: printDocId.slice(0, 12),
+              error: error instanceof Error ? error.message.slice(0, 120) : String(error).slice(0, 120),
+            }),
+          );
+        }
+      }
+      console.log(JSON.stringify({ event: "google_docs_worker_commit_lost", jobId, stage: "GOOGLE_DOCS_FINALIZE" }));
+      return;
+    }
+    await stage(jobId, "", "BATCH_FINALIZE", finalizeStartedAt, true);
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    const summary = `GOOGLE_DOCS_FINALIZE_FAILED: ${message.slice(0, 500)}`;
+    // CAS non-terminal → FAILED (a CANCELLED job stays CANCELLED).
+    await casSyncJobFailed(jobId, summary, summary);
+    await stage(jobId, "", "BATCH_FINALIZE", finalizeStartedAt, false, "GOOGLE_DOCS_FINALIZE_FAILED");
+    console.log(JSON.stringify({ event: "google_docs_worker_finalize_failed", jobId, error: message.slice(0, 300) }));
   }
 }
 
@@ -512,9 +843,9 @@ export async function runJob(jobId: string): Promise<{ processed: number; failed
   const [job] = await db.select().from(mergeJobs).where(eq(mergeJobs.id, jobId)).limit(1);
   if (!job) throw new Error("job not found");
 
-  if (job.engine !== "HTML_PDF") {
-    // The worker is only the HTML/PDF consumer of the existing queue. Legacy
-    // Google Docs jobs have their own synchronous path and must remain intact.
+  if (job.engine !== "HTML_PDF" && job.engine !== "GOOGLE_DOCS") {
+    // The worker is only the HTML/PDF + GOOGLE_DOCS consumer of the existing
+    // queue. Unknown engines must not be silently claimed.
     throw new Error(`UNSUPPORTED_WORKER_ENGINE:${job.engine}`);
   }
 
@@ -523,6 +854,7 @@ export async function runJob(jobId: string): Promise<{ processed: number; failed
     renderedAt?: string;
     dispatchToApplicant?: boolean;
     signingContext?: Partial<SigningContext>;
+    googleDocs?: GoogleDocsJobContext | null;
   };
   const templates = metadata.templates ?? {};
   const parsedRenderedAt = metadata.renderedAt ? new Date(metadata.renderedAt) : new Date(job.createdAt);
@@ -531,6 +863,17 @@ export async function runJob(jobId: string): Promise<{ processed: number; failed
   // at job creation (parseSigningContext in createAsyncMergeJob); the worker
   // never re-derives or re-validates it against the wall clock.
   const signingContext: SigningContext = { ...EMPTY_SIGNING_CONTEXT, ...(metadata.signingContext ?? {}) };
+  const googleDocs = job.engine === "GOOGLE_DOCS" ? metadata.googleDocs ?? null : null;
+  if (job.engine === "GOOGLE_DOCS" && !googleDocs) {
+    // A GOOGLE_DOCS job without the frozen snapshot was created by a version
+    // that predates the async worker executor. It cannot be safely executed
+    // here — fail loudly instead of leaving it PROCESSING forever.
+    const errorSummary =
+      "GOOGLE_DOCS_METADATA_MISSING: job thiếu snapshot metadata.googleDocs (tạo bởi phiên bản cũ trước khi chuyển sang worker). Hãy chạy lại merge từ màn hình Merge.";
+    await failAllNonTerminalItems(jobId, { errorCode: "GOOGLE_DOCS_METADATA_MISSING", errorMessage: errorSummary }).catch(() => undefined);
+    await casSyncJobFailed(jobId, errorSummary, errorSummary).catch(() => undefined);
+    throw new Error(errorSummary);
+  }
   const jobCtx: JobContext = {
     jobId,
     createdBy: job.createdBy,
@@ -539,6 +882,8 @@ export async function runJob(jobId: string): Promise<{ processed: number; failed
     dispatchToApplicant: metadata.dispatchToApplicant === true,
     templates,
     signingContext,
+    googleDocs,
+    googleDocsContentCache: new Map(),
   };
 
   const jobStartedAt = Date.now();
@@ -548,13 +893,24 @@ export async function runJob(jobId: string): Promise<{ processed: number; failed
   let processed = 0;
   let failed = 0;
   const startedAt = Date.now();
+  // GOOGLE_DOCS items run sequentially (claim 1) to pace Docs/Drive writes
+  // against per-user quotas; HTML_PDF keeps the configured concurrency.
+  const claimLimit = jobCtx.googleDocs ? 1 : CONCURRENCY;
 
   // Toàn bộ phần dưới đây PHẢI kết thúc job ở trạng thái terminal (COMPLETED/
   // FAILED) — không bao giờ để merge_jobs kẹt ở PROCESSING vô thời hạn nếu có
   // lỗi bất ngờ (claimItems/recomputeJobProgress ném lỗi, DB tạm gián đoạn...).
   try {
+    // SELF-HEALING FIRST: reclaim THIS job's PROCESSING items whose lease has
+    // expired (a previous worker invocation died mid-item). Live owners
+    // heartbeat the 60s lease every ~20s, so their items are never touched;
+    // an expired lease proves the owning invocation is gone. Applies to BOTH
+    // engines — the worker is self-sufficient without waiting for a cron
+    // sweep first.
+    await reclaimStalledItems(jobId, new Date());
+
     for (let iter = 0; iter < MAX_BATCH_ITERATIONS; iter++) {
-      let items = await claimItems(jobId, CONCURRENCY);
+      let items = await claimItems(jobId, claimLimit);
 
       // claimItems trả rỗng CÓ THỂ là "hết việc thật" (bình thường, thoát loop)
       // HOẶC "bất thường" — vẫn còn item QUEUED/RETRY nhưng không claim được
@@ -568,7 +924,7 @@ export async function runJob(jobId: string): Promise<{ processed: number; failed
         let attempt = 1;
         while (items.length === 0 && shouldRetryClaim(attempt)) {
           await new Promise((r) => setTimeout(r, claimRetryDelayMs(attempt)));
-          items = await claimItems(jobId, CONCURRENCY);
+          items = await claimItems(jobId, claimLimit);
           attempt += 1;
         }
 
@@ -630,6 +986,33 @@ export async function runJob(jobId: string): Promise<{ processed: number; failed
   }
 
   const progress = await recomputeJobProgress(jobId);
+
+  // GOOGLE_DOCS: export completed Docs as PDF (batch print), merge, upload and
+  // CAS-commit the job — separate from the HTML_PDF finalize path.
+  if (jobCtx.googleDocs) {
+    if (progress.terminal) {
+      if (progress.completed > 0) {
+        await finalizeGoogleDocsJob(jobId, jobCtx);
+      } else {
+        await casSyncJobFailed(
+          jobId,
+          "Toàn bộ item FAILED (GOOGLE_DOCS).",
+          progress.failed > 0 ? "Toàn bộ item FAILED." : "Toàn bộ item FAILED.",
+        );
+      }
+    }
+    console.log(
+      JSON.stringify({
+        event: "google_docs_worker_run",
+        jobId,
+        processed,
+        failed,
+        durationMs: Date.now() - startedAt,
+        terminal: progress.terminal,
+      }),
+    );
+    return { processed, failed };
+  }
 
   // Phase 10: khi hết pending items → finalize PDF tổng + ZIP.
   // Nếu finalize lỗi → job FAILED (individual PDFs đã lưu, không mất dữ liệu).
@@ -766,14 +1149,16 @@ const server = http.createServer(async (req, res) => {
       const body = await readBody(req);
       const jobId = String(body.jobId ?? "").trim();
       if (!jobId) {
-        // Không có jobId → watchdog mode: lấy các job HTML_PDF chưa terminal
-        // (QUEUED hoặc PROCESSING). Gồm cả PROCESSING để một invocation sống
+        // Không có jobId → watchdog mode: lấy các job chưa terminal
+        // (QUEUED hoặc PROCESSING) — cả HTML_PDF lẫn GOOGLE_DOCS (executor
+        // async từ sự cố 28–29/08). Gồm cả PROCESSING để một invocation sống
         // có thể tiếp quản job của worker đã chết giữa chừng (item của nó đã
-        // được reclaim về RETRY/QUEUED bởi stale-recovery trước khi /run này).
+        // hết lease — runJob tự reclaim expired-lease items trước khi claim,
+        // nên không cần stale-recovery chạy trước /run này).
         const dueJobs = await db
           .select({ id: mergeJobs.id })
           .from(mergeJobs)
-          .where(and(inArray(mergeJobs.status, ["QUEUED", "PROCESSING"]), eq(mergeJobs.engine, "HTML_PDF")))
+          .where(and(inArray(mergeJobs.status, ["QUEUED", "PROCESSING"]), inArray(mergeJobs.engine, ["HTML_PDF", "GOOGLE_DOCS"])))
           .limit(1);
         const nextJob = dueJobs[0];
         if (!nextJob) return json(res, 200, { processed: 0, note: "no queued jobs" });

@@ -36,6 +36,8 @@ export type MergeJobProgressData = {
   completedAt?: string | null;
   outputPdfUrl?: string | null;
   outputZipUrl?: string | null;
+  /** GOOGLE_DOCS output (Google Doc edit link / merged PDF webViewLink). */
+  outputUrl?: string | null;
   batchExpiresAt?: string | null;
   errorSummary?: string | null;
   viewerRole?: string | null;
@@ -253,6 +255,16 @@ export function JobProgressPanel({ jobId, onClosed }: { jobId: string; onClosed?
           >
             <RefreshCw className="h-3.5 w-3.5" /> Retry failed ({progress.failed})
           </button>
+        )}
+        {data.outputUrl && (
+          <a
+            href={data.outputUrl}
+            target="_blank"
+            rel="noreferrer"
+            className="inline-flex items-center gap-1.5 rounded-lg bg-emerald-700 px-3 py-1.5 text-[11px] font-bold text-white hover:bg-emerald-800"
+          >
+            <FileText className="h-3.5 w-3.5" /> Mở Google Doc
+          </a>
         )}
         {data.outputPdfUrl && (
           <a
