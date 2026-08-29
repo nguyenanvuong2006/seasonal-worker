@@ -89,6 +89,10 @@ const HANDLERS: Record<string, () => Promise<Record<string, unknown>>> = {
     //    trigger. Orphaned jobs get a fresh worker dispatch here (trigger uses
     //    after(), safe to call inside this cron request), and stale PROCESSING
     //    items (dead worker) are reclaimed to RETRY.
+    // NOTE: this cron is DAILY (Vercel Hobby caps cron at 1/day). The same
+    // sweep additionally runs interactively at the start of
+    // POST /api/document-merge/merge/execute (pre-merge-recovery.ts), so a
+    // zombie is closed the next time anyone merges — never up to 24h.
     // Dynamic imports keep the worker-auth/after() modules out of any unrelated
     // module graph and out of the minimal cron route import surface.
     const { recoverStaleMergeJobs } = await import("@/lib/document-merge/stale-recovery");

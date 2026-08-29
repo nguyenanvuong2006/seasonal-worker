@@ -4,27 +4,34 @@
  *
  * Two execution engines share the merge_jobs / merge_job_records tables:
  *
- *  - GOOGLE_DOCS (default, production): SYNCHRONOUS — the HTTP request
- *    POST /api/document-merge/merge/execute does all Google Docs/Drive work
- *    inline. Items are born PENDING (normalised QUEUED) and are NEVER
- *    claimed by any worker. They only move at the very end of the request.
- *    If the function is hard-killed mid-flight (Vercel maxDuration, platform
- *    timeout, a hung Google fetch with no request timeout) the catch-block
- *    that marks FAILED never runs → job RUNNING/PROCESSING + items
- *    PENDING/QUEUED FOREVER. Nothing in the system ever revisits those rows.
+ *  - GOOGLE_DOCS: ASYNC since the 28–29/08 incident — POST /merge/execute
+ *    creates a QUEUED job + QUEUED items with a frozen googleDocs snapshot
+ *    and triggers the Cloud Run worker, which claims items (SKIP LOCKED),
+ *    heartbeats its lease and does the Google Docs/Drive work. The worker's
+ *    own runJob() first reclaims expired-lease PROCESSING items, so a worker
+ *    crash is self-healing on the next invocation.
+ *    LEGACY rows (created before the async move) have status RUNNING and
+ *    items PENDING — nothing can resume them, so they are failed loudly here
+ *    (sync-killed). Async jobs (items QUEUED/RETRY/PROCESSING) are NEVER
+ *    failed by that predicate — they are reclaimed / re-dispatched instead.
  *
  *  - HTML_PDF: ASYNC queue — Cloud Run worker claims items
  *    (FOR UPDATE SKIP LOCKED). The only trigger is the single after()
  *    fire-and-forget call right after job creation (and after retry). If that
  *    trigger dies (misconfig/auth/deployment protection) the job stays QUEUED
- *    with QUEUED items; there is NO cron/watchdog that re-dispatches merge
- *    jobs, and reclaimStalledItems()/reclaimAllStalledItems() in queue.ts had
- *    no caller anywhere in the codebase.
+ *    with QUEUED items; this module re-dispatches it.
  *
- * This module is the missing safety net for BOTH engines. It runs read-time
- * (GET /api/document-merge/jobs/[id] — the UI already polls it every 4s) and
- * from the cron handler. It only touches rows whose staleness proves the
- * owning invocation is gone, so it is idempotent and safe to run repeatedly.
+ * This module is the missing safety net for BOTH engines. It runs only through
+ * the explicit recovery actors:
+ *   - the authenticated cron watchdog (src/lib/scheduler.ts
+ *     RECOVER_STALE_MERGE_JOBS — daily Vercel cron), and
+ *   - the interactive merge-WRITE trigger (src/lib/document-merge/
+ *     pre-merge-recovery.ts, invoked by POST /api/document-merge/merge/execute
+ *     BEFORE a new job is created — because the daily cron alone can leave a
+ *     zombie visible for up to 24 hours).
+ * GET /api/document-merge/jobs/[id] stays strictly read-only. Recovery only
+ * touches rows whose staleness proves the owning invocation is gone, so it is
+ * idempotent and safe to run repeatedly.
  *
  * Every write is a SINGLE conditional SQL statement (no manual BEGIN/COMMIT),
  * which is safe on pooled/PgBouncer transaction-mode connections — the same
@@ -81,9 +88,11 @@ export async function recoverStaleMergeJob(
 }
 
 /**
- * Watchdog sweep across ALL non-terminal jobs (cron). Only HTML_PDF jobs get
- * re-dispatched (the GOOGLE_DOCS legacy path cannot be safely resumed — its
- * request state is gone — they are failed loudly instead).
+ * Watchdog sweep across ALL non-terminal jobs (cron / interactive trigger).
+ * Async worker-queue jobs (HTML_PDF and GOOGLE_DOCS) get reclaimed/re-
+ * dispatched to the worker; pure LEGACY GOOGLE_DOCS zombies (RUNNING job +
+ * PENDING items, no claimable item shape) cannot be safely resumed — their
+ * request state is gone — and are failed loudly instead.
  */
 export async function recoverStaleMergeJobs(
   opts: { now?: Date; fire?: (jobId: string) => void } = {},
@@ -112,15 +121,13 @@ async function runRecovery({ now, singleJobId, fire }: RecoveryOpts): Promise<St
   const dispatchGrace = new Date(now.getTime() - STALE_DISPATCH_MS);
   const processingGrace = new Date(now.getTime() - STALE_PROCESSING_MS);
 
-  // 1. Dead GOOGLE_DOCS synchronous jobs — decided on LAST PROGRESS (the
-  //    liveness lease), NOT on created_at wall-clock age. The active request
-  //    refreshes j.updated_at AND its items' leased_until around every long
-  //    stage (touchSyncMerge). A job is considered dead only when BOTH the job
-  //    liveness AND all of its item leases are stale AND no item is currently
-  //    COMPLETED-with-a-live-request — i.e. no progress at all for the stale
-  //    window. A large healthy batch keeps refreshing updated_at, so even at
-  //    30+ minutes it is never touched. Legacy jobs can't be resumed (no claim
-  //    step; re-running inline would duplicate Google Docs), so they fail loud.
+  // 1. Dead LEGACY GOOGLE_DOCS synchronous jobs — decided on LAST PROGRESS (the
+  //    liveness lease), NOT on created_at wall-clock age. Only the legacy
+  //    shape matches: a RUNNING/PROCESSING GOOGLE_DOCS job whose non-terminal
+  //    items are ALL PENDING/RUNNING (born under the old synchronous model —
+  //    no worker can claim those). ASYNC GOOGLE_DOCS jobs are excluded by the
+  //    NOT EXISTS guard (any QUEUED/RETRY/PROCESSING item is recoverable by
+  //    the worker), and a fresh item lease always exempts a live owner.
   const syncDead = await db.execute<Record<string, unknown>>(sql`
     /* recover-sync-killed */
     WITH dead AS (
@@ -137,6 +144,15 @@ async function runRecovery({ now, singleJobId, fire }: RecoveryOpts): Promise<St
                   AND r.status = 'PROCESSING'
                   AND r.leased_until IS NOT NULL
                   AND r.leased_until > ${now}
+             )
+         AND NOT EXISTS (
+               -- async-model job: any QUEUED/RETRY/PROCESSING item is
+               -- recoverable by the worker (claim/reclaim) — never fail the
+               -- job here. Only the pure legacy shape (all non-terminal
+               -- items PENDING/RUNNING) is a dead synchronous zombie.
+               SELECT 1 FROM merge_job_records r2
+                WHERE r2.merge_job_id = j.id
+                  AND r2.status IN ('QUEUED', 'RETRY', 'PROCESSING')
              )
          ${single}
        FOR UPDATE OF j
@@ -183,9 +199,10 @@ async function runRecovery({ now, singleJobId, fire }: RecoveryOpts): Promise<St
     result.recoveredJobIds.push(...(Array.isArray(syncRow.jobIds) ? syncRow.jobIds : []));
   }
 
-  // 2. Reclaim stale PROCESSING items of HTML_PDF jobs whose LEASE has expired
-  //    and not been renewed for the stale window. The worker now heartbeats
-  //    leased_until through EVERY long stage (data load, render, upload,
+  // 2. Reclaim stale PROCESSING items of worker-queue jobs (HTML_PDF and the
+  //    async GOOGLE_DOCS executor) whose LEASE has expired and not been
+  //    renewed for the stale window. The worker now heartbeats leased_until
+  //    through EVERY long stage (data load, render/Google calls, upload,
   //    history, dispatch), so a held-and-fresh lease proves a healthy owner is
   //    progressing; reclaim only happens once no heartbeat arrived for the
   //    full STALE_AFTER_NO_PROGRESS_MS interval. SKIP LOCKED ensures two
@@ -197,7 +214,7 @@ async function runRecovery({ now, singleJobId, fire }: RecoveryOpts): Promise<St
         FROM merge_job_records r
         JOIN merge_jobs j ON j.id = r.merge_job_id
        WHERE r.status = 'PROCESSING'
-         AND j.engine = 'HTML_PDF'
+         AND j.engine IN ('HTML_PDF', 'GOOGLE_DOCS')
          AND (r.leased_until IS NULL OR r.leased_until < ${processingGrace})
          ${singleJobId ? sql`AND r.merge_job_id = ${singleJobId}` : sql``}
        FOR UPDATE OF r
@@ -215,15 +232,15 @@ async function runRecovery({ now, singleJobId, fire }: RecoveryOpts): Promise<St
     if (!result.dispatchJobIds.includes(row.jobId)) result.dispatchJobIds.push(row.jobId);
   }
 
-  // 3. Orphaned HTML_PDF jobs: still QUEUED with QUEUED/RETRY items long
-  //    after creation but never reached by any worker (the single after()
-  //    trigger failed and there is no cron for merge jobs). Re-dispatch.
+  // 3. Orphaned worker-queue jobs (HTML_PDF and async GOOGLE_DOCS): still
+  //    QUEUED with QUEUED/RETRY items long after creation but never reached
+  //    by any worker (the single after() trigger failed). Re-dispatch.
   const orphan = await db.execute<Record<string, unknown>>(sql`
     /* recover-orphan-dispatch */
     SELECT j.id AS "jobId"
       FROM merge_jobs j
      WHERE j.status IN ('QUEUED', 'PROCESSING')
-       AND j.engine = 'HTML_PDF'
+       AND j.engine IN ('HTML_PDF', 'GOOGLE_DOCS')
        AND j.created_at < ${dispatchGrace}
        AND EXISTS (
              SELECT 1 FROM merge_job_records r

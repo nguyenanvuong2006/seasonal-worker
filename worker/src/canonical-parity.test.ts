@@ -90,8 +90,20 @@ test("worker renders exclusively from the immutable job snapshot", () => {
 test("worker fails closed and marks canonical config errors non-retryable", () => {
   assert.match(workerSource, /CANONICAL_ERROR\.SNAPSHOT_EMPTY/);
   assert.match(workerSource, /retryable: false/);
-  // No implicit substitution of another document source.
-  assert.doesNotMatch(workerSource, /getDocumentContent/);
+  // No implicit substitution of another document source ON THE HTML_PDF PATH.
+  // Since the 28–29/08 incident the worker is also the GOOGLE_DOCS executor —
+  // reading the Google Doc template is allowed ONLY inside that runner (which
+  // executes exclusively for jobs carrying the frozen googleDocs snapshot).
+  const htmlPath = workerSource.slice(
+    workerSource.indexOf("async function runItemProcessing"),
+    workerSource.indexOf("async function sha256Hex"),
+  );
+  assert.doesNotMatch(htmlPath, /getDocumentContent/, "HTML_PDF path must never read Google Docs content");
+  const googleDocsRunner = workerSource.slice(
+    workerSource.indexOf("async function runGoogleDocsItem"),
+    workerSource.indexOf("async function finalizeGoogleDocsJob"),
+  );
+  assert.match(googleDocsRunner, /getDocumentContent/, "GOOGLE_DOCS executor reads the template it snapshotted at job creation");
 });
 
 test("TEST A/B/C: worker output is byte-identical to Preview for the same snapshot", () => {

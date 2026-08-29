@@ -97,6 +97,11 @@ export const WORKER_STAGES = [
   "HISTORY_WRITE",
   "ITEM_COMPLETE",
   "BATCH_FINALIZE",
+  // GOOGLE_DOCS async engine (worker executor since the 28–29/08 incident).
+  "GOOGLE_TEMPLATE_READ",
+  "GOOGLE_DOC_CREATE",
+  "GOOGLE_PDF_EXPORT",
+  "GOOGLE_DRIVE_UPLOAD",
 ] as const;
 export type WorkerStage = (typeof WORKER_STAGES)[number];
 

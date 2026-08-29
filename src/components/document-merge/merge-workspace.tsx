@@ -3,7 +3,6 @@
 import { Component, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import {
   AlertCircle,
-  CheckCircle2,
   ChevronDown,
   ChevronUp,
   ExternalLink,
@@ -594,13 +593,7 @@ export function MergeWorkspace({
   const [isMerging, setIsMerging] = useState(false);
   const [mergeError, setMergeError] = useState<string | null>(null);
   const [diagnostic, setDiagnostic] = useState<Diagnostic | null>(null);
-  const [mergeSuccess, setMergeSuccess] = useState<{
-    jobId: string;
-    outputUrl?: string | null;
-    printUrl?: string | null;
-    dispatchedCount: number;
-  } | null>(null);
-  // --- Async engine (HTML_PDF) — Phase 11 ---
+  // --- Async engines — Phase 11 + GOOGLE_DOCS async worker (sự cố 28–29/08) ---
   const [engine, setEngine] = useState<"GOOGLE_DOCS" | "HTML_PDF">("GOOGLE_DOCS");
   const [activeJobId, setActiveJobId] = useState<string | null>(null);
 
@@ -769,9 +762,41 @@ export function MergeWorkspace({
   };
 
   // --- Phase 14: "Tạo Google Doc chỉnh sửa" cho MỘT hồ sơ ---
-  // Luôn dùng legacy Google Docs engine (editable output), không phụ thuộc
-  // feature flag HTML_PDF. Không bao giờ tự động tạo Docs cho cả batch.
+  // Luôn dùng Google Docs engine (editable output). Job giờ chạy bất đồng bộ
+  // trên Cloud Run worker — poll tới terminal rồi mở output (không giữ request).
   const [singleDocBusy, setSingleDocBusy] = useState<string | null>(null);
+
+  /**
+   * Poll GET /api/document-merge/jobs/[id] tới khi terminal (bounded ~90s).
+   * Trả về outputUrl nếu COMPLETED; ném Error nếu FAILED/CANCELLED; null nếu
+   * hết thời gian chờ (job vẫn chạy — người dùng theo dõi qua Progress UI).
+   */
+  const waitForMergeJobOutput = async (jobId: string): Promise<string | null> => {
+    const deadline = Date.now() + 90_000;
+    for (;;) {
+      try {
+        const res = await fetch(`/api/document-merge/jobs/${jobId}`, { cache: "no-store" });
+        const json = await res.json();
+        if (res.ok && typeof json === "object" && json !== null) {
+          const status = typeof json.status === "string" ? json.status : "";
+          if (status === "COMPLETED") {
+            return typeof json.outputUrl === "string" && json.outputUrl ? json.outputUrl : null;
+          }
+          if (status === "FAILED" || status === "CANCELLED") {
+            const summary =
+              typeof json.errorSummary === "string" && json.errorSummary ? json.errorSummary : `Job kết thúc với trạng thái ${status}.`;
+            throw new Error(summary);
+          }
+        }
+      } catch (error) {
+        // Network hiccup during polling — tolerate until deadline.
+        if (error instanceof Error && error.message.includes("Job kết thúc")) throw error;
+      }
+      if (Date.now() >= deadline) return null;
+      await new Promise((resolve) => setTimeout(resolve, 2000));
+    }
+  };
+
   const createEditableDoc = async (row: ApplicantRow) => {
     const effective = autoRoute
       ? templates.find((item) => item.isActive && item.documentKind === resolveDocumentKind({ declaredType: row.declaredType, dwMatch: row.dwMatch }))
@@ -796,7 +821,14 @@ export function MergeWorkspace({
       });
       const data = await res.json();
       if (!res.ok) throw new Error(data.error || data.details || "Không tạo được Google Doc.");
-      if (data.outputUrl) window.open(data.outputUrl, "_blank", "noopener");
+      if (!data.jobId) throw new Error("Không nhận được jobId từ Merge API.");
+      const outputUrl = await waitForMergeJobOutput(data.jobId);
+      if (!outputUrl) {
+        alert("Google Doc đang được tạo bởi worker — mở bảng tiến độ/lịch sử merge để xem kết quả trong giây lát.");
+        setActiveJobId(data.jobId);
+        return;
+      }
+      window.open(outputUrl, "_blank", "noopener");
       alert("Đã tạo Google Doc chỉnh sửa cho hồ sơ này.");
     } catch (err) {
       alert(err instanceof Error ? err.message : "Không tạo được Google Doc.");
@@ -817,11 +849,11 @@ export function MergeWorkspace({
     setIsMerging(true);
     setMergeError(null);
     setDiagnostic(null);
-    setMergeSuccess(null);
     setActiveJobId(null);
     try {
-      // Engine HTML_PDF → async job: trả jobId ngay, Progress UI poll 4s.
-      // Engine GOOGLE_DOCS (default) → legacy synchronous (giữ nguyên hành vi cũ).
+      // Cả 2 engine giờ đều ASYNC (GOOGLE_DOCS chạy trên Cloud Run worker từ
+      // sự cố 28–29/08): POST tạo durable job rồi trả jobId ngay — Progress
+      // UI poll 4s. HTTP request không còn chờ Google Docs/Drive.
       if (engine === "HTML_PDF") {
         const res = await fetch("/api/document-merge/jobs", {
           method: "POST",
@@ -875,12 +907,8 @@ export function MergeWorkspace({
         });
         return;
       }
-      setMergeSuccess({
-        jobId: data.jobId,
-        outputUrl: data.outputUrl,
-        printUrl: data.printUrl,
-        dispatchedCount: data.dispatchedCount ?? 0,
-      });
+      // Durable async job — Progress UI poll tới khi worker hoàn tất.
+      setActiveJobId(data.jobId);
     } catch (error) {
       setDiagnostic({
         code: "MERGE_NETWORK_ERROR",
@@ -903,42 +931,19 @@ export function MergeWorkspace({
       </div>
 
       {activeJobId && (
-        <JobProgressPanel
-          jobId={activeJobId}
-          onClosed={() => setActiveJobId(null)}
-        />
-      )}
-
-      {mergeSuccess && (
-        <div className="rounded-2xl border border-emerald-300 bg-emerald-50/80 p-5">
-          <div className="flex items-start gap-3">
-            <CheckCircle2 className="mt-0.5 h-6 w-6 text-emerald-700" />
-            <div className="flex-1">
-              <p className="font-bold text-emerald-950">Hoàn tất merge</p>
-              <p className="mt-1 text-xs text-emerald-800">
-                Job {mergeSuccess.jobId}
-                {mergeSuccess.dispatchedCount > 0
-                  ? ` — đã đẩy ${mergeSuccess.dispatchedCount} tài liệu đến hồ sơ tra cứu.`
-                  : ""}
-              </p>
-              <div className="mt-3 flex flex-wrap gap-2">
-                {mergeSuccess.printUrl && (
-                  <a href={mergeSuccess.printUrl} target="_blank" rel="noreferrer" className="inline-flex items-center gap-1 rounded-lg bg-emerald-700 px-3 py-1.5 text-xs font-bold text-white">
-                    <ExternalLink className="h-3.5 w-3.5" /> Mở file in (page break)
-                  </a>
-                )}
-                {mergeSuccess.outputUrl && !mergeSuccess.printUrl && (
-                  <a href={mergeSuccess.outputUrl} target="_blank" rel="noreferrer" className="inline-flex items-center gap-1 rounded-lg bg-emerald-700 px-3 py-1.5 text-xs font-bold text-white">
-                    <ExternalLink className="h-3.5 w-3.5" /> Mở Google Docs
-                  </a>
-                )}
-                <button type="button" onClick={onSwitchToHistory} className="rounded-lg border border-emerald-300 bg-white px-3 py-1.5 text-xs font-semibold text-emerald-800">
-                  Xem lịch sử
-                </button>
-              </div>
-            </div>
-          </div>
-        </div>
+        <>
+          <JobProgressPanel
+            jobId={activeJobId}
+            onClosed={() => setActiveJobId(null)}
+          />
+          <button
+            type="button"
+            onClick={onSwitchToHistory}
+            className="mt-2 rounded-lg border border-slate-200 bg-white px-3 py-1.5 text-xs font-semibold text-slate-600 hover:bg-slate-50"
+          >
+            Xem lịch sử merge
+          </button>
+        </>
       )}
 
       {diagnostic && <DiagnosticBox diagnostic={diagnostic} />}

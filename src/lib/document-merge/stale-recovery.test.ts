@@ -134,7 +134,7 @@ test("HTML_PDF reclaim statement keys on expired item LEASE (r.leased_until), so
   assert.ok(stmt);
   assert.match(stmt, /r\.leased_until/, "reclaim must hinge on the item lease");
   assert.match(stmt, /r\.status = 'PROCESSING'/);
-  assert.match(stmt, /j\.engine = 'HTML_PDF'/);
+  assert.match(stmt, /j\.engine IN \('HTML_PDF', 'GOOGLE_DOCS'\)/, "worker-queue engines (HTML_PDF + async GOOGLE_DOCS) reclaim on expired lease");
 });
 
 test("orphaned QUEUED HTML_PDF job is re-dispatched exactly once", async () => {
@@ -167,4 +167,99 @@ test("idempotent healthy world → zero recovery; a thrown fire() never crashes"
   });
   const res2 = await mod.recoverStaleMergeJobs({ now: NOW, fire: () => { throw new Error("trigger down"); } });
   assert.deepEqual(JSON.parse(JSON.stringify(res2.dispatchJobIds)), ["job-x"]);
+});
+
+test("LEGACY GAP — pre-#125 zombie shape (RUNNING job, PENDING items, no lease, old updated_at) SATISFIES the new recovery predicate", async () => {
+  const executeCalls: unknown[][] = [];
+  const execute = async (...args: unknown[]) => {
+    executeCalls.push(args);
+    const text = sqlTextOf(args[0]);
+    if (tag(text, "recover-sync-killed")) {
+      return { rows: [{ syncFailed: 1, itemsFailed: 2, jobIds: ["job-legacy"] }] };
+    }
+    return { rows: [] };
+  };
+  const mod = loadRecovery(execute);
+
+  // Legacy rows created by the pre-#125 execute route:
+  //   merge_jobs.status='RUNNING', engine default 'GOOGLE_DOCS',
+  //   updated_at = creation time (never refreshed), items status='PENDING'
+  //   with leased_until NULL.
+  const res = await mod.recoverStaleMergeJobs({ now: NOW });
+  assert.equal(res.syncFailed, 1, "legacy zombie must be failed loudly");
+  assert.deepEqual(JSON.parse(JSON.stringify(res.recoveredJobIds)), ["job-legacy"]);
+
+  const stmt = executeCalls.map((c) => sqlTextOf(c[0])).find((t) => tag(t, "recover-sync-killed"));
+  assert.ok(stmt, "sync-killed statement must have run");
+
+  // Engine: legacy rows have engine = default 'GOOGLE_DOCS' (NOT NULL default);
+  // COALESCE also covers a hypothetical NULL — both match the predicate.
+  assert.match(stmt, /COALESCE\(j\.engine, 'GOOGLE_DOCS'\)\s*=\s*'GOOGLE_DOCS'/, "legacy engine value must match the predicate");
+  // Status: the pre-#125 route wrote status 'RUNNING'.
+  assert.match(stmt, /j\.status IN \('RUNNING', 'PROCESSING'\)/, "legacy RUNNING status must match the predicate");
+  // Liveness: updated_at (creation-time for legacy rows) is compared against
+  // the no-progress cutoff — legacy rows are stale and get selected.
+  assert.match(stmt, /j\.updated_at </, "legacy rows are decided by updated_at liveness");
+  assert.doesNotMatch(stmt, /j\.created_at </, "staleness must not depend on created_at");
+  // Items: legacy items are PENDING with leased_until NULL — the item-fail
+  // UPDATE must cover every non-terminal item (PENDING included) and clear
+  // the (absent) lease, so no orphan QUEUED/PENDING row is left behind.
+  assert.match(stmt, /r\.status NOT IN \('COMPLETED', 'FAILED', 'CANCELLED'\)/, "legacy PENDING items must be failed too");
+  assert.match(stmt, /leased_until = NULL/, "failed items must release any lease");
+  assert.match(stmt, /STALE_SYNC_KILLED/, "legacy zombie items get the visible STALE_SYNC_KILLED code");
+});
+
+test("LEGACY GAP — the no-live-lease exemption cannot protect a legacy job (no PROCESSING item holds a fresh lease)", async () => {
+  const executeCalls: unknown[][] = [];
+  const execute = async (...args: unknown[]) => {
+    executeCalls.push(args);
+    return { rows: [] };
+  };
+  const mod = loadRecovery(execute);
+  await mod.recoverStaleMergeJobs({ now: NOW });
+
+  const stmt = executeCalls.map((c) => sqlTextOf(c[0])).find((t) => tag(t, "recover-sync-killed"));
+  assert.ok(stmt);
+  // The only exemption is an item PROCESSING with a live lease. Legacy jobs
+  // have PENDING items and leased_until NULL → the exemption cannot match →
+  // legacy jobs are never hidden from recovery.
+  assert.match(stmt, /r\.status = 'PROCESSING'/, "exemption requires a PROCESSING item");
+  assert.match(stmt, /r\.leased_until > \?/, "exemption requires a fresh lease (legacy rows have none)");
+});
+
+test("ASYNC MODEL — sync-killed NEVER fails a GOOGLE_DOCS job whose items are worker-claimable (QUEUED/RETRY/PROCESSING)", async () => {
+  const executeCalls: unknown[][] = [];
+  const execute = async (...args: unknown[]) => {
+    executeCalls.push(args);
+    return { rows: [] };
+  };
+  const mod = loadRecovery(execute);
+  await mod.recoverStaleMergeJobs({ now: NOW });
+
+  const stmt = executeCalls.map((c) => sqlTextOf(c[0])).find((t) => tag(t, "recover-sync-killed"));
+  assert.ok(stmt);
+  // Async GOOGLE_DOCS jobs are recoverable by the worker (claim/reclaim) —
+  // the legacy sync-killed predicate must exclude them via this guard.
+  assert.match(stmt, /r2\.status IN \('QUEUED', 'RETRY', 'PROCESSING'\)/, "async-model items excluded from sync-killed");
+  assert.match(stmt, /NOT EXISTS \(/, "exclusion guard present");
+});
+
+test("ASYNC MODEL — orphaned QUEUED GOOGLE_DOCS job (trigger died) is re-dispatched to the worker", async () => {
+  const executeCalls: unknown[][] = [];
+  const execute = async (...args: unknown[]) => {
+    executeCalls.push(args);
+    const text = sqlTextOf(args[0]);
+    if (tag(text, "recover-orphan-dispatch")) return { rows: [{ jobId: "job-gd-orphan" }] };
+    return { rows: [] };
+  };
+  const mod = loadRecovery(execute);
+  const fired: string[] = [];
+
+  const res = await mod.recoverStaleMergeJobs({ now: NOW, fire: (id) => fired.push(id) });
+  assert.deepEqual(JSON.parse(JSON.stringify(res.dispatchJobIds)), ["job-gd-orphan"]);
+  assert.deepEqual(JSON.parse(JSON.stringify(fired)), ["job-gd-orphan"]);
+
+  const stmt = executeCalls.map((c) => sqlTextOf(c[0])).find((t) => tag(t, "recover-orphan-dispatch"));
+  assert.ok(stmt);
+  assert.match(stmt, /j\.engine IN \('HTML_PDF', 'GOOGLE_DOCS'\)/, "orphan re-dispatch covers both worker-queue engines");
 });
