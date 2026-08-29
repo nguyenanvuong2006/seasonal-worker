@@ -77,6 +77,31 @@ const HANDLERS: Record<string, () => Promise<Record<string, unknown>>> = {
     // hiện có (Vercel Cron / cron ngoài gọi /api/cron/run) — không thêm dịch vụ mới.
     return cleanupTerminalStaging(100);
   },
+  RECOVER_STALE_MERGE_JOBS: async () => {
+    // DOCUMENT MERGE WATCHDOG:
+    //  - GOOGLE_DOCS (default) merge is SYNCHRONOUS — the HTTP request owns
+    //    RUNNING/PENDING rows and there is no worker to resume it. If the
+    //    serverless function is hard-killed mid-flight (platform timeout /
+    //    hung Google fetch) the catch that marks FAILED never runs and the
+    //    job is stuck "PROCESSING / Queued=1" forever. These are failed loudly.
+    //  - HTML_PDF is async but the ONLY dispatch is a single fire-and-forget
+    //    after() call at job creation; if it dies the QUEUED job has no other
+    //    trigger. Orphaned jobs get a fresh worker dispatch here (trigger uses
+    //    after(), safe to call inside this cron request), and stale PROCESSING
+    //    items (dead worker) are reclaimed to RETRY.
+    // Dynamic imports keep the worker-auth/after() modules out of any unrelated
+    // module graph and out of the minimal cron route import surface.
+    const { recoverStaleMergeJobs } = await import("@/lib/document-merge/stale-recovery");
+    const { triggerPdfWorker } = await import("@/lib/document-merge/worker-trigger");
+    const result = await recoverStaleMergeJobs({
+      fire: (jobId) => triggerPdfWorker(jobId),
+    });
+    return {
+      syncFailed: result.syncFailed,
+      processingReclaimed: result.processingReclaimed,
+      redispatched: result.dispatchJobIds.length,
+    };
+  },
   RECOMPUTE_REQUEST_KPI_CACHE: async () => {
     // WORKFORCE REQUEST LINKAGE (mục 9) — recompute job cho KPI cache: tính lại KPI
     // của mọi Workforce Request chưa xoá và upsert vào request_kpi_cache (có timestamp).
@@ -94,6 +119,7 @@ export const DEFAULT_SCHEDULED_JOBS: { jobKey: string; label: string; schedule: 
   { jobKey: "expire_recruitment_requests", label: "Yêu cầu tuyển dụng hết hạn → EXPIRED + Task tái phân bổ", schedule: "daily", handlerKey: "EXPIRE_RECRUITMENT_REQUESTS" },
   { jobKey: "cleanup_import_staging", label: "Dọn staging của Import Job đã hoàn tất/huỷ (>24h)", schedule: "daily", handlerKey: "CLEANUP_IMPORT_STAGING" },
   { jobKey: "recompute_request_kpi_cache", label: "Recompute KPI cache của Workforce Request", schedule: "hourly", handlerKey: "RECOMPUTE_REQUEST_KPI_CACHE" },
+  { jobKey: "recover_stale_merge_jobs", label: "Watchdog: phục hồi Merge Job bị treo (GOOGLE_DOCS kẹt PROCESSING)", schedule: "daily", handlerKey: "RECOVER_STALE_MERGE_JOBS" },
 ];
 
 /** Chạy toàn bộ job đang Active — gọi từ /api/cron/run. */

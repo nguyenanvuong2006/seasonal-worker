@@ -4,7 +4,15 @@
  * GET /api/document-merge/jobs/[id]
  *   Trả job + item-level progress (cho Progress UI Phase 7, poll 3–5s).
  *
- * POST /api/document-merge/jobs/[id]/retry  (Phase 7) — sẽ thêm ở route riêng.
+ * IMPORTANT — READ-ONLY for recovery: the UI polls this route every ~4s. It
+ * MUST NOT be the actor that fails jobs, reclaims records, or re-dispatches
+ * workers. Stale recovery runs ONLY through the explicit recovery actor (the
+ * cron watchdog, see src/lib/scheduler.ts RECOVER_STALE_MERGE_JOBS and the
+ * stale-recovery module). A GET here performs no merge-status writes and no
+ * worker trigger, so a viewer repeatedly opening/refreshing a job can never
+ * declare a legitimately-running merge dead.
+ *
+ * POST /api/document-merge/jobs/[id]/retry  (Phase 7) — route riêng.
  */
 
 import { NextResponse } from "next/server";

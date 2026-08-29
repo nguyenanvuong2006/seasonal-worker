@@ -40,6 +40,8 @@ import {
   failItem,
   finalizeJob,
   hasPendingItems,
+  heartbeatItem,
+  ITEM_LEASE_SECONDS,
   markJobProcessing,
   recomputeJobProgress,
   recordJobStage,
@@ -64,7 +66,7 @@ import { finalizeBatchOutputs } from "../../src/lib/document-merge/batch-finaliz
 import { loadDailyApplicationRecords } from "../../src/lib/document-merge/record-loader.ts";
 import { db } from "../../src/db";
 import { dailyApplications, mergeJobs, mergeTemplateVersions } from "../../src/db/schema";
-import { and, eq } from "drizzle-orm";
+import { and, eq, inArray } from "drizzle-orm";
 import { getDbIdentity } from "../../src/lib/document-merge/db-identity.ts";
 import { runClaimProbe, claimExistingJobItem } from "../../src/lib/document-merge/queue-diagnostics.ts";
 import { shouldBlockRestrictedWorkerRequest } from "../../src/lib/document-merge/worker-diag-gate.ts";
@@ -267,6 +269,59 @@ async function processItem(item: QueueItem, jobCtx: JobContext): Promise<void> {
   const templateId = item.templateId ?? "";
   const snap = jobCtx.templates[templateId] ?? Object.values(jobCtx.templates)[0];
 
+  // FULL-STAGE LIVENESS: keep the item lease fresh for the ENTIRE processing
+  // lifetime (data load, render, storage upload, history write, dispatch-link,
+  // commit), not just Chromium render. The interval renews the lease well
+  // within the 60s lease; heartbeatItem() is CAS-guarded (renews only while the
+  // row is still PROCESSING and owned by this attempt), so a heartbeat that
+  // lands after a reclaim is a no-op and a reclaimed/retried item is never
+  // extended. If a heartbeat returns 0 (lease lost → another attempt owns the
+  // item), abortSignal trips so we stop doing irreversible work and
+  // completeItem() CAS then refuses to commit (no duplicate PDF).
+  const abortController = new AbortController();
+  let lost = false;
+  const hb = setInterval(() => {
+    heartbeatItem(item.id)
+      .then((renewed) => {
+        if (!renewed && !lost) {
+          lost = true;
+          abortController.abort(new Error("LEASE_LOST"));
+        }
+      })
+      .catch(() => undefined);
+  }, Math.max(10_000, Math.floor((ITEM_LEASE_SECONDS * 1000) / 3)));
+  // Immediate first beat so a slow render can't outrun the initial claim lease.
+  heartbeatItem(item.id)
+    .then((renewed) => {
+      if (!renewed) {
+        lost = true;
+        abortController.abort(new Error("LEASE_LOST"));
+      }
+    })
+    .catch(() => undefined);
+  const stopHeartbeat = () => clearInterval(hb);
+
+  let t = Date.now();
+  void t;
+  try {
+    await runItemProcessing(item, jobCtx, { templateId, snap, abortSignal: abortController.signal });
+  } finally {
+    stopHeartbeat();
+  }
+}
+
+async function runItemProcessing(
+  item: QueueItem,
+  jobCtx: JobContext,
+  ctx: { templateId: string; snap: Parameters<typeof parseCanonicalSnapshot>[0]; abortSignal: AbortSignal },
+): Promise<void> {
+  const templateId = ctx.templateId;
+  const snap = ctx.snap;
+  const abortSignal = ctx.abortSignal;
+  const guardLost = async () => {
+    if (abortSignal.aborted) throw new Error("LEASE_LOST: item reclaimed by another worker attempt");
+  };
+
   let t = Date.now();
 
   // FAIL CLOSED: the immutable canonical snapshot is the only document source.
@@ -348,6 +403,12 @@ async function processItem(item: QueueItem, jobCtx: JobContext): Promise<void> {
   // không được "nói dối" là CHROMIUM_LAUNCH đã ok trong khi thực ra chưa
   // return. getBrowser() tự log mốc launch riêng (xem console.log bên dưới)
   // vì nó chỉ chạy 1 lần/container (cold start), không gắn với item nào.
+  // Chromium launch + page.pdf() can outlast the 60s item lease on a cold
+  // container. Lease is kept alive for the WHOLE item by the heartbeat started
+  // at the top of processItem (covers data load, render, upload, history,
+  // dispatch, commit) — not just render — so a healthy worker progressing in a
+  // non-render stage can never be reclaimed. heartbeatItem() is CAS-guarded to
+  // PROCESSING, so a stale heartbeat after reclaim is a no-op.
   t = Date.now();
   const bytes = await renderPdfBytes(rendered.html);
   await stage(jobCtx.jobId, item.id, "PDF_RENDER", t, true);
@@ -365,12 +426,16 @@ async function processItem(item: QueueItem, jobCtx: JobContext): Promise<void> {
   const sha256 = await sha256Hex(bytes);
   await stage(jobCtx.jobId, item.id, "SHA256", t, true);
 
+  // Before the irreversible storage upload: if our heartbeat lost the lease
+  // (another attempt claimed this item), stop — do not upload a second PDF.
+  await guardLost();
   t = Date.now();
   const storage = getStorageProvider();
   const stored = await storage.put(storageKey, bytes, "application/pdf");
   await stage(jobCtx.jobId, item.id, "STORAGE_UPLOAD", t, true);
 
   // Document History (mỗi PDF = 1 record riêng, retention snapshot).
+  await guardLost();
   t = Date.now();
   const history = await createDocumentHistory({
     candidateId: null,
@@ -390,6 +455,10 @@ async function processItem(item: QueueItem, jobCtx: JobContext): Promise<void> {
   });
   await linkRecordToHistory(item.id, history.id);
   await stage(jobCtx.jobId, item.id, "HISTORY_WRITE", t, true);
+
+  // Final lease check before committing links / item. If lost, the other
+  // attempt owns the item — do NOT update the applicant link or COMPLETED.
+  await guardLost();
 
   // Preserve the existing "dispatch to applicant" behaviour for HTML/PDF:
   // only an explicitly requested job updates the application link, and it
@@ -412,7 +481,10 @@ async function processItem(item: QueueItem, jobCtx: JobContext): Promise<void> {
   }
 
   t = Date.now();
-  await completeItem(item.id, {
+  // CAS complete: PROCESSING → COMPLETED only. If the lease was lost and the
+  // item was reclaimed/re-attempted, this returns 0 and we must not claim
+  // success (the other attempt commits the audited artifact).
+  const committed = await completeItem(item.id, {
     pdfUrl: stored.url,
     storageKey,
     filename,
@@ -420,6 +492,10 @@ async function processItem(item: QueueItem, jobCtx: JobContext): Promise<void> {
     sha256,
     documentHistoryId: history.id,
   });
+  if (!committed) {
+    console.log(JSON.stringify({ event: "pdf_worker_item_commit_lost", jobId: jobCtx.jobId, itemId: item.id, stage: "ITEM_COMPLETE" }));
+    throw new Error("LEASE_LOST: item no longer owned at commit");
+  }
   await stage(jobCtx.jobId, item.id, "ITEM_COMPLETE", t, true);
 }
 
@@ -690,12 +766,16 @@ const server = http.createServer(async (req, res) => {
       const body = await readBody(req);
       const jobId = String(body.jobId ?? "").trim();
       if (!jobId) {
-        // Không có jobId → xử lý lần lượt các job QUEUED/PROCESSING (watchdog mode).
-        const [nextJob] = await db
+        // Không có jobId → watchdog mode: lấy các job HTML_PDF chưa terminal
+        // (QUEUED hoặc PROCESSING). Gồm cả PROCESSING để một invocation sống
+        // có thể tiếp quản job của worker đã chết giữa chừng (item của nó đã
+        // được reclaim về RETRY/QUEUED bởi stale-recovery trước khi /run này).
+        const dueJobs = await db
           .select({ id: mergeJobs.id })
           .from(mergeJobs)
-          .where(and(eq(mergeJobs.status, "QUEUED"), eq(mergeJobs.engine, "HTML_PDF")))
+          .where(and(inArray(mergeJobs.status, ["QUEUED", "PROCESSING"]), eq(mergeJobs.engine, "HTML_PDF")))
           .limit(1);
+        const nextJob = dueJobs[0];
         if (!nextJob) return json(res, 200, { processed: 0, note: "no queued jobs" });
         const result = await runJob(nextJob.id);
         return json(res, 200, result);

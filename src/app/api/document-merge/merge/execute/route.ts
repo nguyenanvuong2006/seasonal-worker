@@ -37,8 +37,32 @@ import {
   googleDocPdfUrl,
   selectTemplateForApplicant,
 } from "@/lib/document-merge/template-routing";
+import { MergeStageTimer } from "@/lib/document-merge/merge-timing";
+import { ITEM_STATUS, JOB_STATUS } from "@/lib/document-merge/queue-types";
+import {
+  casSyncItemsCompleted,
+  casSyncItemsFailed,
+  casSyncJobCompleted,
+  casSyncJobFailed,
+  syncMergeOwnsJob,
+  touchSyncMerge,
+} from "@/lib/document-merge/queue";
 
 type MergeMode = "ONE_DOCUMENT" | "INDIVIDUAL_DOCUMENTS";
+
+/**
+ * Raised when the synchronous merge discovers it no longer owns the active job
+ * (the stale-recovery watchdog declared it dead, or an operator cancelled it).
+ * Distinct from a transient Google/DB error: terminal CAS writes will fail and
+ * any irreversible output already created is treated as an orphan (best-effort
+ * trashed) rather than committed as a successful second output.
+ */
+class OwnershipLostError extends Error {
+  constructor(public phase: string) {
+    super(`OWNERSHIP_LOST at ${phase}`);
+    this.name = "OwnershipLostError";
+  }
+}
 
 interface RecordSelection {
   entityType: "worker_profiles" | "employment_sessions" | "daily_applications";
@@ -355,15 +379,72 @@ export async function POST(request: Request) {
       })),
     );
 
+    // This is the SYNCHRONOUS Google Docs path — there is no worker/queue claim
+    // step. Establish OWNERSHIP + LIVENESS when execution begins, and keep the
+    // lease fresh around every long external stage.
+    //   - items PENDING → PROCESSING + a 60s leased_until lease
+    //     (real QUEUED → PROCESSING transition the UI can show);
+    //   - touchSyncMerge() refreshes merge_jobs.updated_at (the job's
+    //     last-progress lease) and the items' leased_until — it is CAS-guarded
+    //     to active states, so a request that lost ownership can not resurrect
+    //     a dead/cancelled job.
+    // The stale-recovery watchdog decides liveness from THIS lease (last
+    // progress), never from created_at age — a large healthy batch keeps
+    // heartbeating and is never reclaimed no matter how long it runs.
+    const leaseStartedAt = new Date();
+    const leaseUntil = new Date(leaseStartedAt.getTime() + 60_000);
+    await db
+      .update(mergeJobRecords)
+      .set({ status: ITEM_STATUS.PROCESSING, startedAt: leaseStartedAt, leasedUntil: leaseUntil })
+      .where(eq(mergeJobRecords.mergeJobId, job.id));
+    await db.update(mergeJobs).set({ updatedAt: leaseStartedAt }).where(eq(mergeJobs.id, job.id));
+
+    const timer = new MergeStageTimer(job.id);
+    timer.log("google_docs_merge_started", { recordCount: planned.length, batchPrint: shouldBatchPrint });
+
+    // Throws OwnershipLostError if the watchdog/cancellation has taken the job
+    // away — checked before any irreversible external work and before commit.
+    const assertOwnership = async (phase: string) => {
+      const owns = await syncMergeOwnsJob(job.id);
+      if (!owns) {
+        timer.log("google_docs_merge_ownership_lost", { phase });
+        throw new OwnershipLostError(phase);
+      }
+    };
+
+    // Refresh liveness around each long stage; abort if we lost the lease.
+    const heartbeat = async (phase: string) => {
+      const alive = await touchSyncMerge(job.id);
+      if (!alive) {
+        timer.log("google_docs_merge_ownership_lost", { phase });
+        throw new OwnershipLostError(phase);
+      }
+    };
+
     try {
+      await heartbeat("start");
       const docsService = createGoogleDocsService(process.env.GOOGLE_ACCESS_TOKEN);
       const templateContentCache = new Map<string, string>();
       const getTemplateContent = async (googleDocId: string) => {
         const cached = templateContentCache.get(googleDocId);
         if (cached !== undefined) return cached;
-        const content = await docsService.getDocumentContent(googleDocId);
+        await heartbeat("template_read");
+        const content = await timer.measure("GOOGLE_API", () => docsService.getDocumentContent(googleDocId));
         templateContentCache.set(googleDocId, content);
         return content;
+      };
+
+      // Outputs created during this run — tracked so that if ownership is lost
+      // after an irreversible Google/Drive write, the orphaned file can be
+      // best-effort trashed instead of silently left as a second output.
+      const createdFileIds: string[] = [];
+      const trashOrphan = async (fileId: string | null | undefined) => {
+        if (!fileId) return;
+        try {
+          await docsService.trashFile?.(fileId);
+        } catch (e) {
+          console.log(JSON.stringify({ event: "google_docs_orphan_trash_failed", jobId: job.id, fileId: fileId.slice(0, 12), error: e instanceof Error ? e.message.slice(0, 120) : String(e).slice(0, 120) }));
+        }
       };
 
       const rendered: { recordId: string; content: string; kind: string; template: MergeTemplate; fullName: string }[] =
@@ -371,28 +452,46 @@ export async function POST(request: Request) {
 
       for (let index = 0; index < planned.length; index++) {
         const item = planned[index];
+        // Liveness at the start of every candidate iteration — proves progress
+        // across a long multi-record batch.
+        await heartbeat(`candidate_${index + 1}`);
         const templateContent = await getTemplateContent(item.template.googleDocId);
         const fields = fieldsByTemplate.get(item.template.id) ?? [];
         const context = buildMergeContext(guard.session, index + 1, planned.length);
-        const resolved = resolveRecordContent(templateContent, fields, item.recordData, context);
+        const resolved = timer.measure("MAPPING_RESOLVE", () =>
+          Promise.resolve(resolveRecordContent(templateContent, fields, item.recordData, context)),
+        );
         rendered.push({
           recordId: item.recordId,
-          content: resolved.content,
+          content: (await resolved).content,
           kind: item.kind,
           template: item.template,
           fullName: String(item.recordData.fullName ?? "ung-vien"),
         });
       }
+      timer.log("google_docs_merge_rendered", { renderedCount: rendered.length });
 
       const createdByRecord = new Map<string, CreatedDocument>();
       const ensureCreated = async (item: (typeof rendered)[number]): Promise<CreatedDocument> => {
         const existing = createdByRecord.get(item.recordId);
         if (existing) return existing;
-        const created = await createMergedDocument(
-          `${item.kind}_${item.fullName}_${Date.now()}`,
-          item.content,
-          item.template.outputFolderId,
+        // Before the irreversible Google Doc copy: still own the job.
+        await heartbeat("doc_create");
+        const created = await timer.measure("GOOGLE_API", () =>
+          createMergedDocument(
+            `${item.kind}_${item.fullName}_${job.id}_${item.recordId}`,
+            item.content,
+            item.template.outputFolderId,
+          ),
         );
+        // Post-write ownership check: if the job was taken over while the
+        // external write was in flight, this is an orphan — trash it and abort
+        // rather than committing a second successful output.
+        if (!(await syncMergeOwnsJob(job.id))) {
+          await trashOrphan(created.outputDocId);
+          throw new OwnershipLostError("doc_create_after");
+        }
+        createdFileIds.push(created.outputDocId);
         createdByRecord.set(item.recordId, created);
         return created;
       };
@@ -405,23 +504,11 @@ export async function POST(request: Request) {
         templateId: string;
       }[] = [];
 
+      // Created docs (for dispatch). Links are only written to daily_applications
+      // AFTER the job CAS-commits below (never commit an output we lost).
       if (shouldDispatch) {
-        const sentAt = new Date();
         for (const item of rendered) {
           const created = await ensureCreated(item);
-          await db
-            .update(dailyApplications)
-            .set({
-              mergedDocUrl: created.outputUrl,
-              mergedDocPdfUrl: created.outputPdfUrl,
-              mergedTemplateId: item.template.id,
-              documentSentAt: sentAt,
-              signatureDataUrl: null,
-              signatureConfirmedAt: null,
-              confirmedAnswers: {},
-              updatedAt: sentAt,
-            })
-            .where(eq(dailyApplications.id, item.recordId));
           dispatched.push({
             applicationId: item.recordId,
             docUrl: created.outputUrl,
@@ -442,19 +529,30 @@ export async function POST(request: Request) {
         // 1 candidate = 1 exact copy of the source Google Docs template.
         // Only placeholder replacement writes to Docs. PDF export is read-only.
         // The PDFs are then merged server-side and uploaded once to Drive.
+        await heartbeat("pdf_export");
         const individualDocs: CreatedDocument[] = [];
         for (const item of rendered) individualDocs.push(await ensureCreated(item));
 
         const pdfBuffers: Uint8Array[] = [];
         for (const created of individualDocs) {
-          pdfBuffers.push(await exportGoogleDocAsPdf(created.outputDocId));
+          pdfBuffers.push(await timer.measure("DRIVE_PDF", () => exportGoogleDocAsPdf(created.outputDocId)));
         }
-        const mergedPdf = await mergePdfBuffers(pdfBuffers);
-        const uploadedPdf = await uploadPdfToDrive(
-          `In_hang_loat_${planned.length}_${Date.now()}.pdf`,
-          mergedPdf,
-          primaryTemplate.outputFolderId,
+        const mergedPdf = await timer.measure("DOCUMENT_RENDER", () => mergePdfBuffers(pdfBuffers));
+        await heartbeat("drive_upload");
+        const uploadedPdf = await timer.measure("DRIVE_PDF", () =>
+          uploadPdfToDrive(
+            `In_hang_loat_${planned.length}_${job.id}.pdf`,
+            mergedPdf,
+            primaryTemplate.outputFolderId,
+          ),
         );
+        // After the long upload: still own the job, otherwise the merged PDF
+        // is an orphan — best-effort trash it and abort.
+        if (!(await syncMergeOwnsJob(job.id))) {
+          await trashOrphan(uploadedPdf.id);
+          throw new OwnershipLostError("drive_upload_after");
+        }
+        createdFileIds.push(uploadedPdf.id);
 
         printUrl = uploadedPdf.webViewLink || uploadedPdf.webContentLink;
         printDocId = uploadedPdf.id;
@@ -482,31 +580,69 @@ export async function POST(request: Request) {
         })
         .filter(Boolean);
 
-      await db
-        .update(mergeJobs)
-        .set({
-          status: "COMPLETED",
-          outputDocId: outputDocId || printDocId || dispatched[0]?.docUrl || null,
-          outputUrl: outputUrl || printUrl || dispatched[0]?.docUrl || null,
-          completedAt: new Date(),
-          metadata: {
-            autoRoute: shouldAutoRoute,
-            dispatchToApplicant: shouldDispatch,
-            batchPrint: shouldBatchPrint,
-            outputStrategy: shouldBatchPrint ? "INDIVIDUAL_DOCS_PLUS_BATCH_PDF" : "INDIVIDUAL_DOCS",
-            printUrl,
-            printDocId,
-            dispatched,
-            individualDocs,
-            kinds: rendered.map((item) => item.kind),
-          },
-        })
-        .where(eq(mergeJobs.id, job.id));
+      // Final liveness check before the irreversible commit.
+      await heartbeat("commit");
 
-      await db
-        .update(mergeJobRecords)
-        .set({ status: "COMPLETED" })
-        .where(eq(mergeJobRecords.mergeJobId, job.id));
+      // CAS terminal commit: RUNNING/PROCESSING → COMPLETED only. If the
+      // watchdog declared the job FAILED or an operator CANCELLED it while we
+      // were working, this transition fails (0 rows) — we must NOT overwrite a
+      // terminal state and must NOT expose the output as a second success.
+      const committed = await casSyncJobCompleted(job.id, {
+        outputDocId: outputDocId || printDocId || dispatched[0]?.docUrl || null,
+        outputUrl: outputUrl || printUrl || dispatched[0]?.docUrl || null,
+        metadata: {
+          autoRoute: shouldAutoRoute,
+          dispatchToApplicant: shouldDispatch,
+          batchPrint: shouldBatchPrint,
+          outputStrategy: shouldBatchPrint ? "INDIVIDUAL_DOCS_PLUS_BATCH_PDF" : "INDIVIDUAL_DOCS",
+          printUrl,
+          printDocId,
+          dispatched,
+          individualDocs,
+          kinds: rendered.map((item) => item.kind),
+          // PII-free stage durations (ms) — shows where time went for a run.
+          timing: timer.summary(),
+        },
+      });
+
+      if (!committed) {
+        // Lost the race against FAILED/CANCELLED — orphan every output we made
+        // (best effort) and stop. Do not write a COMPLETED, do not link docs.
+        timer.log("google_docs_merge_commit_lost", { createdCount: createdFileIds.length });
+        for (const fid of createdFileIds) await trashOrphan(fid);
+        return NextResponse.json(
+          { error: "Merge job không còn ở trạng thái xử lý (đã bị huỷ hoặc đánh dấu thất bại). Tài liệu tạo dư đã được dọn dẹp; chạy lại merge nếu cần." },
+          { status: 409 },
+        );
+      }
+
+      // The job is now terminally COMPLETED by THIS execution — only then link
+      // outputs to the applicant records (dispatch).
+      if (shouldDispatch) {
+        const sentAt = new Date();
+        for (const item of rendered) {
+          const created = createdByRecord.get(item.recordId)!;
+          await db
+            .update(dailyApplications)
+            .set({
+              mergedDocUrl: created.outputUrl,
+              mergedDocPdfUrl: created.outputPdfUrl,
+              mergedTemplateId: item.template.id,
+              documentSentAt: sentAt,
+              signatureDataUrl: null,
+              signatureConfirmedAt: null,
+              confirmedAnswers: {},
+              updatedAt: sentAt,
+            })
+            .where(eq(dailyApplications.id, item.recordId));
+        }
+      }
+
+      timer.set("OUTPUT_SAVE", 0);
+      timer.log("google_docs_merge_completed");
+
+      // CAS items: PROCESSING → COMPLETED only (failed/cancelled stay terminal).
+      await casSyncItemsCompleted(job.id);
 
       await writeAudit(guard.session, "EXECUTE_MERGE", "merge_jobs", {
         jobId: job.id,
@@ -530,25 +666,40 @@ export async function POST(request: Request) {
         status: "COMPLETED",
       });
     } catch (mergeError) {
+      const ownershipLost = mergeError instanceof OwnershipLostError;
       const errorMessage = mergeError instanceof Error ? mergeError.message : "Unknown error";
+      timer.log("google_docs_merge_failed", {
+        error: errorMessage.slice(0, 200),
+        ownershipLost,
+      });
 
-      await db
-        .update(mergeJobs)
-        .set({
-          status: "FAILED",
-          error: errorMessage,
-          completedAt: new Date(),
-        })
-        .where(eq(mergeJobs.id, job.id));
+      if (ownershipLost) {
+        // Another actor (watchdog FAILED or operator CANCELLED) already owns
+        // the terminal state. Do NOT overwrite it, do NOT fail COMPLETED
+        // records, and do NOT return success. Outputs already created were
+        // best-effort trashed at the point ownership was detected.
+        const owns = await syncMergeOwnsJob(job.id);
+        if (!owns) {
+          timer.log("google_docs_merge_aborted_terminal_elsewhere", {});
+          return NextResponse.json(
+            { error: "Merge job đã bị huỷ hoặc đánh dấu thất bại bởi một tiến trình khác. Không ghi đè kết quả." },
+            { status: 409 },
+          );
+        }
+      }
 
-      await db
-        .update(mergeJobRecords)
-        .set({ status: "FAILED", error: errorMessage })
-        .where(eq(mergeJobRecords.mergeJobId, job.id));
+      // CAS failure: non-terminal → FAILED only (never overwrites COMPLETED or
+      // CANCELLED). Items fail only non-terminal records.
+      const summary = ownershipLost
+        ? "Tiến trình merge mất quyền xử lý (job đã bị huỷ/thất bại bởi tiến trình khác)."
+        : errorMessage.slice(0, 500);
+      await casSyncJobFailed(job.id, summary, errorMessage);
+      await casSyncItemsFailed(job.id, ownershipLost ? "OWNERSHIP_LOST" : "GOOGLE_DOCS_MERGE_FAILED", errorMessage);
 
       await writeAudit(guard.session, "MERGE_FAILED", "merge_jobs", {
         jobId: job.id,
         error: errorMessage,
+        ownershipLost,
       });
 
       return NextResponse.json({ error: "Merge failed", details: errorMessage }, { status: 500 });

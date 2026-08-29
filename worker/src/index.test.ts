@@ -56,7 +56,9 @@ async function loadWorker(
       spies.claimItems.calls += 1;
       return (spies.claimItems.results[idx] ?? []) as unknown[];
     },
-    completeItem: async () => undefined,
+    completeItem: async () => 1,
+    heartbeatItem: async () => 1,
+    ITEM_LEASE_SECONDS: 60,
     failAllNonTerminalItems: async (...args: unknown[]) => {
       spies.failAllNonTerminalItems.calls.push({ args });
       return 1;

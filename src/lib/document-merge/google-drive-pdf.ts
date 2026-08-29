@@ -1,4 +1,5 @@
 import crypto from "node:crypto";
+import { fetchWithTimeout } from "./merge-timing.ts";
 
 type TokenResponse = {
   access_token?: string;
@@ -16,7 +17,7 @@ function base64Url(input: string | Buffer): string {
 }
 
 async function exchangeRefreshToken(clientId: string, clientSecret: string, refreshToken: string): Promise<TokenResponse> {
-  const response = await fetch("https://oauth2.googleapis.com/token", {
+  const response = await fetchWithTimeout("https://oauth2.googleapis.com/token", {
     method: "POST",
     headers: { "Content-Type": "application/x-www-form-urlencoded" },
     body: new URLSearchParams({
@@ -46,7 +47,7 @@ async function exchangeServiceAccountToken(email: string, privateKey: string, im
   const signature = crypto.sign("RSA-SHA256", Buffer.from(signingInput), normalizedKey);
   const assertion = `${signingInput}.${base64Url(signature)}`;
 
-  const response = await fetch("https://oauth2.googleapis.com/token", {
+  const response = await fetchWithTimeout("https://oauth2.googleapis.com/token", {
     method: "POST",
     headers: { "Content-Type": "application/x-www-form-urlencoded" },
     body: new URLSearchParams({
@@ -107,7 +108,7 @@ async function authHeaders(): Promise<Record<string, string>> {
 }
 
 export async function exportGoogleDocAsPdf(docId: string): Promise<Uint8Array> {
-  const response = await fetch(
+  const response = await fetchWithTimeout(
     `https://www.googleapis.com/drive/v3/files/${encodeURIComponent(docId)}/export?mimeType=${encodeURIComponent("application/pdf")}`,
     { headers: await authHeaders() },
   );
@@ -138,7 +139,7 @@ export async function uploadPdfToDrive(
   const tail = Buffer.from(`\r\n--${boundary}--\r\n`, "utf8");
   const body = Buffer.concat([head, Buffer.from(bytes), tail]);
 
-  const response = await fetch(
+  const response = await fetchWithTimeout(
     "https://www.googleapis.com/upload/drive/v3/files?uploadType=multipart&fields=id,webViewLink,webContentLink&supportsAllDrives=true",
     {
       method: "POST",

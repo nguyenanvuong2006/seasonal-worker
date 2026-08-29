@@ -9,6 +9,7 @@
 
 import crypto from "node:crypto";
 import { replaceMultiplePlaceholders } from "./placeholder-extractor.ts";
+import { fetchWithTimeout } from "./merge-timing.ts";
 
 export const PAGE_BREAK_TEXT = "\n\n--- DOCUMENT_MERGE_PAGE_BREAK ---\n\n";
 
@@ -26,6 +27,13 @@ export interface GoogleDocsService {
   createDocument(title: string, content: string, folderId?: string): Promise<string>;
   documentExists(docId: string): Promise<boolean>;
   getDocumentPermissions(docId: string): Promise<string[]>;
+  /**
+   * Best-effort move a Drive file (Doc or uploaded PDF) to trash. Used to clean
+   * up an orphan output produced by a merge execution that later lost ownership
+   * (watchdog declared it dead / job cancelled) so the file is not silently left
+   * as a second successful output. Never throws — failure is logged by caller.
+   */
+  trashFile?(docId: string): Promise<void>;
 }
 
 export interface PlaceholderReplacement {
@@ -89,7 +97,7 @@ async function exchangeServiceAccountToken(
   const signature = crypto.sign("RSA-SHA256", Buffer.from(signingInput), normalizedKey);
   const assertion = `${signingInput}.${base64Url(signature)}`;
 
-  const response = await fetch("https://oauth2.googleapis.com/token", {
+  const response = await fetchWithTimeout("https://oauth2.googleapis.com/token", {
     method: "POST",
     headers: { "Content-Type": "application/x-www-form-urlencoded" },
     body: new URLSearchParams({
@@ -101,7 +109,7 @@ async function exchangeServiceAccountToken(
 }
 
 async function exchangeRefreshToken(clientId: string, clientSecret: string, refreshToken: string): Promise<TokenResponse> {
-  const response = await fetch("https://oauth2.googleapis.com/token", {
+  const response = await fetchWithTimeout("https://oauth2.googleapis.com/token", {
     method: "POST",
     headers: { "Content-Type": "application/x-www-form-urlencoded" },
     body: new URLSearchParams({
@@ -338,7 +346,7 @@ export class RealGoogleDocsService implements GoogleDocsService {
   }
 
   private async requestJson<T>(url: string, options: RequestInit = {}): Promise<T> {
-    const response = await fetch(url, {
+    const response = await fetchWithTimeout(url, {
       ...options,
       headers: {
         ...(await this.authHeader()),
@@ -357,7 +365,7 @@ export class RealGoogleDocsService implements GoogleDocsService {
         for (let attempt = 0; attempt < maxRetries; attempt++) {
           const delay = Math.min(4000, 1000 * 2 ** attempt) + Math.floor(Math.random() * 250);
           await new Promise((resolve) => setTimeout(resolve, delay));
-          const retryResponse = await fetch(url, {
+          const retryResponse = await fetchWithTimeout(url, {
             ...options,
             headers: {
               ...(await this.authHeader()),
@@ -390,7 +398,7 @@ export class RealGoogleDocsService implements GoogleDocsService {
 
   async getDocumentContent(docId: string): Promise<string> {
     const url = `${this.driveUrl}/files/${encodeURIComponent(docId)}/export?mimeType=${encodeURIComponent("text/plain")}&supportsAllDrives=true`;
-    const response = await fetch(url, { headers: await this.authHeader() });
+    const response = await fetchWithTimeout(url, { headers: await this.authHeader() });
     if (!response.ok) {
       const detail = await response.text();
       throw new Error(`Không đọc được Google Docs (${response.status}): ${detail.slice(0, 500)}`);
@@ -406,7 +414,7 @@ export class RealGoogleDocsService implements GoogleDocsService {
    */
   async exportDocumentHtml(docId: string): Promise<string> {
     const url = `${this.driveUrl}/files/${encodeURIComponent(docId)}/export?mimeType=${encodeURIComponent("text/html")}&supportsAllDrives=true`;
-    const response = await fetch(url, { headers: await this.authHeader() });
+    const response = await fetchWithTimeout(url, { headers: await this.authHeader() });
     if (!response.ok) {
       const detail = await response.text();
       throw new Error(`Không xuất được Google Docs sang HTML (${response.status}): ${detail.slice(0, 500)}`);
@@ -512,6 +520,15 @@ export class RealGoogleDocsService implements GoogleDocsService {
       `${this.driveUrl}/files/${encodeURIComponent(docId)}/permissions?fields=permissions(type)&supportsAllDrives=true`,
     );
     return (result.permissions ?? []).map((item) => item.type);
+  }
+
+  async trashFile(docId: string): Promise<void> {
+    // Best-effort: move the file to Drive trash so an orphaned merge output is
+    // not left exposed. Throws are swallowed by callers (cleanup is advisory).
+    await this.requestJson(
+      `${this.driveUrl}/files/${encodeURIComponent(docId)}?supportsAllDrives=true&fields=id`,
+      { method: "PATCH", body: JSON.stringify({ trashed: true }) },
+    );
   }
 }
 
