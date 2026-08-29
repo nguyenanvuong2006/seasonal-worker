@@ -44,11 +44,12 @@ GOOGLE_DOCS worker liveness (same lease columns as HTML_PDF):
 - **Worker self-reclaim**: `runJob()` first reclaims the job's own
   PROCESSING items whose lease expired (previous invocation died) — no cron
   sweep needed first.
-- **Cloud Scheduler watchdog (independent)**: the production deploy workflow
-  provisions a scheduler job hitting the worker `/run` watchdog every
-  5 minutes (OIDC + app-secret auth). Vercel-plan-independent; no user action
-  and no daily-cron dependency. The watchdog processes the next non-terminal
-  job of either engine.
+- **Cloud Scheduler watchdog (independent)**: idempotent provisioning
+  script `scripts/provision-merge-worker-watchdog.sh` (run once against the
+  production worker) arms a scheduler job hitting the worker `/run` watchdog
+  every 5 minutes (OIDC + app-secret auth). Vercel-plan-independent; no user
+  action and no daily-cron dependency. The watchdog processes the next
+  non-terminal job of either engine.
 - **Daily cron** (`RECOVER_STALE_MERGE_JOBS` → `recoverStaleMergeJobs`,
   idempotent, SKIP LOCKED, CAS) and the **pre-merge sweep**
   (`runPreMergeStaleRecovery()` at the start of

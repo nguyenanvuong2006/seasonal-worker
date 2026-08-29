@@ -113,9 +113,16 @@ GOOGLE_DOCS moved onto the EXISTING durable queue + Cloud Run worker
     (live owners heartbeat, so they are never touched) — the worker is
     self-sufficient without a cron sweep first;
   - worker `/run` watchdog mode now covers GOOGLE_DOCS + HTML_PDF;
-  - `deploy-worker-production.yml` now provisions a **Cloud Scheduler job
-    hitting the worker watchdog every 5 minutes** (OIDC + app-secret auth) —
-    Vercel-plan-independent, no user action, no daily-cron dependency;
+  - **Cloud Scheduler watchdog (independent, 5 min)**: idempotent
+    provisioning script `scripts/provision-merge-worker-watchdog.sh`
+    (gcloud create-or-update, OIDC + app-secret auth). Ops action: run it
+    once against the production worker after deploying this PR — from then
+    on recovery is Vercel-plan-independent, needs no user action and no
+    daily cron. (The agent sandbox's GitHub App token lacks the `workflows`
+    permission, so the provisioning ships as a script rather than a
+    deploy-workflow edit; wiring it into
+    `.github/workflows/deploy-worker-production.yml` is a trivial follow-up
+    for any maintainer with push rights.)
   - daily cron + pre-merge sweep remain as belt-and-braces backstops;
   - stale-recovery predicates updated: legacy zombies (all non-terminal items
     PENDING/RUNNING) are still failed loudly; async jobs (QUEUED/RETRY/

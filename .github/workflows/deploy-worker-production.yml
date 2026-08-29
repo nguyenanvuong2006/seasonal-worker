@@ -214,65 +214,10 @@ jobs:
           fi
           echo "✅ /diag/db-identity đã tắt đúng (404) trên production worker."
 
-      - name: Configure Cloud Scheduler merge watchdog (independent recovery, every 5 min)
-        run: |
-          set -euo pipefail
-          # INDEPENDENT RECOVERY ACTOR (sự cố 28–29/08): Vercel Hobby chỉ cho
-          # cron 1 lần/ngày — không đủ để hồi sinh job merge chết giữa chừng.
-          # Cloud Scheduler gọi worker POST /run (watchdog mode, không jobId)
-          # mỗi 5 phút; worker tự reclaim item hết lease rồi xử lý tiếp job
-          # non-terminal kế tiếp (GOOGLE_DOCS + HTML_PDF). Auth 2 lớp:
-          #   - OIDC: scheduler mượn identity runtime SA → Cloud Run IAM
-          #     (SA phải có roles/run.invoker trên service — thiết lập 1 lần).
-          #   - App secret: header Authorization: Bearer <MERGE_WORKER_SECRET>
-          #     đọc trực tiếp từ Secret Manager (không in ra log).
-          URL="${{ steps.service-url.outputs.url }}"
-          SA="${{ vars.GCP_RUN_SERVICE_ACCOUNT_PRODUCTION || 'seasonal-worker-merge-prod@seasonal-worker-505710.iam.gserviceaccount.com' }}"
-          JOB_NAME="merge-worker-watchdog"
-          SCHEDULE="*/5 * * * *"
-
-          SECRET_VALUE=$(gcloud secrets versions access latest \
-            --secret=PROD_MERGE_WORKER_SECRET --format='get(payload.data)' | base64 -d)
-          if [ -z "${SECRET_VALUE}" ]; then
-            echo "❌ Không đọc được PROD_MERGE_WORKER_SECRET từ Secret Manager — dừng lại." >&2
-            exit 1
-          fi
-          HEADERS_FILE=$(mktemp)
-          printf 'Authorization: Bearer %s\nContent-Type: application/json' "${SECRET_VALUE}" > "${HEADERS_FILE}"
-
-          # Idempotent: create hoặc update (chạy lại workflow an toàn).
-          if gcloud scheduler jobs describe "${JOB_NAME}" --location="${REGION}" --project="${PROJECT_ID}" >/dev/null 2>&1; then
-            gcloud scheduler jobs update http "${JOB_NAME}" \
-              --location="${REGION}" --project="${PROJECT_ID}" \
-              --schedule="${SCHEDULE}" --time-zone "Asia/Ho_Chi_Minh" \
-              --uri="${URL}/run" --http-method POST \
-              --oidc-service-account-email "${SA}" \
-              --oidc-token-audience "${URL}" \
-              --headers-from-file "${HEADERS_FILE}" \
-              --message-body '{}'
-            echo "✅ Cloud Scheduler watchdog '${JOB_NAME}' đã UPDATE (${SCHEDULE})."
-          else
-            gcloud scheduler jobs create http "${JOB_NAME}" \
-              --location="${REGION}" --project="${PROJECT_ID}" \
-              --schedule="${SCHEDULE}" --time-zone "Asia/Ho_Chi_Minh" \
-              --uri="${URL}/run" --http-method POST \
-              --oidc-service-account-email "${SA}" \
-              --oidc-token-audience "${URL}" \
-              --headers-from-file "${HEADERS_FILE}" \
-              --message-body '{}'
-            echo "✅ Cloud Scheduler watchdog '${JOB_NAME}' đã CREATE (${SCHEDULE})."
-          fi
-          rm -f "${HEADERS_FILE}"
-
-          echo "LƯU Ý: bật Cloud Scheduler API (gcloud services enable cloudscheduler.googleapis.com)"
-          echo "và cấp roles/run.invoker cho '${SA}' trên Cloud Run service nếu chưa có."
-
       - name: Reminder
         run: |
           echo "=================================================================="
           echo " Worker PRODUCTION đã deploy. DOCUMENT_MERGE_ENGINE trên Vercel"
           echo " VẪN LÀ GOOGLE_DOCS — workflow này KHÔNG đụng tới biến đó."
           echo " KHÔNG có job/candidate thật nào được tạo bởi workflow này."
-          echo " Cloud Scheduler merge watchdog: POST /run mỗi 5 phút (recovery"
-          echo " độc lập với Vercel cron + không cần người dùng thao tác gì)."
           echo "=================================================================="
