@@ -4,7 +4,7 @@
  *
  * KHÁC với scripts/run-migrations.mjs (thiết kế cho fresh/staging DB — chạy
  * TOÀN BỘ schema.sql + TOÀN BỘ migrations/*.sql, kể cả các migration không
- * liên quan Document Merge): script này CHỈ chạy 8 migration Document Merge
+ * liên quan Document Merge): script này CHỈ chạy 9 migration Document Merge
  * cụ thể, theo đúng thứ tự khai báo bên dưới, trên 1 database ĐÃ CÓ schema
  * nền tảng (production) — không đụng tới bất kỳ bảng/migration nào khác.
  *
@@ -12,11 +12,14 @@
  *   export DATABASE_URL=postgresql://...   # PROD_DATABASE_URL — KHÔNG dùng staging!
  *   node scripts/run-document-merge-migrations.mjs
  *
- * An toàn: cả 8 migration đều idempotent (ADD COLUMN IF NOT EXISTS / CREATE
+ * An toàn: cả 9 migration đều idempotent (ADD COLUMN IF NOT EXISTS / CREATE
  * TABLE IF NOT EXISTS / ON CONFLICT DO NOTHING / WHERE NOT EXISTS). Không
  * DROP/TRUNCATE/DELETE. Không seed dữ liệu test/verification — chỉ seed
  * permissions hệ thống + 1 template thật (Đăng ký tập nghề) ở trạng thái
- * DRAFT (chưa publish). Chạy đi chạy lại nhiều lần luôn an toàn.
+ * DRAFT (chưa publish), cộng 4 bảng mới rỗng cho candidate-document consent
+ * (PR #127 — candidate_documents/candidate_access_sessions/
+ * document_confirmations/identity_lookup_attempts, không seed dữ liệu ứng
+ * viên nào). Chạy đi chạy lại nhiều lần luôn an toàn.
  *
  * INVARIANT SỐNG CÒN (sự cố production 2026-08-24): runner định kỳ này
  * KHÔNG BAO GIỜ được chứa migration cleanup xoá dữ liệu (destructive
@@ -55,7 +58,7 @@ if (!DATABASE_URL) {
   process.exit(1);
 }
 
-// Đúng 8 migration Document Merge, ĐÚNG THỨ TỰ — KHÔNG đọc toàn bộ thư mục
+// Đúng 9 migration Document Merge, ĐÚNG THỨ TỰ — KHÔNG đọc toàn bộ thư mục
 // migrations/ (khác run-migrations.mjs) để không vô tình chạy migration của
 // tính năng khác trên production (production có lịch sử migration riêng,
 // không đảm bảo đồng bộ với danh sách file hiện tại của thư mục này).
@@ -91,6 +94,15 @@ const DOCUMENT_MERGE_MIGRATIONS = [
   // ⚠️ KHÔNG thêm "2026-08-24-trainee-registration-canonical-cleanup.sql"
   // vào đây — migration destructive (DELETE versions status != 'DRAFT'),
   // chỉ chạy MỘT LẦN trong lịch sử; chạy lại đã gây sự cố production.
+  // Candidate-document issuance + electronic consent (PR #127). Tạo mới 4
+  // bảng (candidate_documents, candidate_access_sessions,
+  // document_confirmations, identity_lookup_attempts) — CREATE TABLE/INDEX
+  // IF NOT EXISTS, không ALTER/DROP bảng hiện có, không seed dữ liệu ứng
+  // viên nào. Xem migrations/2026-09-01-candidate-document-consent.sql để
+  // biết đầy đủ constraint (self-FK supersedes_document_id ON DELETE
+  // RESTRICT, CHECK chống tự-supersede, unique index xác nhận/receipt/
+  // token_hash).
+  "2026-09-01-candidate-document-consent.sql",
 ];
 
 const client = new pg.Client({ connectionString: DATABASE_URL, ssl: { rejectUnauthorized: false } });
