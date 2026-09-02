@@ -1,0 +1,116 @@
+name: Provision Merge Worker Watchdog — PRODUCTION
+
+# Provisions (create-or-update, idempotent) the Cloud Scheduler job that
+# hits the Document Merge PRODUCTION Cloud Run worker's POST /run every 5
+# minutes in watchdog mode (no jobId) — the independent stale-job recovery
+# actor from the 28-29/08 incident (see
+# docs/MERGE-STUCK-PROCESSING-INCIDENT.md). Recovery must not depend on a
+# user clicking Merge again or a once-a-day Vercel Hobby cron.
+#
+# This workflow does NOT invent new provisioning logic — it wraps the
+# EXISTING, reviewed scripts/provision-merge-worker-watchdog.sh with the
+# same WIF auth pattern already used by deploy-worker-production.yml.
+# Creates NO candidate/job data: watchdog-mode /run only reclaims items
+# with an expired lease and dispatches the next non-terminal job; it is
+# never invoked by this workflow (only Cloud Scheduler invokes /run, on
+# its own 5-minute cadence, after this workflow finishes).
+
+on:
+  workflow_dispatch: {}
+
+permissions:
+  contents: read
+  id-token: write
+
+concurrency:
+  group: provision-watchdog-production
+  cancel-in-progress: false
+
+env:
+  REGION: ${{ vars.GCP_REGION || 'asia-southeast1' }}
+  PROJECT_ID: ${{ vars.GCP_PROJECT_ID }}
+  # Tên RIÊNG, khớp đúng service deploy-worker-production.yml đã tạo —
+  # KHÔNG suy luận tên khác cho watchdog.
+  SERVICE: ${{ vars.GCP_RUN_SERVICE_PRODUCTION || 'seasonal-worker-pdf-production' }}
+
+jobs:
+  guardrails:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Guardrail — service name không được chứa "staging"
+        run: |
+          set -euo pipefail
+          SERVICE_LOWER=$(echo "${SERVICE}" | tr '[:upper:]' '[:lower:]')
+          if [[ "${SERVICE_LOWER}" == *staging* ]]; then
+            echo "❌ GCP_RUN_SERVICE_PRODUCTION chứa 'staging' — dừng lại, đây là watchdog PRODUCTION." >&2
+            exit 1
+          fi
+          echo "✅ Service name OK: ${SERVICE}"
+
+  provision:
+    needs: guardrails
+    runs-on: ubuntu-latest
+    # Cùng ranh giới GitHub Environment 'production' như
+    # deploy-worker-production.yml — job này đọc GCP_WORKLOAD_IDENTITY_PROVIDER
+    # / GCP_SERVICE_ACCOUNT của môi trường đó, không secret nào khác.
+    environment: production
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Authenticate to Google Cloud
+        uses: google-github-actions/auth@v2
+        with:
+          # WIF only — KHÔNG dùng service-account JSON key dài hạn, giống
+          # hệt deploy-worker-production.yml.
+          workload_identity_provider: ${{ secrets.GCP_WORKLOAD_IDENTITY_PROVIDER }}
+          service_account: ${{ secrets.GCP_SERVICE_ACCOUNT }}
+
+      - name: Setup gcloud
+        uses: google-github-actions/setup-gcloud@v2
+        with:
+          project_id: ${{ env.PROJECT_ID }}
+
+      - name: Enable Cloud Scheduler API (idempotent — no-op if already enabled)
+        run: |
+          set -euo pipefail
+          gcloud services enable cloudscheduler.googleapis.com --project "${PROJECT_ID}"
+
+      - name: Resolve worker URL + runtime service account (non-secret resource identifiers)
+        id: resolve
+        run: |
+          set -euo pipefail
+          # Cùng service account production mà deploy-worker-production.yml
+          # dùng để deploy worker — KHÔNG dùng lại service account staging.
+          SA="${{ vars.GCP_RUN_SERVICE_ACCOUNT_PRODUCTION || 'seasonal-worker-merge-prod@seasonal-worker-505710.iam.gserviceaccount.com' }}"
+          URL=$(gcloud run services describe "${SERVICE}" --region "${REGION}" --project "${PROJECT_ID}" --format='value(status.url)')
+          if [ -z "${URL}" ]; then
+            echo "❌ Không lấy được Cloud Run service URL — worker production đã deploy chưa?" >&2
+            exit 1
+          fi
+          echo "worker_url=${URL}" >> "${GITHUB_OUTPUT}"
+          echo "runtime_sa=${SA}" >> "${GITHUB_OUTPUT}"
+          echo "✅ worker_url + runtime_sa đã resolve (không phải secret — chỉ định danh resource)."
+
+      - name: Grant RUNTIME_SA roles/run.invoker on the worker service (idempotent)
+        run: |
+          set -euo pipefail
+          gcloud run services add-iam-policy-binding "${SERVICE}" \
+            --region "${REGION}" --project "${PROJECT_ID}" \
+            --member "serviceAccount:${{ steps.resolve.outputs.runtime_sa }}" \
+            --role roles/run.invoker \
+            --condition=None
+
+      - name: Provision watchdog (existing script — idempotent create-or-update, no candidate data)
+        env:
+          WORKER_URL: ${{ steps.resolve.outputs.worker_url }}
+          RUNTIME_SA: ${{ steps.resolve.outputs.runtime_sa }}
+          SECRET_NAME: PROD_MERGE_WORKER_SECRET
+        run: ./scripts/provision-merge-worker-watchdog.sh --yes
+
+      - name: Verify scheduler job (schedule/target only — never prints the app secret)
+        run: |
+          set -euo pipefail
+          gcloud scheduler jobs describe merge-worker-watchdog \
+            --location "${REGION}" --project "${PROJECT_ID}" \
+            --format='table(name,schedule,state,httpTarget.uri)'
