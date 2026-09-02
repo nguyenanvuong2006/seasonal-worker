@@ -19,7 +19,7 @@ import { eq } from "drizzle-orm";
 import { requirePermission, writeAudit } from "@/lib/auth";
 import { db } from "@/db";
 import { candidateDocuments, mergeJobRecords } from "@/db/schema";
-import { canRevoke, type CandidateDocumentStatus } from "@/lib/candidate-consent/lifecycle";
+import { canRevoke, canSupersede, type CandidateDocumentStatus } from "@/lib/candidate-consent/lifecycle";
 import { POST as executeMerge } from "@/app/api/document-merge/merge/execute/route";
 
 export const runtime = "nodejs";
@@ -94,10 +94,19 @@ export async function POST(request: Request, { params }: { params: Promise<{ id:
     reason,
   });
 
+  // Defense in depth: the new document's applicationId is derived directly
+  // from oldDoc below, so this can never actually be false here — but the
+  // assertion is the single source of truth this route (and any future
+  // reissue-like path) is checked against, not an assumption left implicit.
+  const newApplicationId = oldDoc.applicationId;
+  if (!canSupersede(oldDoc.applicationId, newApplicationId)) {
+    return NextResponse.json({ error: "Không thể tạo lại hồ sơ cho ứng viên khác." }, { status: 400 });
+  }
+
   const [newDoc] = await db
     .insert(candidateDocuments)
     .values({
-      applicationId: oldDoc.applicationId,
+      applicationId: newApplicationId,
       mergeJobId: jobId,
       mergeJobRecordId: newRecord.id,
       templateId: newRecord.templateId ?? oldDoc.templateId,

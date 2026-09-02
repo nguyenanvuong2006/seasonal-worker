@@ -3,8 +3,11 @@
  *
  * STEP 2 — "HỒ SƠ CỦA BẠN". Session-cookie-gated (no CCCD/phone on this
  * request). Returns only documents whose applicationId is in the session's
- * scope, and only in a VIEWABLE-or-later state (never GENERATING/FAILED —
- * nothing to show yet — and never REVOKED/SUPERSEDED/EXPIRED).
+ * scope, and ONLY once a staff member has explicitly released them
+ * (ISSUED/VIEWED/CONFIRMED). READY is deliberately EXCLUDED — a document
+ * that has finished generating and is hashed but not yet released by staff
+ * must stay completely invisible to the candidate, same as
+ * GENERATING/FAILED/REVOKED/SUPERSEDED/EXPIRED.
  */
 
 import { NextResponse } from "next/server";
@@ -16,7 +19,7 @@ import { resolveAccessSession } from "@/lib/candidate-consent/session-store";
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
-const VISIBLE_STATUSES = ["READY", "ISSUED", "VIEWED", "CONFIRMED"] as const;
+const VISIBLE_STATUSES = ["ISSUED", "VIEWED", "CONFIRMED"] as const;
 
 export async function GET() {
   const session = await resolveAccessSession();

@@ -72,3 +72,20 @@ test("schema.ts: documentConfirmations.evidenceHmac is declared NOT NULL (matche
   const tableSlice = schema.slice(tableStart, tableEnd);
   assert.match(tableSlice, /evidenceHmac: varchar\("evidence_hmac", \{ length: 64 \}\)\.notNull\(\)/);
 });
+
+/* ============================================================ *
+ * Supersedes relation integrity — real self-referencing FK, not just an
+ * unenforced uuid column.
+ * ============================================================ */
+
+test("migration: supersedes_document_id is a REAL self-referencing FOREIGN KEY to candidate_documents(id), not a soft/logical reference", () => {
+  assert.match(migration, /supersedes_document_id uuid REFERENCES candidate_documents\(id\)/);
+});
+
+test("migration: the supersedes FK uses ON DELETE RESTRICT — a document that something else supersedes can never be hard-deleted, preserving the evidence chain", () => {
+  assert.match(migration, /supersedes_document_id uuid REFERENCES candidate_documents\(id\) ON DELETE RESTRICT/);
+});
+
+test("migration: a document is blocked from superseding itself at the DB layer (CHECK constraint), not merely by application code", () => {
+  assert.match(migration, /CONSTRAINT candidate_documents_no_self_supersede_chk CHECK \(\s*supersedes_document_id IS NULL OR supersedes_document_id <> id\s*\)/);
+});

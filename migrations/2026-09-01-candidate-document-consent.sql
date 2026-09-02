@@ -12,9 +12,19 @@
 --   - Forward-only: CREATE TABLE IF NOT EXISTS, CREATE INDEX IF NOT
 --     EXISTS. No ALTER on existing tables, no DROP, no data migration.
 --   - Idempotent: safe to run more than once.
---   - No FK constraints added (matches this repo's existing
---     merge_jobs/merge_job_records/document_history convention of
---     soft/logical references — avoids migration-order coupling).
+--   - Cross-table references (application_id, merge_job_id,
+--     merge_job_record_id, template_id) stay soft/logical — matches
+--     this repo's existing merge_jobs/merge_job_records/document_history
+--     convention, avoids migration-order coupling to those tables.
+--   - candidate_documents.supersedes_document_id IS a real, enforced
+--     self-referencing FOREIGN KEY (ON DELETE RESTRICT — a document that
+--     something else supersedes can never be hard-deleted) plus a CHECK
+--     blocking self-reference. This is a NEW table with an internal
+--     invariant worth enforcing at the DB layer, not a cross-table
+--     reference to another migration's table — same reasoning
+--     organization_units.parent_id already uses in this repo (see
+--     migrations/2026-08-17-organization-units.sql and schema.ts's
+--     matching docblock).
 --   - CHECK constraints validate enum-shaped columns at the DB layer
 --     (defense in depth alongside the application-level lifecycle
 --     guards in lib/candidate-consent/lifecycle.ts) — NOT NULL data
@@ -44,7 +54,7 @@ CREATE TABLE IF NOT EXISTS candidate_documents (
   issued_at timestamptz,
   issued_by varchar(64),
   viewed_at timestamptz,
-  supersedes_document_id uuid,
+  supersedes_document_id uuid REFERENCES candidate_documents(id) ON DELETE RESTRICT,
   revoked_at timestamptz,
   revoked_by varchar(64),
   revoke_reason text,
@@ -53,6 +63,10 @@ CREATE TABLE IF NOT EXISTS candidate_documents (
   updated_at timestamptz NOT NULL DEFAULT now(),
   CONSTRAINT candidate_documents_status_chk CHECK (
     status IN ('GENERATING', 'READY', 'ISSUED', 'VIEWED', 'CONFIRMED', 'REVOKED', 'SUPERSEDED', 'EXPIRED', 'FAILED')
+  ),
+  -- A document can never supersede itself.
+  CONSTRAINT candidate_documents_no_self_supersede_chk CHECK (
+    supersedes_document_id IS NULL OR supersedes_document_id <> id
   )
 );
 

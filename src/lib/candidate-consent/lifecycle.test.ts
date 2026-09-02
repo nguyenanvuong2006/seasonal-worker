@@ -5,6 +5,7 @@ import {
   canFinalizeToReady,
   canIssue,
   canRevoke,
+  canSupersede,
   canView,
   isTerminal,
   nextStatusOnView,
@@ -163,4 +164,30 @@ test("RACE: document is revoked AFTER the candidate already viewed it but BEFORE
   // correction, THEN the candidate's already-open tab submits confirm.
   const statusAtConfirmTime: CandidateDocumentStatus = "REVOKED"; // staff revoked between view and confirm
   assert.equal(canConfirm(statusAtConfirmTime), false);
+});
+
+/* ============================================================ *
+ * canSupersede — same-application-only correction lineage
+ * ============================================================ */
+
+test("canSupersede: allows when the new document belongs to the SAME application as the old one", () => {
+  assert.equal(canSupersede("app-1", "app-1"), true);
+});
+
+test("canSupersede: rejects candidate A's document superseding candidate B's document (cross-candidate supersede blocked)", () => {
+  assert.equal(canSupersede("app-A", "app-B"), false);
+});
+
+/* ============================================================ *
+ * READY visibility — READY must never be treated as viewable/confirmable,
+ * matching the public documents-list route's exclusion of READY from
+ * VISIBLE_STATUSES (candidate cannot see a document until staff issues it).
+ * ============================================================ */
+
+test("canView: READY is explicitly NOT viewable — a finalized-but-unissued document stays invisible", () => {
+  assert.equal(canView("READY"), false);
+});
+
+test("canConfirm: READY cannot be confirmed (it isn't even viewable yet, let alone server-proven VIEWED)", () => {
+  assert.equal(canConfirm("READY"), false);
 });

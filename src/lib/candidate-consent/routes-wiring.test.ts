@@ -21,7 +21,9 @@ const pdfRoute = readRoute("src/app/api/candidate-consent/documents/[id]/pdf/rou
 const confirmRoute = readRoute("src/app/api/candidate-consent/documents/[id]/confirm/route.ts");
 const adminListRoute = readRoute("src/app/api/document-merge/candidate-documents/route.ts");
 const finalizeRoute = readRoute("src/app/api/document-merge/candidate-documents/finalize/route.ts");
-const issueRoute = readRoute("src/app/api/document-merge/candidate-documents/issue/route.ts");
+const generateRoute = readRoute("src/app/api/document-merge/candidate-documents/generate/route.ts");
+const issueSingleRoute = readRoute("src/app/api/document-merge/candidate-documents/[id]/issue/route.ts");
+const issueReadyRoute = readRoute("src/app/api/document-merge/candidate-documents/issue-ready/route.ts");
 const revokeRoute = readRoute("src/app/api/document-merge/candidate-documents/[id]/revoke/route.ts");
 const reissueRoute = readRoute("src/app/api/document-merge/candidate-documents/[id]/reissue/route.ts");
 const evidenceRoute = readRoute("src/app/api/document-merge/candidate-documents/[id]/evidence/route.ts");
@@ -55,12 +57,15 @@ test("documents route: requires a resolved access session before returning ANY d
   assert.match(documentsRoute, /if \(!session\) \{[\s\S]{0,300}status: 401/);
 });
 
-test("documents route: filters to VISIBLE statuses only — GENERATING/READY/FAILED/REVOKED/SUPERSEDED/EXPIRED never reach the candidate", () => {
-  assert.match(documentsRoute, /VISIBLE_STATUSES = \["READY", "ISSUED", "VIEWED", "CONFIRMED"\]/);
+test("documents route: filters to VISIBLE statuses only — READY is deliberately EXCLUDED (invisible until staff issues), GENERATING/FAILED/REVOKED/SUPERSEDED/EXPIRED never reach the candidate either", () => {
+  assert.match(documentsRoute, /VISIBLE_STATUSES = \["ISSUED", "VIEWED", "CONFIRMED"\]/);
+  assert.doesNotMatch(documentsRoute, /VISIBLE_STATUSES[^\n]*"READY"/);
 });
 
 /* ============================================================ *
- * 2/3. Write-side finalizer is a SEPARATE, explicit POST — not the GET
+ * 2/3. Finalizer (GENERATING -> READY) and issuance (READY -> ISSUED) are
+ * SEPARATE, explicitly-triggered POST routes — issuance is a STAFF
+ * decision the finalizer never makes on its own.
  * ============================================================ */
 
 test("finalize route: is a POST handler (write-side only), lives at its own /finalize path distinct from the read-only list GET", () => {
@@ -68,15 +73,19 @@ test("finalize route: is a POST handler (write-side only), lives at its own /fin
   assert.doesNotMatch(finalizeRoute, /export async function GET\(/);
 });
 
-test("finalize route: GENERATING -> READY and READY -> ISSUED are TWO SEPARATE UPDATE statements with TWO SEPARATE audit events, never one combined write", () => {
+test("finalize route: NEVER writes status ISSUED and NEVER emits DOCUMENT_ISSUED — it stops strictly at READY (test 1/2/3: finalizer ends at READY, never auto-issues, READY is durable)", () => {
+  const code = stripComments(finalizeRoute);
+  assert.doesNotMatch(code, /status:\s*"ISSUED"/, "finalize route must never write ISSUED — that is issue/route.ts's job alone");
+  assert.doesNotMatch(code, /"DOCUMENT_ISSUED"/, "finalize route must never emit the DOCUMENT_ISSUED audit event");
+});
+
+test("finalize route: a successful outcome writes status READY with its own DOCUMENT_GENERATED audit, and the function ends there (no further write follows in the same try block)", () => {
   const code = stripComments(finalizeRoute);
   const readyUpdateIndex = code.indexOf('status: "READY"');
   const readyAuditIndex = code.indexOf('"DOCUMENT_GENERATED"');
-  const issuedUpdateIndex = code.indexOf('status: "ISSUED"');
-  const issuedAuditIndex = code.indexOf('"DOCUMENT_ISSUED"');
+  const catchIndex = code.indexOf("} catch (err) {");
   assert.ok(readyUpdateIndex > -1 && readyAuditIndex > readyUpdateIndex, "READY write must be followed by its own DOCUMENT_GENERATED audit");
-  assert.ok(issuedUpdateIndex > readyAuditIndex, "ISSUED write must be a LATER, separate statement after the READY audit");
-  assert.ok(issuedAuditIndex > issuedUpdateIndex, "ISSUED write must be followed by its own DOCUMENT_ISSUED audit");
+  assert.ok(catchIndex > readyAuditIndex, "nothing else must be written between the READY audit and the loop's catch block — READY is the end of this route's work");
 });
 
 test("finalize route: one candidate's finalizer error is caught per-document (try/catch inside the loop) and never aborts the batch for the others", () => {
@@ -88,18 +97,73 @@ test("finalize route: only ever consumes an ALREADY-terminal merge_job_record vi
 });
 
 /* ============================================================ *
- * 4. PDF must exist + be hashed before READY/ISSUED (finalize.ts, tested
+ * 4. PDF must exist + be hashed before READY (finalize.ts, tested
  *    behaviorally in finalize.test.ts) — here: the route never lets a
- *    document become ISSUED without going through finalizeToReady's result.
+ *    document become READY without going through finalizeToReady's result.
  * ============================================================ */
 
-test("finalize route: ISSUED write only happens after a 'ready' outcome — FAILED/unchanged outcomes never reach the ISSUED branch", () => {
+test("finalize route: READY write only happens after a 'ready' outcome — FAILED/unchanged outcomes never reach the READY branch", () => {
   const code = stripComments(finalizeRoute);
   const outcomeCheckIndex = code.indexOf('result.outcome === "unchanged"');
   const failedCheckIndex = code.indexOf('result.outcome === "failed"');
   const readyWriteIndex = code.indexOf('status: "READY"');
   assert.ok(outcomeCheckIndex > -1 && outcomeCheckIndex < readyWriteIndex, "'unchanged' must be handled (continue) before reaching the READY write");
   assert.ok(failedCheckIndex > -1 && failedCheckIndex < readyWriteIndex, "'failed' must be handled (continue) before reaching the READY write");
+});
+
+/* ============================================================ *
+ * Explicit issue endpoint(s) — READY -> ISSUED, a STAFF decision, CAS +
+ * idempotent, single and batch forms.
+ * ============================================================ */
+
+test("issue (single) route: the CAS UPDATE's WHERE clause itself requires status='READY' AND pdf_sha256/storage_key both present — eligibility is enforced atomically, not via a separate read-then-write", () => {
+  const code = stripComments(issueSingleRoute);
+  assert.match(code, /eq\(candidateDocuments\.status, "READY"\)/);
+  assert.match(code, /isNotNull\(candidateDocuments\.pdfSha256\)/);
+  assert.match(code, /isNotNull\(candidateDocuments\.storageKey\)/);
+  const whereIndex = code.indexOf(".where(");
+  const setIndex = code.indexOf(".set(");
+  assert.ok(setIndex > -1 && whereIndex > setIndex, "the CAS predicate must be on the SAME .update() statement as the write");
+});
+
+test("issue (single) route: GENERATING/FAILED/REVOKED/SUPERSEDED/EXPIRED/CONFIRMED can never match the CAS predicate — only READY does", () => {
+  assert.doesNotMatch(issueSingleRoute, /eq\(candidateDocuments\.status,\s*"(GENERATING|FAILED|REVOKED|SUPERSEDED|EXPIRED|CONFIRMED)"\)/);
+});
+
+test("issue (single) route: DOCUMENT_ISSUED is audited ONLY when the CAS UPDATE actually returned a row (updated), never on the zero-rows fallback path", () => {
+  const code = stripComments(issueSingleRoute);
+  const updatedCheckIndex = code.indexOf("if (updated) {");
+  const auditIndex = code.indexOf('"DOCUMENT_ISSUED"');
+  assert.ok(updatedCheckIndex > -1 && auditIndex > updatedCheckIndex && auditIndex < code.indexOf("if (updated)") + 400, "the audit call must be inside the `if (updated)` branch");
+});
+
+test("issue (single) route: a zero-row CAS result that turns out to already be ISSUED/VIEWED/CONFIRMED is treated as an idempotent success (double-click), not an error", () => {
+  assert.match(issueSingleRoute, /NOT_VIEWABLE_YET\.has\(current\.status\)/);
+  assert.match(issueSingleRoute, /alreadyIssued: true/);
+});
+
+test("issue (single) route: requires the dedicated candidate_documents.issue capability", () => {
+  assert.match(issueSingleRoute, /"document_merge\.candidate_documents\.issue"/);
+});
+
+test("issue-ready (batch) route: issues each READY document via the SAME atomic per-document CAS UPDATE as the single-document route — never a bulk UPDATE without the predicate", () => {
+  const code = stripComments(issueReadyRoute);
+  assert.match(code, /eq\(candidateDocuments\.status, "READY"\)/);
+  assert.match(code, /isNotNull\(candidateDocuments\.pdfSha256\)/);
+  assert.match(code, /isNotNull\(candidateDocuments\.storageKey\)/);
+});
+
+test("issue-ready (batch) route: isolates per-document failures (try/catch inside the loop) — one candidate's failure never blocks the others", () => {
+  assert.match(issueReadyRoute, /for \(const candidate of candidates\) \{[\s\S]*try \{/);
+});
+
+test("issue-ready (batch) route: a non-READY candidate in the batch is skipped with its own outcome, never issued and never throws for the whole batch", () => {
+  assert.match(issueReadyRoute, /candidate\.status !== "READY"/);
+  assert.match(issueReadyRoute, /"not_ready"/);
+});
+
+test("issue-ready (batch) route: requires the dedicated candidate_documents.issue capability", () => {
+  assert.match(issueReadyRoute, /"document_merge\.candidate_documents\.issue"/);
 });
 
 /* ============================================================ *
@@ -212,13 +276,14 @@ test("confirm route: writes CONSENT_ACCEPTED before the insert attempt, and DOCU
   assert.ok(confirmedIndex > insertIndex, "DOCUMENT_CONFIRMED must only fire after the insert succeeded");
 });
 
-test("issue route: writes DOCUMENT_GENERATION_REQUESTED (not a bare custom action name)", () => {
-  assert.match(issueRoute, /"DOCUMENT_GENERATION_REQUESTED"/);
+test("generate route: writes DOCUMENT_GENERATION_REQUESTED (not a bare custom action name)", () => {
+  assert.match(generateRoute, /"DOCUMENT_GENERATION_REQUESTED"/);
 });
 
-test("finalize route: writes DOCUMENT_GENERATED and DOCUMENT_ISSUED as the exact audit action names the mission requires", () => {
+test("finalize route writes DOCUMENT_GENERATED; issue routes write DOCUMENT_ISSUED — the exact audit action names the mission requires, from the actor actually responsible for each", () => {
   assert.match(finalizeRoute, /"DOCUMENT_GENERATED"/);
-  assert.match(finalizeRoute, /"DOCUMENT_ISSUED"/);
+  assert.match(issueSingleRoute, /"DOCUMENT_ISSUED"/);
+  assert.match(issueReadyRoute, /"DOCUMENT_ISSUED"/);
 });
 
 test("revoke route: writes DOCUMENT_REVOKED", () => {
@@ -335,19 +400,19 @@ test("request-ip helper: reads only x-forwarded-for/x-real-ip (platform-set), ne
  * 15. RBAC / capability gating
  * ============================================================ */
 
-test("issue route: requires the dedicated candidate_documents.issue capability, distinct from plain document_merge.execute", () => {
-  assert.match(issueRoute, /"document_merge\.candidate_documents\.issue"/);
+test("generate route: requires the dedicated candidate_documents.issue capability, distinct from plain document_merge.execute", () => {
+  assert.match(generateRoute, /"document_merge\.candidate_documents\.issue"/);
 });
 
-test("issue route: never sets dispatchToApplicant true — must not write to the legacy daily_applications signature fields", () => {
-  assert.match(issueRoute, /dispatchToApplicant:\s*false/);
+test("generate route: never sets dispatchToApplicant true — must not write to the legacy daily_applications signature fields", () => {
+  assert.match(generateRoute, /dispatchToApplicant:\s*false/);
 });
 
-test("issue route: one candidate_documents row is inserted per merge_job_record — N candidates in, N independent documents out, never a shared/combined row", () => {
-  assert.match(issueRoute, /records\.map\(\(record\) => \(/);
+test("generate route: one candidate_documents row is inserted per merge_job_record — N candidates in, N independent documents out, never a shared/combined row", () => {
+  assert.match(generateRoute, /records\.map\(\(record\) => \(/);
 });
 
-test("finalize route: requires the SAME issue capability as batch issuance (it is the async continuation of that same admin intent)", () => {
+test("finalize route: requires the SAME issue capability as generate/issue (it is the async continuation of that admin intent, still gated the same way)", () => {
   assert.match(finalizeRoute, /"document_merge\.candidate_documents\.issue"/);
 });
 
@@ -376,12 +441,31 @@ test("evidence route: gated by a DIFFERENT, stronger capability than status view
  *     (this file only proves the NEW routes didn't touch that code).
  * ============================================================ */
 
-test("issue/finalize/reissue routes reuse merge/execute IN-PROCESS — none of them re-implement job creation, worker triggering, or CAS logic", () => {
+test("generate/reissue routes reuse merge/execute IN-PROCESS — none of them re-implement job creation, worker triggering, or CAS logic", () => {
   for (const [name, code] of [
-    ["issue", issueRoute],
+    ["generate", generateRoute],
     ["reissue", reissueRoute],
   ] as const) {
     assert.match(code, /POST as executeMerge/, `${name} route must reuse the existing hardened merge/execute handler`);
     assert.doesNotMatch(code, /triggerPdfWorker|FOR UPDATE SKIP LOCKED/, `${name} route must not reimplement worker-trigger/CAS logic`);
   }
+});
+
+/* ============================================================ *
+ * Supersedes relation integrity (self-referencing FK + app-level guard)
+ * ============================================================ */
+
+test("reissue route: derives the new document's applicationId from the SAME fetched old-document row and asserts canSupersede() before insert — cross-candidate supersede is checked, not merely assumed", () => {
+  const code = stripComments(reissueRoute);
+  assert.match(code, /canSupersede\(oldDoc\.applicationId, newApplicationId\)/);
+  const assertIndex = code.indexOf("canSupersede(");
+  const insertIndex = code.indexOf(".insert(candidateDocuments)");
+  assert.ok(assertIndex > -1 && assertIndex < insertIndex, "the canSupersede assertion must run BEFORE the new document is inserted");
+});
+
+test("schema.ts: candidateDocuments.supersedesDocumentId is declared as a PLAIN column (no drizzle .references()) — the REAL self-referencing FK lives in the migration SQL, same convention as organizationUnits.parentId", () => {
+  const schema = readRoute("src/db/schema.ts");
+  const columnLine = schema.match(/supersedesDocumentId: uuid\("supersedes_document_id"\)[^,]*,/)?.[0] ?? "";
+  assert.ok(columnLine.length > 0, "supersedesDocumentId column must exist in schema.ts");
+  assert.doesNotMatch(columnLine, /\.references\(/, "drizzle column must stay plain — matches the documented repo convention for self-referencing FKs");
 });

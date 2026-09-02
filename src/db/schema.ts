@@ -1756,6 +1756,12 @@ export const candidateDocuments = pgTable(
     issuedAt: timestamp("issued_at", { withTimezone: true }),
     issuedBy: varchar("issued_by", { length: 64 }),
     viewedAt: timestamp("viewed_at", { withTimezone: true }),
+    // self-reference — real FK (REFERENCES candidate_documents(id) ON DELETE
+    // RESTRICT, plus a CHECK against self-reference) lives in the migration
+    // SQL, same convention as organizationUnits.parentId /
+    // planningPeriods.parentPeriodId — see that docblock for why the
+    // drizzle column itself stays plain uuid (avoids a circular
+    // declaration referencing the table from inside its own definition).
     supersedesDocumentId: uuid("supersedes_document_id"),
     revokedAt: timestamp("revoked_at", { withTimezone: true }),
     revokedBy: varchar("revoked_by", { length: 64 }),

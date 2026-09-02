@@ -85,6 +85,19 @@ export function nextStatusOnView(status: CandidateDocumentStatus): CandidateDocu
   return status === "ISSUED" ? "VIEWED" : status;
 }
 
+/**
+ * A replacement document may supersede an old one ONLY when both belong to
+ * the SAME application — a document must never be able to supersede another
+ * candidate's document. The reissue route derives both ids from the SAME
+ * fetched old-document row, so this is structurally unreachable there
+ * today; this function is the explicit, tested assertion the route calls
+ * anyway (defense in depth, and a single source of truth if a future
+ * reissue-like path is added elsewhere).
+ */
+export function canSupersede(oldDocumentApplicationId: string, newDocumentApplicationId: string): boolean {
+  return oldDocumentApplicationId === newDocumentApplicationId;
+}
+
 export interface AccessSessionScope {
   revokedAtMs: number | null;
   expiresAtMs: number;

@@ -1,21 +1,27 @@
 /**
  * POST /api/document-merge/candidate-documents/finalize
  *
- * THE write-side actor for GENERATING -> READY -> ISSUED. Never triggered by
- * a GET — this is an explicit, deliberate, mutating admin action (the admin
- * UI polls THIS endpoint, not the read-only status GET, while any document
- * is still GENERATING).
+ * THE write-side actor for GENERATING -> READY. Never triggered by a GET —
+ * this is an explicit, deliberate, mutating admin action (the admin UI
+ * polls THIS endpoint, not the read-only status GET, while any document is
+ * still GENERATING).
+ *
+ * STOPS AT READY. This route NEVER issues a document to the candidate —
+ * READY and ISSUED are separate business decisions made by separate actors:
+ * finalization is a SYSTEM decision ("the PDF exists and is hashed"),
+ * issuance is a STAFF decision ("release it to this candidate now"), made
+ * explicitly via POST .../[id]/issue or its batch form. A document sitting
+ * at READY is durable and stays invisible to the candidate for as long as
+ * staff leaves it there.
  *
  * For each GENERATING candidate_document (optionally scoped to `ids` in the
  * body): checks its linked merge_job_record via the ALREADY-hardened async
  * merge pipeline (never re-renders/re-triggers generation itself — this
  * route only ever CONSUMES a finished item). COMPLETED -> materializes the
  * immutable PDF+SHA-256 (finalize.ts), writes candidate_documents to READY
- * (own audit event DOCUMENT_GENERATED), then immediately releases it to
- * ISSUED as a SEPARATE write + SEPARATE audit event (DOCUMENT_ISSUED) — the
- * two transitions are never collapsed into one UPDATE. FAILED -> writes
- * candidate_documents to FAILED with the error, isolated per document (one
- * candidate's failure never blocks another's finalization).
+ * (own audit event DOCUMENT_GENERATED). FAILED -> writes candidate_documents
+ * to FAILED with the error, isolated per document (one candidate's failure
+ * never blocks another's finalization).
  */
 
 import { NextResponse } from "next/server";
@@ -146,21 +152,9 @@ export async function POST(request: Request) {
         applicationId: doc.applicationId,
         pdfSha256: result.pdfSha256,
       });
-
-      // READY -> ISSUED — a SEPARATE write + SEPARATE audit event. Staff
-      // already expressed release intent via "Tạo & gửi hồ sơ xác nhận";
-      // this finalize route is that intent's async continuation, not a new
-      // decision, so no extra manual click is required per document.
-      const issuedAt = new Date();
-      await db
-        .update(candidateDocuments)
-        .set({ status: "ISSUED", issuedAt, issuedBy: guard.session.username, updatedAt: issuedAt })
-        .where(eq(candidateDocuments.id, doc.id));
-      await writeAudit(guard.session, "DOCUMENT_ISSUED", "candidate_documents", {
-        candidateDocumentId: doc.id,
-        applicationId: doc.applicationId,
-      });
-      results[results.length - 1] = { id: doc.id, outcome: "issued" };
+      // STOP HERE. No auto-issue — READY is durable; a separate, explicit
+      // staff action (POST .../[id]/issue or its batch form) is required
+      // before the candidate can see anything.
     } catch (err) {
       results.push({ id: doc.id, outcome: "error" });
       await db

@@ -844,22 +844,26 @@ export function MergeWorkspace({
   };
 
   /**
-   * "Tạo & gửi hồ sơ xác nhận" — the individual-document Xác nhận điện tử
-   * workflow (candidate later reviews + confirms at the public lookup page).
-   * Separate from execute()/"Đẩy tài liệu merge" below, which is the older
+   * "Tạo hồ sơ" — the individual-document Xác nhận điện tử workflow
+   * (candidate later reviews + confirms at the public lookup page). This
+   * ONLY requests generation (GENERATING -> READY, once the async merge
+   * pipeline + finalizer finish) — it never releases anything to a
+   * candidate. Releasing is a SEPARATE, explicit "Phát hành" action in the
+   * status panel below, once a document reaches SẴN SÀNG (READY). Separate
+   * from execute()/"Đẩy tài liệu merge" further down, which is the older
    * single-signature-canvas flow and does not create immutable, hashed,
    * per-candidate documents.
    */
-  const issueCandidateDocuments = async () => {
+  const generateCandidateDocuments = async () => {
     if (selectedIds.size === 0) {
-      setIssueError("Chọn danh sách ứng viên trước khi tạo & gửi hồ sơ xác nhận.");
+      setIssueError("Chọn danh sách ứng viên trước khi tạo hồ sơ xác nhận.");
       return;
     }
     setIssuing(true);
     setIssueError(null);
     setIssueResult(null);
     try {
-      const res = await fetch("/api/document-merge/candidate-documents/issue", {
+      const res = await fetch("/api/document-merge/candidate-documents/generate", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
@@ -1239,23 +1243,25 @@ export function MergeWorkspace({
             <div className="rounded-lg border border-indigo-200 bg-indigo-50 p-3">
               <p className="text-[11px] font-bold text-indigo-900">Hồ sơ xác nhận điện tử (mới)</p>
               <p className="mt-0.5 text-[10px] text-indigo-700">
-                Tạo MỘT PDF riêng, bất biến, có mã băm SHA-256 cho MỖI ứng viên đã chọn. Ứng viên tự xem + tích
-                &quot;Xác nhận đồng ý&quot; tại trang tra cứu công khai — khác với &quot;Đẩy tài liệu merge&quot; ở trên (chữ ký vẽ tay,
-                dùng chung 1 trường).
+                Tạo MỘT PDF riêng, bất biến, có mã băm SHA-256 cho MỖI ứng viên đã chọn — khác với &quot;Đẩy tài liệu
+                merge&quot; ở trên (chữ ký vẽ tay, dùng chung 1 trường). Sau khi tạo, hồ sơ ở trạng thái{" "}
+                <b>SẴN SÀNG</b> nhưng ứng viên CHƯA thấy được — bấm <b>Phát hành</b> ở danh sách &quot;Hồ sơ xác nhận
+                điện tử&quot; bên dưới khi bạn thực sự muốn gửi cho ứng viên.
               </p>
               <button
                 type="button"
-                onClick={() => void issueCandidateDocuments()}
+                onClick={() => void generateCandidateDocuments()}
                 disabled={issuing || selectedIds.size === 0 || !templateReady}
                 className="mt-2 inline-flex w-full items-center justify-center gap-1.5 rounded-lg bg-indigo-700 py-2.5 text-xs font-bold text-white shadow-sm hover:bg-indigo-800 disabled:opacity-50"
               >
                 <ShieldCheck className="h-3.5 w-3.5" />
-                {issuing ? "Đang tạo & gửi..." : `Tạo & gửi hồ sơ xác nhận (${selectedIds.size})`}
+                {issuing ? "Đang tạo..." : `Tạo hồ sơ xác nhận (${selectedIds.size})`}
               </button>
               {issueError && <p className="mt-2 rounded-lg bg-red-50 p-2 text-[11px] text-red-700">{issueError}</p>}
               {issueResult && (
                 <p className="mt-2 rounded-lg bg-emerald-50 p-2 text-[11px] text-emerald-800">
-                  Đã xếp hàng tạo {issueResult.total} hồ sơ xác nhận. Xem trạng thái tại danh sách &quot;Hồ sơ xác nhận điện tử&quot;.
+                  Đã xếp hàng tạo {issueResult.total} hồ sơ xác nhận. Xem trạng thái tại danh sách &quot;Hồ sơ xác nhận điện tử&quot; —
+                  nhớ bấm <b>Phát hành</b> khi hồ sơ chuyển sang SẴN SÀNG.
                 </p>
               )}
             </div>

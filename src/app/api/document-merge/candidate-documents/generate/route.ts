@@ -1,11 +1,20 @@
 /**
- * POST /api/document-merge/candidate-documents/issue
+ * POST /api/document-merge/candidate-documents/generate
  *
- * "Tạo & gửi hồ sơ xác nhận" — admin selects N candidates, this creates N
- * INDEPENDENT candidate_documents rows (one per candidate — never a combined
+ * "Tạo hồ sơ" — admin selects N candidates, this creates N INDEPENDENT
+ * candidate_documents rows (one per candidate — never a combined
  * multi-candidate PDF) and drives their generation through the EXISTING,
  * already-hardened async merge pipeline (merge_jobs/merge_job_records,
  * Cloud Run worker claim/lease/CAS — see docs/MERGE-ZOMBIE-INCIDENT-*).
+ *
+ * THIS ROUTE ONLY REQUESTS GENERATION. It never releases anything to a
+ * candidate: rows land at GENERATING here, the write-side finalizer
+ * (POST .../finalize) advances a completed one to READY, and a SEPARATE,
+ * explicit staff action (POST .../[id]/issue or its batch form) is what
+ * actually makes a document visible to the candidate. Renamed from
+ * "issue" to "generate" specifically so the name stops implying automatic
+ * release — "Tạo hồ sơ" (create) and "Phát hành" (release) are two
+ * distinct business decisions, made by two distinct actions.
  *
  * Reuses `/api/document-merge/merge/execute` IN-PROCESS (direct function
  * call, same request/AsyncLocalStorage context — so requirePermission's
@@ -50,7 +59,7 @@ export async function POST(request: Request) {
     ? [...new Set(body.applicationIds.filter((v): v is string => typeof v === "string" && v.length > 0))]
     : [];
   if (applicationIds.length === 0) {
-    return NextResponse.json({ error: "Cần chọn ít nhất 1 hồ sơ để tạo & gửi." }, { status: 400 });
+    return NextResponse.json({ error: "Cần chọn ít nhất 1 hồ sơ để tạo hồ sơ xác nhận." }, { status: 400 });
   }
 
   const templateId = typeof body.templateId === "string" && body.templateId.length > 0 ? body.templateId : undefined;
