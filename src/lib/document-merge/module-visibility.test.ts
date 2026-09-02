@@ -7,10 +7,20 @@ import { canSeeTab, DOCUMENT_MERGE_PERMISSION_KEYS, firstPermittedTab, hasAnyDoc
  * gated on document_merge.view as a parent/gateway permission.
  * ------------------------------------------------------------------ */
 
-test("DOCUMENT_MERGE_PERMISSION_KEYS reads the canonical catalog directly — the 5 known keys, no duplication", () => {
+test("DOCUMENT_MERGE_PERMISSION_KEYS reads the canonical catalog directly — the 9 known keys, no duplication", () => {
   assert.deepEqual(
     [...DOCUMENT_MERGE_PERMISSION_KEYS].sort(),
-    ["document_merge.execute", "document_merge.history.delete", "document_merge.history.view", "document_merge.templates.manage", "document_merge.view"].sort(),
+    [
+      "document_merge.execute",
+      "document_merge.history.delete",
+      "document_merge.history.view",
+      "document_merge.templates.manage",
+      "document_merge.view",
+      "document_merge.candidate_documents.issue",
+      "document_merge.candidate_documents.revoke",
+      "document_merge.candidate_documents.view_status",
+      "document_merge.candidate_documents.view_evidence",
+    ].sort(),
   );
 });
 

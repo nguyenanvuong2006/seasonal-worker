@@ -1709,3 +1709,138 @@ export const pdfFieldPositions = pgTable(
 
 export type PdfTemplateVersion = typeof pdfTemplateVersions.$inferSelect;
 export type PdfFieldPosition = typeof pdfFieldPositions.$inferSelect;
+
+/* ============================================================
+   CANDIDATE DOCUMENT ISSUANCE + ZERO-COST ELECTRONIC CONSENT
+   ---------------------------------------------------------------
+   candidate_documents: MỘT bản PDF cá nhân đã phát hành cho MỘT ứng
+   viên (application). Bất biến sau ISSUED — pdf_sha256 chốt đúng
+   file đã phát hành; mọi thay đổi sau đó phải tạo document MỚI
+   (supersedes_document_id), không bao giờ ghi đè file cũ.
+   Tái sử dụng merge_job_records làm nguồn sinh PDF thật (worker đã
+   xử lý claim/lease/CAS) — merge_job_record_id chỉ tham chiếu, không
+   sao chép lại nội dung.
+
+   candidate_access_sessions: phiên truy cập ẩn danh sau khi xác minh
+   CCCD+SĐT — trình duyệt chỉ giữ token ngẫu nhiên (opaque), server chỉ
+   lưu hash. scoped_application_ids chốt NGAY tại lúc xác minh — không
+   bao giờ mở rộng thêm trong đời phiên (đăng nhập lại nếu có hồ sơ mới).
+
+   document_confirmations: bằng chứng "Xác nhận đồng ý" — CHƯA PHẢI chữ
+   ký số/PKI. unique(candidate_document_id) là chốt an toàn "tối đa 1
+   xác nhận thành công/document" (đồng thời chống double-submit/race).
+
+   identity_lookup_attempts: rate-limit tra cứu công khai, lưu Postgres
+   (không thêm dịch vụ trả phí) — key là HMAC(CCCD+SĐT hoặc IP), không
+   bao giờ lưu CCCD/SĐT dạng thô trong bảng này.
+   ============================================================ */
+
+export const candidateDocuments = pgTable(
+  "candidate_documents",
+  {
+    id: uuid("id").defaultRandom().primaryKey(),
+    applicationId: uuid("application_id").notNull(),
+    mergeJobId: uuid("merge_job_id"),
+    mergeJobRecordId: uuid("merge_job_record_id"),
+    templateId: uuid("template_id"),
+    templateVersion: integer("template_version"),
+    documentKind: varchar("document_kind", { length: 32 }).notNull().default("GENERIC"),
+    filename: varchar("filename", { length: 255 }),
+    storageProvider: varchar("storage_provider", { length: 32 }),
+    storageKey: text("storage_key"),
+    fileSize: bigint("file_size", { mode: "number" }),
+    pdfSha256: varchar("pdf_sha256", { length: 64 }),
+    status: varchar("status", { length: 16 }).notNull().default("GENERATING"),
+    // GENERATING | READY | ISSUED | VIEWED | CONFIRMED | REVOKED | SUPERSEDED | EXPIRED | FAILED
+    generatedAt: timestamp("generated_at", { withTimezone: true }),
+    issuedAt: timestamp("issued_at", { withTimezone: true }),
+    issuedBy: varchar("issued_by", { length: 64 }),
+    viewedAt: timestamp("viewed_at", { withTimezone: true }),
+    supersedesDocumentId: uuid("supersedes_document_id"),
+    revokedAt: timestamp("revoked_at", { withTimezone: true }),
+    revokedBy: varchar("revoked_by", { length: 64 }),
+    revokeReason: text("revoke_reason"),
+    errorMessage: text("error_message"),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+    updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [
+    index("candidate_document_application_idx").on(t.applicationId),
+    index("candidate_document_status_idx").on(t.status),
+    index("candidate_document_merge_job_record_idx").on(t.mergeJobRecordId),
+  ],
+);
+
+export const candidateAccessSessions = pgTable(
+  "candidate_access_sessions",
+  {
+    id: uuid("id").defaultRandom().primaryKey(),
+    tokenHash: varchar("token_hash", { length: 64 }).notNull(),
+    cccdHmac: varchar("cccd_hmac", { length: 64 }).notNull(),
+    scopedApplicationIds: jsonb("scoped_application_ids").$type<string[]>().notNull().default([]),
+    identityVerificationMethod: varchar("identity_verification_method", { length: 32 })
+      .notNull()
+      .default("CCCD_PHONE"),
+    verifiedAt: timestamp("verified_at", { withTimezone: true }).notNull(),
+    expiresAt: timestamp("expires_at", { withTimezone: true }).notNull(),
+    revokedAt: timestamp("revoked_at", { withTimezone: true }),
+    lastUsedAt: timestamp("last_used_at", { withTimezone: true }),
+    ipAddress: varchar("ip_address", { length: 64 }),
+    userAgent: text("user_agent"),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [
+    uniqueIndex("candidate_access_session_token_uq").on(t.tokenHash),
+    index("candidate_access_session_cccd_idx").on(t.cccdHmac),
+    index("candidate_access_session_expires_idx").on(t.expiresAt),
+  ],
+);
+
+export const documentConfirmations = pgTable(
+  "document_confirmations",
+  {
+    id: uuid("id").defaultRandom().primaryKey(),
+    candidateDocumentId: uuid("candidate_document_id").notNull(),
+    applicationId: uuid("application_id").notNull(),
+    accessSessionId: uuid("access_session_id").notNull(),
+    pdfSha256: varchar("pdf_sha256", { length: 64 }).notNull(),
+    consentVersion: varchar("consent_version", { length: 16 }).notNull(),
+    consentText: text("consent_text").notNull(),
+    consentTextHash: varchar("consent_text_hash", { length: 64 }).notNull(),
+    identityVerificationMethod: varchar("identity_verification_method", { length: 32 }).notNull(),
+    identityVerifiedAt: timestamp("identity_verified_at", { withTimezone: true }).notNull(),
+    confirmedAtServer: timestamp("confirmed_at_server", { withTimezone: true }).notNull(),
+    ipAddress: varchar("ip_address", { length: 64 }),
+    userAgent: text("user_agent"),
+    receiptId: varchar("receipt_id", { length: 32 }).notNull(),
+    canonicalEvidenceHash: varchar("canonical_evidence_hash", { length: 64 }).notNull(),
+    evidenceHmac: varchar("evidence_hmac", { length: 64 }),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [
+    // Tối đa 1 xác nhận/document — cũng là chốt idempotent/concurrency (2 request
+    // song song cho CÙNG document, tối đa 1 cái insert thành công).
+    uniqueIndex("document_confirmation_document_uq").on(t.candidateDocumentId),
+    uniqueIndex("document_confirmation_receipt_uq").on(t.receiptId),
+    index("document_confirmation_application_idx").on(t.applicationId),
+  ],
+);
+
+export const identityLookupAttempts = pgTable(
+  "identity_lookup_attempts",
+  {
+    id: uuid("id").defaultRandom().primaryKey(),
+    limiterKey: varchar("limiter_key", { length: 64 }).notNull(),
+    attemptCount: integer("attempt_count").notNull().default(1),
+    windowStartAt: timestamp("window_start_at", { withTimezone: true }).notNull(),
+    lockedUntil: timestamp("locked_until", { withTimezone: true }),
+    lockoutStrikes: integer("lockout_strikes").notNull().default(0),
+    updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [uniqueIndex("identity_lookup_attempt_key_uq").on(t.limiterKey)],
+);
+
+export type CandidateDocument = typeof candidateDocuments.$inferSelect;
+export type CandidateAccessSession = typeof candidateAccessSessions.$inferSelect;
+export type DocumentConfirmation = typeof documentConfirmations.$inferSelect;
+export type IdentityLookupAttempt = typeof identityLookupAttempts.$inferSelect;
