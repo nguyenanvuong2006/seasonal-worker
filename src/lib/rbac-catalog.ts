@@ -164,6 +164,11 @@ export const PERMISSION_CATALOG: readonly CatalogPermission[] = [
   { key: "document_merge.execute", name: "Thực hiện Merge", group: "document_merge" },
   { key: "document_merge.history.view", name: "Xem Lịch sử Merge", group: "document_merge" },
   { key: "document_merge.history.delete", name: "Xoá Lịch sử Merge", group: "document_merge" },
+  // Phát hành hồ sơ cá nhân + Xác nhận điện tử (candidate document consent)
+  { key: "document_merge.candidate_documents.issue", name: "Tạo & gửi hồ sơ xác nhận", group: "document_merge" },
+  { key: "document_merge.candidate_documents.revoke", name: "Thu hồi hồ sơ xác nhận", group: "document_merge" },
+  { key: "document_merge.candidate_documents.view_status", name: "Xem trạng thái Xác nhận điện tử", group: "document_merge" },
+  { key: "document_merge.candidate_documents.view_evidence", name: "Xem bằng chứng chi tiết Xác nhận (IP/thiết bị)", group: "document_merge" },
   // Hành chính — Mã số công nhật (mục VI, X)
   { key: "administration.daily_code.view", name: "Xem hàng chờ Mã số công nhật", group: "hanh_chinh" },
   { key: "administration.daily_code.submit", name: "Submit Mã số công nhật hàng loạt", group: "hanh_chinh" },
@@ -314,6 +319,10 @@ export const BASELINE_ROLE_PERMISSIONS: Readonly<Record<string, readonly string[
     "document_merge.execute",
     "document_merge.history.view",
     "document_merge.history.delete",
+    "document_merge.candidate_documents.issue",
+    "document_merge.candidate_documents.revoke",
+    "document_merge.candidate_documents.view_status",
+    "document_merge.candidate_documents.view_evidence",
     // Preserves the EXACT existing getUserScope() default: HR_RECRUITER with no
     // explicit user_department_scopes rows is unrestricted (null), same as before
     // this permission existed — see auth.ts getUserScope().
@@ -358,6 +367,8 @@ export const BASELINE_ROLE_PERMISSIONS: Readonly<Record<string, readonly string[
     "privacy.view_address",
     "document_merge.view",
     "document_merge.history.view",
+    "document_merge.candidate_documents.view_status",
+    "document_merge.candidate_documents.view_evidence",
   ],
   // Mục X trong đề bài — baseline HR_SUPPORT: chỉ Document Merge + xem tối thiểu
   // Daily Application để chọn hồ sơ. KHÔNG registrations.edit/.approve, KHÔNG dw.edit
@@ -367,6 +378,8 @@ export const BASELINE_ROLE_PERMISSIONS: Readonly<Record<string, readonly string[
     "document_merge.view",
     "document_merge.execute",
     "document_merge.history.view",
+    "document_merge.candidate_documents.issue",
+    "document_merge.candidate_documents.view_status",
     "dashboard.view",
     "global_search.use",
   ],

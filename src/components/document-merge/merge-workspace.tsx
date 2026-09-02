@@ -13,6 +13,7 @@ import {
   Search,
   Send,
   Settings2,
+  ShieldCheck,
   Sparkles,
 } from "lucide-react";
 import {
@@ -21,6 +22,7 @@ import {
   resolveDwClassification,
 } from "@/lib/document-merge/template-routing";
 import { JobProgressPanel } from "@/components/document-merge/job-progress-panel";
+import { CandidateDocumentsStatusPanel } from "@/components/document-merge/candidate-documents-status-panel";
 import {
   normalizePreviewResponse,
   type SafePreviewResult,
@@ -596,6 +598,10 @@ export function MergeWorkspace({
   // --- Async engines — Phase 11 + GOOGLE_DOCS async worker (sự cố 28–29/08) ---
   const [engine, setEngine] = useState<"GOOGLE_DOCS" | "HTML_PDF">("GOOGLE_DOCS");
   const [activeJobId, setActiveJobId] = useState<string | null>(null);
+  // --- Cá nhân hoá + Xác nhận điện tử: "Tạo & gửi hồ sơ xác nhận" ---
+  const [issuing, setIssuing] = useState(false);
+  const [issueError, setIssueError] = useState<string | null>(null);
+  const [issueResult, setIssueResult] = useState<{ total: number } | null>(null);
 
   useEffect(() => {
     fetch("/api/document-merge/engine", { cache: "no-store" })
@@ -834,6 +840,47 @@ export function MergeWorkspace({
       alert(err instanceof Error ? err.message : "Không tạo được Google Doc.");
     } finally {
       setSingleDocBusy(null);
+    }
+  };
+
+  /**
+   * "Tạo hồ sơ" — the individual-document Xác nhận điện tử workflow
+   * (candidate later reviews + confirms at the public lookup page). This
+   * ONLY requests generation (GENERATING -> READY, once the async merge
+   * pipeline + finalizer finish) — it never releases anything to a
+   * candidate. Releasing is a SEPARATE, explicit "Phát hành" action in the
+   * status panel below, once a document reaches SẴN SÀNG (READY). Separate
+   * from execute()/"Đẩy tài liệu merge" further down, which is the older
+   * single-signature-canvas flow and does not create immutable, hashed,
+   * per-candidate documents.
+   */
+  const generateCandidateDocuments = async () => {
+    if (selectedIds.size === 0) {
+      setIssueError("Chọn danh sách ứng viên trước khi tạo hồ sơ xác nhận.");
+      return;
+    }
+    setIssuing(true);
+    setIssueError(null);
+    setIssueResult(null);
+    try {
+      const res = await fetch("/api/document-merge/candidate-documents/generate", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          templateId: autoRoute ? undefined : templateId,
+          applicationIds: Array.from(selectedIds),
+        }),
+      });
+      const data = await res.json();
+      if (!res.ok) {
+        setIssueError(data.error || "Không tạo được hồ sơ xác nhận.");
+        return;
+      }
+      setIssueResult({ total: data.total ?? selectedIds.size });
+    } catch (err) {
+      setIssueError(err instanceof Error ? err.message : "Không tạo được hồ sơ xác nhận.");
+    } finally {
+      setIssuing(false);
     }
   };
 
@@ -1192,9 +1239,36 @@ export function MergeWorkspace({
             <button type="button" onClick={() => void execute(false)} disabled={isMerging || selectedIds.size === 0 || !templateReady} className="inline-flex w-full items-center justify-center gap-1.5 rounded-lg border border-emerald-200 bg-emerald-50 py-2 text-xs font-semibold text-emerald-800 disabled:opacity-50">
               <Sparkles className="h-3.5 w-3.5" /> Chỉ xuất file (không gửi ứng viên)
             </button>
+
+            <div className="rounded-lg border border-indigo-200 bg-indigo-50 p-3">
+              <p className="text-[11px] font-bold text-indigo-900">Hồ sơ xác nhận điện tử (mới)</p>
+              <p className="mt-0.5 text-[10px] text-indigo-700">
+                Tạo MỘT PDF riêng, bất biến, có mã băm SHA-256 cho MỖI ứng viên đã chọn — khác với &quot;Đẩy tài liệu
+                merge&quot; ở trên (chữ ký vẽ tay, dùng chung 1 trường). Sau khi tạo, hồ sơ ở trạng thái{" "}
+                <b>SẴN SÀNG</b> nhưng ứng viên CHƯA thấy được — bấm <b>Phát hành</b> ở danh sách &quot;Hồ sơ xác nhận
+                điện tử&quot; bên dưới khi bạn thực sự muốn gửi cho ứng viên.
+              </p>
+              <button
+                type="button"
+                onClick={() => void generateCandidateDocuments()}
+                disabled={issuing || selectedIds.size === 0 || !templateReady}
+                className="mt-2 inline-flex w-full items-center justify-center gap-1.5 rounded-lg bg-indigo-700 py-2.5 text-xs font-bold text-white shadow-sm hover:bg-indigo-800 disabled:opacity-50"
+              >
+                <ShieldCheck className="h-3.5 w-3.5" />
+                {issuing ? "Đang tạo..." : `Tạo hồ sơ xác nhận (${selectedIds.size})`}
+              </button>
+              {issueError && <p className="mt-2 rounded-lg bg-red-50 p-2 text-[11px] text-red-700">{issueError}</p>}
+              {issueResult && (
+                <p className="mt-2 rounded-lg bg-emerald-50 p-2 text-[11px] text-emerald-800">
+                  Đã xếp hàng tạo {issueResult.total} hồ sơ xác nhận. Xem trạng thái tại danh sách &quot;Hồ sơ xác nhận điện tử&quot; —
+                  nhớ bấm <b>Phát hành</b> khi hồ sơ chuyển sang SẴN SÀNG.
+                </p>
+              )}
+            </div>
           </div>
         </section>
       </div>
+      <CandidateDocumentsStatusPanel />
     </div>
   );
 }
