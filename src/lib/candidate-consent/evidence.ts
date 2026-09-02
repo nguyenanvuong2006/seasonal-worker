@@ -48,6 +48,9 @@ export function hmacSha256Hex(input: string, secret: string): string {
   return createHmac("sha256", secret).update(input).digest("hex");
 }
 
+/** Bumping this changes what fields future evidence carries — old rows keep their own frozen version forever, never reinterpreted under a newer schema. */
+export const EVIDENCE_SCHEMA_VERSION = "1";
+
 /**
  * The canonical evidence payload for one candidate document confirmation.
  * Every field is server-derived at confirmation time — never trusts the
@@ -72,6 +75,7 @@ export interface ConfirmationEvidenceInput {
 
 export function buildCanonicalEvidencePayload(input: ConfirmationEvidenceInput): Record<string, CanonicalValue> {
   return {
+    evidenceSchemaVersion: EVIDENCE_SCHEMA_VERSION,
     documentId: input.documentId,
     documentVersion: input.documentVersion,
     documentSha256: input.documentSha256,
@@ -89,19 +93,23 @@ export function buildCanonicalEvidencePayload(input: ConfirmationEvidenceInput):
 }
 
 /**
- * Computes EVIDENCE_SHA256 (always) and EVIDENCE_HMAC (only when a secret is
- * supplied — the HMAC secret is derived from the app's existing AUTH_SECRET
- * by the caller, never a new provisioned secret).
+ * Computes EVIDENCE_SHA256 and EVIDENCE_HMAC — both ALWAYS present. There is
+ * no "no secret" path any more: the caller resolves `hmacSecret` via
+ * resolveDocumentEvidenceSecret() (evidence-secret.ts), which itself throws
+ * in Production when DOCUMENT_EVIDENCE_SECRET is missing — so a confirmation
+ * simply cannot reach this function in Production without a real secret.
+ * Evidence never silently degrades to SHA-256-only.
  */
 export function computeEvidenceHashes(
   input: ConfirmationEvidenceInput,
-  hmacSecret: string | null,
-): { canonicalPayload: string; evidenceSha256: string; evidenceHmac: string | null } {
+  hmacSecret: string,
+): { canonicalPayload: string; evidenceSchemaVersion: string; evidenceSha256: string; evidenceHmac: string } {
   const canonicalPayload = canonicalizeEvidence(buildCanonicalEvidencePayload(input));
   return {
     canonicalPayload,
+    evidenceSchemaVersion: EVIDENCE_SCHEMA_VERSION,
     evidenceSha256: sha256Hex(canonicalPayload),
-    evidenceHmac: hmacSecret ? hmacSha256Hex(canonicalPayload, hmacSecret) : null,
+    evidenceHmac: hmacSha256Hex(canonicalPayload, hmacSecret),
   };
 }
 
@@ -112,6 +120,30 @@ export function verifyEvidenceHash(canonicalPayload: string, expectedSha256: str
 
 export function verifyEvidenceHmac(canonicalPayload: string, secret: string, expectedHmac: string): boolean {
   return hmacSha256Hex(canonicalPayload, secret) === expectedHmac;
+}
+
+/**
+ * Full tamper-evidence verification: re-derives the canonical payload from
+ * the SAME evidence input the confirmation was built from, and checks both
+ * the SHA-256 and (when a secret is supplied) the HMAC against what was
+ * stored. Any mismatch — a single byte changed anywhere in the stored
+ * evidence fields — flips this to false; nothing here trusts a stored hash
+ * without recomputing it.
+ */
+export function verifyEvidence(
+  input: ConfirmationEvidenceInput,
+  stored: { evidenceSha256: string; evidenceHmac: string | null },
+  hmacSecret: string | null,
+): { valid: boolean; sha256Matches: boolean; hmacMatches: boolean | null } {
+  const canonicalPayload = canonicalizeEvidence(buildCanonicalEvidencePayload(input));
+  const sha256Matches = verifyEvidenceHash(canonicalPayload, stored.evidenceSha256);
+  const hmacMatches =
+    hmacSecret && stored.evidenceHmac ? verifyEvidenceHmac(canonicalPayload, hmacSecret, stored.evidenceHmac) : null;
+  return {
+    valid: sha256Matches && hmacMatches !== false,
+    sha256Matches,
+    hmacMatches,
+  };
 }
 
 /**

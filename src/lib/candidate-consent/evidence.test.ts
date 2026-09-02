@@ -4,11 +4,13 @@ import {
   buildCanonicalEvidencePayload,
   canonicalizeEvidence,
   computeEvidenceHashes,
+  EVIDENCE_SCHEMA_VERSION,
   generateAccessToken,
   generateReceiptId,
   hashAccessToken,
   hmacSha256Hex,
   sha256Hex,
+  verifyEvidence,
   verifyEvidenceHash,
   verifyEvidenceHmac,
   type ConfirmationEvidenceInput,
@@ -50,40 +52,73 @@ test("sha256Hex: deterministic and matches known test vector for empty string", 
 
 test("computeEvidenceHashes: deterministic — same input twice yields the same SHA-256", () => {
   const input = sampleInput();
-  const first = computeEvidenceHashes(input, null);
-  const second = computeEvidenceHashes(input, null);
+  const first = computeEvidenceHashes(input, "test-secret");
+  const second = computeEvidenceHashes(input, "test-secret");
   assert.equal(first.evidenceSha256, second.evidenceSha256);
   assert.equal(first.canonicalPayload, second.canonicalPayload);
 });
 
 test("computeEvidenceHashes: changing ANY field changes the hash (tamper-evident)", () => {
-  const base = computeEvidenceHashes(sampleInput(), null);
-  const tampered = computeEvidenceHashes(sampleInput({ documentSha256: "c".repeat(64) }), null);
+  const base = computeEvidenceHashes(sampleInput(), "test-secret");
+  const tampered = computeEvidenceHashes(sampleInput({ documentSha256: "c".repeat(64) }), "test-secret");
   assert.notEqual(base.evidenceSha256, tampered.evidenceSha256);
 });
 
-test("computeEvidenceHashes: no secret -> evidenceHmac is null (HMAC is optional, never required)", () => {
-  const result = computeEvidenceHashes(sampleInput(), null);
-  assert.equal(result.evidenceHmac, null);
+test("computeEvidenceHashes: evidenceHmac is ALWAYS present — never silently degrades to SHA-256-only", () => {
+  const result = computeEvidenceHashes(sampleInput(), "test-secret");
+  assert.ok(result.evidenceHmac);
+  assert.equal(typeof result.evidenceHmac, "string");
+});
+
+test("computeEvidenceHashes: includes the evidence schema version, frozen at compute time", () => {
+  const result = computeEvidenceHashes(sampleInput(), "test-secret");
+  assert.equal(result.evidenceSchemaVersion, EVIDENCE_SCHEMA_VERSION);
+  assert.match(result.canonicalPayload, /"evidenceSchemaVersion":"1"/);
 });
 
 test("computeEvidenceHashes: with a secret -> HMAC verifies against the same secret", () => {
   const input = sampleInput();
   const result = computeEvidenceHashes(input, "test-secret");
-  assert.ok(result.evidenceHmac);
-  assert.ok(verifyEvidenceHmac(result.canonicalPayload, "test-secret", result.evidenceHmac!));
+  assert.ok(verifyEvidenceHmac(result.canonicalPayload, "test-secret", result.evidenceHmac));
 });
 
 test("verifyEvidenceHmac: fails against the WRONG secret", () => {
   const input = sampleInput();
   const result = computeEvidenceHashes(input, "correct-secret");
-  assert.equal(verifyEvidenceHmac(result.canonicalPayload, "wrong-secret", result.evidenceHmac!), false);
+  assert.equal(verifyEvidenceHmac(result.canonicalPayload, "wrong-secret", result.evidenceHmac), false);
 });
 
 test("verifyEvidenceHash: tampered canonical payload fails verification against the original hash", () => {
-  const result = computeEvidenceHashes(sampleInput(), null);
+  const result = computeEvidenceHashes(sampleInput(), "test-secret");
   const tamperedPayload = result.canonicalPayload.replace(sampleInput().documentSha256, "f".repeat(64));
   assert.equal(verifyEvidenceHash(tamperedPayload, result.evidenceSha256), false);
+});
+
+test("verifyEvidence: passes for unchanged evidence (recomputes from the same input, matches stored hashes)", () => {
+  const input = sampleInput();
+  const result = computeEvidenceHashes(input, "test-secret");
+  const verification = verifyEvidence(input, { evidenceSha256: result.evidenceSha256, evidenceHmac: result.evidenceHmac }, "test-secret");
+  assert.equal(verification.valid, true);
+  assert.equal(verification.sha256Matches, true);
+  assert.equal(verification.hmacMatches, true);
+});
+
+test("verifyEvidence: FAILS after any single field is tampered (e.g. documentSha256 changed post-hoc)", () => {
+  const input = sampleInput();
+  const result = computeEvidenceHashes(input, "test-secret");
+  const tamperedInput = sampleInput({ documentSha256: "e".repeat(64) });
+  const verification = verifyEvidence(tamperedInput, { evidenceSha256: result.evidenceSha256, evidenceHmac: result.evidenceHmac }, "test-secret");
+  assert.equal(verification.valid, false);
+  assert.equal(verification.sha256Matches, false);
+});
+
+test("verifyEvidence: FAILS if the stored HMAC doesn't match, even when SHA-256 still matches (independent checks)", () => {
+  const input = sampleInput();
+  const result = computeEvidenceHashes(input, "test-secret");
+  const verification = verifyEvidence(input, { evidenceSha256: result.evidenceSha256, evidenceHmac: "0".repeat(64) }, "test-secret");
+  assert.equal(verification.sha256Matches, true);
+  assert.equal(verification.hmacMatches, false);
+  assert.equal(verification.valid, false);
 });
 
 test("buildCanonicalEvidencePayload: never includes raw CCCD/phone fields (only IDs/hashes/timestamps)", () => {

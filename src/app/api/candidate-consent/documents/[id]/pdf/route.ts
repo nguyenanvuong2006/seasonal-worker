@@ -14,7 +14,7 @@
 import { NextResponse } from "next/server";
 import { eq } from "drizzle-orm";
 import { db } from "@/db";
-import { candidateDocuments } from "@/db/schema";
+import { auditLogs, candidateDocuments } from "@/db/schema";
 import { canView, nextStatusOnView, type CandidateDocumentStatus } from "@/lib/candidate-consent/lifecycle";
 import { resolveAccessSession, sessionCanAccess } from "@/lib/candidate-consent/session-store";
 import { getStorageProvider } from "@/lib/storage";
@@ -49,6 +49,18 @@ export async function GET(_request: Request, { params }: { params: Promise<{ id:
       .update(candidateDocuments)
       .set({ status: nextStatus, viewedAt: doc.viewedAt ?? new Date(), updatedAt: new Date() })
       .where(eq(candidateDocuments.id, id));
+    try {
+      await db.insert(auditLogs).values({
+        userId: null,
+        username: "candidate",
+        action: "DOCUMENT_VIEWED",
+        targetType: "candidate_documents",
+        category: "AUDIT",
+        details: { candidateDocumentId: id, applicationId: doc.applicationId },
+      });
+    } catch {
+      /* audit must never break the request */
+    }
   }
 
   const storage = getStorageProvider();

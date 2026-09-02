@@ -2,15 +2,17 @@
 
 /**
  * Admin status panel for "Hồ sơ xác nhận điện tử" (candidate document
- * issuance + consent). Read-only status + Thu hồi (revoke) — actual
- * generation is triggered by the "Tạo & gửi hồ sơ xác nhận" button in
- * MergeWorkspace. Polls GET /api/document-merge/candidate-documents, which
- * also lazily promotes any row still GENERATING (see promote.ts) — so this
- * panel reflects live progress without a separate cron.
+ * issuance + consent). GET status list is STRICTLY READ-ONLY (see the route
+ * — it performs zero mutations). Progress is advanced ONLY by an explicit
+ * write-side POST to /finalize, which this panel calls on an interval WHILE
+ * any row is GENERATING (never as a GET side effect) — that endpoint checks
+ * each row's linked merge_job_record and, once actually COMPLETED,
+ * materializes the immutable PDF+SHA-256 (READY) and releases it (ISSUED),
+ * each its own audit event. One candidate's failure never blocks the rest.
  */
 
-import { useCallback, useEffect, useState } from "react";
-import { RefreshCw, ShieldCheck, XCircle } from "lucide-react";
+import { useCallback, useEffect, useRef, useState } from "react";
+import { RefreshCw, RotateCcw, ShieldCheck, XCircle } from "lucide-react";
 
 const STATUS_LABEL: Record<string, string> = {
   GENERATING: "ĐANG TẠO",
@@ -36,6 +38,9 @@ const STATUS_COLOR: Record<string, string> = {
   FAILED: "bg-red-100 text-red-700",
 };
 
+const REVOCABLE = new Set(["READY", "ISSUED", "VIEWED"]);
+const FINALIZE_POLL_MS = 4000;
+
 type CandidateDocumentRow = {
   id: string;
   applicationId: string;
@@ -55,6 +60,8 @@ export function CandidateDocumentsStatusPanel() {
   const [summary, setSummary] = useState<Summary | null>(null);
   const [loading, setLoading] = useState(false);
   const [revokingId, setRevokingId] = useState<string | null>(null);
+  const [reissuingId, setReissuingId] = useState<string | null>(null);
+  const finalizingRef = useRef(false);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -73,6 +80,27 @@ export function CandidateDocumentsStatusPanel() {
     void load();
   }, [load]);
 
+  // Write-side finalizer poll: explicit POST, only while something is
+  // GENERATING, never a passive side effect of the read-only GET above.
+  useEffect(() => {
+    if (!summary || summary.generating === 0) return;
+    const timer = setTimeout(async () => {
+      if (finalizingRef.current) return;
+      finalizingRef.current = true;
+      try {
+        await fetch("/api/document-merge/candidate-documents/finalize", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: "{}",
+        });
+      } finally {
+        finalizingRef.current = false;
+        await load();
+      }
+    }, FINALIZE_POLL_MS);
+    return () => clearTimeout(timer);
+  }, [summary, load]);
+
   const revoke = async (id: string) => {
     if (!confirm("Thu hồi hồ sơ này? Ứng viên sẽ không thể xem/xác nhận nữa.")) return;
     setRevokingId(id);
@@ -86,6 +114,22 @@ export function CandidateDocumentsStatusPanel() {
       await load();
     } finally {
       setRevokingId(null);
+    }
+  };
+
+  const reissue = async (id: string) => {
+    if (!confirm("Thu hồi hồ sơ này và tạo lại một hồ sơ mới cho ứng viên? Hồ sơ cũ sẽ được đánh dấu ĐÃ THAY THẾ (không xoá) và ứng viên sẽ cần xác nhận lại hồ sơ mới.")) return;
+    setReissuingId(id);
+    try {
+      const res = await fetch(`/api/document-merge/candidate-documents/${id}/reissue`, { method: "POST", headers: { "Content-Type": "application/json" }, body: "{}" });
+      if (!res.ok) {
+        const data = await res.json().catch(() => ({}));
+        alert(data.error || "Không tạo lại được hồ sơ.");
+        return;
+      }
+      await load();
+    } finally {
+      setReissuingId(null);
     }
   };
 
@@ -106,6 +150,7 @@ export function CandidateDocumentsStatusPanel() {
         <div className="mt-2 flex flex-wrap gap-2 text-[10px] font-semibold">
           <span className="rounded-full bg-slate-100 px-2 py-0.5 text-slate-600">Tổng {summary.total}</span>
           <span className="rounded-full bg-slate-100 px-2 py-0.5 text-slate-600">Đang tạo {summary.generating}</span>
+          <span className="rounded-full bg-slate-100 px-2 py-0.5 text-slate-600">Sẵn sàng {summary.ready}</span>
           <span className="rounded-full bg-blue-100 px-2 py-0.5 text-blue-700">Đã phát hành {summary.issued}</span>
           <span className="rounded-full bg-amber-100 px-2 py-0.5 text-amber-700">Đã xem {summary.viewed}</span>
           <span className="rounded-full bg-emerald-100 px-2 py-0.5 text-emerald-700">Đã xác nhận {summary.confirmed}</span>
@@ -137,15 +182,26 @@ export function CandidateDocumentsStatusPanel() {
                 </td>
                 <td className="py-1.5 pr-2 text-slate-500">{doc.confirmation ? doc.confirmation.receiptId : "—"}</td>
                 <td className="py-1.5 text-right">
-                  {["READY", "ISSUED", "VIEWED"].includes(doc.status) && (
-                    <button
-                      type="button"
-                      onClick={() => void revoke(doc.id)}
-                      disabled={revokingId === doc.id}
-                      className="inline-flex items-center gap-1 rounded-lg border border-red-200 px-2 py-0.5 text-[10px] font-semibold text-red-700 hover:bg-red-50 disabled:opacity-50"
-                    >
-                      <XCircle className="h-3 w-3" /> Thu hồi
-                    </button>
+                  {REVOCABLE.has(doc.status) && (
+                    <div className="flex justify-end gap-1">
+                      <button
+                        type="button"
+                        onClick={() => void reissue(doc.id)}
+                        disabled={reissuingId === doc.id}
+                        title="Thu hồi & tạo lại"
+                        className="inline-flex items-center gap-1 rounded-lg border border-indigo-200 px-2 py-0.5 text-[10px] font-semibold text-indigo-700 hover:bg-indigo-50 disabled:opacity-50"
+                      >
+                        <RotateCcw className="h-3 w-3" /> Tạo lại
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => void revoke(doc.id)}
+                        disabled={revokingId === doc.id}
+                        className="inline-flex items-center gap-1 rounded-lg border border-red-200 px-2 py-0.5 text-[10px] font-semibold text-red-700 hover:bg-red-50 disabled:opacity-50"
+                      >
+                        <XCircle className="h-3 w-3" /> Thu hồi
+                      </button>
+                    </div>
                   )}
                 </td>
               </tr>

@@ -13,14 +13,19 @@
  * runs many stateless instances) with an increasing, never-permanent
  * lockout. CCCD/phone are read from the POST body only — never a query
  * string, never logged raw.
+ *
+ * FAILS CLOSED: if the rate-limit store itself cannot be read/written
+ * (Postgres unavailable, etc.), the request is DENIED — never silently
+ * allowed through as if unlimited attempts were fine.
  */
 
 import { NextResponse } from "next/server";
 import { and, eq, isNull } from "drizzle-orm";
 import { db } from "@/db";
-import { dailyApplications, identityLookupAttempts } from "@/db/schema";
+import { auditLogs, dailyApplications, identityLookupAttempts } from "@/db/schema";
 import { verifyLookupIdentity } from "@/lib/lookup-identity";
 import { normalizePersonName } from "@/lib/person-name";
+import { trustedClientIp } from "@/lib/request-ip";
 import { evaluateAttempt, resetOnSuccess, type LimiterRow } from "@/lib/candidate-consent/rate-limiter";
 import { identityLimiterKey, ipLimiterKey, cccdHmac } from "@/lib/candidate-consent/identity";
 import { issueAccessSessionCookie } from "@/lib/candidate-consent/session-store";
@@ -32,11 +37,6 @@ function consentSecret(): string {
   const base = process.env.AUTH_SECRET;
   if (!base) throw new Error("AUTH_SECRET is not configured");
   return `candidate-consent:v1:${base}`;
-}
-
-function requestIp(request: Request): string {
-  const forwarded = request.headers.get("x-forwarded-for");
-  return forwarded?.split(",")[0]?.trim() || "unknown";
 }
 
 async function readLimiterRow(key: string): Promise<LimiterRow | null> {
@@ -74,10 +74,11 @@ async function writeLimiterRow(key: string, next: LimiterRow): Promise<void> {
 }
 
 const GENERIC_DENY = { error: "Thông tin không chính xác hoặc không có hồ sơ có thể truy cập." };
+const RATE_LIMIT_UNAVAILABLE = { error: "Hệ thống đang bận. Vui lòng thử lại sau ít phút." };
 
 export async function POST(request: Request) {
   const secret = consentSecret();
-  const ip = requestIp(request);
+  const ip = trustedClientIp(request);
   const now = Date.now();
 
   let body: { cccd?: unknown; phone?: unknown };
@@ -96,12 +97,21 @@ export async function POST(request: Request) {
   const ipKey = ipLimiterKey(ip, secret);
   const identityKey = identityLimiterKey(rawCccd, rawPhone, secret);
 
-  const [ipRow, identityRow] = await Promise.all([readLimiterRow(ipKey), readLimiterRow(identityKey)]);
-  const ipDecision = evaluateAttempt(ipRow, now);
-  const identityDecision = evaluateAttempt(identityRow, now);
+  let ipDecision: ReturnType<typeof evaluateAttempt>;
+  let identityDecision: ReturnType<typeof evaluateAttempt>;
+  try {
+    const [ipRow, identityRow] = await Promise.all([readLimiterRow(ipKey), readLimiterRow(identityKey)]);
+    ipDecision = evaluateAttempt(ipRow, now);
+    identityDecision = evaluateAttempt(identityRow, now);
+    await Promise.all([writeLimiterRow(ipKey, ipDecision.nextRow), writeLimiterRow(identityKey, identityDecision.nextRow)]);
+  } catch (err) {
+    // FAIL CLOSED: the limiter store itself is unavailable — deny rather
+    // than let an unbounded number of lookup attempts through.
+    console.error("[candidate-consent/lookup] rate-limit store unavailable, denying:", err);
+    return NextResponse.json(RATE_LIMIT_UNAVAILABLE, { status: 503 });
+  }
 
   if (!ipDecision.allowed || !identityDecision.allowed) {
-    await Promise.all([writeLimiterRow(ipKey, ipDecision.nextRow), writeLimiterRow(identityKey, identityDecision.nextRow)]);
     const retryAfterSeconds = Math.max(
       !ipDecision.allowed ? ipDecision.retryAfterSeconds : 0,
       !identityDecision.allowed ? identityDecision.retryAfterSeconds : 0,
@@ -111,7 +121,6 @@ export async function POST(request: Request) {
       { status: 429, headers: { "Retry-After": String(retryAfterSeconds) } },
     );
   }
-  await Promise.all([writeLimiterRow(ipKey, ipDecision.nextRow), writeLimiterRow(identityKey, identityDecision.nextRow)]);
 
   const identity = await verifyLookupIdentity(rawCccd, rawPhone);
   if (!identity.ok) {
@@ -121,10 +130,13 @@ export async function POST(request: Request) {
   }
 
   // Success clears both buckets so legitimate repeat use is never throttled.
-  await Promise.all([
-    writeLimiterRow(ipKey, resetOnSuccess(now)),
-    writeLimiterRow(identityKey, resetOnSuccess(now)),
-  ]);
+  // Best-effort: a failure here must never turn a successful lookup into an
+  // error response — the candidate already passed the security check.
+  try {
+    await Promise.all([writeLimiterRow(ipKey, resetOnSuccess(now)), writeLimiterRow(identityKey, resetOnSuccess(now))]);
+  } catch {
+    /* non-fatal */
+  }
 
   const applications = await db
     .select({ id: dailyApplications.id })
@@ -142,6 +154,19 @@ export async function POST(request: Request) {
     ipAddress: ip === "unknown" ? null : ip,
     userAgent: request.headers.get("user-agent"),
   });
+
+  try {
+    await db.insert(auditLogs).values({
+      userId: null,
+      username: "candidate",
+      action: "IDENTITY_VERIFIED",
+      targetType: "candidate_access_sessions",
+      category: "AUDIT",
+      details: { accessSessionId: sessionId, applicationCount: scopedApplicationIds.length, method: "CCCD_PHONE" },
+    });
+  } catch {
+    /* audit must never break the request */
+  }
 
   return NextResponse.json({
     success: true,

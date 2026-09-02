@@ -15,6 +15,15 @@
 --   - No FK constraints added (matches this repo's existing
 --     merge_jobs/merge_job_records/document_history convention of
 --     soft/logical references — avoids migration-order coupling).
+--   - CHECK constraints validate enum-shaped columns at the DB layer
+--     (defense in depth alongside the application-level lifecycle
+--     guards in lib/candidate-consent/lifecycle.ts) — NOT NULL data
+--     yet at first apply, so adding these is non-destructive.
+--
+-- NOT YET APPLIED to any database as of this revision (see PR #127) —
+-- this file was edited in place (not superseded by a second migration)
+-- because it has never been run against Production or any other
+-- database; editing an unapplied, unreleased migration is safe.
 -- ============================================================
 
 CREATE TABLE IF NOT EXISTS candidate_documents (
@@ -41,12 +50,21 @@ CREATE TABLE IF NOT EXISTS candidate_documents (
   revoke_reason text,
   error_message text,
   created_at timestamptz NOT NULL DEFAULT now(),
-  updated_at timestamptz NOT NULL DEFAULT now()
+  updated_at timestamptz NOT NULL DEFAULT now(),
+  CONSTRAINT candidate_documents_status_chk CHECK (
+    status IN ('GENERATING', 'READY', 'ISSUED', 'VIEWED', 'CONFIRMED', 'REVOKED', 'SUPERSEDED', 'EXPIRED', 'FAILED')
+  )
 );
 
 CREATE INDEX IF NOT EXISTS candidate_document_application_idx ON candidate_documents (application_id);
 CREATE INDEX IF NOT EXISTS candidate_document_status_idx ON candidate_documents (status);
 CREATE INDEX IF NOT EXISTS candidate_document_merge_job_record_idx ON candidate_documents (merge_job_record_id);
+-- Supersedes-chain integrity: lets "find what replaced this document" and
+-- "walk the correction lineage" both use an index instead of a full scan.
+CREATE INDEX IF NOT EXISTS candidate_document_supersedes_idx ON candidate_documents (supersedes_document_id);
+-- Composite (application, status): the exact shape the public documents
+-- list route filters/joins by ("this candidate's currently-visible docs").
+CREATE INDEX IF NOT EXISTS candidate_document_application_status_idx ON candidate_documents (application_id, status);
 
 CREATE TABLE IF NOT EXISTS candidate_access_sessions (
   id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -65,7 +83,10 @@ CREATE TABLE IF NOT EXISTS candidate_access_sessions (
 
 CREATE UNIQUE INDEX IF NOT EXISTS candidate_access_session_token_uq ON candidate_access_sessions (token_hash);
 CREATE INDEX IF NOT EXISTS candidate_access_session_cccd_idx ON candidate_access_sessions (cccd_hmac);
+-- Session-expiry scan: the finalize/session-resolution path filters live
+-- sessions by "not revoked AND not yet expired" — composite index for that.
 CREATE INDEX IF NOT EXISTS candidate_access_session_expires_idx ON candidate_access_sessions (expires_at);
+CREATE INDEX IF NOT EXISTS candidate_access_session_active_idx ON candidate_access_sessions (revoked_at, expires_at);
 
 CREATE TABLE IF NOT EXISTS document_confirmations (
   id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -82,8 +103,13 @@ CREATE TABLE IF NOT EXISTS document_confirmations (
   ip_address varchar(64),
   user_agent text,
   receipt_id varchar(32) NOT NULL,
+  evidence_schema_version varchar(8) NOT NULL DEFAULT '1',
   canonical_evidence_hash varchar(64) NOT NULL,
-  evidence_hmac varchar(64),
+  -- NOT NULL: DOCUMENT_EVIDENCE_SECRET is required to reach this insert at
+  -- all in Production (resolveDocumentEvidenceSecret() fails closed before
+  -- any confirmation is built) — evidence never silently degrades to a
+  -- SHA-256-only record.
+  evidence_hmac varchar(64) NOT NULL,
   created_at timestamptz NOT NULL DEFAULT now()
 );
 

@@ -91,14 +91,16 @@ export async function POST(request: Request) {
         mergeJobRecordId: record.id,
         templateId: record.templateId ?? null,
         status: "GENERATING" as const,
-        issuedBy: guard.session.username,
+        // issuedBy is set ONLY at the READY -> ISSUED transition (finalize
+        // route) — generation being requested is not the same business
+        // event as releasing the finished document to the candidate.
         createdAt: now,
         updatedAt: now,
       })),
     )
     .returning({ id: candidateDocuments.id, applicationId: candidateDocuments.applicationId });
 
-  await writeAudit(guard.session, "ISSUE_CANDIDATE_DOCUMENTS", "candidate_documents", {
+  await writeAudit(guard.session, "DOCUMENT_GENERATION_REQUESTED", "candidate_documents", {
     jobId,
     applicationIds,
     documentCount: inserted.length,

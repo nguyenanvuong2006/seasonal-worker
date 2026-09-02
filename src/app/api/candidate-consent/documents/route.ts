@@ -34,6 +34,7 @@ export async function GET() {
       status: candidateDocuments.status,
       issuedAt: candidateDocuments.issuedAt,
       templateName: mergeTemplates.name,
+      templateVersion: candidateDocuments.templateVersion,
       regDate: dailyApplications.regDate,
     })
     .from(candidateDocuments)
@@ -54,6 +55,7 @@ export async function GET() {
     documents: visible.map((r) => ({
       id: r.id,
       templateName: r.templateName,
+      templateVersion: r.templateVersion,
       regDate: r.regDate,
       issuedAt: r.issuedAt,
       status: r.status,

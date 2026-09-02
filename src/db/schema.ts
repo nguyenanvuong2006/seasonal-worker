@@ -1813,8 +1813,13 @@ export const documentConfirmations = pgTable(
     ipAddress: varchar("ip_address", { length: 64 }),
     userAgent: text("user_agent"),
     receiptId: varchar("receipt_id", { length: 32 }).notNull(),
+    evidenceSchemaVersion: varchar("evidence_schema_version", { length: 8 }).notNull().default("1"),
     canonicalEvidenceHash: varchar("canonical_evidence_hash", { length: 64 }).notNull(),
-    evidenceHmac: varchar("evidence_hmac", { length: 64 }),
+    // NOT NULL: DOCUMENT_EVIDENCE_SECRET is required to reach this insert at
+    // all in Production (resolveDocumentEvidenceSecret() fails closed before
+    // any confirmation is built) — evidence never silently degrades to a
+    // SHA-256-only record.
+    evidenceHmac: varchar("evidence_hmac", { length: 64 }).notNull(),
     createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
   },
   (t) => [

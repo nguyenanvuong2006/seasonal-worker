@@ -19,6 +19,7 @@ import { CheckCircle2, FileText, Search, ShieldCheck } from "lucide-react";
 type DocumentRow = {
   id: string;
   templateName: string | null;
+  templateVersion: number | null;
   regDate: string | null;
   issuedAt: string | null;
   status: string;
@@ -41,7 +42,7 @@ export default function CandidateConsentPage() {
   const [activeDoc, setActiveDoc] = useState<DocumentRow | null>(null);
   const [agree, setAgree] = useState(false);
   const [confirming, setConfirming] = useState(false);
-  const [receipt, setReceipt] = useState<{ receiptId: string; confirmedAtServer: string } | null>(null);
+  const [receipt, setReceipt] = useState<{ receiptId: string; confirmedAtServer: string; documentVersion: number | null } | null>(null);
   const [viewed, setViewed] = useState(false);
 
   const loadDocuments = async () => {
@@ -84,7 +85,7 @@ export default function CandidateConsentPage() {
     setActiveDoc(doc);
     setAgree(false);
     setViewed(false);
-    setReceipt(doc.receipt);
+    setReceipt(doc.receipt ? { ...doc.receipt, documentVersion: doc.templateVersion } : null);
     setStep(doc.status === "CONFIRMED" ? 4 : 3);
   };
 
@@ -106,7 +107,7 @@ export default function CandidateConsentPage() {
         toast({ title: data.error || "Không xác nhận được.", variant: "destructive" });
         return;
       }
-      setReceipt({ receiptId: data.receiptId, confirmedAtServer: data.confirmedAtServer });
+      setReceipt({ receiptId: data.receiptId, confirmedAtServer: data.confirmedAtServer, documentVersion: data.documentVersion ?? null });
       setStep(4);
     } finally {
       setConfirming(false);
@@ -190,6 +191,7 @@ export default function CandidateConsentPage() {
               <div className="rounded-lg bg-slate-100 p-3 text-left text-[11px] text-slate-700">
                 <p>Thời gian xác nhận: {new Date(receipt.confirmedAtServer).toLocaleString("vi-VN")}</p>
                 <p className="font-mono">Mã xác nhận: {receipt.receiptId}</p>
+                {receipt.documentVersion !== null && <p>Phiên bản tài liệu: v{receipt.documentVersion}</p>}
                 <p>Trạng thái: ĐÃ XÁC NHẬN</p>
               </div>
             )}
