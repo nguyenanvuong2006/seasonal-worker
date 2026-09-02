@@ -1,8 +1,11 @@
 name: Migrate Document Merge DB — PRODUCTION
 
-# CHỈ chạy 5 migration Document Merge (scripts/run-document-merge-migrations.mjs)
-# — KHÔNG chạy schema.sql, KHÔNG chạy migration của tính năng khác. Không
-# seed dữ liệu test/verification. KHÔNG publish template, KHÔNG đổi
+# CHỈ chạy danh sách migration Document Merge do
+# scripts/run-document-merge-migrations.mjs định nghĩa (xem DOCUMENT_MERGE_MIGRATIONS
+# trong file đó để biết số lượng & thứ tự HIỆN TẠI — không lặp lại con số ở
+# đây nữa vì nó đã lỗi thời ít nhất 1 lần trước khi sửa comment này) — KHÔNG
+# chạy schema.sql, KHÔNG chạy migration của tính năng khác. Không seed dữ
+# liệu test/verification. KHÔNG publish template, KHÔNG đổi
 # DOCUMENT_MERGE_ENGINE (workflow này không chạm tới Vercel).
 
 on:
