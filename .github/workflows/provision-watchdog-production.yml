@@ -71,10 +71,25 @@ jobs:
         with:
           project_id: ${{ env.PROJECT_ID }}
 
-      - name: Enable Cloud Scheduler API (idempotent — no-op if already enabled)
+      - name: Ensure Cloud Scheduler API is enabled
         run: |
           set -euo pipefail
-          gcloud services enable cloudscheduler.googleapis.com --project "${PROJECT_ID}"
+          # Checking enablement (serviceusage.services.list/get) is a far more
+          # commonly-granted read permission than enabling a new API
+          # (serviceusage.services.enable) — deliberately excluded from this
+          # deploying identity's grants in this project, same as
+          # deploy-worker-production.yml never attempts to enable any API
+          # itself. Only call `enable` (and only fail the run) when the API
+          # is actually not already on.
+          ENABLED=$(gcloud services list --enabled --project "${PROJECT_ID}" \
+            --filter="config.name:cloudscheduler.googleapis.com" \
+            --format="value(config.name)")
+          if [ -n "${ENABLED}" ]; then
+            echo "✅ Cloud Scheduler API already enabled — nothing to do."
+          else
+            echo "Cloud Scheduler API not yet enabled — attempting to enable it..."
+            gcloud services enable cloudscheduler.googleapis.com --project "${PROJECT_ID}"
+          fi
 
       - name: Resolve worker URL + runtime service account (non-secret resource identifiers)
         id: resolve
