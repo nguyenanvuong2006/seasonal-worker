@@ -4,9 +4,40 @@ Tài liệu này bổ sung cho `docs/PRODUCTION-DEPLOY.md` (runbook chung của
 toàn bộ ứng dụng) — phạm vi ở đây CHỈ là tính năng Document Merge / engine
 `HTML_PDF` (Cloud Run worker + Playwright/Chromium).
 
-**Trạng thái tại thời điểm viết tài liệu này: hạ tầng production CHƯA tồn
-tại. `DOCUMENT_MERGE_ENGINE` production vẫn là `GOOGLE_DOCS` (mặc định an
-toàn — không cần set gì để giữ nguyên hành vi hiện tại).**
+**Cập nhật 2026-09-02: hạ tầng production ĐÃ tồn tại và ĐÃ được xác nhận
+healthy.** Tuyên bố "hạ tầng production CHƯA tồn tại" trước đây trong tài
+liệu này đã LỖI THỜI (viết trước khi `deploy-worker-production.yml` từng
+được chạy thành công lần đầu) — giữ nguyên phần dưới đây gây hiểu nhầm cho
+operator tiếp theo nên đã được sửa.
+
+Bằng chứng xác nhận (từ chính log GitHub Actions, không phải suy đoán):
+`deploy-worker-production.yml` đã chạy thành công nhiều lần kể từ
+2026-08-21 (lần gần nhất trước bản cập nhật này: run #17, commit
+`4bd0216`, health check trả `{"ok":true}`, `/diag/*` xác nhận 404 đúng
+như kỳ vọng `WORKER_ENV=production`). Cloud Run service thật:
+`seasonal-worker-pdf-production`, region `asia-southeast1`, project
+`seasonal-worker-505710`. Service account runtime thật ghi nhận được từ
+log deploy: `seasonal-worker-merge-producti@seasonal-worker-505710.iam.gserviceaccount.com`
+(khác chút ít so với quy ước `...-merge-prod@...` ở bảng mục 2 bên dưới —
+giữ nguyên giá trị thật đang chạy, không đổi theo tài liệu).
+
+`DOCUMENT_MERGE_ENGINE` production vẫn là `GOOGLE_DOCS` (mặc định an
+toàn — không cần set gì để giữ nguyên hành vi hiện tại); việc worker tồn
+tại KHÔNG đồng nghĩa HTML_PDF đã được kích hoạt — xem mục 1.
+
+Còn CHƯA xác nhận được (ngoài phạm vi những gì log deploy tự chứng minh):
+migration Document Merge của candidate-document consent
+(`2026-09-01-candidate-document-consent.sql`, PR #127/#128) — runner định
+kỳ (`migrate-production.yml`) đã đăng ký migration này nhưng lần chạy
+thành công gần nhất của chính workflow đó (run #6, 2026-08-24) diễn ra
+TRƯỚC khi migration này tồn tại, nên vẫn cần 1 lần chạy nữa (yêu cầu xác
+nhận backup thủ công — xem `docs/PRODUCTION-DEPLOY.md` mục "Sao lưu bắt
+buộc"). Cloud Scheduler watchdog (`scripts/provision-merge-worker-watchdog.sh`,
+nay có thể chạy qua `provision-watchdog-production.yml`) cũng chưa
+provision được — Cloud Scheduler API chưa bật trên project và identity
+deploy không có quyền tự bật (`serviceusage.services.enable` bị từ chối
+có chủ đích) — cần 1 thao tác bật API 1 lần trong GCP Console trước khi
+chạy lại workflow đó.
 
 ## 1. Nguyên tắc bắt buộc
 
