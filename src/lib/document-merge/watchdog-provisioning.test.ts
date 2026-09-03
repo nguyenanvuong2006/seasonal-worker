@@ -125,6 +125,25 @@ test("script still requires explicit --yes confirmation (Guardrail 1) and requir
   assert.match(code, /-z "\$\{PROJECT_ID\}" \|\| -z "\$\{WORKER_URL\}" \|\| -z "\$\{RUNTIME_SA\}"/);
 });
 
+test("11. self-test sends the real request shape (both OIDC Authorization + X-Merge-Worker-Secret) and never prints the secret value", () => {
+  const code = readScript();
+  const selfTestStart = code.indexOf("Self-test:");
+  assert.ok(selfTestStart >= 0, "expected a self-test block after provisioning");
+  const selfTestBlock = code.slice(selfTestStart);
+  assert.match(selfTestBlock, /-H "Authorization: Bearer \$\{SELF_TEST_TOKEN\}"/);
+  assert.match(selfTestBlock, /-H "X-Merge-Worker-Secret: \$\{SECRET_VALUE\}"/);
+  // Only the response (status/body) is echoed, never the request headers
+  // themselves or the raw secret value.
+  assert.doesNotMatch(stripShellComments(selfTestBlock), /echo\s+"?\$\{?SECRET_VALUE\}?"?\s*$/m);
+});
+
+test("11b. self-test is best-effort — a failed identity-token mint does not abort provisioning (already succeeded above it)", () => {
+  const code = readScript();
+  const selfTestStart = code.indexOf("Self-test:");
+  const selfTestBlock = code.slice(selfTestStart);
+  assert.match(selfTestBlock, /gcloud auth print-identity-token[\s\S]*\|\| echo ""/, "identity-token mint must not use set -e to fail the script");
+});
+
 test("secret is read from Secret Manager directly, never accepted as a plain env var or CLI arg", () => {
   const code = readScript();
   assert.match(code, /gcloud secrets versions access latest/);
