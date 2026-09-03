@@ -11,8 +11,10 @@
 # job non-terminal kế tiếp (GOOGLE_DOCS + HTML_PDF). Auth 2 lớp:
 #   - OIDC: scheduler mượn identity của RUNTIME_SA → Cloud Run IAM
 #     (RUNTIME_SA phải có roles/run.invoker trên service — cấp 1 lần).
-#   - App secret: header `Authorization: Bearer <MERGE_WORKER_SECRET>` đọc
-#     trực tiếp từ Secret Manager (KHÔNG in ra log).
+#   - App secret: header `X-Merge-Worker-Secret: <MERGE_WORKER_SECRET>` (KHÔNG
+#     tiền tố "Bearer ") đọc trực tiếp từ Secret Manager (KHÔNG in ra log).
+#     KHÔNG dùng `Authorization` cho secret này — header đó đã bị OIDC token
+#     (dòng trên) chiếm giữ; 2 giá trị không thể cùng tồn tại trên 1 header.
 #
 # IDEMPOTENT: chạy lại bao nhiêu lần cũng an toàn (create nếu chưa có,
 # update nếu đã tồn tại).
@@ -102,7 +104,21 @@ fi
 # inline KEY=VALUE, nên secret buộc phải xuất hiện như 1 argument của lệnh
 # gcloud này — không có cách nào khác qua CLI. Không bao giờ echo/log lệnh
 # này (script không bật `set -x` ở đâu cả).
-AUTH_HEADER="Authorization=Bearer ${SECRET_VALUE},Content-Type=application/json"
+#
+# QUAN TRỌNG: KHÔNG đặt app secret vào header `Authorization` — header đó đã
+# bị --oidc-service-account-email chiếm giữ cho Cloud Run IAM (Cloud Scheduler
+# CHỈ hỗ trợ gắn OIDC token vào đúng header `Authorization`, không có cờ nào
+# đổi sang header khác). 2 giá trị không thể cùng tồn tại trên 1 header HTTP —
+# đặt secret vào đây sẽ ghi đè/xung đột với OIDC token, worker nhận về
+# `Authorization: Bearer <OIDC JWT>` (không khớp app secret) → 401, đã xác
+# nhận bằng chẩn đoán trực tiếp production (status 401, body
+# {"error":"unauthorized"}) — không phải suy đoán.
+#
+# Dùng header thay thế `X-Merge-Worker-Secret` mà worker/src/index.ts đã hỗ
+# trợ sẵn (isAuthorized(), dòng ~100-109 — được giữ lại chính xác cho tình
+# huống `Authorization` không rảnh cho app secret). Giá trị KHÔNG có tiền tố
+# "Bearer " — isAuthorized() so sánh trực tiếp với WORKER_SECRET nguyên văn.
+AUTH_HEADER="X-Merge-Worker-Secret=${SECRET_VALUE},Content-Type=application/json"
 
 if gcloud scheduler jobs describe "${JOB_NAME}" \
   --location="${REGION}" --project="${PROJECT_ID}" >/dev/null 2>&1; then

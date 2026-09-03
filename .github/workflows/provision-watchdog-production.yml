@@ -222,5 +222,5 @@ jobs:
           echo "Raw /run response (watchdog mode — this call itself is a safe no-op with zero queued jobs in production today):"
           echo "${RESPONSE}"
           echo ""
-          echo "200 + {\"processed\":0,\"note\":\"no queued jobs\"} = fully healthy, auth correct, DB reachable, nothing to do."
-          echo "401 = app-secret Authorization header rejected. 403 = OIDC/Cloud Run IAM rejected. 5xx = a real runtime error inside the worker (e.g. DB connectivity) — the response body above should show why."
+          echo "This call deliberately sends ONLY the OIDC Authorization header (no X-Merge-Worker-Secret) — it exists to prove Cloud Run IAM/OIDC alone reaches the app, not to exercise the app secret. Expect 401 {\"error\":\"unauthorized\"} here even when the real Scheduler job (which DOES send X-Merge-Worker-Secret) is fully correct — see the before/after status.code reads above for that."
+          echo "403/5xx here (instead of the expected 401) would mean Cloud Run IAM itself, or the worker container, is broken — that would be a real problem regardless of the app secret."
