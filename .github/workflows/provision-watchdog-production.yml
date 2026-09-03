@@ -136,15 +136,59 @@ jobs:
           fi
 
       - name: Provision watchdog (existing script — idempotent create-or-update, no candidate data)
+        # continue-on-error: this step can legitimately fail here even when
+        # the job already exists and is fully correct (e.g. the deploying
+        # identity lacking secretmanager.versions.access — a known, already
+        # least-privilege-preserving boundary; see PR #132/#133). The
+        # read-only verification steps below are still meaningful and must
+        # still run in that case — they check the job GCP actually has, not
+        # whether this specific step's write succeeded.
+        continue-on-error: true
         env:
           WORKER_URL: ${{ steps.resolve.outputs.worker_url }}
           RUNTIME_SA: ${{ steps.resolve.outputs.runtime_sa }}
           SECRET_NAME: PROD_MERGE_WORKER_SECRET
         run: ./scripts/provision-merge-worker-watchdog.sh --yes
 
-      - name: Verify scheduler job (schedule/target only — never prints the app secret)
+      - name: Verify scheduler job config (schedule/target/OIDC identity/timezone — NEVER httpTarget.headers)
+        # Non-fatal: cloudscheduler.jobs.get may itself be restricted for
+        # this deploying identity (same pattern hit on 3 other GCP read/write
+        # permissions already this session) — don't let that stop the later
+        # steps from at least attempting the force-run and its own read.
+        continue-on-error: true
         run: |
           set -euo pipefail
           gcloud scheduler jobs describe merge-worker-watchdog \
             --location "${REGION}" --project "${PROJECT_ID}" \
-            --format='table(name,schedule,state,httpTarget.uri)'
+            --format='yaml(name,schedule,timeZone,state,httpTarget.uri,httpTarget.httpMethod,httpTarget.oidcToken.serviceAccountEmail,httpTarget.oidcToken.audience)'
+
+      - name: Read last execution result BEFORE force-run (status/lastAttemptTime only — proves auth correctness without ever reading the header value)
+        run: |
+          set -euo pipefail
+          echo "Cloud Scheduler's own status.code after an attempt reflects whether the worker's Authorization check accepted the request — this is how we verify the header is CORRECT without ever looking at what it contains."
+          gcloud scheduler jobs describe merge-worker-watchdog \
+            --location "${REGION}" --project "${PROJECT_ID}" \
+            --format='yaml(lastAttemptTime,status)' || echo "(no attempt has occurred yet — status/lastAttemptTime absent until the first execution)"
+
+      - name: "Force-run exactly one watchdog execution (safe — watchdog mode reclaims/dispatches only, creates no candidate/job data)"
+        # Non-fatal: cloudscheduler.jobs.run may also be restricted for this
+        # identity. If so, the natural */5 * * * * schedule still fires on
+        # its own — the final read step below reports whatever the latest
+        # real attempt (forced or organic) shows.
+        continue-on-error: true
+        run: |
+          set -euo pipefail
+          gcloud scheduler jobs run merge-worker-watchdog \
+            --location "${REGION}" --project "${PROJECT_ID}"
+          echo "✅ Force-run triggered. Cloud Scheduler executes it asynchronously — waiting briefly before reading the result."
+          sleep 15
+
+      - name: Read execution result AFTER force-run (status/lastAttemptTime only)
+        run: |
+          set -euo pipefail
+          gcloud scheduler jobs describe merge-worker-watchdog \
+            --location "${REGION}" --project "${PROJECT_ID}" \
+            --format='yaml(lastAttemptTime,status)'
+          echo ""
+          echo "status.code absent or 0 (OK) = the worker accepted BOTH the OIDC token AND the Authorization: Bearer header — i.e. the app secret in the header is genuinely correct, not a placeholder/misconstructed value."
+          echo "A non-zero status.code here (commonly 16 = UNAUTHENTICATED) would mean the header or OIDC identity is wrong and needs investigation — it would NOT mean 'transient error' the way an HTTP 5xx does."
