@@ -143,6 +143,28 @@ else
   echo "✅ Cloud Scheduler watchdog '${JOB_NAME}' đã CREATE."
 fi
 
+# Self-test: gọi thẳng /run với ĐÚNG hình dạng request Cloud Scheduler sẽ
+# gửi (2 header: OIDC ở Authorization + app secret ở X-Merge-Worker-Secret) —
+# chỉ nơi duy nhất SECRET_VALUE hợp lệ để dùng cho việc này (không export ra
+# process/step khác). Best-effort: không chặn provisioning nếu lệnh này lỗi
+# (vd. identity hiện tại không mint được identity token) — chỉ để chẩn đoán.
+# KHÔNG BAO GIỜ in SECRET_VALUE; chỉ in HTTP status + response body (không
+# nhạy cảm — worker chỉ trả {"processed":...} hoặc {"error":...}).
+echo ""
+echo "➡ Self-test: gọi /run trực tiếp với đúng 2 header thật (không qua Cloud Scheduler)..."
+SELF_TEST_TOKEN=$(gcloud auth print-identity-token --audiences="${WORKER_URL}" 2>/dev/null || echo "")
+if [[ -n "${SELF_TEST_TOKEN}" ]]; then
+  SELF_TEST_RESPONSE=$(curl -s -w '\nHTTP_STATUS:%{http_code}' -X POST \
+    -H "Authorization: Bearer ${SELF_TEST_TOKEN}" \
+    -H "X-Merge-Worker-Secret: ${SECRET_VALUE}" \
+    -H "Content-Type: application/json" \
+    -d '{}' \
+    "${WORKER_URL}/run" 2>/dev/null || echo "(curl lỗi)")
+  echo "${SELF_TEST_RESPONSE}"
+else
+  echo "⚠️  Không mint được identity token để self-test (identity hiện tại có thể thiếu quyền) — bỏ qua, không ảnh hưởng việc provision ở trên."
+fi
+
 echo "LƯU Ý: '${RUNTIME_SA}' phải có roles/run.invoker trên Cloud Run service"
 echo "(gcloud run services add-iam-policy-binding <service> --member=serviceAccount:${RUNTIME_SA} --role=roles/run.invoker)."
 echo "Worker tự reclaim item hết lease + xử lý job non-terminal kế tiếp — recovery"
