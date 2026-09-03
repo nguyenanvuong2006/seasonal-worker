@@ -55,9 +55,15 @@ test("2b. update http uses the supported --update-headers mechanism (not --heade
   assert.doesNotMatch(updateBlock, /\s--headers\s/, "update path must use --update-headers, not --headers");
 });
 
-test("3. the Authorization: Bearer <secret> header is still configured, alongside Content-Type", () => {
+test("3. the app secret is configured via X-Merge-Worker-Secret (no Bearer prefix), alongside Content-Type", () => {
   const code = readScript();
-  assert.match(code, /AUTH_HEADER="Authorization=Bearer \$\{SECRET_VALUE\},Content-Type=application\/json"/);
+  assert.match(code, /AUTH_HEADER="X-Merge-Worker-Secret=\$\{SECRET_VALUE\},Content-Type=application\/json"/);
+});
+
+test("3b. the app secret is NEVER put in the Authorization header — that header is exclusively OIDC's, per a real production 401 this was proven to cause (2026-09-03: Cloud Run IAM/OIDC and a custom Authorization header cannot coexist on one HTTP header slot)", () => {
+  const code = stripShellComments(readScript());
+  assert.doesNotMatch(code, /AUTH_HEADER="Authorization=/);
+  assert.doesNotMatch(code, /\bAuthorization=Bearer \$\{SECRET_VALUE\}/);
 });
 
 test("4. the secret value is never echoed/printed by the script, and xtrace is never enabled", () => {
