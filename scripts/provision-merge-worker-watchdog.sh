@@ -88,9 +88,21 @@ if [[ -z "${SECRET_VALUE}" ]]; then
   exit 1
 fi
 
-HEADERS_FILE=$(mktemp)
-trap 'rm -f "${HEADERS_FILE}"' EXIT
-printf 'Authorization: Bearer %s\nContent-Type: application/json' "${SECRET_VALUE}" > "${HEADERS_FILE}"
+# GitHub Actions không tự biết giá trị này nhạy cảm (đọc runtime từ GCP Secret
+# Manager, không phải 1 `secrets.*` đã đăng ký sẵn) — tự đăng ký mask log.
+# No-op khi chạy ngoài CI (GITHUB_ACTIONS không set, vd. Cloud Shell) — nếu
+# không guard, dòng này sẽ tự in giá trị ra terminal y hệt điều nó định ngăn.
+if [[ "${GITHUB_ACTIONS:-}" == "true" ]]; then
+  echo "::add-mask::${SECRET_VALUE}"
+fi
+
+# gcloud scheduler jobs create/update http KHÔNG có input header dạng file —
+# --headers-from-file không tồn tại cho lệnh này (đã xác nhận với gcloud CLI
+# reference thật, không suy đoán). Cơ chế DUY NHẤT được hỗ trợ là danh sách
+# inline KEY=VALUE, nên secret buộc phải xuất hiện như 1 argument của lệnh
+# gcloud này — không có cách nào khác qua CLI. Không bao giờ echo/log lệnh
+# này (script không bật `set -x` ở đâu cả).
+AUTH_HEADER="Authorization=Bearer ${SECRET_VALUE},Content-Type=application/json"
 
 if gcloud scheduler jobs describe "${JOB_NAME}" \
   --location="${REGION}" --project="${PROJECT_ID}" >/dev/null 2>&1; then
@@ -100,7 +112,7 @@ if gcloud scheduler jobs describe "${JOB_NAME}" \
     --uri="${WORKER_URL}/run" --http-method POST \
     --oidc-service-account-email "${RUNTIME_SA}" \
     --oidc-token-audience "${WORKER_URL}" \
-    --headers-from-file "${HEADERS_FILE}" \
+    --update-headers "${AUTH_HEADER}" \
     --message-body '{}'
   echo "✅ Cloud Scheduler watchdog '${JOB_NAME}' đã UPDATE."
 else
@@ -110,7 +122,7 @@ else
     --uri="${WORKER_URL}/run" --http-method POST \
     --oidc-service-account-email "${RUNTIME_SA}" \
     --oidc-token-audience "${WORKER_URL}" \
-    --headers-from-file "${HEADERS_FILE}" \
+    --headers "${AUTH_HEADER}" \
     --message-body '{}'
   echo "✅ Cloud Scheduler watchdog '${JOB_NAME}' đã CREATE."
 fi
