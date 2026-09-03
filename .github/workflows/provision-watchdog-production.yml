@@ -107,14 +107,33 @@ jobs:
           echo "runtime_sa=${SA}" >> "${GITHUB_OUTPUT}"
           echo "✅ worker_url + runtime_sa đã resolve (không phải secret — chỉ định danh resource)."
 
-      - name: Grant RUNTIME_SA roles/run.invoker on the worker service (idempotent)
+      - name: Check RUNTIME_SA has roles/run.invoker (read-only, best-effort, never fails the run)
         run: |
-          set -euo pipefail
-          gcloud run services add-iam-policy-binding "${SERVICE}" \
+          set -uo pipefail
+          # This binding is a documented ONE-TIME prerequisite
+          # (scripts/provision-merge-worker-watchdog.sh's own trailing note),
+          # not something this workflow's identity is meant to grant itself:
+          # run.services.setIamPolicy sits in roles/run.admin, deliberately
+          # broader than the roles/run.developer-tier grant this deploying
+          # identity has for routine deploys (same "read allowed, write
+          # reserved for the account owner" boundary already hit on
+          # serviceusage.services.enable). Least privilege means NOT
+          # widening this identity just to self-grant a one-time binding —
+          # so this step only ever reads, and never blocks provisioning the
+          # actual scheduler job below even if the read itself is denied or
+          # the binding is missing (that would only surface later as a
+          # 403 in the scheduler job's own execution history, not here).
+          MEMBER="serviceAccount:${{ steps.resolve.outputs.runtime_sa }}"
+          POLICY=$(gcloud run services get-iam-policy "${SERVICE}" \
             --region "${REGION}" --project "${PROJECT_ID}" \
-            --member "serviceAccount:${{ steps.resolve.outputs.runtime_sa }}" \
-            --role roles/run.invoker \
-            --condition=None
+            --format=json 2>&1)
+          if [ $? -ne 0 ]; then
+            echo "⚠️  Không đọc được IAM policy (quyền get-iam-policy có thể cũng bị giới hạn) — bỏ qua kiểm tra, tiếp tục provision watchdog. Nếu scheduler job sau này gọi /run bị 403, đây là nơi cần kiểm tra thủ công."
+          elif echo "${POLICY}" | grep -q "${MEMBER}"; then
+            echo "✅ ${MEMBER} đã có ít nhất 1 role binding trên service — giả định roles/run.invoker đã được cấp theo đúng ghi chú của script (cấp 1 lần)."
+          else
+            echo "⚠️  Không thấy ${MEMBER} trong IAM policy hiện tại của ${SERVICE}. Scheduler job vẫn sẽ được tạo/update (không mutate IAM ở đây theo nguyên tắc least-privilege), nhưng /run có thể trả 403 cho tới khi 1 người có quyền project chạy: gcloud run services add-iam-policy-binding ${SERVICE} --region ${REGION} --project ${PROJECT_ID} --member=${MEMBER} --role=roles/run.invoker"
+          fi
 
       - name: Provision watchdog (existing script — idempotent create-or-update, no candidate data)
         env:
