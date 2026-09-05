@@ -55,6 +55,14 @@ test("2b. update http uses the supported --update-headers mechanism (not --heade
   assert.doesNotMatch(updateBlock, /\s--headers\s/, "update path must use --update-headers, not --headers");
 });
 
+test("2c. create and update both suppress gcloud's default resource echo (--format=none), which would otherwise print AUTH_HEADER (containing SECRET_VALUE) to stdout outside CI's ::add-mask:: safety net (e.g. a manual Cloud Shell run)", () => {
+  const code = stripShellComments(readScript());
+  const updateBlock = code.slice(code.indexOf("gcloud scheduler jobs update http"), code.indexOf("gcloud scheduler jobs create http"));
+  const createBlock = code.slice(code.indexOf("gcloud scheduler jobs create http"));
+  assert.match(updateBlock, /--format=['"]none['"]/, "update must suppress the default resource output (contains headers)");
+  assert.match(createBlock, /--format=['"]none['"]/, "create must suppress the default resource output (contains headers)");
+});
+
 test("3. the app secret is configured via X-Merge-Worker-Secret (no Bearer prefix), alongside Content-Type", () => {
   const code = readScript();
   assert.match(code, /AUTH_HEADER="X-Merge-Worker-Secret=\$\{SECRET_VALUE\},Content-Type=application\/json"/);
