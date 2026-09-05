@@ -120,6 +120,15 @@ fi
 # "Bearer " — isAuthorized() so sánh trực tiếp với WORKER_SECRET nguyên văn.
 AUTH_HEADER="X-Merge-Worker-Secret=${SECRET_VALUE},Content-Type=application/json"
 
+# --format='none' trên CẢ 2 lệnh: mặc định `gcloud scheduler jobs
+# create/update http` in ra TOÀN BỘ resource vừa tạo/update ra stdout, bao
+# gồm httpTarget.headers — tức là AUTH_HEADER (chứa SECRET_VALUE nguyên
+# văn) sẽ bị in ra terminal. Trong GitHub Actions, ::add-mask:: ở trên che
+# được giá trị này, nhưng đó chỉ là lưới an toàn phụ của riêng CI — chạy
+# script này ở nơi khác (vd. Cloud Shell, như đã từng làm thủ công) sẽ
+# không có ::add-mask:: và secret sẽ lộ ra cleartext. --format='none' chặn
+# việc in resource ngay tại nguồn, không phụ thuộc môi trường chạy; các
+# thông báo lỗi (stderr) và echo "✅ ..." bên dưới vẫn hiển thị bình thường.
 if gcloud scheduler jobs describe "${JOB_NAME}" \
   --location="${REGION}" --project="${PROJECT_ID}" >/dev/null 2>&1; then
   gcloud scheduler jobs update http "${JOB_NAME}" \
@@ -129,7 +138,8 @@ if gcloud scheduler jobs describe "${JOB_NAME}" \
     --oidc-service-account-email "${RUNTIME_SA}" \
     --oidc-token-audience "${WORKER_URL}" \
     --update-headers "${AUTH_HEADER}" \
-    --message-body '{}'
+    --message-body '{}' \
+    --format='none'
   echo "✅ Cloud Scheduler watchdog '${JOB_NAME}' đã UPDATE."
 else
   gcloud scheduler jobs create http "${JOB_NAME}" \
@@ -139,7 +149,8 @@ else
     --oidc-service-account-email "${RUNTIME_SA}" \
     --oidc-token-audience "${WORKER_URL}" \
     --headers "${AUTH_HEADER}" \
-    --message-body '{}'
+    --message-body '{}' \
+    --format='none'
   echo "✅ Cloud Scheduler watchdog '${JOB_NAME}' đã CREATE."
 fi
 
