@@ -44,14 +44,56 @@ body { background: #64748b; padding: 28px 0; margin: 0; }
 `;
 
 /**
+ * Margin/printable-area guide (Phase 5) — a subtle, non-printing dashed inset
+ * drawn at exactly the configured margin, so an admin can see "A4 physical
+ * page -> configured margin -> printable content area" on screen. This is
+ * PREVIEW-ONLY: it is injected into the already-rendered preview HTML shown
+ * in a modal iframe, exactly like `A4_PREVIEW_SHEET_DECORATION_CSS` above —
+ * it never touches the canonical HTML/CSS the real PDF renders from
+ * (wrapHtmlDocument's own `pageGeometryCss()` output), so it can never appear
+ * in a generated PDF.
+ */
+export function marginGuideCss(margins: { topMm: number; bottomMm: number; leftMm: number; rightMm: number }): string {
+  return `
+.page::after, .paper::after {
+  content: "";
+  position: absolute;
+  top: ${margins.topMm}mm;
+  right: ${margins.rightMm}mm;
+  bottom: ${margins.bottomMm}mm;
+  left: ${margins.leftMm}mm;
+  border: 1px dashed rgba(37, 99, 235, 0.55);
+  pointer-events: none;
+}
+`;
+}
+
+/**
  * Injects the decoration `<style>` right before `</head>` (or, if the
  * document has no `<head>`, prepends it — browsers hoist a stray top-level
  * `<style>` into the parsed `<head>` automatically). Idempotent: a second
  * call is a no-op if the decoration is already present.
+ *
+ * `margins`, when provided, additionally draws the printable-area guide
+ * (see `marginGuideCss`) using the SAME margin values the final PDF used —
+ * Preview and PDF must never disagree about what "the margin" is.
  */
-export function decoratePreviewForA4Sheets(html: string): string {
-  if (html.includes(A4_PREVIEW_SHEET_DECORATION_CSS)) return html;
-  const styleTag = `<style>${A4_PREVIEW_SHEET_DECORATION_CSS}</style>`;
+export function decoratePreviewForA4Sheets(
+  html: string,
+  margins?: { topMm: number; bottomMm: number; leftMm: number; rightMm: number } | null,
+): string {
+  const decoration = A4_PREVIEW_SHEET_DECORATION_CSS + (margins ? marginGuideCss(margins) : "");
+  if (html.includes(A4_PREVIEW_SHEET_DECORATION_CSS)) {
+    // Idempotent even when a caller adds a margin guide on a second pass: if
+    // the base decoration is already present but the guide isn't yet, append
+    // just the guide instead of skipping entirely.
+    if (margins && !html.includes(marginGuideCss(margins))) {
+      const guideTag = `<style>${marginGuideCss(margins)}</style>`;
+      return /<\/head>/i.test(html) ? html.replace(/<\/head>/i, `${guideTag}</head>`) : `${guideTag}${html}`;
+    }
+    return html;
+  }
+  const styleTag = `<style>${decoration}</style>`;
   if (/<\/head>/i.test(html)) {
     return html.replace(/<\/head>/i, `${styleTag}</head>`);
   }

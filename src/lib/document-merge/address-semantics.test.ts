@@ -24,6 +24,7 @@ import { resolveAllFields, validateRequiredFields } from "./data-resolver.ts";
 import { applyFallbackPlaceholders, FALLBACK_PLACEHOLDER_MAP } from "./preview-merge.ts";
 import { renderCanonicalDocument, type CanonicalMapping } from "./canonical-document.ts";
 import { DEFAULT_MAX_ATTEMPTS, isRetryableItemError, shouldRetry } from "./queue-types.ts";
+import { DEFAULT_PAGE_MARGINS } from "./html-renderer.ts";
 
 const PERMANENT_TEST_VALUE = "PERMANENT_TEST_VALUE";
 const RESIDENTIAL_TEST_VALUE = "RESIDENTIAL_TEST_VALUE";
@@ -251,6 +252,7 @@ test("mapping is_required=false overrides catalog required=true for addresses", 
     printCss: null,
     mappings,
     formatting: { contractKey: "dang-ky-tap-nghe", retentionYears: 3, documentKind: "B", templateName: "t" },
+    margins: DEFAULT_PAGE_MARGINS,
   };
 
   const rendered = renderCanonicalDocument(
@@ -280,6 +282,7 @@ test("ADDRESS_PARITY: Preview and Worker resolve identical address values", () =
     printCss: ".page{color:#000}",
     mappings,
     formatting: { contractKey: "dang-ky-tap-nghe", retentionYears: 3, documentKind: "B", templateName: "t" },
+    margins: DEFAULT_PAGE_MARGINS,
   };
   const record = { id: "j", permanentAddress: null, residentialAddress: RESIDENTIAL_TEST_VALUE, customAnswers: {} };
 

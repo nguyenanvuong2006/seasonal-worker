@@ -230,6 +230,9 @@ export async function POST(request: Request, context: RouteContext) {
       mappingSummary: summarizePreviewMappings(mappings),
       renderedHtml: rendered.html,
       printCss: snapshot.printCss,
+      // Phase 5 — same margin config the final PDF uses (frozen in the
+      // snapshot), so the operator's on-screen preview guide matches exactly.
+      margins: rendered.margins,
       // H3 — echo back exactly what Signing Context this render used, so the
       // operator can see it was applied (never silently defaulted/guessed).
       signingContext,

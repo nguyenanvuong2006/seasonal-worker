@@ -118,6 +118,9 @@ async function loadService(db: FakeDb): Promise<CloneModule> {
           return Array.from(unique).sort();
         },
       },
+      "./html-renderer.ts": {
+        DEFAULT_PAGE_MARGINS: { topMm: 10, bottomMm: 10, leftMm: 12, rightMm: 12 },
+      },
     },
   });
   return mod as unknown as CloneModule;

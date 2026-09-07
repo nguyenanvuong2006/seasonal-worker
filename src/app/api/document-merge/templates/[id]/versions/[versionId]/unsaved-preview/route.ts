@@ -280,6 +280,11 @@ export async function POST(request: Request, context: RouteContext) {
       analysisHash: computeAnalysisHash(normalized.htmlBody, normalizedPrintCss),
       renderedHtml: rendered.html,
       printCss: snapshot.printCss,
+      // Phase 5 — same margin config the final PDF uses (the persisted
+      // version's saved margins; margin edits go through the same Save
+      // Draft/PATCH flow as htmlBody/printCss, so Preview and PDF always
+      // agree once saved).
+      margins: rendered.margins,
       signingContext,
       applicationId,
       recordId: applicationId,

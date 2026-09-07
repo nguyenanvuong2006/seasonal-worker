@@ -58,6 +58,8 @@ type PreviewResult = {
   missingFields: string[];
   valid: boolean;
   currentPublishedVersion: number | null;
+  /** Phase 5 — same margin config the final PDF used (see preview-a4-decoration.ts). */
+  margins: { topMm: number; bottomMm: number; leftMm: number; rightMm: number } | null;
 };
 
 type Problem = { code: string; error: string; action?: string; details?: string };
@@ -120,6 +122,16 @@ function normalize(raw: unknown): PreviewResult {
     missingFields: asArray(data.missingFields),
     valid: data.valid === true,
     currentPublishedVersion: asNumber(data.currentPublishedVersion),
+    margins: (() => {
+      const m = data.margins as Record<string, unknown> | undefined;
+      const topMm = asNumber(m?.topMm);
+      const bottomMm = asNumber(m?.bottomMm);
+      const leftMm = asNumber(m?.leftMm);
+      const rightMm = asNumber(m?.rightMm);
+      return topMm !== null && bottomMm !== null && leftMm !== null && rightMm !== null
+        ? { topMm, bottomMm, leftMm, rightMm }
+        : null;
+    })(),
   };
 }
 
@@ -143,7 +155,10 @@ export function DraftVersionPreviewModal({
   // Preview-only, screen-media A4 sheet boundaries ("Trang N" labels) — never
   // fed back into the renderer; the canonical HTML used for the real merge/PDF
   // is untouched. See preview-a4-decoration.ts for why this is an approximation.
-  const decoratedPreviewHtml = useMemo(() => (result ? decoratePreviewForA4Sheets(result.renderedHtml) : ""), [result]);
+  const decoratedPreviewHtml = useMemo(
+    () => (result ? decoratePreviewForA4Sheets(result.renderedHtml, result.margins) : ""),
+    [result],
+  );
   const [problem, setProblem] = useState<Problem | null>(null);
   /** The candidate id that produced the CURRENT renderedHtml (so the print view
    *  never drifts if the operator picks another candidate without re-rendering). */

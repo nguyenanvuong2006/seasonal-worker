@@ -100,15 +100,18 @@ test("save(): PATCH đúng endpoint version detail dựng từ templateId + vers
   assert.match(save, /method:\s*"PATCH"/, "Lưu bản nháp phải là PATCH (UPDATE tại chỗ), không phải POST");
 });
 
-test("save(): KHÔNG BAO GIỜ tạo version mới — chỉ một fetch, không POST, body chỉ có htmlBody/printCss", () => {
+test("save(): KHÔNG BAO GIỜ tạo version mới — chỉ một fetch, không POST, body chỉ có htmlBody/printCss/margin A4", () => {
   const save = sliceHandler(editor.code, "save");
   const fetches = save.match(/fetch\(/g) ?? [];
   assert.equal(fetches.length, 1, "save() chỉ được gọi đúng một endpoint");
   assert.doesNotMatch(save, /method:\s*"POST"/, "POST /versions là tạo version MỚI — nghiêm cấm trong save()");
   assert.doesNotMatch(save, /\/versions`/, "không được đụng collection /versions (tạo mới)");
-  // Body chỉ đụng nội dung — mapping_snapshot/publishedAt/current_published_version
-  // không bao giờ nằm trong request.
-  assert.match(save, /body:\s*JSON\.stringify\(\{\s*htmlBody:\s*html,\s*printCss:\s*css \|\| null\s*\}\)/);
+  // Body chỉ đụng nội dung (html/css/margin A4) — mapping_snapshot/publishedAt/
+  // current_published_version không bao giờ nằm trong request.
+  assert.match(
+    save,
+    /body:\s*JSON\.stringify\(\{\s*htmlBody:\s*html,\s*printCss:\s*css \|\| null,\s*marginTopMm,\s*marginBottomMm,\s*marginLeftMm,\s*marginRightMm,\s*\}\)/,
+  );
   assert.doesNotMatch(save, /mappingSnapshot|mapping_snapshot|currentPublishedVersion|current_published_version/);
 });
 

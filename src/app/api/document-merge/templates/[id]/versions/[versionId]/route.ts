@@ -63,9 +63,21 @@ export async function PATCH(request: Request, context: RouteContext) {
       return NextResponse.json({ error: "printCss phải là chuỗi hoặc null." }, { status: 400 });
     }
 
+    const marginFields = ["marginTopMm", "marginBottomMm", "marginLeftMm", "marginRightMm"] as const;
+    for (const field of marginFields) {
+      const value = (body as Record<string, unknown>)[field];
+      if (value !== undefined && typeof value !== "number") {
+        return NextResponse.json({ error: `${field} phải là số (mm).` }, { status: 400 });
+      }
+    }
+
     const updated = await updateTemplateVersionDraft(id, versionId, {
       htmlBody,
       printCss: typeof printCss === "string" ? printCss : null,
+      marginTopMm: typeof (body as Record<string, unknown>).marginTopMm === "number" ? ((body as Record<string, unknown>).marginTopMm as number) : undefined,
+      marginBottomMm: typeof (body as Record<string, unknown>).marginBottomMm === "number" ? ((body as Record<string, unknown>).marginBottomMm as number) : undefined,
+      marginLeftMm: typeof (body as Record<string, unknown>).marginLeftMm === "number" ? ((body as Record<string, unknown>).marginLeftMm as number) : undefined,
+      marginRightMm: typeof (body as Record<string, unknown>).marginRightMm === "number" ? ((body as Record<string, unknown>).marginRightMm as number) : undefined,
     });
 
     await writeAudit(guard.session, "UPDATE_TEMPLATE_VERSION_DRAFT", "merge_template_versions", {

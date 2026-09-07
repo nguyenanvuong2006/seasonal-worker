@@ -43,6 +43,10 @@ export async function POST(request: Request, context: RouteContext) {
       printCss: body.printCss ?? null,
       sourceDocxName: body.sourceDocxName ?? null,
       retentionYears: body.retentionYears ?? null,
+      marginTopMm: typeof body.marginTopMm === "number" ? body.marginTopMm : undefined,
+      marginBottomMm: typeof body.marginBottomMm === "number" ? body.marginBottomMm : undefined,
+      marginLeftMm: typeof body.marginLeftMm === "number" ? body.marginLeftMm : undefined,
+      marginRightMm: typeof body.marginRightMm === "number" ? body.marginRightMm : undefined,
     });
 
     await writeAudit(guard.session, "CREATE_TEMPLATE_VERSION", "merge_template_versions", {

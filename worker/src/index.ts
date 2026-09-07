@@ -246,6 +246,8 @@ interface TemplateSnapshot {
   htmlBody?: string | null;
   printCss?: string | null;
   mappings?: CanonicalMapping[];
+  /** A4 page margins (mm) frozen at job creation — see html-renderer.ts's pageGeometryCss(). */
+  margins?: { topMm?: number; bottomMm?: number; leftMm?: number; rightMm?: number } | null;
   formatting?: {
     contractKey?: string | null;
     retentionYears?: number | null;
