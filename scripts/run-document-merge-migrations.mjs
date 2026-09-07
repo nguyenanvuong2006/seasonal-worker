@@ -4,7 +4,7 @@
  *
  * KHÁC với scripts/run-migrations.mjs (thiết kế cho fresh/staging DB — chạy
  * TOÀN BỘ schema.sql + TOÀN BỘ migrations/*.sql, kể cả các migration không
- * liên quan Document Merge): script này CHỈ chạy 11 migration Document Merge
+ * liên quan Document Merge): script này CHỈ chạy 12 migration Document Merge
  * cụ thể, theo đúng thứ tự khai báo bên dưới, trên 1 database ĐÃ CÓ schema
  * nền tảng (production) — không đụng tới bất kỳ bảng/migration nào khác.
  *
@@ -12,7 +12,7 @@
  *   export DATABASE_URL=postgresql://...   # PROD_DATABASE_URL — KHÔNG dùng staging!
  *   node scripts/run-document-merge-migrations.mjs
  *
- * An toàn: cả 11 migration đều idempotent (ADD COLUMN IF NOT EXISTS / CREATE
+ * An toàn: cả 12 migration đều idempotent (ADD COLUMN IF NOT EXISTS / CREATE
  * TABLE IF NOT EXISTS / ON CONFLICT DO NOTHING / WHERE NOT EXISTS). Không
  * DROP/TRUNCATE/DELETE. Không seed dữ liệu test/verification — chỉ seed
  * permissions hệ thống + 1 template thật (Đăng ký tập nghề) ở trạng thái
@@ -58,7 +58,7 @@ if (!DATABASE_URL) {
   process.exit(1);
 }
 
-// Đúng 11 migration Document Merge, ĐÚNG THỨ TỰ — KHÔNG đọc toàn bộ thư mục
+// Đúng 12 migration Document Merge, ĐÚNG THỨ TỰ — KHÔNG đọc toàn bộ thư mục
 // migrations/ (khác run-migrations.mjs) để không vô tình chạy migration của
 // tính năng khác trên production (production có lịch sử migration riêng,
 // không đảm bảo đồng bộ với danh sách file hiện tại của thư mục này).
@@ -116,6 +116,15 @@ const DOCUMENT_MERGE_MIGRATIONS = [
   // touches PUBLISHED v18 or current_published_version. See the
   // migration file's own docblock for the full root-cause analysis.
   "2026-09-07-trainee-registration-layout-compaction-draft.sql",
+  // v20 DRAFT (two local refinements on the user-approved layout-
+  // compaction version): page 1 signature space +~10mm using its own
+  // unused slack; section 7 no longer forced onto its own page (merged
+  // the two .paper divs, added keep-with-next-small to its heading).
+  // Idempotent (dedupe by source_docx_name) INSERT of exactly one new
+  // DRAFT version, cloned from whatever is currently PUBLISHED — never
+  // touches PUBLISHED or current_published_version. See the migration
+  // file's own docblock for the full measured root-cause analysis.
+  "2026-09-07-trainee-registration-v20-signature-and-section7-flow-draft.sql",
 ];
 
 const client = new pg.Client({ connectionString: DATABASE_URL, ssl: { rejectUnauthorized: false } });

@@ -66,6 +66,9 @@ const MARGINS_MIGRATION = "2026-09-07-document-merge-template-margins.sql";
 const LAYOUT_COMPACTION_MIGRATION = "2026-09-07-trainee-registration-layout-compaction-draft.sql";
 const LAYOUT_COMPACTION_SOURCE_NAME =
   "trainee-registration/layout-compaction-draft (evolution of v18: tightened spacing so all 6 sections fit their own intended single physical page — 10 real Chromium pages -> 6)";
+const V20_SIGNATURE_SECTION7_MIGRATION = "2026-09-07-trainee-registration-v20-signature-and-section7-flow-draft.sql";
+const V20_SIGNATURE_SECTION7_SOURCE_NAME =
+  "trainee-registration/v20-signature-and-section7-flow-draft (page 1 signature space +~10mm; section 7 flows naturally after section 6 instead of forcing a new page)";
 
 const CANONICAL_TEMPLATE_ID = "a1b2c3d4-e5f6-7890-abcd-ef1234567890";
 const CANONICAL_SOURCE_NAME =
@@ -278,6 +281,7 @@ test("HOTFIX-1: the runner list is exactly the known-safe, idempotent sequence",
     CANDIDATE_CONSENT_MIGRATION,
     MARGINS_MIGRATION,
     LAYOUT_COMPACTION_MIGRATION,
+    V20_SIGNATURE_SECTION7_MIGRATION,
   ]);
 });
 
@@ -303,9 +307,9 @@ test("PHASE 4 REGISTRATION: template-margins migration is present and idempotent
   assert.match(sql, /ADD COLUMN IF NOT EXISTS margin_right_mm/);
 });
 
-test("PHASE 5 REGISTRATION: layout-compaction draft migration is present, LAST, dedupe-guarded, and idempotent/non-destructive per the runner's own invariant checks", () => {
+test("PHASE 5 REGISTRATION: layout-compaction draft migration is present, dedupe-guarded, and idempotent/non-destructive per the runner's own invariant checks", () => {
   const list = parseRunnerList();
-  assert.equal(list.at(-1), LAYOUT_COMPACTION_MIGRATION, "must be registered so the official Production migration workflow actually runs it");
+  assert.ok(list.includes(LAYOUT_COMPACTION_MIGRATION), "must be registered so the official Production migration workflow actually runs it");
   const sql = readRepoFile(`migrations/${LAYOUT_COMPACTION_MIGRATION}`);
   assertNonDestructiveSql(`migrations/${LAYOUT_COMPACTION_MIGRATION}`, sql);
   const code = stripSqlComments(sql);
@@ -318,6 +322,21 @@ test("PHASE 5 REGISTRATION: layout-compaction draft migration is present, LAST, 
   assert.match(code, /'DRAFT'/, "the new version row must be inserted as DRAFT");
   const inserts = code.match(/\bINSERT\s+INTO\s+merge_template_versions\b/gi) ?? [];
   assert.equal(inserts.length, 1, "exactly one INSERT into merge_template_versions");
+});
+
+test("PHASE 6 REGISTRATION: v20 signature/section7-flow draft migration is present, LAST, dedupe-guarded, and idempotent/non-destructive per the runner's own invariant checks", () => {
+  const list = parseRunnerList();
+  assert.equal(list.at(-1), V20_SIGNATURE_SECTION7_MIGRATION, "must be registered so the official Production migration workflow actually runs it");
+  const sql = readRepoFile(`migrations/${V20_SIGNATURE_SECTION7_MIGRATION}`);
+  assertNonDestructiveSql(`migrations/${V20_SIGNATURE_SECTION7_MIGRATION}`, sql);
+  const code = stripSqlComments(sql);
+  assert.match(code, /\bNOT\s+EXISTS[\s\S]*?source_docx_name/i, "must be dedupe-guarded by source_docx_name (rerun-safe)");
+  assert.ok(code.includes(V20_SIGNATURE_SECTION7_SOURCE_NAME));
+  assert.doesNotMatch(code, /UPDATE\s+merge_template_versions|UPDATE\s+merge_templates|current_published_version\s*=/i, "must never touch PUBLISHED or the template's published-version pointer");
+  assert.match(code, /'DRAFT'/, "the new version row must be inserted as DRAFT");
+  const inserts = code.match(/\bINSERT\s+INTO\s+merge_template_versions\b/gi) ?? [];
+  assert.equal(inserts.length, 1, "exactly one INSERT into merge_template_versions");
+  assert.ok(code.includes("keep-with-next-small"), "must reuse the existing shared keep-with-next-small utility, not invent a new break rule");
 });
 
 test("HOTFIX-1: runner comments describe the REAL migration count", () => {
@@ -370,8 +389,8 @@ test("HOTFIX-9: NO runner migration can (re)create a pre-v7 document body — on
   }
   assert.deepEqual(
     versionInserters,
-    [RECOVERY_MIGRATION, V7_DRAFT_MIGRATION, V8_DRAFT_MIGRATION, LAYOUT_COMPACTION_MIGRATION],
-    "exactly the recovery migration, v7 operator draft, v8 pagination draft, and the v18 layout-compaction draft may insert document versions",
+    [RECOVERY_MIGRATION, V7_DRAFT_MIGRATION, V8_DRAFT_MIGRATION, LAYOUT_COMPACTION_MIGRATION, V20_SIGNATURE_SECTION7_MIGRATION],
+    "exactly the recovery migration, v7 operator draft, v8 pagination draft, the v18 layout-compaction draft, and the v20 signature/section7-flow draft may insert document versions",
   );
 
   // And the only source_docx_name those producers can write is the v7 one.
@@ -579,6 +598,21 @@ function layoutCompactionMigration(state: DbState): DbState {
   };
 }
 
+/**
+ * Model of the v20 signature/section7-flow draft: same dedupe-guarded,
+ * dynamic-next-version INSERT shape as layoutCompactionMigration above.
+ */
+function v20SignatureSection7Migration(state: DbState): DbState {
+  if (state.versions.some((v) => v.sourceDocxName === V20_SIGNATURE_SECTION7_SOURCE_NAME)) return state;
+  return {
+    ...state,
+    versions: [
+      ...state.versions,
+      { version: maxVersion(state) + 1, status: "DRAFT", sourceDocxName: V20_SIGNATURE_SECTION7_SOURCE_NAME, bodySha256: "n/a" },
+    ],
+  };
+}
+
 const MIGRATION_MODELS: Record<string, (state: DbState) => DbState> = {
   "2026-08-15-document-merge-engine.sql": ddlMigration,
   "2026-08-17-document-merge-async-phase2.sql": ddlMigration,
@@ -600,6 +634,10 @@ const MIGRATION_MODELS: Record<string, (state: DbState) => DbState> = {
   // never touches PUBLISHED/current_published_version — modelled like the
   // v7/v8 draft producers above.
   [LAYOUT_COMPACTION_MIGRATION]: layoutCompactionMigration,
+  // v20 signature/section7-flow draft (Phase 6): one dedupe-guarded INSERT
+  // DRAFT, never touches PUBLISHED/current_published_version — modelled
+  // like the v7/v8/layout-compaction draft producers above.
+  [V20_SIGNATURE_SECTION7_MIGRATION]: v20SignatureSection7Migration,
 };
 
 /** Re-run the recurring runner exactly as scripts/run-document-merge-migrations.mjs does. */
@@ -659,12 +697,16 @@ test("runner recovery creates v7 and v8 DRAFTs only; neither is published", () =
 
   assert.equal(
     after.versions.length,
-    3,
-    "the runner may create only the approved v7 recovery, v8 pagination, and layout-compaction DRAFTs; never the legacy v1 draft",
+    4,
+    "the runner may create only the approved v7 recovery, v8 pagination, layout-compaction, and v20 signature/section7-flow DRAFTs; never the legacy v1 draft",
   );
   assert.ok(
     after.versions.some((v) => v.sourceDocxName === LAYOUT_COMPACTION_SOURCE_NAME),
     "the layout-compaction draft must also be created (it is registered and dedupe-guarded, same as v7/v8)",
+  );
+  assert.ok(
+    after.versions.some((v) => v.sourceDocxName === V20_SIGNATURE_SECTION7_SOURCE_NAME),
+    "the v20 signature/section7-flow draft must also be created (it is registered and dedupe-guarded, same as v7/v8/layout-compaction)",
   );
   assert.ok(
     !after.versions.some((v) => v.sourceDocxName === CANONICAL_SOURCE_NAME),
@@ -693,8 +735,8 @@ test("runner adds v8 once when only v7 exists, then is idempotent", () => {
   const thrice = runRecurringRunner(twice);
 
   for (const [label, state] of [["once", once], ["twice", twice], ["thrice", thrice]] as const) {
-    assert.equal(state.versions.length, 3, `after run ${label}: exactly v7, v8, and the layout-compaction rows exist`);
-    assert.deepEqual(state.versions.map((v) => v.version).sort((a, b) => a - b), [7, 8, 9], `after run ${label}: only the known 3 producers may append rows`);
+    assert.equal(state.versions.length, 4, `after run ${label}: exactly v7, v8, layout-compaction, and v20 rows exist`);
+    assert.deepEqual(state.versions.map((v) => v.version).sort((a, b) => a - b), [7, 8, 9, 10], `after run ${label}: only the known 4 producers may append rows`);
     assert.ok(state.versions.every((v) => v.status === "DRAFT"), `after run ${label}: no draft is auto-published`);
     assert.ok(
       !state.versions.some((v) => v.sourceDocxName === CANONICAL_SOURCE_NAME),
@@ -705,7 +747,7 @@ test("runner adds v8 once when only v7 exists, then is idempotent", () => {
   assert.deepEqual(twice, once, "second rerun is byte-for-byte identical to the first");
 });
 
-test("running the runner twice creates no duplicate v7/v8/layout-compaction drafts", () => {
+test("running the runner twice creates no duplicate v7/v8/layout-compaction/v20 drafts", () => {
   const once = runRecurringRunner(incidentState());
   const twice = runRecurringRunner(once);
   const thrice = runRecurringRunner(twice);
@@ -720,7 +762,10 @@ test("running the runner twice creates no duplicate v7/v8/layout-compaction draf
     const layoutRows = state.versions.filter((v) => v.sourceDocxName === LAYOUT_COMPACTION_SOURCE_NAME);
     assert.equal(layoutRows.length, 1, `after run #${label}: exactly one layout-compaction draft`);
     assert.equal(layoutRows[0].version, 9, `after run #${label}: layout-compaction draft lands right after v8`);
-    assert.ok(!state.versions.some((v) => v.version > 9), `after run #${label}: no v10/... may appear — only the 3 known producers`);
+    const v20Rows = state.versions.filter((v) => v.sourceDocxName === V20_SIGNATURE_SECTION7_SOURCE_NAME);
+    assert.equal(v20Rows.length, 1, `after run #${label}: exactly one v20 signature/section7-flow draft`);
+    assert.equal(v20Rows[0].version, 10, `after run #${label}: v20 draft lands right after the layout-compaction draft`);
+    assert.ok(!state.versions.some((v) => v.version > 10), `after run #${label}: no v11/... may appear — only the 4 known producers`);
     assert.equal(state.currentPublishedVersion, null, `after run #${label}: still fail closed`);
   }
   assert.deepEqual(twice.versions, once.versions, "second run is a true no-op on versions");
