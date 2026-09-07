@@ -1172,6 +1172,47 @@ const server = http.createServer(async (req, res) => {
     }
 
     // ---------------------------------------------------------------
+    // POST /preview-pdf — authoritative "A4 PDF Preview" (Admin website,
+    // 2026-09). Body: { html } — the FULLY rendered, already-wrapped HTML
+    // string produced server-side by Vercel via the EXACT SAME
+    // renderCanonicalDocument()/buildCanonicalSnapshot() pipeline the
+    // Preview JSON route already uses (see
+    // src/lib/document-merge/preview-render.ts). This endpoint does nothing
+    // but call the SAME renderPdfBytes() the real HTML_PDF merge uses —
+    // same Chromium launch args, same page.setContent/fonts.ready/page.pdf()
+    // options — so Preview and the final merge can never drift onto two
+    // independently maintained PDF configurations.
+    //
+    // Stateless and read-only: no DB write, no merge_jobs row, no storage
+    // upload, no candidate_documents row. Always available in production
+    // (unlike /verify-visual and /benchmark, which are gated to non-
+    // production by isVerificationEnabled() on the caller side) — this is a
+    // real, permanent admin feature, not a diagnostic/comparison tool.
+    // ---------------------------------------------------------------
+    if (url.pathname === "/preview-pdf" && req.method === "POST") {
+      if (!isAuthorized(req)) {
+        return json(res, 401, { error: "unauthorized" });
+      }
+      const body = await readBody(req);
+      const html = typeof body.html === "string" ? body.html : "";
+      if (!html.trim()) {
+        return json(res, 400, { error: "Thiếu html." });
+      }
+      // Generous but bounded — a real merged document is well under this;
+      // guards against an oversized/malformed request, never a real preview.
+      if (html.length > 5_000_000) {
+        return json(res, 400, { error: "HTML preview quá lớn." });
+      }
+      try {
+        const bytes = await renderPdfBytes(html);
+        return json(res, 200, { pdfBase64: Buffer.from(bytes).toString("base64"), byteLength: bytes.byteLength });
+      } catch (e) {
+        console.error(JSON.stringify({ event: "preview_pdf_render_failed", error: e instanceof Error ? e.message.slice(0, 300) : String(e) }));
+        return json(res, 500, { error: "Không render được PDF xem trước." });
+      }
+    }
+
+    // ---------------------------------------------------------------
     // POST /run-overlay — controlled staging E2E cho PDF Overlay (PR5).
     // Body: { jobId } — job phải có engine='PDF_OVERLAY' + metadata.e2e
     // snapshot NON-PRODUCTION (xem staging-e2e.ts). Đi qua ĐÚNG queue/storage/

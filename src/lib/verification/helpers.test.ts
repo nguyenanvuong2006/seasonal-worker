@@ -79,6 +79,17 @@ test("callWorker uses POST for /verify-visual and /benchmark", async () => {
   assert.equal(calls[1].init?.method, "POST");
 });
 
+test("callWorker uses POST with JSON body for /preview-pdf — the A4 PDF Preview route's ONLY worker call", async () => {
+  process.env.PDF_MERGE_WORKER_URL = "https://worker.example";
+  const calls = captureFetch();
+
+  await callWorker("/preview-pdf", { html: "<html></html>" });
+
+  assert.equal(calls[0].input, "https://worker.example/preview-pdf");
+  assert.equal(calls[0].init?.method, "POST");
+  assert.equal(calls[0].init?.body, JSON.stringify({ html: "<html></html>" }));
+});
+
 test("callWorker omits Authorization when worker secret is empty", async () => {
   process.env.PDF_MERGE_WORKER_URL = "https://worker.example";
   delete process.env.MERGE_WORKER_SECRET;

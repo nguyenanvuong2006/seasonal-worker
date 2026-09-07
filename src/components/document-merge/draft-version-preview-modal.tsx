@@ -6,19 +6,32 @@
  * Opened from: Trộn tài liệu → Sửa Template → Phiên bản Template → [Xem trước].
  *
  * This dialog NEVER publishes. It calls only:
- *   GET  /api/document-merge/candidates?q=…                       (search)
- *   POST /api/document-merge/templates/:id/versions/:vid/preview  (render)
- * Both are read-only, ADMIN-guarded and data-scope filtered server-side.
+ *   GET  /api/document-merge/candidates?q=…                           (search)
+ *   POST /api/document-merge/templates/:id/versions/:vid/preview      (Quick Preview, DOM)
+ *   POST /api/document-merge/templates/:id/versions/:vid/preview-pdf  (A4 PDF Preview, real PDF)
+ * All are read-only, ADMIN-guarded and data-scope filtered server-side.
  *
- * The rendered document is displayed in a sandboxed iframe using the EXACT
- * HTML + print_css produced by the shared canonical renderer (the same function
- * the Cloud Run HTML_PDF worker uses), so page/.paper structure, placeholder
- * replacement, checkbox glyphs, formatting and page breaks are preserved
- * byte-for-byte. The document itself is never restyled here.
+ * TWO preview modes, both from the SAME canonical renderer/snapshot
+ * (renderCanonicalDocument — see preview-render.ts), so neither can drift
+ * from what a real merge produces:
+ *
+ *   - "Xem trước PDF A4" (AUTHORITATIVE): the real Chromium-rendered PDF —
+ *     same page.pdf() configuration the HTML_PDF worker uses for a real
+ *     merge (see worker/src/index.ts's renderPdfBytes). True A4 physical
+ *     pagination, print-media CSS, exact page count. This is the version to
+ *     approve a template against.
+ *   - "Xem nhanh" (Quick Preview, APPROXIMATE): the SAME rendered HTML shown
+ *     in a sandboxed iframe on ordinary screen media, decorated with
+ *     visual "Trang N" sheet boundaries. Fast (no Chromium round trip) but
+ *     CANNOT reproduce true print-media pagination — a `.paper` section
+ *     whose content overflows one physical A4 page renders here as a
+ *     single tall box, while the real PDF continues it onto additional
+ *     physical pages (see preview-a4-decoration.ts). Useful for a quick
+ *     look while editing; never the basis for approving a template.
  */
 
 import { useEffect, useMemo, useRef, useState } from "react";
-import { AlertTriangle, Eye, ExternalLink, FileText, Printer, Search, X } from "lucide-react";
+import { AlertTriangle, Eye, ExternalLink, FileText, FileWarning, Printer, Search, X } from "lucide-react";
 import {
   buildPrintViewUrl,
   canOpenPrintView,
@@ -160,6 +173,13 @@ export function DraftVersionPreviewModal({
     [result],
   );
   const [problem, setProblem] = useState<Problem | null>(null);
+  // A4 PDF Preview (authoritative) — real Chromium-rendered PDF, shown via a
+  // blob: URL. Independent of the Quick Preview's `result`/`problem` state
+  // above so either mode can be used without needing the other first.
+  const [pdfLoading, setPdfLoading] = useState(false);
+  const [pdfUrl, setPdfUrl] = useState<string | null>(null);
+  const [pdfProblem, setPdfProblem] = useState<Problem | null>(null);
+  const pdfUrlRef = useRef<string | null>(null);
   /** The candidate id that produced the CURRENT renderedHtml (so the print view
    *  never drifts if the operator picks another candidate without re-rendering). */
   const [previewApplicationId, setPreviewApplicationId] = useState<string | null>(null);
@@ -249,6 +269,80 @@ export function DraftVersionPreviewModal({
       });
     } finally {
       setRendering(false);
+    }
+  };
+
+  // Revoke any blob: URL still held when the modal unmounts, so we never
+  // leak memory across repeated opens.
+  useEffect(() => {
+    return () => {
+      if (pdfUrlRef.current) URL.revokeObjectURL(pdfUrlRef.current);
+    };
+  }, []);
+
+  /**
+   * "Xem trước PDF A4" — AUTHORITATIVE preview. Calls the SAME
+   * renderCanonicalDocument() snapshot resolution as Quick Preview, then
+   * hands that HTML to the worker's real Chromium page.pdf() (see
+   * preview-pdf/route.ts). Never persists anything — the PDF is only ever
+   * held client-side as a blob: URL, discarded on the next render or on
+   * unmount.
+   */
+  const runPdfPreview = async () => {
+    if (!selected) {
+      setPdfProblem({ code: "APPLICATION_REQUIRED", error: "Chọn một ứng viên trước khi tạo bản xem trước." });
+      return;
+    }
+    setPdfLoading(true);
+    setPdfProblem(null);
+    try {
+      const res = await fetch(
+        `/api/document-merge/templates/${templateId}/versions/${version.id}/preview-pdf`,
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ applicationId: selected.id, signingContext: signingContextBody(signingContext) }),
+        },
+      );
+      if (!res.ok) {
+        let data: Record<string, unknown> = {};
+        try {
+          const parsed: unknown = await res.json();
+          if (parsed !== null && typeof parsed === "object" && !Array.isArray(parsed)) data = parsed as Record<string, unknown>;
+        } catch {
+          data = {};
+        }
+        if (pdfUrlRef.current) {
+          URL.revokeObjectURL(pdfUrlRef.current);
+          pdfUrlRef.current = null;
+        }
+        setPdfUrl(null);
+        setPdfProblem({
+          code: asString(data.code, `HTTP_${res.status}`),
+          error: asString(data.error, "Không tạo được PDF xem trước."),
+          action: typeof data.action === "string" ? data.action : undefined,
+          details: typeof data.details === "string" ? data.details : undefined,
+        });
+        return;
+      }
+      const blob = await res.blob();
+      const url = URL.createObjectURL(blob);
+      if (pdfUrlRef.current) URL.revokeObjectURL(pdfUrlRef.current);
+      pdfUrlRef.current = url;
+      setPdfUrl(url);
+    } catch (error) {
+      if (pdfUrlRef.current) {
+        URL.revokeObjectURL(pdfUrlRef.current);
+        pdfUrlRef.current = null;
+      }
+      setPdfUrl(null);
+      setPdfProblem({
+        code: "NETWORK_ERROR",
+        error: "Không kết nối được tới API xem trước PDF.",
+        details: error instanceof Error ? error.message : String(error),
+      });
+    } finally {
+      setPdfLoading(false);
     }
   };
 
@@ -434,18 +528,28 @@ export function DraftVersionPreviewModal({
           <div className="flex flex-wrap items-center gap-2">
             <button
               type="button"
+              onClick={() => void runPdfPreview()}
+              disabled={pdfLoading || !selected}
+              title="Render PDF thật qua Chromium (đúng cấu hình worker HTML_PDF dùng cho merge thật) — phân trang, whitespace, chữ ký đúng như bản merge thật."
+              className="inline-flex items-center gap-1.5 rounded-lg bg-indigo-700 px-4 py-2 text-xs font-bold text-white hover:bg-indigo-800 disabled:opacity-50"
+            >
+              <FileText className="h-3.5 w-3.5" /> {pdfLoading ? "Đang render PDF..." : "Xem trước PDF A4"}
+            </button>
+            <button
+              type="button"
               onClick={() => void runPreview()}
               disabled={rendering || !selected}
-              className="inline-flex items-center gap-1.5 rounded-lg bg-emerald-700 px-4 py-2 text-xs font-bold text-white hover:bg-emerald-800 disabled:opacity-50"
+              title="Bản xem nhanh, gần đúng (HTML/CSS trên màn hình thường) — không phân trang thật như PDF. Dùng để xem nhanh khi đang sửa mapping, không dùng để duyệt mẫu."
+              className="inline-flex items-center gap-1.5 rounded-lg border border-slate-300 px-3 py-2 text-xs font-semibold text-slate-700 hover:bg-slate-50 disabled:opacity-50"
             >
-              <FileText className="h-3.5 w-3.5" /> {rendering ? "Đang dựng bản xem trước..." : "Tạo bản xem trước"}
+              <FileWarning className="h-3.5 w-3.5" /> {rendering ? "Đang dựng bản xem nhanh..." : "Xem nhanh (gần đúng)"}
             </button>
             {hasRenderedPreview(result) && (
               <>
                 <button
                   type="button"
                   onClick={() => openPrintView(true)}
-                  title="Mở hộp thoại in của trình duyệt trên chính bản xem trước (In / Lưu thành PDF TEST). Không tạo file trên máy chủ, không tạo job, không publish."
+                  title="Mở hộp thoại in của trình duyệt trên chính bản xem nhanh (In / Lưu thành PDF TEST). Không tạo file trên máy chủ, không tạo job, không publish."
                   className="inline-flex items-center gap-1.5 rounded-lg border border-slate-300 px-3 py-2 text-xs font-semibold text-slate-700 hover:bg-slate-50"
                 >
                   <Printer className="h-3.5 w-3.5" /> In / Lưu PDF TEST
@@ -453,7 +557,7 @@ export function DraftVersionPreviewModal({
                 <button
                   type="button"
                   onClick={() => openPrintView(false)}
-                  title="Mở một bản in (print-only view) của chính bản xem trước trong tab riêng, rồi dùng Print / Save as PDF của trình duyệt. Đây là đường chạy tin cậy trên Chrome Android và khi trình duyệt chặn print tự động."
+                  title="Mở một bản in (print-only view) của chính bản xem nhanh trong tab riêng, rồi dùng Print / Save as PDF của trình duyệt. Đây là đường chạy tin cậy trên Chrome Android và khi trình duyệt chặn print tự động."
                   className="inline-flex items-center gap-1.5 rounded-lg border border-slate-300 px-3 py-2 text-xs font-semibold text-slate-600 hover:bg-slate-50"
                 >
                   <ExternalLink className="h-3.5 w-3.5" /> Mở bản in
@@ -466,6 +570,30 @@ export function DraftVersionPreviewModal({
               </span>
             )}
           </div>
+
+          {pdfProblem && (
+            <div className="rounded-xl border border-red-200 bg-red-50 p-3 text-xs text-red-800">
+              <p className="flex items-center gap-1.5 font-bold">
+                <AlertTriangle className="h-3.5 w-3.5" /> {pdfProblem.error}
+              </p>
+              {pdfProblem.action && <p className="mt-1 text-red-700">{pdfProblem.action}</p>}
+              <p className="mt-1 font-mono text-[10px] text-red-500">{pdfProblem.code}</p>
+            </div>
+          )}
+
+          {pdfUrl && (
+            <div className="space-y-2">
+              <p className="rounded-lg bg-indigo-50 p-2 text-[11px] font-semibold text-indigo-800">
+                PDF A4 thật — render qua Chromium bằng đúng cấu hình worker HTML_PDF dùng cho merge thật. Đây là bản
+                dùng để duyệt mẫu.
+              </p>
+              <iframe
+                title="Xem trước PDF A4 (chính thức)"
+                src={pdfUrl}
+                className="h-[700px] w-full rounded-lg border border-indigo-200"
+              />
+            </div>
+          )}
 
           {problem && (
             <div className="rounded-xl border border-red-200 bg-red-50 p-3 text-xs text-red-800">
@@ -500,8 +628,8 @@ export function DraftVersionPreviewModal({
               <p className="text-[10px] text-slate-400">
                 Xem trước bên dưới đóng khung từng trang theo tỉ lệ A4 để dễ phân biệt — đây là bản{" "}
                 <b>GẦN ĐÚNG</b> (trình duyệt không phân trang khi hiển thị màn hình thường như khi in thật). Nếu một
-                trang bị tràn nội dung dài hơn 1 trang A4 thật, hãy dùng <b>In / Lưu PDF TEST</b> bên dưới — PDF thật
-                mới là nguồn xác thực cuối cùng.
+                trang bị tràn nội dung dài hơn 1 trang A4 thật, số trang và vị trí ngắt trang ở đây sẽ khác PDF thật.
+                Dùng <b>Xem trước PDF A4</b> ở trên để duyệt mẫu — đó mới là nguồn xác thực cuối cùng.
               </p>
               <iframe
                 id="draft-preview-frame"
