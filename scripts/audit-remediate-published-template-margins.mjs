@@ -59,8 +59,10 @@ if (!DATABASE_URL) {
 // Opt-in only: full html_body/print_css are template content (placeholders
 // like <<Ho_ten>>, never candidate data), but are large — keep default runs
 // lean and only include them when explicitly requested for offline
-// (local, non-production) render verification of a remediation.
-const DUMP_CONTENT = process.env.DUMP_CONTENT === "1";
+// (local, non-production) render verification of a remediation. GitHub
+// Actions' `type: boolean` workflow_dispatch inputs arrive as the literal
+// string "true"/"false" (not "1"/"0"), so accept both spellings.
+const DUMP_CONTENT = process.env.DUMP_CONTENT === "1" || process.env.DUMP_CONTENT === "true";
 
 const client = new pg.Client({ connectionString: DATABASE_URL, ssl: { rejectUnauthorized: false } });
 await client.connect();
