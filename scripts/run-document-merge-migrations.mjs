@@ -4,7 +4,7 @@
  *
  * KHÁC với scripts/run-migrations.mjs (thiết kế cho fresh/staging DB — chạy
  * TOÀN BỘ schema.sql + TOÀN BỘ migrations/*.sql, kể cả các migration không
- * liên quan Document Merge): script này CHỈ chạy 10 migration Document Merge
+ * liên quan Document Merge): script này CHỈ chạy 11 migration Document Merge
  * cụ thể, theo đúng thứ tự khai báo bên dưới, trên 1 database ĐÃ CÓ schema
  * nền tảng (production) — không đụng tới bất kỳ bảng/migration nào khác.
  *
@@ -12,7 +12,7 @@
  *   export DATABASE_URL=postgresql://...   # PROD_DATABASE_URL — KHÔNG dùng staging!
  *   node scripts/run-document-merge-migrations.mjs
  *
- * An toàn: cả 10 migration đều idempotent (ADD COLUMN IF NOT EXISTS / CREATE
+ * An toàn: cả 11 migration đều idempotent (ADD COLUMN IF NOT EXISTS / CREATE
  * TABLE IF NOT EXISTS / ON CONFLICT DO NOTHING / WHERE NOT EXISTS). Không
  * DROP/TRUNCATE/DELETE. Không seed dữ liệu test/verification — chỉ seed
  * permissions hệ thống + 1 template thật (Đăng ký tập nghề) ở trạng thái
@@ -58,7 +58,7 @@ if (!DATABASE_URL) {
   process.exit(1);
 }
 
-// Đúng 10 migration Document Merge, ĐÚNG THỨ TỰ — KHÔNG đọc toàn bộ thư mục
+// Đúng 11 migration Document Merge, ĐÚNG THỨ TỰ — KHÔNG đọc toàn bộ thư mục
 // migrations/ (khác run-migrations.mjs) để không vô tình chạy migration của
 // tính năng khác trên production (production có lịch sử migration riêng,
 // không đảm bảo đồng bộ với danh sách file hiện tại của thư mục này).
@@ -108,6 +108,14 @@ const DOCUMENT_MERGE_MIGRATIONS = [
   // html-renderer.ts's pageGeometryCss()). ADD COLUMN IF NOT EXISTS + guarded
   // CHECK constraint — idempotent, no data seeded/mutated beyond defaults.
   "2026-09-07-document-merge-template-margins.sql",
+  // Layout-compaction DRAFT (evolution of v18) — real Chromium print
+  // pagination measured 10 pages against v18's own verified content;
+  // tightened spacing so all 6 logical sections fit their own intended
+  // single physical page again (10 -> 6). Idempotent (dedupe by
+  // source_docx_name) INSERT of exactly one new DRAFT version — never
+  // touches PUBLISHED v18 or current_published_version. See the
+  // migration file's own docblock for the full root-cause analysis.
+  "2026-09-07-trainee-registration-layout-compaction-draft.sql",
 ];
 
 const client = new pg.Client({ connectionString: DATABASE_URL, ssl: { rejectUnauthorized: false } });
