@@ -58,6 +58,11 @@ test("@page stripping is scoped to @page {...} blocks only — no other CSS rule
   assert.match(code, /printCss\.replace\(AT_PAGE_RULE, ""\)/);
 });
 
+test("DUMP_CONTENT accepts GitHub Actions' boolean workflow_dispatch string \"true\" (not just \"1\")", () => {
+  const code = readScript();
+  assert.match(code, /DUMP_CONTENT\s*=\s*process\.env\.DUMP_CONTENT === "1" \|\| process\.env\.DUMP_CONTENT === "true"/);
+});
+
 test("remediation is idempotent — a second run detects a matching existing DRAFT and skips re-insertion", () => {
   const code = readScript();
   assert.match(code, /status = 'DRAFT' AND html_body = \$2 AND print_css = \$3/);
