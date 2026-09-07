@@ -59,6 +59,60 @@ export function stripPreviewOnlyMarkup(html: string): string {
 }
 
 /**
+ * CANONICAL A4 PAGE GEOMETRY — single source of truth.
+ *
+ * Root cause fixed here (production defect, 2026-09): margins were applied
+ * TWICE — once by `@page { margin: 12mm 12mm }` (the print engine's own page
+ * inset) and again by template-authored wrapper padding (e.g. the trainee-
+ * registration template's `.paper { padding: 12mm 14mm }`), stacking to
+ * roughly double the intended whitespace. Worse, `.paper`'s own
+ * `width:210mm; min-height:297mm` assumed it occupied the FULL physical
+ * sheet (a common "@page margin:0, wrapper supplies its own margin via
+ * padding" pattern) while `@page` was ALSO reserving margin — so `.paper`'s
+ * box did not fit within the page's own (already-shrunk) printable area,
+ * overflowing it on every page. That overflow is what pushed small trailing
+ * fragments (e.g. a name field) onto their own near-empty page.
+ *
+ * Fix: `@page` NEVER carries a margin (always 0 — see below). The page box
+ * itself is always the full physical sheet. The ONE place margin is ever
+ * applied is `pageGeometryCss()`, which sets `.page`/`.paper`'s own
+ * width/min-height/padding from the (admin-configurable) template version's
+ * margin settings, and — critically — is emitted LAST in the concatenated
+ * stylesheet (see `wrapHtmlDocument`), so it always overrides any margin/
+ * width/height a template's own authored CSS declares for `.page`/`.paper`,
+ * without ever having to edit stored template content (PUBLISHED versions
+ * are immutable).
+ */
+export const A4_PAGE_WIDTH_MM = 210;
+export const A4_PAGE_HEIGHT_MM = 297;
+
+export interface PageMargins {
+  topMm: number;
+  bottomMm: number;
+  leftMm: number;
+  rightMm: number;
+}
+
+export const DEFAULT_PAGE_MARGINS: PageMargins = { topMm: 10, bottomMm: 10, leftMm: 12, rightMm: 12 };
+
+/**
+ * The canonical, single-source page-box rule. Emitted LAST in the
+ * concatenated `<style>` (after the template's own CSS) so it always wins
+ * the cascade for `.page`/`.paper`'s geometry-defining properties, whatever
+ * a legacy template's own authored CSS declares for them.
+ */
+export function pageGeometryCss(margins: PageMargins = DEFAULT_PAGE_MARGINS): string {
+  return `
+.page, .paper {
+  width: ${A4_PAGE_WIDTH_MM}mm;
+  min-height: ${A4_PAGE_HEIGHT_MM}mm;
+  padding: ${margins.topMm}mm ${margins.rightMm}mm ${margins.bottomMm}mm ${margins.leftMm}mm;
+  box-sizing: border-box;
+}
+`;
+}
+
+/**
  * Shared print rules.  `.page + .page` starts a new logical section without a
  * trailing forced blank page.  A long value may naturally add a page, but it
  * cannot overlap its neighbour or create an empty final page.
@@ -66,7 +120,7 @@ export function stripPreviewOnlyMarkup(html: string): string {
 export const A4_PRINT_CSS = `
 @page {
   size: A4;
-  margin: 12mm 12mm;
+  margin: 0;
 }
 * {
   box-sizing: border-box;
@@ -171,14 +225,23 @@ export const LAYOUT_UTILITY_CSS = `
 }
 `;
 
-/** Wrap trusted body + CSS into a Unicode A4 document suitable for Playwright. */
-export function wrapHtmlDocument(bodyHtml: string, css: string): string {
+/**
+ * Wrap trusted body + CSS into a Unicode A4 document suitable for Playwright.
+ *
+ * `pageGeometryCss(margins)` is deliberately concatenated LAST — after the
+ * template's own `css` — so it always wins the cascade for `.page`/`.paper`'s
+ * width/min-height/padding, overriding any margin a template's own authored
+ * CSS declares for them (see the docblock on `A4_PRINT_CSS` above). This is
+ * the ONLY place page margin is ever applied; `@page` itself always carries
+ * `margin: 0`.
+ */
+export function wrapHtmlDocument(bodyHtml: string, css: string, margins: PageMargins = DEFAULT_PAGE_MARGINS): string {
   return `<!DOCTYPE html>
 <html lang="vi">
 <head>
 <meta charset="utf-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1" />
-<style>${A4_PRINT_CSS}\n${LAYOUT_UTILITY_CSS}\n${css}</style>
+<style>${A4_PRINT_CSS}\n${LAYOUT_UTILITY_CSS}\n${css}\n${pageGeometryCss(margins)}</style>
 </head>
 <body>${stripPreviewOnlyMarkup(bodyHtml)}</body>
 </html>`;
@@ -199,6 +262,7 @@ export function renderApplicantHtmlFromParts(
   bodyHtml: string,
   css: string | null | undefined,
   fieldValues: Record<string, string>,
+  margins: PageMargins = DEFAULT_PAGE_MARGINS,
 ): RenderResult {
   const escaped: Record<string, string> = {};
   for (const [key, value] of Object.entries(fieldValues)) {
@@ -206,5 +270,5 @@ export function renderApplicantHtmlFromParts(
   }
   const body = replaceMultiplePlaceholders(stripPreviewOnlyMarkup(bodyHtml), escaped);
   const unreplaced = extractUniquePlaceholders(body);
-  return { html: wrapHtmlDocument(body, css ?? ""), unreplaced };
+  return { html: wrapHtmlDocument(body, css ?? "", margins), unreplaced };
 }

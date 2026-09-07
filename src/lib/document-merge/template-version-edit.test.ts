@@ -86,6 +86,9 @@ async function loadService(db: FakeDb): Promise<EditModule> {
           return Array.from(unique).sort();
         },
       },
+      "./html-renderer.ts": {
+        DEFAULT_PAGE_MARGINS: { topMm: 10, bottomMm: 10, leftMm: 12, rightMm: 12 },
+      },
     },
   });
   return mod as unknown as EditModule;
@@ -170,8 +173,11 @@ test("edit: KHÔNG đổi version number, KHÔNG đổi templateId, KHÔNG publi
 
   const update = db.writesTo("merge_template_versions")[0];
   const set = argOf(update, "set") as Record<string, unknown>;
-  // Chỉ được phép set đúng 3 khoá nội dung — không identity/lifecycle/mapping.
-  assert.deepEqual(Object.keys(set).sort(), ["htmlBody", "printCss", "updatedAt"]);
+  // Chỉ được phép set đúng các khoá nội dung (html/css/margin) — không identity/lifecycle/mapping.
+  assert.deepEqual(
+    Object.keys(set).sort(),
+    ["htmlBody", "marginBottomMm", "marginLeftMm", "marginRightMm", "marginTopMm", "printCss", "updatedAt"],
+  );
   assert.equal(set.status, undefined);
   assert.equal(set.version, undefined);
   assert.equal(set.templateId, undefined);
@@ -302,7 +308,10 @@ test("edit (lặp NHIỀU LẦN): Save liên tục trên cùng versionId — m�
     assert.equal(eqValue(update, "merge_template_versions.templateId"), "tpl-1");
     assert.equal(eqValue(update, "merge_template_versions.status"), "DRAFT");
     const set = argOf(update, "set") as Record<string, unknown>;
-    assert.deepEqual(Object.keys(set).sort(), ["htmlBody", "printCss", "updatedAt"]);
+    assert.deepEqual(
+      Object.keys(set).sort(),
+      ["htmlBody", "marginBottomMm", "marginLeftMm", "marginRightMm", "marginTopMm", "printCss", "updatedAt"],
+    );
     assert.equal(set.status, undefined);
     assert.equal(set.version, undefined);
     assert.equal(set.mappingSnapshot, undefined);

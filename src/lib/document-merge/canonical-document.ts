@@ -28,10 +28,28 @@
 import type { MergeTemplateField } from "../../db/schema";
 import type { MergeContext, RecordData } from "./data-resolver.ts";
 import type { TemplateContract } from "./template-contract.ts";
+import { DEFAULT_PAGE_MARGINS, type PageMargins } from "./html-renderer.ts";
 import {
   renderApplicantDocumentFromParts,
   type RenderApplicantDocumentResult,
 } from "./html-pipeline.ts";
+
+/** Clamp/normalize a raw margin value (mm) to a safe, sane range. Never negative,
+ * never large enough to make the printable area unusable. See PAGE_MARGIN_LIMITS_MM. */
+export const PAGE_MARGIN_LIMITS_MM = { min: 0, max: 60 } as const;
+
+export function normalizePageMargins(raw: Partial<PageMargins> | null | undefined): PageMargins {
+  const clamp = (value: number | undefined, fallback: number): number => {
+    if (typeof value !== "number" || !Number.isFinite(value)) return fallback;
+    return Math.min(PAGE_MARGIN_LIMITS_MM.max, Math.max(PAGE_MARGIN_LIMITS_MM.min, Math.round(value)));
+  };
+  return {
+    topMm: clamp(raw?.topMm, DEFAULT_PAGE_MARGINS.topMm),
+    bottomMm: clamp(raw?.bottomMm, DEFAULT_PAGE_MARGINS.bottomMm),
+    leftMm: clamp(raw?.leftMm, DEFAULT_PAGE_MARGINS.leftMm),
+    rightMm: clamp(raw?.rightMm, DEFAULT_PAGE_MARGINS.rightMm),
+  };
+}
 
 /** Machine-readable configuration error codes for the canonical pipeline. */
 export const CANONICAL_ERROR = {
@@ -117,6 +135,8 @@ export interface CanonicalDocumentSnapshot {
   printCss: string | null;
   mappings: CanonicalMapping[];
   formatting: CanonicalFormatting;
+  /** A4 page margins (mm) frozen at snapshot time — see html-renderer.ts's pageGeometryCss(). */
+  margins: PageMargins;
 }
 
 /** A merge_template_versions row, as far as this module needs it. */
@@ -127,6 +147,10 @@ export interface PublishedVersionRow {
   htmlBody?: string | null;
   printCss?: string | null;
   retentionYears?: number | null;
+  marginTopMm?: number | null;
+  marginBottomMm?: number | null;
+  marginLeftMm?: number | null;
+  marginRightMm?: number | null;
 }
 
 function hasBody(value: string | null | undefined): value is string {
@@ -188,6 +212,12 @@ export function buildCanonicalSnapshot(input: BuildSnapshotInput): CanonicalDocu
     printCss: version.printCss ?? null,
     mappings: input.mappings.map((mapping) => ({ ...mapping })),
     formatting: { ...input.formatting, retentionYears: version.retentionYears ?? input.formatting.retentionYears ?? null },
+    margins: normalizePageMargins({
+      topMm: version.marginTopMm ?? undefined,
+      bottomMm: version.marginBottomMm ?? undefined,
+      leftMm: version.marginLeftMm ?? undefined,
+      rightMm: version.marginRightMm ?? undefined,
+    }),
   };
 }
 
@@ -203,6 +233,7 @@ export interface RawCanonicalSnapshot {
   printCss?: string | null;
   mappings?: CanonicalMapping[] | null;
   formatting?: Partial<CanonicalFormatting> | null;
+  margins?: Partial<PageMargins> | null;
 }
 
 export function parseCanonicalSnapshot(
@@ -224,6 +255,10 @@ export function parseCanonicalSnapshot(
       documentKind: raw.formatting?.documentKind ?? "GENERIC",
       templateName: raw.formatting?.templateName ?? "",
     },
+    // A job created before this feature has no frozen `margins` in its stored
+    // metadata — normalizePageMargins() falls back to DEFAULT_PAGE_MARGINS,
+    // never throwing, so an existing/in-flight job keeps rendering.
+    margins: normalizePageMargins(raw.margins ?? undefined),
   };
 }
 
@@ -252,6 +287,7 @@ export interface CanonicalRenderResult extends RenderApplicantDocumentResult {
   templateId: string;
   templateVersion: number;
   printCss: string | null;
+  margins: PageMargins;
 }
 
 export interface CanonicalRenderOptions {
@@ -282,12 +318,14 @@ export function renderCanonicalDocument(
     recordData,
     context,
     { contract: options.contract ?? null },
+    snapshot.margins,
   );
   return {
     ...rendered,
     templateId: snapshot.templateId,
     templateVersion: snapshot.templateVersion,
     printCss: snapshot.printCss,
+    margins: snapshot.margins,
   };
 }
 

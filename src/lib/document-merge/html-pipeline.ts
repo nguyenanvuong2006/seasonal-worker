@@ -15,7 +15,7 @@
 import type { MergeTemplateField } from "../../db/schema";
 import { resolveAllFields, validateRequiredFields, type MergeContext, type RecordData } from "./data-resolver.ts";
 import { applyFallbackPlaceholders } from "./preview-merge.ts";
-import { renderApplicantHtmlFromParts } from "./html-renderer.ts";
+import { DEFAULT_PAGE_MARGINS, renderApplicantHtmlFromParts, type PageMargins } from "./html-renderer.ts";
 import type { TemplateContract } from "./template-contract.ts";
 import { validateContractRequiredValues } from "./template-contract.ts";
 
@@ -51,13 +51,14 @@ export function renderApplicantDocumentFromParts(
   recordData: RecordData,
   context: MergeContext,
   options: HtmlRenderOptions = {},
+  margins: PageMargins = DEFAULT_PAGE_MARGINS,
 ): RenderApplicantDocumentResult {
   const fieldValues = resolveHtmlFieldValues(fields, recordData, context);
   const dbValidation = validateRequiredFields(fields, fieldValues);
   const mappedKeys = new Set(fields.filter((field) => !field.isOrphaned).map((field) => field.placeholder));
   const contractMissing = validateContractRequiredValues(options.contract, fieldValues, { mappedKeys });
   const missingFields = [...new Set([...dbValidation.missingFields, ...contractMissing])].sort();
-  const rendered = renderApplicantHtmlFromParts(htmlBody, printCss, fieldValues);
+  const rendered = renderApplicantHtmlFromParts(htmlBody, printCss, fieldValues, margins);
 
   return {
     html: rendered.html,
@@ -74,9 +75,10 @@ export function renderApplicantDocumentFromVersion(
   recordData: RecordData,
   context: MergeContext,
   options: HtmlRenderOptions = {},
+  margins: PageMargins = DEFAULT_PAGE_MARGINS,
 ): RenderApplicantDocumentResult {
   if (!version.htmlBody?.trim()) {
     throw new Error("HTML_TEMPLATE_EMPTY: version chưa có nội dung HTML.");
   }
-  return renderApplicantDocumentFromParts(version.htmlBody, version.printCss, fields, recordData, context, options);
+  return renderApplicantDocumentFromParts(version.htmlBody, version.printCss, fields, recordData, context, options, margins);
 }

@@ -1535,6 +1535,14 @@ export const mergeTemplateVersions = pgTable(
     sourceDocxName: varchar("source_docx_name", { length: 255 }),
     retentionYears: integer("retention_years"),
     mappingSnapshot: jsonb("mapping_snapshot").$type<Record<string, unknown>[]>().default([]),
+    // A4 PRINT LAYOUT (mm) — admin-configurable per version, DRAFT-editable
+    // only (see template-versions.ts). Defaults match the canonical geometry
+    // fixed in html-renderer.ts (pageGeometryCss()) — existing rows migrated
+    // before this feature receive these same defaults (backward compatible).
+    marginTopMm: integer("margin_top_mm").notNull().default(10),
+    marginBottomMm: integer("margin_bottom_mm").notNull().default(10),
+    marginLeftMm: integer("margin_left_mm").notNull().default(12),
+    marginRightMm: integer("margin_right_mm").notNull().default(12),
     createdBy: varchar("created_by", { length: 64 }).notNull(),
     publishedAt: timestamp("published_at", { withTimezone: true }),
     archivedAt: timestamp("archived_at", { withTimezone: true }),

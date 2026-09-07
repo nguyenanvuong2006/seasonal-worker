@@ -30,6 +30,7 @@ import {
   LEGACY_TEMPLATE_SENTINEL,
   readCanonicalManifest,
 } from "../test-support/canonical-fixture.ts";
+import { DEFAULT_PAGE_MARGINS } from "./html-renderer.ts";
 
 const mapping = (overrides: Partial<CanonicalMapping> = {}): CanonicalMapping => ({
   placeholder: "Ho_ten",
@@ -190,6 +191,7 @@ test("even if an obsolete body is force-fed, it is never reachable via a publish
     printCss: LEGACY_OBSOLETE_CSS,
     mappings: [mapping()],
     formatting: FORMATTING,
+    margins: DEFAULT_PAGE_MARGINS,
   };
   // Rendering a hand-built snapshot is possible in a unit test, but production
   // snapshots are only ever produced by buildCanonicalSnapshot() from a

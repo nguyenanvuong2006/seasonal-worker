@@ -27,6 +27,101 @@ import {
   type MergeTemplateVersion,
 } from "@/db/schema";
 import { extractUniquePlaceholders } from "./placeholder-extractor.ts";
+import { DEFAULT_PAGE_MARGINS, type PageMargins } from "./html-renderer.ts";
+
+/**
+ * A4 PRINT MARGIN VALIDATION (Phase 4) — no negative margin, no margin large
+ * enough to make the printable area unusable. Mirrors the DB-level CHECK
+ * constraint (migrations/2026-09-07-document-merge-template-margins.sql) as
+ * the primary, operator-facing validation layer (the DB constraint is
+ * defense in depth, not the first line of defence).
+ */
+export const MARGIN_MM_MIN = 0;
+export const MARGIN_MM_MAX = 60;
+/** Leaves at least this much usable printable width/height (mm) out of 210x297. */
+const MIN_USABLE_WIDTH_MM = 30;
+const MIN_USABLE_HEIGHT_MM = 40;
+
+export type PartialPageMargins = Partial<{
+  marginTopMm: number;
+  marginBottomMm: number;
+  marginLeftMm: number;
+  marginRightMm: number;
+}>;
+
+/**
+ * Validate margin inputs. Returns a human-readable error, or null if valid.
+ * Only validates fields that are actually present in `input` — callers merge
+ * against existing/default values first when only some fields are supplied.
+ */
+export function validateMargins(margins: {
+  marginTopMm: number;
+  marginBottomMm: number;
+  marginLeftMm: number;
+  marginRightMm: number;
+}): string | null {
+  const entries: [string, number][] = [
+    ["Top", margins.marginTopMm],
+    ["Bottom", margins.marginBottomMm],
+    ["Left", margins.marginLeftMm],
+    ["Right", margins.marginRightMm],
+  ];
+  for (const [label, value] of entries) {
+    if (!Number.isInteger(value)) {
+      return `Margin ${label} phải là số nguyên (mm).`;
+    }
+    if (value < MARGIN_MM_MIN || value > MARGIN_MM_MAX) {
+      return `Margin ${label} phải trong khoảng ${MARGIN_MM_MIN}-${MARGIN_MM_MAX}mm.`;
+    }
+  }
+  const usableWidth = 210 - margins.marginLeftMm - margins.marginRightMm;
+  const usableHeight = 297 - margins.marginTopMm - margins.marginBottomMm;
+  if (usableWidth < MIN_USABLE_WIDTH_MM) {
+    return `Margin trái + phải quá lớn — vùng in được chỉ còn ${usableWidth}mm (tối thiểu ${MIN_USABLE_WIDTH_MM}mm).`;
+  }
+  if (usableHeight < MIN_USABLE_HEIGHT_MM) {
+    return `Margin trên + dưới quá lớn — vùng in được chỉ còn ${usableHeight}mm (tối thiểu ${MIN_USABLE_HEIGHT_MM}mm).`;
+  }
+  return null;
+}
+
+/** Normalize an optional margin patch against existing/default values, then validate. */
+export function resolveAndValidateMargins(
+  patch: PartialPageMargins,
+  existing: { marginTopMm: number; marginBottomMm: number; marginLeftMm: number; marginRightMm: number } = {
+    marginTopMm: DEFAULT_PAGE_MARGINS.topMm,
+    marginBottomMm: DEFAULT_PAGE_MARGINS.bottomMm,
+    marginLeftMm: DEFAULT_PAGE_MARGINS.leftMm,
+    marginRightMm: DEFAULT_PAGE_MARGINS.rightMm,
+  },
+): { marginTopMm: number; marginBottomMm: number; marginLeftMm: number; marginRightMm: number } {
+  const resolved = {
+    marginTopMm: patch.marginTopMm ?? existing.marginTopMm,
+    marginBottomMm: patch.marginBottomMm ?? existing.marginBottomMm,
+    marginLeftMm: patch.marginLeftMm ?? existing.marginLeftMm,
+    marginRightMm: patch.marginRightMm ?? existing.marginRightMm,
+  };
+  const error = validateMargins(resolved);
+  if (error) {
+    throw new TemplateVersionError(error, 400);
+  }
+  return resolved;
+}
+
+/** Row margins → the PageMargins shape html-renderer.ts expects. */
+export function toPageMargins(row: {
+  marginTopMm?: number | null;
+  marginBottomMm?: number | null;
+  marginLeftMm?: number | null;
+  marginRightMm?: number | null;
+}): PageMargins {
+  return {
+    topMm: row.marginTopMm ?? DEFAULT_PAGE_MARGINS.topMm,
+    bottomMm: row.marginBottomMm ?? DEFAULT_PAGE_MARGINS.bottomMm,
+    leftMm: row.marginLeftMm ?? DEFAULT_PAGE_MARGINS.leftMm,
+    rightMm: row.marginRightMm ?? DEFAULT_PAGE_MARGINS.rightMm,
+  };
+}
 
 export const TEMPLATE_VERSION_STATUS = {
   DRAFT: "DRAFT",
@@ -47,7 +142,7 @@ export type NewTemplateVersionInput = {
   printCss?: string | null;
   sourceDocxName?: string | null;
   retentionYears?: number | null;
-};
+} & PartialPageMargins;
 
 /** Version tiếp theo = max(version) + 1 (mặc định 1). */
 export function nextVersionNumber(existing: { version: number }[]): number {
@@ -73,6 +168,8 @@ export async function createTemplateVersion(
     .from(mergeTemplateVersions)
     .where(eq(mergeTemplateVersions.templateId, templateId));
 
+  const margins = resolveAndValidateMargins(input);
+
   const [version] = await db
     .insert(mergeTemplateVersions)
     .values({
@@ -83,6 +180,7 @@ export async function createTemplateVersion(
       printCss: input.printCss ?? null,
       sourceDocxName: input.sourceDocxName ?? null,
       retentionYears: normalizeRetentionYears(input.retentionYears),
+      ...margins,
       createdBy,
     })
     .returning();
@@ -117,7 +215,8 @@ export type ClonedTemplateVersion = MergeTemplateVersion & {
  * INVARIANTS (có regression test riêng — template-version-clone.test.ts):
  *   - Version nguồn KHÔNG BAO GIỜ bị UPDATE/DELETE (clone = CREATE NEW ROW).
  *   - Chỉ copy nội dung render: htmlBody, printCss, sourceDocxName,
- *     retentionYears. KHÔNG copy id/version/status/publishedAt/archivedAt/
+ *     retentionYears, và 4 cột margin (marginTopMm/BottomMm/LeftMm/RightMm —
+ *     Phase 4). KHÔNG copy id/version/status/publishedAt/archivedAt/
  *     supersededBy/createdAt.
  *   - Version mới: status = DRAFT, publishedAt = NULL, archivedAt = NULL.
  *   - mapping_snapshot của version mới PHẢI = [] — DRAFT resolve CURRENT
@@ -177,6 +276,12 @@ export async function cloneTemplateVersion(
             printCss: source.printCss,
             sourceDocxName: source.sourceDocxName,
             retentionYears: source.retentionYears,
+            // A4 print margins (Phase 4) — copied verbatim, same as htmlBody/
+            // printCss; editable afterwards since the clone starts DRAFT.
+            marginTopMm: source.marginTopMm,
+            marginBottomMm: source.marginBottomMm,
+            marginLeftMm: source.marginLeftMm,
+            marginRightMm: source.marginRightMm,
             // …nhưng mapping_snapshot KHÔNG copy: DRAFT = [] cho tới khi publish.
             mappingSnapshot: [],
             // Lifecycle fields thuộc về version mới.
@@ -212,10 +317,11 @@ export async function cloneTemplateVersion(
 export type UpdateTemplateVersionDraftInput = {
   htmlBody: string;
   printCss?: string | null;
-};
+} & PartialPageMargins;
 
 /**
- * Sửa HTML/CSS của một version DRAFT. Server-side guard — KHÔNG chỉ chặn ở UI:
+ * Sửa HTML/CSS (và margin A4 — Phase 4) của một version DRAFT. Server-side
+ * guard — KHÔNG chỉ chặn ở UI:
  *   - Version phải tồn tại và thuộc template (id + templateId cross-check).
  *   - Chỉ DRAFT được UPDATE; PUBLISHED/ARCHIVED → 409 (kể cả khi editor đã mở
  *     từ trước và version vừa được ai đó publish).
@@ -245,11 +351,21 @@ export async function updateTemplateVersionDraft(
     );
   }
 
+  // target.marginXMm falls back to the canonical default when a row predates
+  // the margin columns (defensive — the DB column itself is NOT NULL DEFAULT).
+  const margins = resolveAndValidateMargins(input, {
+    marginTopMm: target.marginTopMm ?? DEFAULT_PAGE_MARGINS.topMm,
+    marginBottomMm: target.marginBottomMm ?? DEFAULT_PAGE_MARGINS.bottomMm,
+    marginLeftMm: target.marginLeftMm ?? DEFAULT_PAGE_MARGINS.leftMm,
+    marginRightMm: target.marginRightMm ?? DEFAULT_PAGE_MARGINS.rightMm,
+  });
+
   const [updated] = await db
     .update(mergeTemplateVersions)
     .set({
       htmlBody: input.htmlBody,
       printCss: input.printCss ?? null,
+      ...margins,
       updatedAt: new Date(),
     })
     // Guard trong câu UPDATE: chỉ ghi nếu row VẪN là DRAFT tại thời điểm ghi.

@@ -16,6 +16,7 @@ import type {
   CanonicalDocumentSnapshot,
   CanonicalMapping,
 } from "../document-merge/canonical-document.ts";
+import { DEFAULT_PAGE_MARGINS } from "../document-merge/html-renderer.ts";
 
 /**
  * Repo root resolved from this module's own location, so the fixture works
@@ -96,6 +97,7 @@ export function canonicalSnapshotFixture(
       documentKind: "B",
       templateName: "Giấy đăng ký tập nghề + Quy định + Hồ sơ thuế",
     },
+    margins: DEFAULT_PAGE_MARGINS,
     ...overrides,
   };
 }

@@ -249,6 +249,10 @@ export async function createAsyncMergeJob(input: CreateAsyncJobInput): Promise<C
       retentionYears: mergeTemplateVersions.retentionYears,
       htmlBody: mergeTemplateVersions.htmlBody,
       printCss: mergeTemplateVersions.printCss,
+      marginTopMm: mergeTemplateVersions.marginTopMm,
+      marginBottomMm: mergeTemplateVersions.marginBottomMm,
+      marginLeftMm: mergeTemplateVersions.marginLeftMm,
+      marginRightMm: mergeTemplateVersions.marginRightMm,
     })
     .from(mergeTemplateVersions)
     .where(
@@ -443,6 +447,7 @@ export async function createAsyncMergeJob(input: CreateAsyncJobInput): Promise<C
                 printCss: snapshot.printCss,
                 mappings: snapshot.mappings,
                 formatting: snapshot.formatting,
+                margins: snapshot.margins,
                 // Denormalised copies kept for existing history/filename code.
                 name: formatting.templateName,
                 documentKind: formatting.documentKind,

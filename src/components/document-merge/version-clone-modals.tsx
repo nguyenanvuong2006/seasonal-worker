@@ -277,6 +277,11 @@ export type DraftEditTarget = {
   status: "DRAFT" | "PUBLISHED" | "ARCHIVED";
   htmlBody: string | null;
   printCss: string | null;
+  /** A4 print margins (mm, Phase 4) — DRAFT-editable, frozen once published. */
+  marginTopMm: number;
+  marginBottomMm: number;
+  marginLeftMm: number;
+  marginRightMm: number;
 };
 
 /** Shape of POST .../ai-analyze's JSON response — READ-ONLY, never mutates anything. */
@@ -314,6 +319,8 @@ type UnsavedPreviewResult = {
   valid: boolean;
   /** H2 fix (Defect A): clear, non-null when >=1 placeholder has no mapping at all. */
   unresolvedPlaceholderWarning: string | null;
+  /** Phase 5 — same margin config the final PDF used (see preview-a4-decoration.ts). */
+  margins: { topMm: number; bottomMm: number; leftMm: number; rightMm: number } | null;
 };
 
 const asPreviewString = (value: unknown, fallback = ""): string => (typeof value === "string" ? value : fallback);
@@ -339,6 +346,16 @@ function normalizeUnsavedPreview(raw: unknown): UnsavedPreviewResult {
     missingFields: asPreviewArray(data.missingFields),
     valid: data.valid === true,
     unresolvedPlaceholderWarning: typeof data.unresolvedPlaceholderWarning === "string" ? data.unresolvedPlaceholderWarning : null,
+    margins: (() => {
+      const m = data.margins as Record<string, unknown> | undefined;
+      const topMm = asPreviewNumber(m?.topMm);
+      const bottomMm = asPreviewNumber(m?.bottomMm);
+      const leftMm = asPreviewNumber(m?.leftMm);
+      const rightMm = asPreviewNumber(m?.rightMm);
+      return topMm !== null && bottomMm !== null && leftMm !== null && rightMm !== null
+        ? { topMm, bottomMm, leftMm, rightMm }
+        : null;
+    })(),
   };
 }
 
@@ -414,6 +431,23 @@ export function DraftVersionEditorModal({
   const [error, setError] = useState<string | null>(null);
   const [conflict, setConflict] = useState(false);
 
+  // A4 PRINT MARGINS (Phase 4) — DRAFT-editable, same Save/PATCH flow as
+  // html/css. `version.status !== "DRAFT"` disables the inputs entirely
+  // (server-side guard is the real enforcement — see updateTemplateVersionDraft).
+  const [marginTopMm, setMarginTopMm] = useState(version.marginTopMm);
+  const [marginBottomMm, setMarginBottomMm] = useState(version.marginBottomMm);
+  const [marginLeftMm, setMarginLeftMm] = useState(version.marginLeftMm);
+  const [marginRightMm, setMarginRightMm] = useState(version.marginRightMm);
+  const [baselineMarginTopMm, setBaselineMarginTopMm] = useState(version.marginTopMm);
+  const [baselineMarginBottomMm, setBaselineMarginBottomMm] = useState(version.marginBottomMm);
+  const [baselineMarginLeftMm, setBaselineMarginLeftMm] = useState(version.marginLeftMm);
+  const [baselineMarginRightMm, setBaselineMarginRightMm] = useState(version.marginRightMm);
+  const marginsDirty =
+    marginTopMm !== baselineMarginTopMm ||
+    marginBottomMm !== baselineMarginBottomMm ||
+    marginLeftMm !== baselineMarginLeftMm ||
+    marginRightMm !== baselineMarginRightMm;
+
   /**
    * Baseline = nội dung DRAFT ĐÃ LƯU mà editor đang dựa vào. Khởi tạo THẲNG
    * từ html_body/print_css của chính versionId được mở (không bao giờ từ
@@ -452,7 +486,7 @@ export function DraftVersionEditorModal({
   // when the operator explicitly loads content into it below, so a load
   // action itself never counts as a dirty edit.
   const [baselineRawPaste, setBaselineRawPaste] = useState("");
-  const dirty = isDraftEditorDirty({ html, css, rawPaste, baselineHtml, baselineCss, baselineRawPaste });
+  const dirty = isDraftEditorDirty({ html, css, rawPaste, baselineHtml, baselineCss, baselineRawPaste }) || marginsDirty;
   /** "Đã lưu" chỉ đúng khi không còn gì chưa lưu — tự ẩn khi operator gõ tiếp. */
   const savedNoticeVisible = savedNotice !== null && !dirty;
 
@@ -474,6 +508,10 @@ export function DraftVersionEditorModal({
     setCss(baselineCss);
     setRawPaste("");
     setBaselineRawPaste("");
+    setMarginTopMm(baselineMarginTopMm);
+    setMarginBottomMm(baselineMarginBottomMm);
+    setMarginLeftMm(baselineMarginLeftMm);
+    setMarginRightMm(baselineMarginRightMm);
   };
 
   const requestClose = () => {
@@ -499,7 +537,7 @@ export function DraftVersionEditorModal({
   const [previewResult, setPreviewResult] = useState<UnsavedPreviewResult | null>(null);
   // Preview-only, screen-media A4 sheet boundaries — see preview-a4-decoration.ts.
   const decoratedPreviewHtml = useMemo(
-    () => (previewResult ? decoratePreviewForA4Sheets(previewResult.renderedHtml) : ""),
+    () => (previewResult ? decoratePreviewForA4Sheets(previewResult.renderedHtml, previewResult.margins) : ""),
     [previewResult],
   );
   const [previewError, setPreviewError] = useState<string | null>(null);
@@ -688,7 +726,14 @@ export function DraftVersionEditorModal({
         {
           method: "PATCH",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ htmlBody: html, printCss: css || null }),
+          body: JSON.stringify({
+            htmlBody: html,
+            printCss: css || null,
+            marginTopMm,
+            marginBottomMm,
+            marginLeftMm,
+            marginRightMm,
+          }),
         },
       );
       const data = await res.json();
@@ -697,12 +742,16 @@ export function DraftVersionEditorModal({
         throw new Error(data.error || "Không lưu được bản nháp.");
       }
       // LƯU XONG KHÔNG ĐÓNG MODAL — chỉ nâng baseline lên đúng nội dung vừa
-      // ghi. PATCH chỉ UPDATE html_body/print_css của version DRAFT này
+      // ghi. PATCH chỉ UPDATE html_body/print_css/margin của version DRAFT này
       // (server guard): mapping_snapshot, version number, templateId, status,
       // current_published_version và các version khác KHÔNG đổi. Operator
       // tiếp tục sửa → Xem trước A4 → Lưu lại bao nhiêu lần cũng được.
       setBaselineHtml(html);
       setBaselineCss(css);
+      setBaselineMarginTopMm(marginTopMm);
+      setBaselineMarginBottomMm(marginBottomMm);
+      setBaselineMarginLeftMm(marginLeftMm);
+      setBaselineMarginRightMm(marginRightMm);
       setSavedNotice(
         `Đã lưu bản nháp v${version.version} — editor vẫn mở: sửa tiếp, Xem trước A4 rồi Lưu lại khi cần.`,
       );
@@ -867,12 +916,74 @@ export function DraftVersionEditorModal({
                   className="mt-1 w-full rounded-lg border border-slate-300 px-3 py-2 font-mono text-[11px] outline-none focus:border-emerald-600 disabled:bg-slate-50"
                 />
               </label>
+              <div className="rounded-lg border border-slate-200 bg-slate-50 p-3">
+                <p className="text-[11px] font-semibold text-slate-600">
+                  Canh lề A4 (mm) — áp dụng cho cả Xem trước và PDF cuối cùng
+                </p>
+                <div className="mt-2 grid grid-cols-2 gap-3 sm:grid-cols-4">
+                  <label className="text-[11px] font-medium text-slate-500">
+                    Trên
+                    <input
+                      type="number"
+                      min={0}
+                      max={60}
+                      step={1}
+                      value={marginTopMm}
+                      onChange={(e) => setMarginTopMm(Number(e.target.value))}
+                      disabled={conflict || saving}
+                      className="mt-1 w-full rounded-lg border border-slate-300 px-2 py-1.5 text-[12px] outline-none focus:border-emerald-600 disabled:bg-slate-100"
+                    />
+                  </label>
+                  <label className="text-[11px] font-medium text-slate-500">
+                    Dưới
+                    <input
+                      type="number"
+                      min={0}
+                      max={60}
+                      step={1}
+                      value={marginBottomMm}
+                      onChange={(e) => setMarginBottomMm(Number(e.target.value))}
+                      disabled={conflict || saving}
+                      className="mt-1 w-full rounded-lg border border-slate-300 px-2 py-1.5 text-[12px] outline-none focus:border-emerald-600 disabled:bg-slate-100"
+                    />
+                  </label>
+                  <label className="text-[11px] font-medium text-slate-500">
+                    Trái
+                    <input
+                      type="number"
+                      min={0}
+                      max={60}
+                      step={1}
+                      value={marginLeftMm}
+                      onChange={(e) => setMarginLeftMm(Number(e.target.value))}
+                      disabled={conflict || saving}
+                      className="mt-1 w-full rounded-lg border border-slate-300 px-2 py-1.5 text-[12px] outline-none focus:border-emerald-600 disabled:bg-slate-100"
+                    />
+                  </label>
+                  <label className="text-[11px] font-medium text-slate-500">
+                    Phải
+                    <input
+                      type="number"
+                      min={0}
+                      max={60}
+                      step={1}
+                      value={marginRightMm}
+                      onChange={(e) => setMarginRightMm(Number(e.target.value))}
+                      disabled={conflict || saving}
+                      className="mt-1 w-full rounded-lg border border-slate-300 px-2 py-1.5 text-[12px] outline-none focus:border-emerald-600 disabled:bg-slate-100"
+                    />
+                  </label>
+                </div>
+                <p className="mt-1.5 text-[10px] text-slate-400">
+                  Mặc định 10/10/12/12mm. Chỉ áp dụng cho phiên bản DRAFT — sau khi Xuất bản, giá trị này bị khóa vĩnh viễn theo phiên bản.
+                </p>
+              </div>
               <div>
                 <button
                   type="button"
                   onClick={() => void save()}
                   disabled={saving || conflict}
-                  title="Lưu trực tiếp (PATCH) html_body + print_css của version DRAFT này. Không qua Phân tích/Áp dụng, KHÔNG tạo version mới, KHÔNG publish, KHÔNG đổi mapping. Sau khi lưu, editor vẫn mở để sửa tiếp."
+                  title="Lưu trực tiếp (PATCH) html_body + print_css + canh lề A4 của version DRAFT này. Không qua Phân tích/Áp dụng, KHÔNG tạo version mới, KHÔNG publish, KHÔNG đổi mapping. Sau khi lưu, editor vẫn mở để sửa tiếp."
                   className="inline-flex items-center gap-1.5 rounded-lg border border-emerald-300 bg-emerald-50 px-3 py-1.5 text-[11px] font-bold text-emerald-700 hover:bg-emerald-100 disabled:opacity-50"
                 >
                   <Save className="h-3.5 w-3.5" />
@@ -1284,6 +1395,10 @@ export type VersionHtmlViewTarget = {
   status: "DRAFT" | "PUBLISHED" | "ARCHIVED";
   htmlBody: string | null;
   printCss: string | null;
+  marginTopMm: number;
+  marginBottomMm: number;
+  marginLeftMm: number;
+  marginRightMm: number;
 };
 
 /**
@@ -1352,6 +1467,10 @@ export function VersionHtmlViewerModal({
             className="mt-1 w-full rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 font-mono text-[11px] text-slate-700 outline-none"
           />
         </label>
+        <p className="mt-3 text-[11px] font-semibold text-slate-600">
+          Canh lề A4 (mm, đã khóa cùng phiên bản này): Trên {version.marginTopMm} · Dưới {version.marginBottomMm} · Trái{" "}
+          {version.marginLeftMm} · Phải {version.marginRightMm}
+        </p>
 
         <div className="mt-4 flex justify-end">
           <button

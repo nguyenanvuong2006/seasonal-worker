@@ -59,6 +59,10 @@ type TemplateVersion = {
   printCss: string | null;
   sourceDocxName: string | null;
   retentionYears: number | null;
+  marginTopMm: number;
+  marginBottomMm: number;
+  marginLeftMm: number;
+  marginRightMm: number;
   mappingSnapshot: Record<string, unknown>[];
   createdBy: string;
   publishedAt: string | null;
@@ -905,6 +909,10 @@ export function TemplateLibrary({ onSelectForMerge }: { onSelectForMerge: (templ
                                     status: version.status,
                                     htmlBody: version.htmlBody,
                                     printCss: version.printCss,
+                                    marginTopMm: version.marginTopMm,
+                                    marginBottomMm: version.marginBottomMm,
+                                    marginLeftMm: version.marginLeftMm,
+                                    marginRightMm: version.marginRightMm,
                                   });
                                 }}
                                 title="Sửa HTML/CSS của bản DRAFT này: nạp HTML + Print CSS hiện tại, Lưu bản nháp (PATCH), Xem trước A4 rồi Lưu lại nhiều lần. Server chỉ cho phép UPDATE khi version còn là DRAFT."
@@ -929,6 +937,10 @@ export function TemplateLibrary({ onSelectForMerge }: { onSelectForMerge: (templ
                                     status: version.status,
                                     htmlBody: version.htmlBody,
                                     printCss: version.printCss,
+                                    marginTopMm: version.marginTopMm,
+                                    marginBottomMm: version.marginBottomMm,
+                                    marginLeftMm: version.marginLeftMm,
+                                    marginRightMm: version.marginRightMm,
                                   });
                                 }}
                                 title="Xem HTML/CSS đã lưu của phiên bản này ở chế độ chỉ đọc. PUBLISHED/ARCHIVED là bất biến — muốn sửa hãy tạo bản nháp từ phiên bản này."

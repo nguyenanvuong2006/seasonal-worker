@@ -62,6 +62,7 @@ const V7_DRAFT_MIGRATION = "2026-08-24-trainee-registration-v7-operator-test2-dr
 const RECOVERY_MIGRATION = "2026-08-24-trainee-registration-v7-incident-recovery.sql";
 const V8_DRAFT_MIGRATION = "2026-08-24-trainee-registration-v8-pagination-draft.sql";
 const CANDIDATE_CONSENT_MIGRATION = "2026-09-01-candidate-document-consent.sql";
+const MARGINS_MIGRATION = "2026-09-07-document-merge-template-margins.sql";
 
 const CANONICAL_TEMPLATE_ID = "a1b2c3d4-e5f6-7890-abcd-ef1234567890";
 const CANONICAL_SOURCE_NAME =
@@ -272,18 +273,30 @@ test("HOTFIX-1: the runner list is exactly the known-safe, idempotent sequence",
     V7_DRAFT_MIGRATION,
     V8_DRAFT_MIGRATION,
     CANDIDATE_CONSENT_MIGRATION,
+    MARGINS_MIGRATION,
   ]);
 });
 
-test("PR #127 REGISTRATION: candidate-document consent migration is present, last, and idempotent/non-destructive per the runner's own invariant checks", () => {
+test("PR #127 REGISTRATION: candidate-document consent migration is present and idempotent/non-destructive per the runner's own invariant checks", () => {
   const list = parseRunnerList();
-  assert.equal(list.at(-1), CANDIDATE_CONSENT_MIGRATION, "must be registered so the official Production migration workflow actually runs it");
+  assert.ok(list.includes(CANDIDATE_CONSENT_MIGRATION), "must be registered so the official Production migration workflow actually runs it");
   const sql = readRepoFile(`migrations/${CANDIDATE_CONSENT_MIGRATION}`);
   assertNonDestructiveSql(`migrations/${CANDIDATE_CONSENT_MIGRATION}`, sql);
   assert.match(sql, /CREATE TABLE IF NOT EXISTS candidate_documents\b/);
   assert.match(sql, /CREATE TABLE IF NOT EXISTS candidate_access_sessions\b/);
   assert.match(sql, /CREATE TABLE IF NOT EXISTS document_confirmations\b/);
   assert.match(sql, /CREATE TABLE IF NOT EXISTS identity_lookup_attempts\b/);
+});
+
+test("PHASE 4 REGISTRATION: template-margins migration is present, LAST, and idempotent/non-destructive per the runner's own invariant checks", () => {
+  const list = parseRunnerList();
+  assert.equal(list.at(-1), MARGINS_MIGRATION, "must be registered so the official Production migration workflow actually runs it");
+  const sql = readRepoFile(`migrations/${MARGINS_MIGRATION}`);
+  assertNonDestructiveSql(`migrations/${MARGINS_MIGRATION}`, sql);
+  assert.match(sql, /ADD COLUMN IF NOT EXISTS margin_top_mm/);
+  assert.match(sql, /ADD COLUMN IF NOT EXISTS margin_bottom_mm/);
+  assert.match(sql, /ADD COLUMN IF NOT EXISTS margin_left_mm/);
+  assert.match(sql, /ADD COLUMN IF NOT EXISTS margin_right_mm/);
 });
 
 test("HOTFIX-1: runner comments describe the REAL migration count", () => {
@@ -541,6 +554,10 @@ const MIGRATION_MODELS: Record<string, (state: DbState) => DbState> = {
   // zero merge_template_versions/merge_templates writes — pure DDL, same as
   // the other document-merge-engine migrations above.
   [CANDIDATE_CONSENT_MIGRATION]: ddlMigration,
+  // Admin-configurable A4 margins (Phase 4): ADD COLUMN IF NOT EXISTS + a
+  // guarded CHECK constraint, zero merge_template_versions row writes — pure
+  // DDL, same as the other document-merge-engine migrations above.
+  [MARGINS_MIGRATION]: ddlMigration,
 };
 
 /** Re-run the recurring runner exactly as scripts/run-document-merge-migrations.mjs does. */
