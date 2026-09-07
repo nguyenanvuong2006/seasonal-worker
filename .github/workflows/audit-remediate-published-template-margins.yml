@@ -1,0 +1,108 @@
+name: Audit/Remediate Published Template Margins — PRODUCTION
+
+# ONE-OFF remediation for a legacy embedded `@page` rule in the currently
+# PUBLISHED Document Merge template's print_css (see the docblock in
+# scripts/audit-remediate-published-template-margins.mjs for the full root
+# cause). This workflow NEVER updates/deletes the PUBLISHED row, NEVER
+# publishes anything, NEVER touches current_published_version, merge_jobs,
+# merge_job_records, document_history, merge_template_fields, or any
+# candidate data. Its only possible write is a single INSERT of a new DRAFT
+# template version — idempotent, safe to re-run.
+
+on:
+  workflow_dispatch:
+    inputs:
+      confirm:
+        description: 'Gõ chính xác "PRODUCTION" để xác nhận (phân biệt hoa/thường)'
+        required: true
+        type: string
+      backup_confirmed:
+        description: 'Đã tạo snapshot/backup Neon production TRƯỚC KHI chạy workflow này?'
+        required: true
+        type: boolean
+        default: false
+      dump_content:
+        description: 'In toàn bộ html_body/print_css (không phải dữ liệu ứng viên) ra log — chỉ dùng để verify render cục bộ, KHÔNG bật mặc định'
+        required: false
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+concurrency:
+  group: audit-remediate-published-template-margins
+  cancel-in-progress: false
+
+jobs:
+  guardrails:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Guardrail — input xác nhận phải ĐÚNG "PRODUCTION"
+        run: |
+          set -euo pipefail
+          if [ "${{ github.event.inputs.confirm }}" != "PRODUCTION" ]; then
+            echo "❌ Input xác nhận không khớp 'PRODUCTION' — dừng lại." >&2
+            exit 1
+          fi
+          echo "✅ Xác nhận PRODUCTION hợp lệ."
+
+      - name: Guardrail — backup phải được xác nhận trước
+        run: |
+          set -euo pipefail
+          if [ "${{ github.event.inputs.backup_confirmed }}" != "true" ]; then
+            echo "❌ Chưa xác nhận đã tạo backup/snapshot — dừng lại." >&2
+            echo "   Tạo snapshot/branch Neon HOẶC pg_dump theo docs/PRODUCTION-DEPLOY.md mục 2 TRƯỚC, rồi chạy lại workflow với backup_confirmed=true." >&2
+            exit 1
+          fi
+          echo "✅ Backup đã được xác nhận (theo lời khai người chạy workflow)."
+
+  audit-remediate:
+    needs: guardrails
+    runs-on: ubuntu-latest
+    # Secret PROD_DATABASE_URL chỉ nằm trong scope environment 'production'.
+    environment: production
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci --no-audit --no-fund
+
+      - name: Guardrail — hostname PROD_DATABASE_URL không được khớp staging đã biết
+        env:
+          DATABASE_URL: ${{ secrets.PROD_DATABASE_URL }}
+        run: |
+          set -euo pipefail
+          HOST=$(node -e "try { console.log(new URL(process.env.DATABASE_URL).hostname); } catch { console.log(''); }")
+          if [ -z "${HOST}" ]; then
+            echo "❌ Không parse được hostname từ PROD_DATABASE_URL." >&2
+            exit 1
+          fi
+          echo "✅ Production DB host: ${HOST}"
+          KNOWN_STAGING_HOST="${{ vars.STAGING_DATABASE_HOSTNAME }}"
+          if [ -n "${KNOWN_STAGING_HOST}" ] && [ "${HOST}" == "${KNOWN_STAGING_HOST}" ]; then
+            echo "❌ PROD_DATABASE_URL trỏ ĐÚNG hostname staging — dừng lại ngay." >&2
+            exit 1
+          fi
+
+      - name: Audit + remediate legacy @page rule (idempotent — INSERT DRAFT only, never touches PUBLISHED)
+        env:
+          DATABASE_URL: ${{ secrets.PROD_DATABASE_URL }}
+          DUMP_CONTENT: ${{ github.event.inputs.dump_content }}
+        run: node scripts/audit-remediate-published-template-margins.mjs
+
+      - name: Reminder
+        run: |
+          echo "=================================================================="
+          echo " Audit/remediation đã chạy xong. Nếu có DRAFT mới được tạo, nó"
+          echo " KHÔNG được publish tự động — xem log ở trên để lấy version/id,"
+          echo " rồi Preview + review thủ công trước khi Publish."
+          echo " PUBLISHED version hiện tại KHÔNG bị đụng tới."
+          echo "=================================================================="
