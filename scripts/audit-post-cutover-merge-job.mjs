@@ -154,10 +154,10 @@ for (const snap of snapshots) {
           }
         : null,
       snapshotMarginsMatchPublished: published
-        ? snap.margins?.top === published.margin_top_mm &&
-          snap.margins?.bottom === published.margin_bottom_mm &&
-          snap.margins?.left === published.margin_left_mm &&
-          snap.margins?.right === published.margin_right_mm
+        ? snap.margins?.topMm === published.margin_top_mm &&
+          snap.margins?.bottomMm === published.margin_bottom_mm &&
+          snap.margins?.leftMm === published.margin_left_mm &&
+          snap.margins?.rightMm === published.margin_right_mm
         : null,
       htmlBodyContentIdentical: published ? snap.htmlBodySha256 === publishedHtmlSha : null,
       printCssContentIdentical: published ? snap.printCssSha256 === publishedCssSha : null,
