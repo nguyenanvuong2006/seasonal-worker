@@ -60,6 +60,15 @@ test("script cross-checks the frozen snapshot against the CURRENTLY PUBLISHED ve
   assert.match(code, /snapshotMarginsMatchPublished/);
 });
 
+test("margin comparison reads the canonical PageMargins key names (topMm/bottomMm/leftMm/rightMm) — not top/bottom/left/right, which the frozen snapshot never uses (see canonical-document.ts's PageMargins shape)", () => {
+  const code = readScript();
+  const block = code.slice(code.indexOf("snapshotMarginsMatchPublished:"), code.indexOf("htmlBodyContentIdentical:"));
+  assert.match(block, /snap\.margins\?\.topMm/);
+  assert.match(block, /snap\.margins\?\.bottomMm/);
+  assert.match(block, /snap\.margins\?\.leftMm/);
+  assert.match(block, /snap\.margins\?\.rightMm/);
+});
+
 test("script requires DATABASE_URL and exits non-zero without it", () => {
   const code = readScript();
   assert.match(code, /if \(!DATABASE_URL\)/);
