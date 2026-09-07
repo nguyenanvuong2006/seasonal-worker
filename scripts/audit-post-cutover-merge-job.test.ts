@@ -1,8 +1,11 @@
 /**
  * REGRESSION TESTS — scripts/audit-post-cutover-merge-job.mjs must stay
- * strictly read-only, never select candidate PII, and never dump raw
- * template content (only lengths/sha256). Structural source tests, matching
- * this repo's established pattern (see diagnose-stuck-merge-jobs.test.ts).
+ * strictly read-only and never select candidate PII. Raw template content
+ * (htmlBody/printCss — placeholders, not candidate data) is dumped ONLY when
+ * DUMP_CONTENT is explicitly opted in, matching
+ * audit-remediate-published-template-margins.mjs's existing convention.
+ * Structural source tests, matching this repo's established pattern (see
+ * diagnose-stuck-merge-jobs.test.ts).
  */
 import test from "node:test";
 import assert from "node:assert/strict";
@@ -67,6 +70,15 @@ test("margin comparison reads the canonical PageMargins key names (topMm/bottomM
   assert.match(block, /snap\.margins\?\.bottomMm/);
   assert.match(block, /snap\.margins\?\.leftMm/);
   assert.match(block, /snap\.margins\?\.rightMm/);
+});
+
+test("DUMP_CONTENT is opt-in only (accepts GitHub Actions' boolean workflow_dispatch string \"true\", not just \"1\") and gates the only content_dump emission", () => {
+  const code = readScript();
+  assert.match(code, /DUMP_CONTENT\s*=\s*process\.env\.DUMP_CONTENT === "1" \|\| process\.env\.DUMP_CONTENT === "true"/);
+  assert.match(code, /if \(DUMP_CONTENT\) \{/);
+  const dumpBlock = code.slice(code.indexOf("if (DUMP_CONTENT)"));
+  assert.match(dumpBlock, /event: "content_dump"/);
+  assert.equal((code.match(/event: "content_dump"/g) ?? []).length, 1, "content_dump must be emitted from exactly one place, inside the DUMP_CONTENT gate");
 });
 
 test("script requires DATABASE_URL and exits non-zero without it", () => {

@@ -30,6 +30,12 @@
  * Optional env:
  *   JOB_ID=<uuid>          audit this specific job instead of "most recent"
  *   SINCE=<ISO timestamp>  only consider jobs created at/after this time
+ *   DUMP_CONTENT=true      also print the frozen snapshot's raw htmlBody/
+ *                          printCss (template content — placeholders, not
+ *                          candidate data). Opt-in only, same convention as
+ *                          audit-remediate-published-template-margins.mjs's
+ *                          DUMP_CONTENT gate — off by default to keep
+ *                          routine runs lean.
  *
  * Output: NDJSON to stdout (one JSON object per line).
  */
@@ -43,6 +49,7 @@ if (!DATABASE_URL) {
 }
 const JOB_ID = process.env.JOB_ID || null;
 const SINCE = process.env.SINCE || null;
+const DUMP_CONTENT = process.env.DUMP_CONTENT === "1" || process.env.DUMP_CONTENT === "true";
 
 const client = new pg.Client({ connectionString: DATABASE_URL, ssl: { rejectUnauthorized: false } });
 await client.connect();
@@ -118,6 +125,20 @@ console.log(
     snapshots,
   }),
 );
+
+if (DUMP_CONTENT) {
+  for (const [tid, snap] of snapshotEntries) {
+    console.log(
+      JSON.stringify({
+        event: "content_dump",
+        jobId: job.id,
+        templateId: tid,
+        htmlBody: snap?.htmlBody ?? null,
+        printCss: snap?.printCss ?? null,
+      }),
+    );
+  }
+}
 
 // Cross-check every snapshot's templateId against the CURRENTLY PUBLISHED
 // version of that template — proves the frozen snapshot really is that

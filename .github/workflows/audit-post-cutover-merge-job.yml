@@ -19,6 +19,11 @@ on:
         description: 'Only consider jobs created at/after this ISO timestamp (e.g. 2026-09-07T06:20:00Z). Ignored if job_id is set.'
         required: false
         type: string
+      dump_content:
+        description: 'In toàn bộ html_body/print_css của snapshot (không phải dữ liệu ứng viên) ra log — chỉ dùng để verify render cục bộ, KHÔNG bật mặc định'
+        required: false
+        type: boolean
+        default: false
 
 permissions:
   contents: read
@@ -68,4 +73,5 @@ jobs:
           DATABASE_URL: ${{ secrets.PROD_DATABASE_URL }}
           JOB_ID: ${{ inputs.job_id }}
           SINCE: ${{ inputs.since }}
+          DUMP_CONTENT: ${{ inputs.dump_content }}
         run: node scripts/audit-post-cutover-merge-job.mjs
