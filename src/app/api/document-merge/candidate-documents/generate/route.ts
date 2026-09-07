@@ -16,12 +16,15 @@
  * release — "Tạo hồ sơ" (create) and "Phát hành" (release) are two
  * distinct business decisions, made by two distinct actions.
  *
- * Reuses `/api/document-merge/merge/execute` IN-PROCESS (direct function
- * call, same request/AsyncLocalStorage context — so requirePermission's
- * cookies()-based session read still works) rather than duplicating its
- * template-routing/snapshot-freeze/worker-trigger logic: zero risk of
- * drifting from the just-hardened GOOGLE_DOCS zombie-recovery behavior,
- * zero new failure surface in that already-audited code path.
+ * Creates its job via createCandidateDocumentMergeJob() (see that module's
+ * docblock) — the SAME engine branch (HTML_PDF vs legacy GOOGLE_DOCS) the
+ * main bulk "Merge" UI action already uses, so this feature follows
+ * whatever DOCUMENT_MERGE_ENGINE is currently configured instead of being
+ * hardcoded to GOOGLE_DOCS. The GOOGLE_DOCS branch is unchanged: still an
+ * in-process call to /merge/execute (direct function call, same request/
+ * AsyncLocalStorage context — so requirePermission's cookies()-based
+ * session read still works), zero risk of drifting from the already-
+ * hardened GOOGLE_DOCS zombie-recovery behavior.
  *
  * dispatchToApplicant is always false here — this feature does NOT write to
  * the legacy daily_applications.mergedDocUrl/signatureDataUrl fields (that
@@ -34,7 +37,7 @@ import { eq } from "drizzle-orm";
 import { requirePermission, writeAudit } from "@/lib/auth";
 import { db } from "@/db";
 import { candidateDocuments, mergeJobRecords } from "@/db/schema";
-import { POST as executeMerge } from "@/app/api/document-merge/merge/execute/route";
+import { createCandidateDocumentMergeJob, CandidateMergeJobError } from "@/lib/document-merge/candidate-merge-job";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -64,26 +67,16 @@ export async function POST(request: Request) {
 
   const templateId = typeof body.templateId === "string" && body.templateId.length > 0 ? body.templateId : undefined;
 
-  const internalRequest = new Request("http://internal.local/api/document-merge/merge/execute", {
-    method: "POST",
-    headers: { "content-type": "application/json" },
-    body: JSON.stringify({
-      templateId,
-      mergeMode: "INDIVIDUAL_DOCUMENTS",
-      batchPrint: false,
-      dispatchToApplicant: false,
-      autoRoute: !templateId,
-      records: { entityType: "daily_applications", recordIds: applicationIds },
-    }),
-  });
-
-  const mergeResponse = await executeMerge(internalRequest);
-  const mergeData = (await mergeResponse.json()) as { jobId?: string; error?: string };
-  if (!mergeResponse.ok || !mergeData.jobId) {
-    return NextResponse.json({ error: mergeData.error ?? "Không tạo được job sinh hồ sơ." }, { status: mergeResponse.status || 500 });
+  let jobId: string;
+  try {
+    jobId = await createCandidateDocumentMergeJob(guard.session, request, { templateId, recordIds: applicationIds });
+  } catch (error) {
+    if (error instanceof CandidateMergeJobError) {
+      return NextResponse.json({ error: error.message }, { status: error.status });
+    }
+    throw error;
   }
 
-  const jobId = mergeData.jobId;
   const records = await db.select().from(mergeJobRecords).where(eq(mergeJobRecords.mergeJobId, jobId));
 
   if (records.length === 0) {

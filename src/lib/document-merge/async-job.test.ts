@@ -40,6 +40,14 @@ async function load(
    * loadDailyApplicationRecords returns (flattened applicant merge record).
    */
   records: Record<string, Record<string, unknown>> = {},
+  /**
+   * Simulates DOCUMENT_MERGE_ENGINE — the SAME env var every other
+   * production call site reads via getDocumentMergeEngine(). Defaults to
+   * "GOOGLE_DOCS" (today's configured Production default) so every
+   * pre-existing test, which always passes an explicit `engine` in its
+   * input to override this, is unaffected.
+   */
+  defaultEngine: "GOOGLE_DOCS" | "HTML_PDF" = "GOOGLE_DOCS",
 ): Promise<AsyncJobModule> {
   const mod = await loadModule(new URL("./async-job.ts", import.meta.url), {
     stubs: {
@@ -47,7 +55,7 @@ async function load(
       "drizzle-orm": drizzleStub,
       "@/db": { db },
       "@/db/schema": schemaStub,
-      "./engine-config.ts": { getDocumentMergeEngine: () => "GOOGLE_DOCS" },
+      "./engine-config.ts": { getDocumentMergeEngine: () => defaultEngine },
       "./template-routing.ts": {
         selectTemplateForApplicant: () => ({ template: null, kind: "GENERIC" }),
         documentKindLabel: (k: string) => k,
@@ -238,6 +246,50 @@ test("createAsyncMergeJob: HTML_PDF accepts an explicit HTML-enabled template an
   const values = argOf(jobInsert as QueryCall, "values") as { engine: string; metadata: { renderedAt?: string } };
   assert.equal(values.engine, "HTML_PDF");
   assert.ok(values.metadata.renderedAt, "phải snapshot merge clock cho retry deterministic");
+});
+
+// 2026-09 HTML_PDF production engine switch: proves a NEW job with no
+// explicit `engine` in its input follows DOCUMENT_MERGE_ENGINE (via
+// getDocumentMergeEngine()) — the single, existing, supported
+// engine-selection mechanism — rather than silently defaulting to
+// GOOGLE_DOCS regardless of that env var's value. Every other test in this
+// file passes an explicit `engine`, which always wins over the env var
+// (`input.engine ?? getDocumentMergeEngine()`); this test is the one that
+// actually exercises the ENV-driven fallback in isolation.
+test("createAsyncMergeJob: with no explicit engine in the input, a new job follows DOCUMENT_MERGE_ENGINE=HTML_PDF (getDocumentMergeEngine()) — not a hardcoded GOOGLE_DOCS default", async () => {
+  const db = fixtureDb(PUBLISHED_VERSION_ROW);
+  const mod = await load(db, {}, {}, "HTML_PDF");
+
+  const result = await mod.createAsyncMergeJob({
+    templateId: "tpl-1",
+    autoRoute: false,
+    records: { entityType: "daily_applications", recordIds: ["app-1"] },
+    createdBy: "admin",
+    scopeDeptIds: null,
+    // no `engine` field — production callers (the bulk Merge button and
+    // candidate-document generate/reissue) never pass one either; they all
+    // rely on the env-var default.
+  });
+
+  assert.equal(result.engine, "HTML_PDF");
+  const jobInsert = db.calls.find((c) => c.root === "insert" && c.table === "merge_jobs");
+  const values = argOf(jobInsert as QueryCall, "values") as { engine: string };
+  assert.equal(values.engine, "HTML_PDF");
+});
+
+test("createAsyncMergeJob: with no explicit engine in the input, a new job still follows DOCUMENT_MERGE_ENGINE=GOOGLE_DOCS (today's configured Production default)", async () => {
+  const db = fixtureDb(PUBLISHED_VERSION_ROW);
+  const mod = await load(db, {}, {}, "GOOGLE_DOCS");
+
+  const result = await mod.createAsyncMergeJob({
+    templateId: "tpl-1",
+    autoRoute: false,
+    records: { entityType: "daily_applications", recordIds: ["app-1"] },
+    createdBy: "admin",
+    scopeDeptIds: null,
+  });
+
+  assert.equal(result.engine, "GOOGLE_DOCS");
 });
 
 test("createAsyncMergeJob: HTML_PDF rejects auto-route or a missing explicit template before creating a job", async () => {

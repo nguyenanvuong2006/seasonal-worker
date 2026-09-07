@@ -18,7 +18,10 @@
  *
  * READ-ONLY AUDIT (always runs, every template with a PUBLISHED version):
  * reports templateId/version/whether print_css contains an `@page` rule and
- * the exact matched rule text.
+ * the exact matched rule text, plus merge_templates.html_enabled (read-only,
+ * added 2026-09 to confirm HTML/PDF eligibility ahead of the HTML_PDF
+ * production engine switch — createAsyncMergeJob() requires this true for
+ * any HTML_PDF job).
  *
  * CONDITIONAL REMEDIATION (only when an `@page` rule is found AND no
  * matching remediation DRAFT already exists): INSERTs exactly ONE new DRAFT
@@ -79,7 +82,7 @@ const AT_PAGE_RULE = /@page\s*\{[^}]*\}/g;
 const DEFAULT_MARGINS = { top: 10, bottom: 10, left: 12, right: 12 };
 
 const { rows: templates } = await client.query(
-  `SELECT id, name, current_published_version
+  `SELECT id, name, current_published_version, html_enabled
    FROM merge_templates
    WHERE current_published_version IS NOT NULL`,
 );
@@ -114,6 +117,7 @@ for (const tpl of templates) {
     event: "audit",
     templateId: tpl.id,
     templateName: tpl.name,
+    htmlEnabled: tpl.html_enabled,
     publishedVersionId: published.id,
     publishedVersion: published.version,
     sourceDocxName: published.source_docx_name,
