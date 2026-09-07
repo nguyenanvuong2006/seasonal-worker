@@ -1,0 +1,59 @@
+name: Verify Production Google Auth
+
+# READ-ONLY diagnostic — never creates a merge job/candidate, never writes
+# to Drive/Docs. Directly exercises the exact 3-secret credential the Cloud
+# Run production worker uses (same exchange call as
+# src/lib/storage/google-drive.ts's exchangeRefreshToken()) against a real,
+# already-committed production template ID (not a secret, not PII) — see
+# scripts/verify-production-google-auth.mjs for exactly what it checks and
+# what it never logs.
+
+on:
+  workflow_dispatch: {}
+
+permissions:
+  contents: read
+  id-token: write
+
+concurrency:
+  group: verify-production-google-auth
+  cancel-in-progress: false
+
+env:
+  PROJECT_ID: ${{ vars.GCP_PROJECT_ID }}
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    environment: production
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - name: Authenticate to Google Cloud
+        uses: google-github-actions/auth@v2
+        with:
+          workload_identity_provider: ${{ secrets.GCP_WORKLOAD_IDENTITY_PROVIDER }}
+          service_account: ${{ secrets.GCP_SERVICE_ACCOUNT }}
+
+      - name: Setup gcloud
+        uses: google-github-actions/setup-gcloud@v2
+        with:
+          project_id: ${{ env.PROJECT_ID }}
+
+      - name: "Read the 3 Google OAuth secrets from Secret Manager and verify auth in the same step (never passed via step outputs/env files — read, masked, used, discarded)"
+        run: |
+          set -euo pipefail
+          GOOGLE_CLIENT_ID=$(gcloud secrets versions access latest --secret="PROD_GOOGLE_CLIENT_ID" --project="${PROJECT_ID}")
+          GOOGLE_CLIENT_SECRET=$(gcloud secrets versions access latest --secret="PROD_GOOGLE_CLIENT_SECRET" --project="${PROJECT_ID}")
+          GOOGLE_REFRESH_TOKEN=$(gcloud secrets versions access latest --secret="PROD_GOOGLE_REFRESH_TOKEN" --project="${PROJECT_ID}")
+          echo "::add-mask::${GOOGLE_CLIENT_ID}"
+          echo "::add-mask::${GOOGLE_CLIENT_SECRET}"
+          echo "::add-mask::${GOOGLE_REFRESH_TOKEN}"
+          export GOOGLE_CLIENT_ID GOOGLE_CLIENT_SECRET GOOGLE_REFRESH_TOKEN
+          node scripts/verify-production-google-auth.mjs
