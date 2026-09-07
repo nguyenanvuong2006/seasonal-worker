@@ -38,33 +38,18 @@
  */
 
 import { NextResponse } from "next/server";
-import { and, eq, isNull } from "drizzle-orm";
 import { getUserScope, requirePermission } from "@/lib/auth";
-import { db } from "@/db";
+import { countCanonicalPages } from "@/lib/document-merge/canonical-document";
 import {
-  dailyApplications,
-  mergeTemplateFields,
-  mergeTemplates,
-  mergeTemplateVersions,
-} from "@/db/schema";
-import {
-  buildCanonicalSnapshot,
-  CANONICAL_ACTION_VI,
-  countCanonicalPages,
+  PreviewResolutionError,
   isCanonicalTemplateError,
-  renderCanonicalDocument,
-} from "@/lib/document-merge/canonical-document";
-import { loadDailyApplicationRecords } from "@/lib/document-merge/record-loader";
-import { getHtmlTemplateContractByGoogleDocId } from "@/document-templates/registry";
-import type { MergeContext } from "@/lib/document-merge/data-resolver";
+  CANONICAL_ACTION_VI,
+  resolveTemplateVersionPreview,
+} from "@/lib/document-merge/preview-render";
 import {
   DRAFT_PREVIEW_BANNER_VI,
   DRAFT_PREVIEW_MODE,
-  isUnpublishedPreview,
   parseDraftPreviewRequest,
-  isCandidateInScope,
-  selectPreviewMappings,
-  summarizePreviewMappings,
 } from "@/lib/document-merge/draft-preview";
 
 export const runtime = "nodejs";
@@ -87,128 +72,17 @@ export async function POST(request: Request, context: RouteContext) {
     }
     const { applicationId, signingContext } = parsed.value;
 
-    const [template] = await db
-      .select()
-      .from(mergeTemplates)
-      .where(eq(mergeTemplates.id, templateId))
-      .limit(1);
-    if (!template) {
-      return NextResponse.json(
-        {
-          code: "TEMPLATE_NOT_FOUND",
-          error: "Không tìm thấy mẫu tài liệu.",
-          action: "Tải lại danh sách mẫu và thử lại.",
-        },
-        { status: 404 },
-      );
-    }
-
-    // Load the EXACT version requested — by id AND template id. Never by
-    // merge_templates.current_published_version.
-    const [version] = await db
-      .select()
-      .from(mergeTemplateVersions)
-      .where(
-        and(eq(mergeTemplateVersions.id, versionId), eq(mergeTemplateVersions.templateId, templateId)),
-      )
-      .limit(1);
-    if (!version) {
-      return NextResponse.json(
-        {
-          code: "VERSION_NOT_FOUND",
-          error: "Không tìm thấy phiên bản này trong mẫu tài liệu đã chọn.",
-          action: "Tải lại danh sách phiên bản của mẫu và chọn lại.",
-        },
-        { status: 404 },
-      );
-    }
-
-    // DATA SCOPE — resolve the candidate through the caller's authorised
-    // departments. Out-of-scope ids are indistinguishable from missing ones.
     const scope = await getUserScope(guard.session);
-    const [candidate] = await db
-      .select({ id: dailyApplications.id, deptId: dailyApplications.deptId })
-      .from(dailyApplications)
-      .where(and(eq(dailyApplications.id, applicationId), isNull(dailyApplications.deletedAt)))
-      .limit(1);
-    if (!candidate || !isCandidateInScope(scope, candidate.deptId)) {
-      return NextResponse.json(
-        {
-          code: "APPLICATION_NOT_FOUND",
-          error: "Không tìm thấy ứng viên trong phạm vi dữ liệu của bạn.",
-          action: "Tìm lại ứng viên bằng ô tìm kiếm trong hộp thoại xem trước.",
-        },
-        { status: 404 },
-      );
-    }
-
-    // Current non-orphaned mapping — the same set pre-publish validation reads.
-    const fields = await db
-      .select()
-      .from(mergeTemplateFields)
-      .where(and(eq(mergeTemplateFields.templateId, templateId), eq(mergeTemplateFields.isOrphaned, false)));
-
-    const { mappings, source: mappingSource } = selectPreviewMappings(version, fields);
-    if (mappings.length === 0) {
-      return NextResponse.json(
-        {
-          code: "MAPPING_MISSING",
-          error: `Mẫu “${template.name}” chưa có placeholder mapping đang hoạt động.`,
-          action: "Mở Mapping Inspector, kiểm tra mapping rồi tạo lại bản xem trước.",
-          templateId,
-          templateName: template.name,
-        },
-        { status: 422 },
-      );
-    }
-
-    // Same loader the HTML_PDF worker uses — preview data cannot drift.
-    const records = await loadDailyApplicationRecords([applicationId]);
-    const recordData = records.get(applicationId);
-    if (!recordData) {
-      return NextResponse.json(
-        {
-          code: "APPLICATION_NOT_FOUND",
-          error: "Không tìm thấy hồ sơ ứng viên.",
-          action: "Tìm lại ứng viên rồi thử lại.",
-        },
-        { status: 404 },
-      );
-    }
-
-    const previewContext: MergeContext = {
-      currentUserId: guard.session.id,
-      currentUserName: guard.session.fullName,
-      currentDate: new Date(),
-      mergeIndex: 1,
-      mergeCount: 1,
-      // H3 — resolved ONCE for this Preview call, exactly like a merge job
-      // freezes it once for the whole batch (see async-job.ts).
-      signingContext,
-    };
-
-    // Build the SAME immutable snapshot shape a job freezes and render it with
-    // the SAME canonical renderer the worker uses — preview never reconstructs
-    // the document. `allowUnpublishedForVerification` relaxes ONLY the
-    // PUBLISHED status gate, and only on this read-only path.
-    const snapshot = buildCanonicalSnapshot({
+    const resolved = await resolveTemplateVersionPreview({
       templateId,
-      version,
-      allowUnpublishedForVerification: true,
-      mappings,
-      formatting: {
-        contractKey: template.googleDocId,
-        retentionYears: version.retentionYears ?? null,
-        documentKind: template.documentKind,
-        templateName: template.name,
-      },
+      versionId,
+      applicationId,
+      signingContext,
+      session: guard.session,
+      scope,
     });
+    const { template, version, rendered, mappingSource, mappingSummary, unpublished, fullName, cccd } = resolved;
 
-    const rendered = renderCanonicalDocument(snapshot, recordData, previewContext, {
-      contract: getHtmlTemplateContractByGoogleDocId(template.googleDocId),
-    });
-
-    const unpublished = isUnpublishedPreview(version);
     return NextResponse.json({
       mode: DRAFT_PREVIEW_MODE,
       banner: unpublished ? DRAFT_PREVIEW_BANNER_VI : null,
@@ -226,10 +100,10 @@ export async function POST(request: Request, context: RouteContext) {
       // pointer: the rendered version number is independent of this value.
       currentPublishedVersion: template.currentPublishedVersion ?? null,
       mappingSource,
-      mappingSnapshotCount: Array.isArray(version.mappingSnapshot) ? version.mappingSnapshot.length : 0,
-      mappingSummary: summarizePreviewMappings(mappings),
+      mappingSnapshotCount: resolved.mappingSnapshotCount,
+      mappingSummary,
       renderedHtml: rendered.html,
-      printCss: snapshot.printCss,
+      printCss: rendered.printCss,
       // Phase 5 — same margin config the final PDF uses (frozen in the
       // snapshot), so the operator's on-screen preview guide matches exactly.
       margins: rendered.margins,
@@ -240,8 +114,8 @@ export async function POST(request: Request, context: RouteContext) {
       renderer: "renderCanonicalDocument (shared Preview + HTML_PDF worker renderer)",
       applicationId,
       recordId: applicationId,
-      fullName: typeof recordData.fullName === "string" ? recordData.fullName : undefined,
-      cccd: typeof recordData.cccd === "string" ? recordData.cccd : undefined,
+      fullName,
+      cccd,
       unresolved: rendered.unreplaced,
       unreplaced: rendered.unreplaced,
       missingFields: rendered.missingFields,
@@ -252,6 +126,12 @@ export async function POST(request: Request, context: RouteContext) {
         : "Đang xem phiên bản đã XUẤT BẢN — đúng nội dung mà worker HTML_PDF sẽ in.",
     });
   } catch (error) {
+    if (error instanceof PreviewResolutionError) {
+      return NextResponse.json(
+        { code: error.code, error: error.message, action: error.action, templateId: error.templateId },
+        { status: error.status },
+      );
+    }
     if (isCanonicalTemplateError(error)) {
       return NextResponse.json(
         {

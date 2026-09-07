@@ -121,6 +121,7 @@ export function checkVerificationConfigPresence(
 export type WorkerEndpoint =
   | "/health"
   | "/run"
+  | "/preview-pdf"
   | "/verify-visual"
   | "/benchmark"
   | "/diag/db-identity"
@@ -131,6 +132,7 @@ export type WorkerEndpoint =
 const WORKER_METHODS: Record<WorkerEndpoint, "GET" | "POST"> = {
   "/health": "GET",
   "/run": "POST",
+  "/preview-pdf": "POST",
   "/verify-visual": "POST",
   "/benchmark": "POST",
   "/diag/db-identity": "GET",
