@@ -8,10 +8,10 @@
  * version", audited as DOCUMENT_SUPERSEDED) and its evidence/history is
  * NEVER touched or deleted. A brand-new candidate_document is created
  * (GENERATING, supersedes_document_id = the old id) and generation is
- * re-triggered for that ONE candidate through the same in-process
- * merge/execute call the batch issue route uses — the new document gets
- * its own new PDF, new SHA-256, and will require an entirely new candidate
- * confirmation once it reaches ISSUED/VIEWED.
+ * re-triggered for that ONE candidate through createCandidateDocumentMergeJob()
+ * (the same helper, and same engine branch, the batch generate route uses)
+ * — the new document gets its own new PDF, new SHA-256, and will require an
+ * entirely new candidate confirmation once it reaches ISSUED/VIEWED.
  */
 
 import { NextResponse } from "next/server";
@@ -20,7 +20,7 @@ import { requirePermission, writeAudit } from "@/lib/auth";
 import { db } from "@/db";
 import { candidateDocuments, mergeJobRecords } from "@/db/schema";
 import { canRevoke, canSupersede, type CandidateDocumentStatus } from "@/lib/candidate-consent/lifecycle";
-import { POST as executeMerge } from "@/app/api/document-merge/merge/execute/route";
+import { createCandidateDocumentMergeJob, CandidateMergeJobError } from "@/lib/document-merge/candidate-merge-job";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -55,26 +55,21 @@ export async function POST(request: Request, { params }: { params: Promise<{ id:
   }
 
   // Re-trigger generation for this ONE candidate — same hardened pipeline
-  // the batch issue route uses, scoped to a single applicationId.
-  const internalRequest = new Request("http://internal.local/api/document-merge/merge/execute", {
-    method: "POST",
-    headers: { "content-type": "application/json" },
-    body: JSON.stringify({
+  // (and same engine branch) the batch generate route uses, scoped to a
+  // single applicationId.
+  let jobId: string;
+  try {
+    jobId = await createCandidateDocumentMergeJob(guard.session, request, {
       templateId: oldDoc.templateId ?? undefined,
-      mergeMode: "INDIVIDUAL_DOCUMENTS",
-      batchPrint: false,
-      dispatchToApplicant: false,
-      autoRoute: !oldDoc.templateId,
-      records: { entityType: "daily_applications", recordIds: [oldDoc.applicationId] },
-    }),
-  });
-  const mergeResponse = await executeMerge(internalRequest);
-  const mergeData = (await mergeResponse.json()) as { jobId?: string; error?: string };
-  if (!mergeResponse.ok || !mergeData.jobId) {
-    return NextResponse.json({ error: mergeData.error ?? "Không tạo được job sinh hồ sơ thay thế." }, { status: mergeResponse.status || 500 });
+      recordIds: [oldDoc.applicationId],
+    });
+  } catch (error) {
+    if (error instanceof CandidateMergeJobError) {
+      return NextResponse.json({ error: error.message }, { status: error.status });
+    }
+    throw error;
   }
 
-  const jobId = mergeData.jobId;
   const [newRecord] = await db.select().from(mergeJobRecords).where(eq(mergeJobRecords.mergeJobId, jobId)).limit(1);
   if (!newRecord) {
     return NextResponse.json({ error: "Job đã tạo nhưng không có hồ sơ nào được xếp hàng." }, { status: 500 });

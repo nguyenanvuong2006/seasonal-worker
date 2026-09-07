@@ -27,6 +27,7 @@ const issueReadyRoute = readRoute("src/app/api/document-merge/candidate-document
 const revokeRoute = readRoute("src/app/api/document-merge/candidate-documents/[id]/revoke/route.ts");
 const reissueRoute = readRoute("src/app/api/document-merge/candidate-documents/[id]/reissue/route.ts");
 const evidenceRoute = readRoute("src/app/api/document-merge/candidate-documents/[id]/evidence/route.ts");
+const candidateMergeJobHelper = readRoute("src/lib/document-merge/candidate-merge-job.ts");
 
 function stripComments(code: string): string {
   return code.replace(/\/\*[\s\S]*?\*\//g, "").replace(/(^|[^:])\/\/.*$/gm, "$1");
@@ -405,7 +406,11 @@ test("generate route: requires the dedicated candidate_documents.issue capabilit
 });
 
 test("generate route: never sets dispatchToApplicant true — must not write to the legacy daily_applications signature fields", () => {
-  assert.match(generateRoute, /dispatchToApplicant:\s*false/);
+  // dispatchToApplicant:false now lives in the shared createCandidateDocumentMergeJob()
+  // helper (both engine branches) since generate/reissue both call it — the
+  // route itself never constructs the merge-job request body directly.
+  assert.doesNotMatch(generateRoute, /dispatchToApplicant:\s*true/);
+  assert.match(candidateMergeJobHelper, /dispatchToApplicant:\s*false/);
 });
 
 test("generate route: one candidate_documents row is inserted per merge_job_record — N candidates in, N independent documents out, never a shared/combined row", () => {
@@ -441,14 +446,38 @@ test("evidence route: gated by a DIFFERENT, stronger capability than status view
  *     (this file only proves the NEW routes didn't touch that code).
  * ============================================================ */
 
-test("generate/reissue routes reuse merge/execute IN-PROCESS — none of them re-implement job creation, worker triggering, or CAS logic", () => {
+test("generate/reissue routes reuse createCandidateDocumentMergeJob() — none of them re-implement job creation, worker triggering, or CAS logic", () => {
   for (const [name, code] of [
     ["generate", generateRoute],
     ["reissue", reissueRoute],
   ] as const) {
-    assert.match(code, /POST as executeMerge/, `${name} route must reuse the existing hardened merge/execute handler`);
+    assert.match(code, /createCandidateDocumentMergeJob/, `${name} route must reuse the shared candidate-merge-job helper`);
     assert.doesNotMatch(code, /triggerPdfWorker|FOR UPDATE SKIP LOCKED/, `${name} route must not reimplement worker-trigger/CAS logic`);
   }
+});
+
+// 2026-09 HTML_PDF production engine switch: candidate-documents/generate and
+// .../reissue used to be hardcoded to the legacy GOOGLE_DOCS-only
+// /merge/execute route, so this feature could never produce an HTML_PDF
+// document regardless of DOCUMENT_MERGE_ENGINE. createCandidateDocumentMergeJob()
+// is the single shared fix — it reads the SAME engine flag every other call
+// site reads and never introduces a second selection mechanism.
+test("candidate-merge-job helper: branches on the SAME getDocumentMergeEngine() every other call site reads — HTML_PDF via createAsyncMergeJob(), GOOGLE_DOCS via the unchanged /merge/execute handler", () => {
+  const code = stripComments(candidateMergeJobHelper);
+  assert.match(code, /getDocumentMergeEngine/);
+  assert.match(code, /createAsyncMergeJob/);
+  assert.match(code, /POST as executeMerge/, "the GOOGLE_DOCS branch must still reuse the existing hardened merge/execute handler");
+  assert.match(code, /triggerPdfWorker/, "the HTML_PDF branch must trigger the Cloud Run worker exactly like /api/document-merge/jobs does");
+});
+
+test("candidate-merge-job helper: HTML_PDF branch requires an explicit templateId (Auto Route stays GOOGLE_DOCS-only, matching createAsyncMergeJob's own gate)", () => {
+  const code = stripComments(candidateMergeJobHelper);
+  const htmlPdfBranchStart = code.indexOf('engine === "HTML_PDF"');
+  const htmlPdfBranchEnd = code.indexOf("internal.local/api/document-merge/merge/execute");
+  assert.ok(htmlPdfBranchStart > -1 && htmlPdfBranchEnd > htmlPdfBranchStart);
+  const htmlPdfBranch = code.slice(htmlPdfBranchStart, htmlPdfBranchEnd);
+  assert.match(htmlPdfBranch, /if \(!input\.templateId\)/);
+  assert.match(htmlPdfBranch, /autoRoute: false/);
 });
 
 /* ============================================================ *

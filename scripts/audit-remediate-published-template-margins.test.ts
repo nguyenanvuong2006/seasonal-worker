@@ -84,6 +84,12 @@ test("new DRAFT copies html_body verbatim (byte-identical) — the script never 
   assert.doesNotMatch(insertStatement, /html_body\s*=\s*\$/, "html_body must be copied via the SELECT, never passed as a rewritten bound parameter");
 });
 
+test("audit reads merge_templates.html_enabled read-only (never writes to merge_templates) and reports it in the audit event", () => {
+  const code = readScript();
+  assert.match(code, /SELECT id, name, current_published_version, html_enabled\s*\n\s*FROM merge_templates/);
+  assert.match(code, /htmlEnabled:\s*tpl\.html_enabled/);
+});
+
 test("script requires DATABASE_URL and exits non-zero without it", () => {
   const code = readScript();
   assert.match(code, /if \(!DATABASE_URL\)/);
