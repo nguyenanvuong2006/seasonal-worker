@@ -455,6 +455,86 @@ test("GOOGLE_DOCS worker: runJob self-heals (reclaim), processes the item, CAS-c
   assert.equal(spies.finalizeJob.calls.length, 0, "GOOGLE_DOCS success must go through the CAS helper");
 });
 
+test("GOOGLE_DOCS worker: PREVIEW/FINAL-MERGE PARITY GAP — even when the frozen job snapshot carries htmlBody/printCss/margins (as async-job.ts's real code writes for GOOGLE_DOCS jobs), the worker's actual output is driven ENTIRELY by the live Google Doc content, never by those canonical fields", async () => {
+  // Root cause of the 2026-09 PREVIEW vs real-merge geometry divergence:
+  // GoogleDocsTemplateSnapshot (this file) has no margin fields, and
+  // runGoogleDocsItem() never reads htmlBody/printCss even when async-job.ts
+  // happens to copy them into metadata.googleDocs.templates[tid] — it always
+  // calls service.getDocumentContent(tpl.googleDocId) instead (the LIVE
+  // Google Doc). This test proves that empirically: stuffing the frozen
+  // snapshot with canonical HTML/CSS/margins that would visibly change a
+  // Chromium render must NOT change the GOOGLE_DOCS worker's output at all.
+  const jobWithCanonicalDataPresent = googleDocsJob({
+    metadata: {
+      renderedAt: "2026-08-29T00:06:26.000Z",
+      googleDocs: {
+        batchPrint: false,
+        dispatchToApplicant: false,
+        outputStrategy: "INDIVIDUAL_DOCS",
+        currentUserId: "user-1",
+        currentUserName: "HR Staff",
+        templates: {
+          "tpl-1": {
+            templateId: "tpl-1",
+            name: "Đăng ký tập nghề - Quy định tập nghề",
+            documentKind: "DW_CU",
+            googleDocId: "google-doc-16",
+            outputFolderId: "folder-1",
+            // Present in a real GOOGLE_DOCS job's stored metadata (async-job.ts
+            // copies these), but MUST be inert for this engine.
+            htmlBody: '<div class="page" style="padding:999mm">DIFFERENT CANONICAL BODY — if this were used, the test below would see it</div>',
+            printCss: "@page { margin: 999mm; } .page { padding: 999mm; }",
+            margins: { topMm: 1, bottomMm: 1, leftMm: 1, rightMm: 1 },
+            fields: [
+              {
+                id: "f1",
+                placeholder: "Ho_ten",
+                sourceType: "FIELD",
+                sourceEntity: "daily_applications",
+                sourceField: "fullName",
+                sourcePath: null,
+                optionValue: null,
+                formatType: null,
+                fallbackValue: null,
+                isRequired: false,
+              },
+            ],
+          },
+        },
+      },
+    },
+  });
+
+  const db = createFakeDb({
+    respond: (call) => (call.root === "select" && call.table === "merge_jobs" ? [jobWithCanonicalDataPresent] : []),
+  });
+  const spies = makeQueueSpies();
+  spies.claimItems.results = [[googleDocsItem()], []];
+  spies.recomputeJobProgress.results = [
+    { queued: 0, completed: 1, failed: 0, terminal: true },
+    { queued: 0, completed: 1, failed: 0, terminal: true },
+    { queued: 0, completed: 1, failed: 0, terminal: true },
+  ];
+  spies.listCompletedItemsInOrder.results = [[{ id: "item-1", sortOrder: 1, pdfUrl: "https://docs.google.com/document/d/doc-out-1/edit", storageKey: "doc-out-1" }]];
+  const records = new Map([["app-1", { id: "app-1", fullName: "Nguyễn Văn A" }]]);
+  const googleCalls = { create: [] as { title: string; content: string; folderId?: string }[] };
+  const worker = await loadWorker(db, spies, [], records, googleCalls);
+
+  const result = await worker.runJob("job-gd");
+  assert.equal(result.processed, 1);
+  assert.equal(result.failed, 0);
+
+  // The rendered content is EXACTLY what the mocked live Google Doc content
+  // ("MẪU <<Ho_ten>>", via getDocumentContent) produces — byte-identical to
+  // the baseline test above that has NO canonical data in its snapshot. The
+  // injected htmlBody/printCss/margins never appear anywhere in the output
+  // and never influence it.
+  assert.equal(googleCalls.create.length, 1);
+  assert.equal(googleCalls.create[0].content, "MẪU <<Ho_ten>>");
+  assert.doesNotMatch(googleCalls.create[0].content, /DIFFERENT CANONICAL BODY/);
+  assert.doesNotMatch(googleCalls.create[0].content, /999mm/);
+});
+
 test("GOOGLE_DOCS worker: transient Google error retries the item (retryable), a 403 fails deterministically", async () => {
   const transientDb = createFakeDb({
     respond: (call) => (call.root === "select" && call.table === "merge_jobs" ? [googleDocsJob()] : []),
