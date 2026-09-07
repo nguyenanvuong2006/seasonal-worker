@@ -60,6 +60,12 @@ test("diagnostic script runs the exact watchdog-mode selection query (same predi
   assert.match(code, /LIMIT 1/);
 });
 
+test("jobs_of_interest and job_items are emitted as single-line NDJSON (no pretty-print) — the workflow's job-ID extractor parses one JSON object per line, and a multi-line pretty-printed object silently fails to parse there (real bug found in production: job_count was always 0 even with jobs present)", () => {
+  const code = readScript();
+  assert.doesNotMatch(code, /event: "jobs_of_interest"[\s\S]*?\}\),?\s*\n\s*null,\s*\n\s*2,/);
+  assert.doesNotMatch(code, /event: "job_items"[\s\S]{0,400}\},\s*\n\s*null,\s*\n\s*2,/);
+});
+
 test("diagnostic workflow is workflow_dispatch only, scoped to the production environment, and never calls the worker /run endpoint", () => {
   const workflow = readFileSync(join(ROOT, ".github/workflows/diagnose-production-merge-jobs.yml"), "utf8");
   assert.match(workflow, /on:\s*\n\s*workflow_dispatch: \{\}/);

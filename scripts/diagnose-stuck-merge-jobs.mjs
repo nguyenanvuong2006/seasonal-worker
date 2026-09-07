@@ -74,7 +74,13 @@ const jobsResult = await client.query(
    ORDER BY created_at DESC`,
   [String(FAILED_WINDOW_HOURS)],
 );
-console.log(JSON.stringify({ event: "jobs_of_interest", count: jobsResult.rows.length, jobs: jobsResult.rows }, null, 2));
+// Single-line NDJSON (no pretty-print) — the log-correlation step below
+// parses this output one line == one JSON object; a multi-line pretty-
+// printed object would silently fail to parse there (found via a real
+// production run: job_count was always 0 even when jobs_of_interest had
+// entries, because every individual line of the indented JSON is not
+// valid JSON on its own).
+console.log(JSON.stringify({ event: "jobs_of_interest", count: jobsResult.rows.length, jobs: jobsResult.rows }));
 
 // 2) Per-item diagnostics for each job found above — status/lease/retry/error
 // only. source_record_id (candidate FK) is deliberately NEVER selected.
@@ -100,20 +106,16 @@ for (const job of jobsResult.rows) {
     [job.id],
   );
   console.log(
-    JSON.stringify(
-      {
-        event: "job_items",
-        jobId: job.id,
-        itemCount: itemsResult.rows.length,
-        statusBreakdown: itemsResult.rows.reduce((acc, r) => {
-          acc[r.status] = (acc[r.status] ?? 0) + 1;
-          return acc;
-        }, {}),
-        items: itemsResult.rows,
-      },
-      null,
-      2,
-    ),
+    JSON.stringify({
+      event: "job_items",
+      jobId: job.id,
+      itemCount: itemsResult.rows.length,
+      statusBreakdown: itemsResult.rows.reduce((acc, r) => {
+        acc[r.status] = (acc[r.status] ?? 0) + 1;
+        return acc;
+      }, {}),
+      items: itemsResult.rows,
+    }),
   );
 }
 
@@ -137,19 +139,15 @@ const eligibleCount = await client.query(
       AND engine IN ('HTML_PDF', 'GOOGLE_DOCS')`,
 );
 console.log(
-  JSON.stringify(
-    {
-      event: "watchdog_query_result",
-      eligibleNonTerminalJobs: eligibleCount.rows[0].n,
-      watchdogWouldPick: watchdogPick.rows[0] ?? null,
-      starvationRisk:
-        eligibleCount.rows[0].n > 1
-          ? `${eligibleCount.rows[0].n} eligible jobs but the watchdog query has no ORDER BY and LIMIT 1 — every invocation may resolve to the same row, starving the others until it becomes terminal.`
-          : null,
-    },
-    null,
-    2,
-  ),
+  JSON.stringify({
+    event: "watchdog_query_result",
+    eligibleNonTerminalJobs: eligibleCount.rows[0].n,
+    watchdogWouldPick: watchdogPick.rows[0] ?? null,
+    starvationRisk:
+      eligibleCount.rows[0].n > 1
+        ? `${eligibleCount.rows[0].n} eligible jobs but the watchdog query has no ORDER BY and LIMIT 1 — every invocation may resolve to the same row, starving the others until it becomes terminal.`
+        : null,
+  }),
 );
 
 await client.end();
