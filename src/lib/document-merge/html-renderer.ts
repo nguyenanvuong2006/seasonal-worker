@@ -185,10 +185,23 @@ th { font-weight: 700; text-align: center; }
 }
 .sig-line { display: inline-block; width: 160pt; border-bottom: 1px solid #000; }
 .logo { max-height: 22mm; max-width: 100%; }
-/* Keep signatures and complete tables together where room permits. */
+/* Keep signatures and complete tables together where room permits.
+ *
+ * Root cause fixed here (production defect, 2026-09): this rule targeted
+ * .sig-block, but every real template (trainee-registration v7 through the
+ * currently PUBLISHED v18, and every other authored template) uses
+ * .sign-block for its signature/acknowledgement container -- .sig-block
+ * never matched anything, so this protection was a silent no-op since it was
+ * introduced. That let a signature block get split across a page boundary
+ * whenever it landed close enough to the bottom margin (e.g. "ky ten xac
+ * nhan hieu ro cac khoan neu tren" ending page N, "va cam ket tuan thu
+ * nghiem tuc" + the candidate name alone starting a near-empty page N+1).
+ * Renderer-level fix only -- no template content or PUBLISHED version was
+ * touched; this selector correction alone restores the intended protection
+ * for every existing and future template. */
 .page .right,
 .page table,
-.sig-block {
+.sign-block {
   break-inside: avoid;
   page-break-inside: avoid;
 }
