@@ -78,6 +78,7 @@ import {
   ExternalLink,
   FileCode2,
   FileDown,
+  FileText,
   Printer,
   RotateCcw,
   Save,
@@ -85,6 +86,9 @@ import {
   Trash2,
   X,
 } from "lucide-react";
+
+/** Error shape for the authoritative "Xem trước PDF A4" call — same as draft-version-preview-modal.tsx. */
+type PdfPreviewProblem = { code: string; error: string; action?: string };
 
 export type CloneVersionTarget = {
   id: string;
@@ -448,6 +452,23 @@ export function DraftVersionEditorModal({
     marginLeftMm !== baselineMarginLeftMm ||
     marginRightMm !== baselineMarginRightMm;
 
+  // AUTHORITATIVE "Xem trước PDF A4" (real Chromium, same worker/render path
+  // as draft-version-preview-modal.tsx) — placed next to the margin fields
+  // so an operator can iterate: adjust margin -> Lưu bản nháp -> Xem trước
+  // PDF A4 -> adjust again, without leaving this editor. Reads whatever is
+  // CURRENTLY SAVED for this versionId (server-side) — never the unsaved
+  // textarea/margin edits above, so the button is disabled while dirty
+  // (see JSX) rather than silently previewing stale-vs-editor content.
+  const [pdfLoading, setPdfLoading] = useState(false);
+  const [pdfUrl, setPdfUrl] = useState<string | null>(null);
+  const [pdfProblem, setPdfProblem] = useState<PdfPreviewProblem | null>(null);
+  const pdfUrlRef = useRef<string | null>(null);
+  useEffect(() => {
+    return () => {
+      if (pdfUrlRef.current) URL.revokeObjectURL(pdfUrlRef.current);
+    };
+  }, []);
+
   /**
    * Baseline = nội dung DRAFT ĐÃ LƯU mà editor đang dựa vào. Khởi tạo THẲNG
    * từ html_body/print_css của chính versionId được mở (không bao giờ từ
@@ -763,6 +784,67 @@ export function DraftVersionEditorModal({
     }
   };
 
+  /**
+   * AUTHORITATIVE "Xem trước PDF A4" — calls the SAME
+   * resolveTemplateVersionPreview()/renderCanonicalDocument() snapshot
+   * resolution as the Quick Preview route, then hands that HTML to the
+   * worker's real Chromium page.pdf() (preview-pdf/route.ts) — the exact
+   * same endpoint draft-version-preview-modal.tsx uses. Never persists
+   * anything; the PDF only ever lives client-side as a blob: URL.
+   */
+  const runPdfPreview = async () => {
+    if (!selectedCandidate) {
+      setPdfProblem({ code: "APPLICATION_REQUIRED", error: "Chọn một ứng viên (mục 'Xem trước A4' bên dưới) trước khi xem trước PDF A4." });
+      return;
+    }
+    setPdfLoading(true);
+    setPdfProblem(null);
+    try {
+      const res = await fetch(
+        `/api/document-merge/templates/${templateId}/versions/${version.id}/preview-pdf`,
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ applicationId: selectedCandidate.id, signingContext: signingContextBody(signingContext) }),
+        },
+      );
+      if (!res.ok) {
+        let data: Record<string, unknown> = {};
+        try {
+          const parsed: unknown = await res.json();
+          if (parsed !== null && typeof parsed === "object" && !Array.isArray(parsed)) data = parsed as Record<string, unknown>;
+        } catch {
+          data = {};
+        }
+        if (pdfUrlRef.current) {
+          URL.revokeObjectURL(pdfUrlRef.current);
+          pdfUrlRef.current = null;
+        }
+        setPdfUrl(null);
+        setPdfProblem({
+          code: typeof data.code === "string" ? data.code : `HTTP_${res.status}`,
+          error: typeof data.error === "string" ? data.error : "Không tạo được PDF xem trước.",
+          action: typeof data.action === "string" ? data.action : undefined,
+        });
+        return;
+      }
+      const blob = await res.blob();
+      const url = URL.createObjectURL(blob);
+      if (pdfUrlRef.current) URL.revokeObjectURL(pdfUrlRef.current);
+      pdfUrlRef.current = url;
+      setPdfUrl(url);
+    } catch {
+      if (pdfUrlRef.current) {
+        URL.revokeObjectURL(pdfUrlRef.current);
+        pdfUrlRef.current = null;
+      }
+      setPdfUrl(null);
+      setPdfProblem({ code: "NETWORK", error: "Không kết nối được để tạo PDF xem trước." });
+    } finally {
+      setPdfLoading(false);
+    }
+  };
+
   return (
     <div className="fixed inset-0 z-50 flex items-start justify-center overflow-y-auto bg-slate-900/50 p-4">
       <div className="my-6 w-full max-w-4xl rounded-2xl bg-white p-5 shadow-xl">
@@ -917,12 +999,13 @@ export function DraftVersionEditorModal({
                 />
               </label>
               <div className="rounded-lg border border-slate-200 bg-slate-50 p-3">
+                <p className="text-[11px] font-bold text-slate-700">Cài đặt trang (A4)</p>
                 <p className="text-[11px] font-semibold text-slate-600">
-                  Canh lề A4 (mm) — áp dụng cho cả Xem trước và PDF cuối cùng
+                  Canh lề — áp dụng cho cả Xem trước và PDF cuối cùng của riêng phiên bản này
                 </p>
                 <div className="mt-2 grid grid-cols-2 gap-3 sm:grid-cols-4">
                   <label className="text-[11px] font-medium text-slate-500">
-                    Trên
+                    Lề trên (mm)
                     <input
                       type="number"
                       min={0}
@@ -935,7 +1018,7 @@ export function DraftVersionEditorModal({
                     />
                   </label>
                   <label className="text-[11px] font-medium text-slate-500">
-                    Dưới
+                    Lề dưới (mm)
                     <input
                       type="number"
                       min={0}
@@ -948,7 +1031,7 @@ export function DraftVersionEditorModal({
                     />
                   </label>
                   <label className="text-[11px] font-medium text-slate-500">
-                    Trái
+                    Lề trái (mm)
                     <input
                       type="number"
                       min={0}
@@ -961,7 +1044,7 @@ export function DraftVersionEditorModal({
                     />
                   </label>
                   <label className="text-[11px] font-medium text-slate-500">
-                    Phải
+                    Lề phải (mm)
                     <input
                       type="number"
                       min={0}
@@ -975,7 +1058,7 @@ export function DraftVersionEditorModal({
                   </label>
                 </div>
                 <p className="mt-1.5 text-[10px] text-slate-400">
-                  Mặc định 10/10/12/12mm. Chỉ áp dụng cho phiên bản DRAFT — sau khi Xuất bản, giá trị này bị khóa vĩnh viễn theo phiên bản.
+                  Mặc định 10/10/12/12mm. Chỉ áp dụng cho phiên bản DRAFT này — sau khi Xuất bản, giá trị này bị khóa vĩnh viễn theo phiên bản (không ảnh hưởng phiên bản khác, kể cả các job đã merge trước đó).
                 </p>
               </div>
               <div>
@@ -989,9 +1072,44 @@ export function DraftVersionEditorModal({
                   <Save className="h-3.5 w-3.5" />
                   {saving ? "Đang lưu..." : "Lưu bản nháp"}
                 </button>
+                <button
+                  type="button"
+                  onClick={() => void runPdfPreview()}
+                  disabled={pdfLoading || dirty || conflict}
+                  title={
+                    dirty
+                      ? "Lưu bản nháp trước — Xem trước PDF A4 dùng ĐÚNG nội dung/canh lề đã lưu trên server, không dùng nội dung đang gõ chưa lưu."
+                      : "PDF A4 thật — render qua Chromium bằng đúng cấu hình worker HTML_PDF dùng cho merge thật, dùng canh lề đã lưu ở trên."
+                  }
+                  className="ml-2 inline-flex items-center gap-1.5 rounded-lg bg-indigo-700 px-3 py-1.5 text-[11px] font-bold text-white hover:bg-indigo-800 disabled:opacity-50"
+                >
+                  <FileText className="h-3.5 w-3.5" /> {pdfLoading ? "Đang render PDF..." : "Xem trước PDF A4"}
+                </button>
                 <span className="ml-2 text-[10px] text-slate-400">
                   Lưu xong editor KHÔNG đóng — sửa tiếp → Xem trước A4 → Lưu lại nhiều lần.
+                  {dirty && " Có thay đổi chưa lưu — Lưu bản nháp trước khi Xem trước PDF A4."}
                 </span>
+                {pdfProblem && (
+                  <div className="mt-2 flex items-start gap-2 rounded-lg border border-red-200 bg-red-50 p-2 text-[11px] text-red-700">
+                    <AlertTriangle className="mt-0.5 h-3.5 w-3.5 shrink-0" />
+                    <div>
+                      <p className="font-semibold">{pdfProblem.error}</p>
+                      {pdfProblem.action && <p className="mt-0.5">{pdfProblem.action}</p>}
+                    </div>
+                  </div>
+                )}
+                {pdfUrl && (
+                  <div className="mt-2">
+                    <p className="text-[10px] text-slate-400">
+                      PDF A4 thật (canh lề {marginTopMm}/{marginBottomMm}/{marginLeftMm}/{marginRightMm}mm) — đây là nguồn xác thực cuối cùng, dùng để duyệt trước khi Xuất bản.
+                    </p>
+                    <iframe
+                      title="Xem trước PDF A4 (chính thức)"
+                      src={pdfUrl}
+                      className="mt-1 h-[600px] w-full rounded-lg border border-indigo-200"
+                    />
+                  </div>
+                )}
               </div>
             </div>
           )}
