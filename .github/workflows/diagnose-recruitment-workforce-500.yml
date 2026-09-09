@@ -54,4 +54,10 @@ jobs:
       - name: Diagnose Recruitment/Workforce Request 500 (read-only)
         env:
           DATABASE_URL: ${{ secrets.PROD_DATABASE_URL }}
-        run: node --import tsx scripts/diagnose-recruitment-workforce-500.ts
+        # --conditions=react-server makes the "server-only" marker package
+        # resolve to its empty/no-op export (same condition Next.js's own
+        # bundler sets) instead of the throwing default export — needed
+        # because recruitment-request.ts/workforce-request.ts both start
+        # with `import "server-only"`, and this script imports them for
+        # real to exercise the EXACT same code path Production runs.
+        run: node --conditions=react-server --import tsx scripts/diagnose-recruitment-workforce-500.ts
