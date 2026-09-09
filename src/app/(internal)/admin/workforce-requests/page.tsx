@@ -8,6 +8,7 @@ import {
   Card,
   CardContent,
   EmptyState,
+  ErrorState,
   FormField,
   Input,
   KpiCard,
@@ -39,6 +40,7 @@ import {
   ArrowRightLeft,
   CheckCircle2,
 } from "lucide-react";
+import { fetchJsonWithTimeout } from "@/lib/api-client";
 
 /* ============================================================
    WORKFORCE REQUEST — Recruiter view (mục 12) + Dept Manager
@@ -220,7 +222,7 @@ export default function WorkforceRequestsPage() {
   const [dashboard, setDashboard] = useState<DashboardData | null>(null);
   const [can, setCan] = useState<Can>({ allocate: false, overallocate: false, comment: false });
   const [loading, setLoading] = useState(true);
-  const [error, setError] = useState<string | null>(null);
+  const [error, setError] = useState<{ code: string; message: string } | null>(null);
 
   const [statusFilter, setStatusFilter] = useState("ALL");
   const [search, setSearch] = useState("");
@@ -245,43 +247,67 @@ export default function WorkforceRequestsPage() {
   const load = useCallback(async () => {
     setLoading(true);
     setError(null);
-    try {
-      const asOf = asOfMode === "date" && asOfDate ? asOfDate : asOfMode === "expected" ? "expected" : "today";
-      const [listRes, dashRes] = await Promise.all([
-        fetch(`/api/workforce-requests?status=${statusFilter}&search=${encodeURIComponent(search)}&asOf=${asOf}`),
-        fetch(`/api/workforce-requests/dashboard${asOfMode === "date" && asOfDate ? `?asOf=${asOfDate}` : ""}`),
-      ]);
-      if (listRes.status === 403 || dashRes.status === 403) {
-        setError("Tài khoản của bạn không có quyền xem Workforce Request.");
-        return;
-      }
-      const listJson = (await listRes.json()) as { rows: RequestRow[]; can: Can };
-      const dashJson = (await dashRes.json()) as DashboardData;
-      setRows(listJson.rows ?? []);
-      setCan(listJson.can ?? { allocate: false, overallocate: false, comment: false });
-      setDashboard(dashJson);
-    } catch (e) {
-      setError((e as Error).message);
-    } finally {
+    // NEVER blindly call response.json() — a 500/empty/non-JSON body must
+    // become a structured error state, never an uncaught "Unexpected end of
+    // JSON input" surfaced raw to the user (see fetchJsonWithTimeout's own
+    // docblock: safe JSON parse, ALWAYS returns a discriminated ApiResult,
+    // never throws).
+    const asOf = asOfMode === "date" && asOfDate ? asOfDate : asOfMode === "expected" ? "expected" : "today";
+    const [listResult, dashResult] = await Promise.all([
+      fetchJsonWithTimeout<{ rows: RequestRow[]; can: Can }>(
+        `/api/workforce-requests?status=${statusFilter}&search=${encodeURIComponent(search)}&asOf=${asOf}`,
+        { label: "workforce-requests.list" },
+      ),
+      fetchJsonWithTimeout<DashboardData>(
+        `/api/workforce-requests/dashboard${asOfMode === "date" && asOfDate ? `?asOf=${asOfDate}` : ""}`,
+        { label: "workforce-requests.dashboard" },
+      ),
+    ]);
+
+    if (!listResult.ok) {
+      // FORBIDDEN keeps its own distinct message; every other failure class
+      // (server error, timeout, network, parse) shows the structured message
+      // fetchJsonWithTimeout already derived — a real backend 500 must never
+      // be silently rendered as an empty "Chưa có Workforce Request" state.
+      setError({
+        code: listResult.code,
+        message:
+          listResult.code === "FORBIDDEN" || listResult.code === "UNAUTHORIZED"
+            ? "Tài khoản của bạn không có quyền xem Workforce Request."
+            : listResult.message,
+      });
       setLoading(false);
+      return;
     }
+    if (!dashResult.ok) {
+      setError({
+        code: dashResult.code,
+        message:
+          dashResult.code === "FORBIDDEN" || dashResult.code === "UNAUTHORIZED"
+            ? "Tài khoản của bạn không có quyền xem Workforce Request."
+            : dashResult.message,
+      });
+      setLoading(false);
+      return;
+    }
+
+    setRows(listResult.data.rows ?? []);
+    setCan(listResult.data.can ?? { allocate: false, overallocate: false, comment: false });
+    setDashboard(dashResult.data);
+    setLoading(false);
   }, [statusFilter, search, asOfMode, asOfDate]);
 
   const openDetail = useCallback(async (id: string) => {
     setDetailLoading(true);
     setDetail(null);
-    try {
-      const res = await fetch(`/api/workforce-requests/${id}`);
-      if (!res.ok) {
-        toast({ title: "Không thể tải chi tiết request.", variant: "destructive" });
-        return;
-      }
-      setDetail((await res.json()) as DetailData);
-    } catch {
-      toast({ title: "Lỗi khi tải chi tiết.", variant: "destructive" });
-    } finally {
+    const result = await fetchJsonWithTimeout<DetailData>(`/api/workforce-requests/${id}`, { label: "workforce-requests.detail" });
+    if (!result.ok) {
+      toast({ title: result.code === "FORBIDDEN" ? "Bạn không có quyền xem chi tiết request này." : result.message, variant: "destructive" });
       setDetailLoading(false);
+      return;
     }
+    setDetail(result.data);
+    setDetailLoading(false);
   }, []);
 
   useEffect(() => {
@@ -289,7 +315,6 @@ export default function WorkforceRequestsPage() {
     // Hỗ trợ link từ Planning: ?open=<requestId>
     const openParam = new URLSearchParams(window.location.search).get("open");
     if (openParam) void openDetail(openParam);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [load, openDetail]);
 
   const openAllocate = useCallback(
@@ -299,13 +324,10 @@ export default function WorkforceRequestsPage() {
       setReason("");
       setOverrideOn(false);
       setOverrideReason("");
-      try {
-        const res = await fetch("/api/workforce-requests/unplanned");
-        const json = (await res.json()) as { rows: Candidate[] };
-        setCandidates(json.rows ?? []);
-      } catch {
-        setCandidates([]);
-      }
+      const result = await fetchJsonWithTimeout<{ rows: Candidate[] }>("/api/workforce-requests/unplanned", {
+        label: "workforce-requests.unplanned",
+      });
+      setCandidates(result.ok ? (result.data.rows ?? []) : []);
     },
     [],
   );
@@ -319,29 +341,32 @@ export default function WorkforceRequestsPage() {
     }
     setSaving(true);
     try {
-      const res = await fetch(`/api/workforce-requests/${allocateFor.id}/allocate`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          employmentSessionIds: ids,
-          reason: reason.trim() || null,
-          override: overrideOn ? { confirmed: true, reason: overrideReason } : null,
-        }),
-      });
-      const json = (await res.json()) as { error?: string; results?: { outcome: string; workerName: string }[]; warnings?: WarningDetail[]; overridden?: boolean };
-      if (!res.ok) {
-        toast({ title: json.error ?? "Không thể phân bổ.", variant: "destructive" });
+      const result = await fetchJsonWithTimeout<{ results?: { outcome: string; workerName: string }[]; warnings?: WarningDetail[]; overridden?: boolean }>(
+        `/api/workforce-requests/${allocateFor.id}/allocate`,
+        {
+          label: "workforce-requests.allocate",
+          init: {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              employmentSessionIds: ids,
+              reason: reason.trim() || null,
+              override: overrideOn ? { confirmed: true, reason: overrideReason } : null,
+            }),
+          },
+        },
+      );
+      if (!result.ok) {
+        toast({ title: result.message, variant: "destructive" });
         return;
       }
-      const warningTitles = (json.warnings ?? []).filter((w) => w.severity !== "OK").map((w) => WARNING_LABEL[w.code] ?? w.code);
+      const warningTitles = (result.data.warnings ?? []).filter((w) => w.severity !== "OK").map((w) => WARNING_LABEL[w.code] ?? w.code);
       toast({
-        title: `Đã phân bổ ${ids.length} lao động${json.overridden ? " (override vượt tổng)" : ""}${warningTitles.length ? ` — ${warningTitles.join(", ")}` : ""}`,
+        title: `Đã phân bổ ${ids.length} lao động${result.data.overridden ? " (override vượt tổng)" : ""}${warningTitles.length ? ` — ${warningTitles.join(", ")}` : ""}`,
       });
       setAllocateFor(null);
       void load();
       if (detail) void openDetail(detail.request.id);
-    } catch (e) {
-      toast({ title: (e as Error).message, variant: "destructive" });
     } finally {
       setSaving(false);
     }
@@ -353,14 +378,16 @@ export default function WorkforceRequestsPage() {
     if (!text) return;
     setPostingComment(true);
     try {
-      const res = await fetch(`/api/workforce-requests/${detail.request.id}/comments`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ body: text }),
+      const result = await fetchJsonWithTimeout(`/api/workforce-requests/${detail.request.id}/comments`, {
+        label: "workforce-requests.comments",
+        init: {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ body: text }),
+        },
       });
-      if (!res.ok) {
-        const json = (await res.json()) as { error?: string };
-        toast({ title: json.error ?? "Không thể gửi bình luận.", variant: "destructive" });
+      if (!result.ok) {
+        toast({ title: result.message, variant: "destructive" });
         return;
       }
       setCommentText("");
@@ -490,14 +517,22 @@ export default function WorkforceRequestsPage() {
             </div>
           )}
 
-          {error && (
-            <AlertPanel tone="danger" icon={<ShieldAlert className="h-4 w-4" />} title="Không thể tải dữ liệu">
-              <p>{error}</p>
-            </AlertPanel>
-          )}
-
           {loading ? (
             <SkeletonTable rows={6} cols={8} />
+          ) : error ? (
+            // "Chưa có Workforce Request" chỉ hiển thị khi tải THÀNH CÔNG (HTTP
+            // 200) và danh sách thật sự rỗng — không bao giờ hiển thị cùng lúc
+            // với error (rows giữ nguyên [] ban đầu khi load() thất bại, dễ bị
+            // nhầm là "trống thật" nếu không loại trừ tường minh ở đây).
+            <ErrorState
+              title="Không thể tải dữ liệu"
+              description={
+                <span>
+                  {error.message} <span className="text-fg-muted">Mã lỗi: {error.code}</span>
+                </span>
+              }
+              onRetry={() => void load()}
+            />
           ) : rows.length === 0 ? (
             <EmptyState title="Chưa có Workforce Request" description="Import yêu cầu tại trang “Yêu cầu tuyển dụng” hoặc tạo Planning liên kết." />
           ) : (

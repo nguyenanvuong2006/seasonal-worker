@@ -18,32 +18,40 @@ export async function GET(req: Request) {
   );
   if (!guard.ok) return NextResponse.json({ error: guard.error }, { status: guard.status });
 
-  const url = new URL(req.url);
-  const statusParam = url.searchParams.get("status");
-  const departmentId = url.searchParams.get("departmentId") ?? undefined;
-  const search = url.searchParams.get("search") ?? undefined;
-  const asOfParam = url.searchParams.get("asOf") ?? "today";
-  const limit = Math.min(Number(url.searchParams.get("limit") ?? 300) || 300, 1000);
+  try {
+    const url = new URL(req.url);
+    const statusParam = url.searchParams.get("status");
+    const departmentId = url.searchParams.get("departmentId") ?? undefined;
+    const search = url.searchParams.get("search") ?? undefined;
+    const asOfParam = url.searchParams.get("asOf") ?? "today";
+    const limit = Math.min(Number(url.searchParams.get("limit") ?? 300) || 300, 1000);
 
-  const scope = await getUserScope(guard.session);
-  const asOf: string | ((r: RequestRow) => string) = resolveAsOf(asOfParam);
+    const scope = await getUserScope(guard.session);
+    const asOf: string | ((r: RequestRow) => string) = resolveAsOf(asOfParam);
 
-  const rows = await listWorkforceRequests({
-    scope,
-    status: statusParam && statusParam !== "ALL" ? statusParam : undefined,
-    departmentId,
-    search,
-    asOf,
-    limit,
-  });
+    const rows = await listWorkforceRequests({
+      scope,
+      status: statusParam && statusParam !== "ALL" ? statusParam : undefined,
+      departmentId,
+      search,
+      asOf,
+      limit,
+    });
 
-  const can = {
-    allocate: await hasPermission(guard.session.role, "workforce_request.allocate"),
-    overallocate: await hasPermission(guard.session.role, "planning.overallocate"),
-    comment: await hasPermission(guard.session.role, "workforce_request.comment"),
-  };
+    const can = {
+      allocate: await hasPermission(guard.session.role, "workforce_request.allocate"),
+      overallocate: await hasPermission(guard.session.role, "planning.overallocate"),
+      comment: await hasPermission(guard.session.role, "workforce_request.comment"),
+    };
 
-  return NextResponse.json({ rows, can, asOf: asOfParam });
+    return NextResponse.json({ rows, can, asOf: asOfParam });
+  } catch (error) {
+    console.error("[workforce-requests] GET failed", error);
+    return NextResponse.json(
+      { error: "Không thể tải danh sách Workforce Request. Vui lòng thử lại." },
+      { status: 500 },
+    );
+  }
 }
 
 /** Giải tham số asOf (mục 14): today | expected | period | ngày cụ thể YYYY-MM-DD. */
