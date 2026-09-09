@@ -4,7 +4,7 @@
  *
  * KHÁC với scripts/run-migrations.mjs (thiết kế cho fresh/staging DB — chạy
  * TOÀN BỘ schema.sql + TOÀN BỘ migrations/*.sql, kể cả các migration không
- * liên quan Document Merge): script này CHỈ chạy 13 migration Document Merge
+ * liên quan Document Merge): script này CHỈ chạy 14 migration Document Merge
  * cụ thể, theo đúng thứ tự khai báo bên dưới, trên 1 database ĐÃ CÓ schema
  * nền tảng (production) — không đụng tới bất kỳ bảng/migration nào khác.
  *
@@ -12,7 +12,7 @@
  *   export DATABASE_URL=postgresql://...   # PROD_DATABASE_URL — KHÔNG dùng staging!
  *   node scripts/run-document-merge-migrations.mjs
  *
- * An toàn: cả 13 migration đều idempotent (ADD COLUMN IF NOT EXISTS / CREATE
+ * An toàn: cả 14 migration đều idempotent (ADD COLUMN IF NOT EXISTS / CREATE
  * TABLE IF NOT EXISTS / ON CONFLICT DO NOTHING / WHERE NOT EXISTS). Không
  * DROP/TRUNCATE/DELETE. Không seed dữ liệu test/verification — chỉ seed
  * permissions hệ thống + 1 template thật (Đăng ký tập nghề) ở trạng thái
@@ -58,7 +58,7 @@ if (!DATABASE_URL) {
   process.exit(1);
 }
 
-// Đúng 13 migration Document Merge, ĐÚNG THỨ TỰ — KHÔNG đọc toàn bộ thư mục
+// Đúng 14 migration Document Merge, ĐÚNG THỨ TỰ — KHÔNG đọc toàn bộ thư mục
 // migrations/ (khác run-migrations.mjs) để không vô tình chạy migration của
 // tính năng khác trên production (production có lịch sử migration riêng,
 // không đảm bảo đồng bộ với danh sách file hiện tại của thư mục này).
@@ -134,6 +134,17 @@ const DOCUMENT_MERGE_MIGRATIONS = [
   // idempotency check — a second run is a no-op. Never touches PUBLISHED
   // or current_published_version.
   "2026-09-09-trainee-registration-v20-manual-page-break-margin-restore.sql",
+  // DW Cũ (Tài liệu A) — fixes 22 checkbox/option merge_template_fields rows
+  // that were mismapped as CORE_FIELD (all source columns NULL) instead of
+  // CHECKBOX_OPTION, causing the ☐/☒ glyph to render as nothing. Copies DW
+  // Mới's exact working source_path/option_value per placeholder; also
+  // regenerates DW Cũ's PUBLISHED version's mapping_snapshot from the
+  // corrected fields (selectPreviewMappings() prefers that frozen snapshot
+  // over live fields whenever non-empty). Pure UPDATE (no INSERT/DELETE),
+  // scoped by google_doc_id + this exact placeholder list — silently
+  // affects 0 rows if DW Cũ doesn't exist yet in an environment. Never
+  // touches DW Mới, html_body, print_css, or any other DW Cũ field.
+  "2026-09-09-dw-cu-checkbox-option-mapping-fix.sql",
 ];
 
 const client = new pg.Client({ connectionString: DATABASE_URL, ssl: { rejectUnauthorized: false } });
