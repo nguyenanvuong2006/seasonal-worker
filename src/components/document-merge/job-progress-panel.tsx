@@ -11,7 +11,7 @@
  */
 
 import { useCallback, useEffect, useRef, useState } from "react";
-import { AlertTriangle, CheckCircle2, Clock, Download, FileText, Loader2, PauseCircle, RefreshCw, XCircle } from "lucide-react";
+import { AlertTriangle, CheckCircle2, Clock, Download, Eye, FileText, Loader2, PauseCircle, Printer, RefreshCw, XCircle } from "lucide-react";
 
 export type MergeJobProgressItem = {
   id: string;
@@ -267,14 +267,35 @@ export function JobProgressPanel({ jobId, onClosed }: { jobId: string; onClosed?
           </a>
         )}
         {data.outputPdfUrl && (
-          <a
-            href={data.outputPdfUrl}
-            target="_blank"
-            rel="noreferrer"
-            className="inline-flex items-center gap-1.5 rounded-lg bg-emerald-700 px-3 py-1.5 text-[11px] font-bold text-white hover:bg-emerald-800"
-          >
-            <Download className="h-3.5 w-3.5" /> PDF tổng
-          </a>
+          <>
+            <a
+              href={data.outputPdfUrl}
+              target="_blank"
+              rel="noreferrer"
+              title="Xem PDF tổng"
+              className="inline-flex items-center gap-1.5 rounded-lg bg-emerald-700 px-3 py-1.5 text-[11px] font-bold text-white hover:bg-emerald-800"
+            >
+              <Eye className="h-3.5 w-3.5" /> Xem PDF
+            </a>
+            <a
+              href={data.outputPdfUrl}
+              target="_blank"
+              rel="noreferrer"
+              title="Tải PDF tổng"
+              className="inline-flex items-center gap-1.5 rounded-lg border border-emerald-200 bg-emerald-50 px-3 py-1.5 text-[11px] font-bold text-emerald-700 hover:bg-emerald-100"
+            >
+              <Download className="h-3.5 w-3.5" /> Tải PDF
+            </a>
+            <a
+              href={data.outputPdfUrl}
+              target="_blank"
+              rel="noreferrer"
+              title="In PDF tổng — mở PDF gốc, dùng nút In của trình xem PDF"
+              className="inline-flex items-center gap-1.5 rounded-lg border border-emerald-200 bg-emerald-50 px-3 py-1.5 text-[11px] font-bold text-emerald-700 hover:bg-emerald-100"
+            >
+              <Printer className="h-3.5 w-3.5" /> In PDF
+            </a>
+          </>
         )}
         {data.outputZipUrl && (
           <a
@@ -340,9 +361,17 @@ export function JobProgressPanel({ jobId, onClosed }: { jobId: string; onClosed?
                   </td>
                   <td className="px-3 py-1.5">
                     {item.pdfUrl ? (
-                      <a href={item.pdfUrl} target="_blank" rel="noreferrer" className="font-semibold text-emerald-700 hover:underline">
-                        {item.filename || "PDF"}
-                      </a>
+                      <div className="flex items-center gap-2">
+                        <a href={item.pdfUrl} target="_blank" rel="noreferrer" title="Xem" className="text-emerald-700 hover:text-emerald-900">
+                          <Eye className="h-3.5 w-3.5" />
+                        </a>
+                        <a href={item.pdfUrl} target="_blank" rel="noreferrer" title="Tải" className="text-emerald-700 hover:text-emerald-900">
+                          <Download className="h-3.5 w-3.5" />
+                        </a>
+                        <a href={item.pdfUrl} target="_blank" rel="noreferrer" title="In" className="text-emerald-700 hover:text-emerald-900">
+                          <Printer className="h-3.5 w-3.5" />
+                        </a>
+                      </div>
                     ) : (
                       <span className="text-slate-300">—</span>
                     )}

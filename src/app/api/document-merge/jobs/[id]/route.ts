@@ -49,6 +49,7 @@ export async function GET(_request: Request, context: RouteContext) {
         status: mergeJobRecords.status,
         attemptCount: mergeJobRecords.attemptCount,
         pdfUrl: mergeJobRecords.pdfUrl,
+        filename: mergeJobRecords.filename,
         errorCode: mergeJobRecords.errorCode,
         errorMessage: mergeJobRecords.errorMessage,
       })
