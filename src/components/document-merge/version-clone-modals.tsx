@@ -69,19 +69,23 @@ import { composeFullHtmlDocument, isDraftEditorDirty } from "@/lib/document-merg
 import { normalizeFullHtmlDocument } from "@/lib/document-merge/full-document-normalizer";
 import {
   AlertTriangle,
+  ArrowDownToLine,
   CheckCircle2,
   CheckSquare,
   ClipboardPaste,
   Code2,
   Copy,
+  Eraser,
   Eye,
   ExternalLink,
   FileCode2,
   FileDown,
   FileText,
+  Link2,
   Printer,
   RotateCcw,
   Save,
+  Scissors,
   Search,
   Trash2,
   X,
@@ -434,6 +438,133 @@ export function DraftVersionEditorModal({
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [conflict, setConflict] = useState(false);
+
+  // CÔNG CỤ PHÂN TRANG (Phase 17) — self-service pagination tools: HR/Admin
+  // inserts/removes `.manual-page-break` and `.keep-together`/`keep-with-next-small`
+  // markers directly in the HTML textarea below, no SQL migration, no PR, no
+  // deploy. The CSS rules themselves live ONCE in the shared LAYOUT_UTILITY_CSS
+  // (html-renderer.ts) — these handlers only ever write MARKUP into `html`,
+  // which flows through the exact same Lưu bản nháp (PATCH) / Xem trước PDF A4
+  // path as any other manual edit to the textarea.
+  const htmlTextareaRef = useRef<HTMLTextAreaElement>(null);
+  const [paginationNotice, setPaginationNotice] = useState<string | null>(null);
+  const disablePaginationTools = conflict || saving;
+
+  const focusHtmlAt = (pos: number) => {
+    const el = htmlTextareaRef.current;
+    if (!el) return;
+    requestAnimationFrame(() => {
+      el.focus();
+      el.setSelectionRange(pos, pos);
+    });
+  };
+
+  /** Chèn ngắt trang — insert the marker at the cursor position (or replace an
+   * empty selection), then place the cursor right after it. */
+  const insertPageBreak = () => {
+    if (disablePaginationTools) return;
+    setPaginationNotice(null);
+    const el = htmlTextareaRef.current;
+    const start = el ? el.selectionStart : html.length;
+    const end = el ? el.selectionEnd : html.length;
+    const marker = '<!-- NGẮT TRANG A4 -->\n<div class="manual-page-break"></div>\n';
+    setHtml(html.slice(0, start) + marker + html.slice(end));
+    focusHtmlAt(start + marker.length);
+  };
+
+  /** Giữ cùng trang — wrap the current selection in .keep-together; with no
+   * selection, insert an empty opening/closing pair with the cursor between
+   * them so the operator can build the block without corrupting HTML. */
+  const wrapKeepTogether = () => {
+    if (disablePaginationTools) return;
+    setPaginationNotice(null);
+    const el = htmlTextareaRef.current;
+    const start = el ? el.selectionStart : html.length;
+    const end = el ? el.selectionEnd : html.length;
+    const OPEN = '<div class="keep-together">\n';
+    const CLOSE = "\n</div>";
+    if (start === end) {
+      const cursorLine = "  ";
+      const template = `${OPEN}${cursorLine}${CLOSE}`;
+      setHtml(html.slice(0, start) + template + html.slice(end));
+      focusHtmlAt(start + OPEN.length + cursorLine.length);
+      return;
+    }
+    const selected = html.slice(start, end);
+    const wrapped = `${OPEN}${selected}${CLOSE}`;
+    setHtml(html.slice(0, start) + wrapped + html.slice(end));
+    focusHtmlAt(start + wrapped.length);
+  };
+
+  const KEEP_WITH_NEXT_CLASS = "keep-with-next-small";
+
+  /** Giữ với nội dung sau — reuses the EXISTING keep-with-next-small utility
+   * (no duplicate CSS class). Requires selecting an existing opening tag (e.g.
+   * `<h3 class="...">`) so the class attribute can be edited safely instead of
+   * guessing at arbitrary selected HTML, which could corrupt the markup. */
+  const applyKeepWithNext = () => {
+    if (disablePaginationTools) return;
+    const el = htmlTextareaRef.current;
+    if (!el) return;
+    const start = el.selectionStart;
+    const end = el.selectionEnd;
+    const selected = html.slice(start, end);
+    const tagMatch = selected.match(/^<([a-zA-Z][\w-]*)((?:\s+[^<>]*)?)>/);
+    if (!tagMatch) {
+      setPaginationNotice(
+        'Chưa áp dụng: hãy bôi đen thẻ mở đầu của khối muốn "Giữ với nội dung sau" (ví dụ <h3 class="...">Tiêu đề</h3> hoặc chỉ phần thẻ mở <h3 class="...">) rồi bấm lại.',
+      );
+      return;
+    }
+    const fullOpenTag = tagMatch[0];
+    const attrs = tagMatch[2] ?? "";
+    const classAttrMatch = attrs.match(/class="([^"]*)"/);
+    let updatedOpenTag: string;
+    if (classAttrMatch) {
+      const classes = classAttrMatch[1].split(/\s+/).filter(Boolean);
+      if (classes.includes(KEEP_WITH_NEXT_CLASS)) {
+        setPaginationNotice("Thẻ đang chọn đã có Giữ với nội dung sau — không cần thêm lại.");
+        return;
+      }
+      classes.push(KEEP_WITH_NEXT_CLASS);
+      updatedOpenTag = fullOpenTag.replace(classAttrMatch[0], `class="${classes.join(" ")}"`);
+    } else {
+      updatedOpenTag = `${fullOpenTag.slice(0, -1)} class="${KEEP_WITH_NEXT_CLASS}">`;
+    }
+    setPaginationNotice(null);
+    const replaced = updatedOpenTag + selected.slice(fullOpenTag.length);
+    setHtml(html.slice(0, start) + replaced + html.slice(end));
+    focusHtmlAt(start + replaced.length);
+  };
+
+  /** Xóa ngắt trang — find the manual-page-break marker nearest the cursor
+   * (with/without the "NGẮT TRANG A4" comment) and remove it. */
+  const removePageBreak = () => {
+    if (disablePaginationTools) return;
+    const el = htmlTextareaRef.current;
+    const cursor = el ? el.selectionStart : html.length;
+    const markerRegex = /(?:<!--\s*NGẮT TRANG A4\s*-->\s*)?<div class="manual-page-break">\s*<\/div>\n?/g;
+    const NEARBY = 400;
+    let found: { start: number; end: number } | null = null;
+    let match: RegExpExecArray | null;
+    while ((match = markerRegex.exec(html)) !== null) {
+      const mStart = match.index;
+      const mEnd = match.index + match[0].length;
+      if (cursor >= mStart - NEARBY && cursor <= mEnd + NEARBY) {
+        found = { start: mStart, end: mEnd };
+        break;
+      }
+    }
+    if (!found) {
+      setPaginationNotice(
+        "Không tìm thấy dấu ngắt trang gần vị trí con trỏ. Đặt con trỏ ngay trước hoặc sau dấu ngắt trang muốn xóa rồi bấm lại — hoặc xóa trực tiếp trong ô HTML.",
+      );
+      return;
+    }
+    setPaginationNotice(null);
+    setHtml(html.slice(0, found.start) + html.slice(found.end));
+    focusHtmlAt(found.start);
+  };
 
   // A4 PRINT MARGINS (Phase 4) — DRAFT-editable, same Save/PATCH flow as
   // html/css. `version.status !== "DRAFT"` disables the inputs entirely
@@ -979,6 +1110,7 @@ export function DraftVersionEditorModal({
               <label className="text-[11px] font-semibold text-slate-600">
                 HTML hiện tại (html_body của bản nháp v{version.version} — template in A4, chứa placeholder {"<<...>>"})
                 <textarea
+                  ref={htmlTextareaRef}
                   value={html}
                   onChange={(e) => setHtml(e.target.value)}
                   rows={16}
@@ -1059,6 +1191,55 @@ export function DraftVersionEditorModal({
                 </div>
                 <p className="mt-1.5 text-[10px] text-slate-400">
                   Mặc định 10/10/12/12mm. Chỉ áp dụng cho phiên bản DRAFT này — sau khi Xuất bản, giá trị này bị khóa vĩnh viễn theo phiên bản (không ảnh hưởng phiên bản khác, kể cả các job đã merge trước đó).
+                </p>
+              </div>
+              <div className="rounded-lg border border-slate-200 bg-slate-50 p-3">
+                <p className="text-[11px] font-bold text-slate-700">Công cụ phân trang</p>
+                <p className="text-[11px] font-semibold text-slate-600">
+                  Chèn/gỡ ngắt trang và đánh dấu khối không được tách rời ngay trong ô HTML phía trên — không cần viết tay HTML.
+                </p>
+                <div className="mt-2 flex flex-wrap items-center gap-2">
+                  <button
+                    type="button"
+                    onClick={insertPageBreak}
+                    disabled={disablePaginationTools}
+                    title='Chèn <div class="manual-page-break"></div> tại vị trí con trỏ trong ô HTML — nội dung ngay sau luôn bắt đầu ở trang A4 mới. Xóa dòng này trong ô HTML (hoặc dùng "Xóa ngắt trang") để hủy.'
+                    className="inline-flex items-center gap-1.5 rounded-lg border border-slate-300 bg-white px-2.5 py-1.5 text-[11px] font-bold text-slate-700 hover:bg-slate-100 disabled:opacity-50"
+                  >
+                    <Scissors className="h-3.5 w-3.5" /> Chèn ngắt trang
+                  </button>
+                  <button
+                    type="button"
+                    onClick={wrapKeepTogether}
+                    disabled={disablePaginationTools}
+                    title='Bôi đen phần HTML muốn giữ nguyên trên một trang rồi bấm — bọc bằng <div class="keep-together">...</div>. Không bôi đen gì thì chèn một khối rỗng tại con trỏ để soạn tiếp.'
+                    className="inline-flex items-center gap-1.5 rounded-lg border border-slate-300 bg-white px-2.5 py-1.5 text-[11px] font-bold text-slate-700 hover:bg-slate-100 disabled:opacity-50"
+                  >
+                    <Link2 className="h-3.5 w-3.5" /> Giữ cùng trang
+                  </button>
+                  <button
+                    type="button"
+                    onClick={applyKeepWithNext}
+                    disabled={disablePaginationTools}
+                    title='Bôi đen thẻ mở đầu một khối (ví dụ tiêu đề, <h3 class="...">) rồi bấm — thêm class "keep-with-next-small" (lớp có sẵn) để khối này không bị tách rời khỏi nội dung ngay sau nó.'
+                    className="inline-flex items-center gap-1.5 rounded-lg border border-slate-300 bg-white px-2.5 py-1.5 text-[11px] font-bold text-slate-700 hover:bg-slate-100 disabled:opacity-50"
+                  >
+                    <ArrowDownToLine className="h-3.5 w-3.5" /> Giữ với nội dung sau
+                  </button>
+                  <button
+                    type="button"
+                    onClick={removePageBreak}
+                    disabled={disablePaginationTools}
+                    title="Đặt con trỏ ngay trước/sau một dấu ngắt trang đã chèn rồi bấm để xóa dấu đó."
+                    className="inline-flex items-center gap-1.5 rounded-lg border border-slate-300 bg-white px-2.5 py-1.5 text-[11px] font-bold text-slate-700 hover:bg-slate-100 disabled:opacity-50"
+                  >
+                    <Eraser className="h-3.5 w-3.5" /> Xóa ngắt trang
+                  </button>
+                </div>
+                {paginationNotice && <p className="mt-1.5 text-[10px] text-amber-700">{paginationNotice}</p>}
+                <p className="mt-1.5 text-[10px] text-slate-400">
+                  Các công cụ này chỉ sửa nội dung trong ô HTML ở trên (chưa lưu) — bấm <b>Lưu bản nháp</b> rồi{" "}
+                  <b>Xem trước PDF A4</b> để xác nhận ngắt trang trên PDF thật trước khi Xuất bản.
                 </p>
               </div>
               <div>

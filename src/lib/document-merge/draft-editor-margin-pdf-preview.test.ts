@@ -64,11 +64,16 @@ test("margin inputs are bound to marginTopMm/BottomMm/LeftMm/RightMm state (same
 });
 
 test("Xem trước PDF A4 button sits next to Lưu bản nháp, calls the SAME /preview-pdf endpoint, no second render config", () => {
-  const saveButtonIdx = editor.indexOf("Lưu bản nháp");
-  const pdfButtonIdx = editor.indexOf("Xem trước PDF A4");
-  assert.ok(saveButtonIdx !== -1 && pdfButtonIdx !== -1);
-  assert.ok(pdfButtonIdx > saveButtonIdx, "Xem trước PDF A4 must appear after Lưu bản nháp in the same box");
-  assert.ok(pdfButtonIdx - saveButtonIdx < 1800, "Xem trước PDF A4 must be close to (in the same box as) Lưu bản nháp");
+  // Anchor on the actual button onClick wiring, not the label text — the
+  // Công cụ phân trang toolbar's own helper text also mentions both button
+  // labels in prose (bấm Lưu bản nháp rồi Xem trước PDF A4), so a bare
+  // indexOf() on the labels alone would match that prose instead of the
+  // real buttons.
+  const saveOnClickIdx = editor.indexOf("onClick={() => void save()}");
+  const pdfOnClickIdx = editor.indexOf("onClick={() => void runPdfPreview()}");
+  assert.ok(saveOnClickIdx !== -1 && pdfOnClickIdx !== -1);
+  assert.ok(pdfOnClickIdx > saveOnClickIdx, "Xem trước PDF A4 must appear after Lưu bản nháp in the same box");
+  assert.ok(pdfOnClickIdx - saveOnClickIdx < 1000, "Xem trước PDF A4 must be close to (in the same box as) Lưu bản nháp");
 
   assert.match(
     editor,
@@ -81,7 +86,8 @@ test("Xem trước PDF A4 button sits next to Lưu bản nháp, calls the SAME /
 });
 
 test("Xem trước PDF A4 is disabled while there are unsaved edits (dirty) — never previews stale-vs-editor content", () => {
-  const button = editor.slice(editor.indexOf("onClick={() => void runPdfPreview()}") - 50, editor.indexOf("Xem trước PDF A4"));
+  const pdfOnClickIdx = editor.indexOf("onClick={() => void runPdfPreview()}");
+  const button = editor.slice(pdfOnClickIdx - 50, editor.indexOf("Xem trước PDF A4", pdfOnClickIdx));
   assert.match(button, /disabled=\{pdfLoading \|\| dirty \|\| conflict\}/);
 });
 
