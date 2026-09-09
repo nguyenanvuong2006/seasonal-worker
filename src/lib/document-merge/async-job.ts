@@ -18,7 +18,7 @@ import { and, eq, inArray, isNull } from "drizzle-orm";
 import { db } from "@/db";
 import { dailyApplications, mergeJobRecords, mergeJobs, mergeTemplateFields, mergeTemplates, mergeTemplateVersions } from "@/db/schema";
 import { getDocumentMergeEngine, type DocumentMergeEngine } from "./engine-config.ts";
-import { selectTemplateForApplicant, documentKindLabel } from "./template-routing.ts";
+import { selectTemplateForApplicant, documentKindLabel, hasDwClassificationSignal } from "./template-routing.ts";
 import { ITEM_STATUS, JOB_STATUS } from "./queue-types.ts";
 import {
   getRegisteredContractKeyByGoogleDocId,
@@ -66,11 +66,33 @@ export interface CreateAsyncJobInput {
   signingContext?: unknown;
 }
 
+/** One created job for one Auto Route group (or the single job when Auto Route is off). */
+export interface CreateAsyncJobGroupResult {
+  jobId: string;
+  templateId: string;
+  templateName: string;
+  /** "A" (DW Cũ) | "B" (DW Mới) | "" when a fixed templateId was used (no routing kind). */
+  kind: string;
+  total: number;
+}
+
+/** A selected record Auto Route could not classify at all (no dwMatch/declaredType signal) — never silently dropped. */
+export interface UnresolvedAutoRouteRecord {
+  recordId: string;
+  reason: "UNKNOWN_DW_CLASSIFICATION";
+}
+
 export interface CreateAsyncJobResult {
+  /** First/primary created job — kept for callers that only ever create one job (autoRoute:false). */
   jobId: string;
   status: string;
+  /** Total records actually queued across ALL created jobs (excludes unresolved). */
   total: number;
   engine: DocumentMergeEngine;
+  /** Every job created by this call — 1 unless Auto Route split records across DW Cũ/Mới groups. */
+  jobs: CreateAsyncJobGroupResult[];
+  /** Auto Route only: selected records with no DW classification signal at all — require manual handling. */
+  unresolved: UnresolvedAutoRouteRecord[];
 }
 
 interface PlannedRecord {
@@ -126,12 +148,17 @@ export async function createAsyncMergeJob(input: CreateAsyncJobInput): Promise<C
   const mergeMode = input.mergeMode ?? "ONE_DOCUMENT";
   const shouldDispatch = Boolean(input.dispatchToApplicant) && entityType === "daily_applications";
 
-  // HTML/PDF is deliberately explicit: callers must select one concrete
-  // template. Auto-routing remains available to the legacy Google Docs flow,
-  // but may not silently choose an HTML template/version for a legal PDF.
-  if (engine === "HTML_PDF" && (shouldAutoRoute || !input.templateId)) {
+  // HTML/PDF requires EITHER one concrete template OR Auto Route. Auto Route
+  // itself resolves each record to exactly one templateId (DW Cũ -> Tài
+  // liệu A, DW Mới -> Tài liệu B) via the SAME deterministic
+  // selectTemplateForApplicant() used everywhere else, then groups records
+  // by that templateId into separate jobs below — every job that gets
+  // created still snapshots/validates exactly ONE PUBLISHED version, the
+  // same immutable-snapshot guarantee a manually-selected template already
+  // had. It never lets one job silently mix templates/versions.
+  if (engine === "HTML_PDF" && !shouldAutoRoute && !input.templateId) {
     throw new AsyncJobValidationError(
-      "HTML/PDF yêu cầu chọn một template cụ thể (templateId) và tắt Auto Route.",
+      "HTML/PDF yêu cầu chọn một template cụ thể (templateId) hoặc bật Auto Route.",
       400,
     );
   }
@@ -181,12 +208,21 @@ export async function createAsyncMergeJob(input: CreateAsyncJobInput): Promise<C
   // auto route là OPTIONAL).
   const planned: PlannedRecord[] = [];
   const missingKinds = new Set<string>();
+  // Auto Route only — a selected record with NO dwMatch/declaredType signal
+  // at all. Never silently folded into the DW Mới group: tracked here and
+  // returned to the caller (never dropped) so the UI can show "Chưa xác
+  // định phân loại DW" and require manual handling.
+  const unresolved: UnresolvedAutoRouteRecord[] = [];
   let order = 0;
   for (const id of recordIds) {
     const rec = byId.get(id)!;
     order += 1;
     if (forcedTemplateId) {
       planned.push({ recordId: id, templateId: forcedTemplateId, kind: "", sortOrder: order });
+      continue;
+    }
+    if (shouldAutoRoute && !hasDwClassificationSignal({ declaredType: rec.declaredType, dwMatch: rec.dwMatch })) {
+      unresolved.push({ recordId: id, reason: "UNKNOWN_DW_CLASSIFICATION" });
       continue;
     }
     const routed = selectTemplateForApplicant(activeTemplates, {
@@ -204,7 +240,9 @@ export async function createAsyncMergeJob(input: CreateAsyncJobInput): Promise<C
     throw new AsyncJobValidationError(
       missingKinds.size > 0
         ? `Chưa có mẫu đang hoạt động cho: ${[...missingKinds].map((k) => documentKindLabel(k)).join(", ")}.`
-        : "Không tìm thấy hồ sơ hợp lệ để merge.",
+        : unresolved.length > 0
+          ? `Không xác định được phân loại DW (Cũ/Mới) cho ${unresolved.length} hồ sơ đã chọn — chọn template cố định để xử lý thủ công.`
+          : "Không tìm thấy hồ sơ hợp lệ để merge.",
       422,
     );
   }
@@ -358,125 +396,160 @@ export async function createAsyncMergeJob(input: CreateAsyncJobInput): Promise<C
     }
   }
 
-  const primaryTemplate = allTemplates.find((t) => t.id === planned[0].templateId) ?? null;
+  /** metadata.templates for a set of templateIds — unchanged canonical-snapshot logic, just factored out so each Auto Route group can build its OWN (single-template) snapshot instead of one job mixing every template in the whole selection. */
+  const buildTemplatesMetadata = (tids: string[]) =>
+    Object.fromEntries(
+      tids.map((tid) => {
+        const t = allTemplates.find((x) => x.id === tid);
+        const version = versionByTemplate.get(tid);
+        const formatting: CanonicalFormatting = {
+          // Registered first-party contract key — validation metadata only,
+          // never a document-body source.
+          contractKey: getRegisteredContractKeyByGoogleDocId(t?.googleDocId) ?? null,
+          retentionYears: version?.retentionYears ?? null,
+          documentKind: t?.documentKind ?? "GENERIC",
+          templateName: t?.name ?? "",
+        };
+        const mappings = (fieldsByTemplate.get(tid) ?? []) as CanonicalMapping[];
 
-  // 5+6. Tạo job + items trong 1 khối (job QUEUED, items QUEUED theo sequence)
-  const [job] = await db
-    .insert(mergeJobs)
-    .values({
-      templateId: primaryTemplate?.id ?? null,
-      templateNameSnapshot: shouldAutoRoute
-        ? `Auto-route A/B (${planned.length} hồ sơ)`
-        : primaryTemplate?.name ?? "Template",
-      mergeMode: shouldDispatch ? "INDIVIDUAL_DOCUMENTS" : mergeMode,
-      status: JOB_STATUS.QUEUED,
-      recordCount: planned.length,
-      engine,
-      queuedCount: planned.length,
-      processingCount: 0,
-      completedCount: 0,
-      failedCount: 0,
-      progressPercent: 0,
-      createdBy: input.createdBy,
-      startedAt: null,
-      metadata: {
+        // GOOGLE_DOCS keeps its legacy metadata shape untouched (it has its
+        // own synchronous render path and never uses the canonical body).
+        // HTML_PDF is ALWAYS a fail-closed canonical snapshot.
+        if (engine !== "HTML_PDF") {
+          return [
+            tid,
+            {
+              name: formatting.templateName,
+              documentKind: formatting.documentKind,
+              googleDocId: t?.googleDocId ?? "",
+              contractKey: formatting.contractKey,
+              version: version?.version ?? t?.currentPublishedVersion ?? null,
+              retentionYears: formatting.retentionYears,
+              fields: mappings,
+              htmlBody: version?.htmlBody ?? null,
+              printCss: version?.printCss ?? null,
+            },
+          ];
+        }
+
+        const snapshot = buildCanonicalSnapshot({
+          templateId: tid,
+          version,
+          mappings,
+          formatting,
+        });
+        return [
+          tid,
+          {
+            // Canonical snapshot fields (read by renderCanonicalDocument).
+            templateId: snapshot.templateId,
+            templateVersion: snapshot.templateVersion,
+            htmlBody: snapshot.htmlBody,
+            printCss: snapshot.printCss,
+            mappings: snapshot.mappings,
+            formatting: snapshot.formatting,
+            margins: snapshot.margins,
+            // Denormalised copies kept for existing history/filename code.
+            name: formatting.templateName,
+            documentKind: formatting.documentKind,
+            googleDocId: t?.googleDocId ?? "",
+            contractKey: formatting.contractKey,
+            version: snapshot.templateVersion,
+            retentionYears: formatting.retentionYears,
+            fields: snapshot.mappings,
+          },
+        ];
+      }),
+    );
+
+  // 5+6. Tạo job + items cho MỘT group (job QUEUED, items QUEUED theo sequence).
+  // Auto Route calls this ONCE PER DISTINCT templateId (DW Cũ / DW Mới) —
+  // never one job mixing both, so finalizeBatchOutputs()'s single merged
+  // PDF/ZIP per job never combines a DW Cũ document with a DW Mới one.
+  const insertJobAndItems = async (groupPlanned: PlannedRecord[]): Promise<CreateAsyncJobGroupResult> => {
+    const groupTemplateIds = [...new Set(groupPlanned.map((p) => p.templateId))];
+    const primaryTemplate = allTemplates.find((t) => t.id === groupPlanned[0].templateId) ?? null;
+    const [job] = await db
+      .insert(mergeJobs)
+      .values({
+        templateId: primaryTemplate?.id ?? null,
+        templateNameSnapshot: shouldAutoRoute
+          ? `Auto-route ${documentKindLabel(groupPlanned[0].kind)} (${groupPlanned.length} hồ sơ)`
+          : primaryTemplate?.name ?? "Template",
+        mergeMode: shouldDispatch ? "INDIVIDUAL_DOCUMENTS" : mergeMode,
+        status: JOB_STATUS.QUEUED,
+        recordCount: groupPlanned.length,
         engine,
-        autoRoute: shouldAutoRoute,
-        dispatchToApplicant: shouldDispatch,
-        entityType,
-        mergeMode,
-        // Freeze the merge clock as well as HTML/CSS/mappings. A retry cannot
-        // change signature/computed dates or pagination after the job exists.
-        renderedAt: new Date().toISOString(),
-        // H3 — the SAME frozen Signing Context every record in this job reads
-        // for COMPUTED placeholders (Ngay_ky_day/month/year, Dia_diem_ky, ...).
-        // Never re-derived per record; the worker only ever consumes this.
-        signingContext: toJsonSigningContext(signingContext),
-        // IMMUTABLE CANONICAL SNAPSHOT — the single document definition this
-        // job will ever render. Both Preview and the Cloud Run HTML_PDF worker
-        // read exactly this object via renderCanonicalDocument(); neither may
-        // reconstruct the document from Google Docs, static TypeScript HTML or
-        // a later/earlier template version.
-        templates: Object.fromEntries(
-          templateIds.map((tid) => {
-            const t = allTemplates.find((x) => x.id === tid);
-            const version = versionByTemplate.get(tid);
-            const formatting: CanonicalFormatting = {
-              // Registered first-party contract key — validation metadata only,
-              // never a document-body source.
-              contractKey: getRegisteredContractKeyByGoogleDocId(t?.googleDocId) ?? null,
-              retentionYears: version?.retentionYears ?? null,
-              documentKind: t?.documentKind ?? "GENERIC",
-              templateName: t?.name ?? "",
-            };
-            const mappings = (fieldsByTemplate.get(tid) ?? []) as CanonicalMapping[];
+        queuedCount: groupPlanned.length,
+        processingCount: 0,
+        completedCount: 0,
+        failedCount: 0,
+        progressPercent: 0,
+        createdBy: input.createdBy,
+        startedAt: null,
+        metadata: {
+          engine,
+          autoRoute: shouldAutoRoute,
+          dispatchToApplicant: shouldDispatch,
+          entityType,
+          mergeMode,
+          // Freeze the merge clock as well as HTML/CSS/mappings. A retry cannot
+          // change signature/computed dates or pagination after the job exists.
+          renderedAt: new Date().toISOString(),
+          // H3 — the SAME frozen Signing Context every record in this job reads
+          // for COMPUTED placeholders (Ngay_ky_day/month/year, Dia_diem_ky, ...).
+          // Never re-derived per record; the worker only ever consumes this.
+          signingContext: toJsonSigningContext(signingContext),
+          // IMMUTABLE CANONICAL SNAPSHOT — the single document definition this
+          // job will ever render. Both Preview and the Cloud Run HTML_PDF worker
+          // read exactly this object via renderCanonicalDocument(); neither may
+          // reconstruct the document from Google Docs, static TypeScript HTML or
+          // a later/earlier template version.
+          templates: buildTemplatesMetadata(groupTemplateIds),
+        },
+      })
+      .returning();
 
-            // GOOGLE_DOCS keeps its legacy metadata shape untouched (it has its
-            // own synchronous render path and never uses the canonical body).
-            // HTML_PDF is ALWAYS a fail-closed canonical snapshot.
-            if (engine !== "HTML_PDF") {
-              return [
-                tid,
-                {
-                  name: formatting.templateName,
-                  documentKind: formatting.documentKind,
-                  googleDocId: t?.googleDocId ?? "",
-                  contractKey: formatting.contractKey,
-                  version: version?.version ?? t?.currentPublishedVersion ?? null,
-                  retentionYears: formatting.retentionYears,
-                  fields: mappings,
-                  htmlBody: version?.htmlBody ?? null,
-                  printCss: version?.printCss ?? null,
-                },
-              ];
-            }
+    await db.insert(mergeJobRecords).values(
+      groupPlanned.map((p) => ({
+        mergeJobId: job.id,
+        sourceEntity: entityType,
+        sourceRecordId: p.recordId,
+        templateId: p.templateId,
+        sortOrder: p.sortOrder,
+        status: ITEM_STATUS.QUEUED,
+        attemptCount: 0,
+      })),
+    );
 
-            const snapshot = buildCanonicalSnapshot({
-              templateId: tid,
-              version,
-              mappings,
-              formatting,
-            });
-            return [
-              tid,
-              {
-                // Canonical snapshot fields (read by renderCanonicalDocument).
-                templateId: snapshot.templateId,
-                templateVersion: snapshot.templateVersion,
-                htmlBody: snapshot.htmlBody,
-                printCss: snapshot.printCss,
-                mappings: snapshot.mappings,
-                formatting: snapshot.formatting,
-                margins: snapshot.margins,
-                // Denormalised copies kept for existing history/filename code.
-                name: formatting.templateName,
-                documentKind: formatting.documentKind,
-                googleDocId: t?.googleDocId ?? "",
-                contractKey: formatting.contractKey,
-                version: snapshot.templateVersion,
-                retentionYears: formatting.retentionYears,
-                fields: snapshot.mappings,
-              },
-            ];
-          }),
-        ),
-      },
-    })
-    .returning();
+    return {
+      jobId: job.id,
+      templateId: primaryTemplate?.id ?? "",
+      templateName: primaryTemplate?.name ?? "Template",
+      kind: groupPlanned[0].kind,
+      total: groupPlanned.length,
+    };
+  };
 
-  await db.insert(mergeJobRecords).values(
-    planned.map((p) => ({
-      mergeJobId: job.id,
-      sourceEntity: entityType,
-      sourceRecordId: p.recordId,
-      templateId: p.templateId,
-      sortOrder: p.sortOrder,
-      status: ITEM_STATUS.QUEUED,
-      attemptCount: 0,
-    })),
-  );
+  // Auto Route: group the plan by templateId (== DW Cũ vs DW Mới, since
+  // selectTemplateForApplicant resolves each record to exactly one) so each
+  // group becomes its OWN job/output file. Manual selection (forcedTemplateId)
+  // is already a single group by construction (planned has one templateId).
+  const groups: PlannedRecord[][] = shouldAutoRoute
+    ? [...planned.reduce((map, p) => {
+        const list = map.get(p.templateId) ?? [];
+        list.push(p);
+        map.set(p.templateId, list);
+        return map;
+      }, new Map<string, PlannedRecord[]>()).values()]
+    : [planned];
+
+  const jobs: CreateAsyncJobGroupResult[] = [];
+  for (const groupPlanned of groups) {
+    jobs.push(await insertJobAndItems(groupPlanned));
+  }
 
   // 7. enqueue — Phase 3/4 sẽ trigger Cloud Run worker tại đây (hiện là no-op an toàn).
 
-  return { jobId: job.id, status: JOB_STATUS.QUEUED, total: planned.length, engine };
+  return { jobId: jobs[0].jobId, status: JOB_STATUS.QUEUED, total: planned.length, engine, jobs, unresolved };
 }

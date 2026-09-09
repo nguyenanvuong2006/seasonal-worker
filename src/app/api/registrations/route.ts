@@ -1,5 +1,5 @@
 import { NextResponse } from "next/server";
-import { and, asc, desc, eq, gte, inArray, isNotNull, isNull, lte, ne, sql } from "drizzle-orm";
+import { and, asc, desc, eq, gte, ilike, inArray, isNotNull, isNull, lte, ne, or, sql } from "drizzle-orm";
 import { db } from "@/db";
 import { dailyApplications, departments, dwData, employmentSessions, formQuestions, workerProfiles } from "@/db/schema";
 import { getUserScope, hasPermission, requirePermission } from "@/lib/auth";
@@ -241,8 +241,28 @@ export async function GET(req: Request) {
   const deptParam = url.searchParams.get("deptId");
   const matchParam = url.searchParams.get("dwMatch");
   const assigned = url.searchParams.get("assigned");
+  const q = (url.searchParams.get("q") ?? "").trim();
 
-  const filters = [gte(dailyApplications.regDate, from), lte(dailyApplications.regDate, to), isNull(dailyApplications.deletedAt)];
+  // SEARCH must cover the full eligible historical dataset, not just the
+  // default from/to browsing window (see Document Merge candidate list —
+  // a candidate older than the default window must still be findable by
+  // name/phone/CCCD/mã số). When q is present, drop the regDate range
+  // filter entirely instead of narrowing the search to it; every other
+  // filter (status/scope/dept/dwMatch/assigned) still applies.
+  const filters = q
+    ? [isNull(dailyApplications.deletedAt)]
+    : [gte(dailyApplications.regDate, from), lte(dailyApplications.regDate, to), isNull(dailyApplications.deletedAt)];
+  if (q) {
+    const term = `%${q}%`;
+    filters.push(
+      or(
+        ilike(dailyApplications.fullName, term),
+        ilike(dailyApplications.cccd, term),
+        ilike(dailyApplications.phone, term),
+        ilike(dailyApplications.itCode, term),
+      )!,
+    );
+  }
   if (status && status !== "ALL") filters.push(eq(dailyApplications.status, status));
   if (matchParam && matchParam !== "ALL") filters.push(eq(dailyApplications.dwMatch, matchParam));
   if (assigned === "1") {
@@ -348,5 +368,10 @@ export async function GET(req: Request) {
     itCode: r.itCode ?? dwItCode ?? null,
   }));
 
-  return NextResponse.json({ rows: normalizedRows, range: { from, to } });
+  return NextResponse.json({
+    rows: normalizedRows,
+    // When q bypasses the regDate window, range no longer describes what was
+    // actually queried — report that explicitly instead of the stale from/to.
+    range: q ? { searched: "ALL" as const } : { from, to },
+  });
 }

@@ -42,7 +42,7 @@ import {
 import { resolveAllFields, validateRequiredFields, type MergeContext } from "@/lib/document-merge/data-resolver";
 import { applyFallbackPlaceholders, buildPreviewContent } from "@/lib/document-merge/preview-merge";
 import { buildApplicantMergeRecord } from "@/lib/document-merge/applicant-record";
-import { documentKindLabel, selectTemplateForApplicant } from "@/lib/document-merge/template-routing";
+import { documentKindLabel, hasDwClassificationSignal, selectTemplateForApplicant } from "@/lib/document-merge/template-routing";
 import { ITEM_STATUS } from "@/lib/document-merge/queue-types";
 import { runPreMergeStaleRecovery } from "@/lib/document-merge/pre-merge-recovery";
 import { triggerPdfWorker } from "@/lib/document-merge/worker-trigger";
@@ -292,6 +292,11 @@ export async function POST(request: Request) {
     };
     const planned: Planned[] = [];
     const missingTemplateKinds = new Set<string>();
+    // Auto Route only — a selected record with NO dwMatch/declaredType
+    // signal at all. Never silently folded into the DW Mới group: reported
+    // back so the caller/UI can show "Chưa xác định phân loại DW" and
+    // require manual handling, instead of the record just disappearing.
+    const unresolved: { recordId: string; reason: "UNKNOWN_DW_CLASSIFICATION" }[] = [];
 
     for (const recordId of records.recordIds) {
       const recordData = dataMap.get(recordId);
@@ -299,6 +304,14 @@ export async function POST(request: Request) {
 
       if (forcedTemplate) {
         planned.push({ recordId, recordData, template: forcedTemplate, kind: forcedTemplate.documentKind });
+        continue;
+      }
+
+      if (
+        shouldAutoRoute &&
+        !hasDwClassificationSignal({ declaredType: String(recordData.declaredType ?? ""), dwMatch: String(recordData.dwMatch ?? "") })
+      ) {
+        unresolved.push({ recordId, reason: "UNKNOWN_DW_CLASSIFICATION" });
         continue;
       }
 
@@ -324,7 +337,9 @@ export async function POST(request: Request) {
           error:
             missingTemplateKinds.size > 0
               ? `Chưa có mẫu đang hoạt động cho: ${[...missingTemplateKinds].map((k) => documentKindLabel(k)).join(", ")}.`
-              : "Không tìm thấy hồ sơ hợp lệ để merge.",
+              : unresolved.length > 0
+                ? `Không xác định được phân loại DW (Cũ/Mới) cho ${unresolved.length} hồ sơ đã chọn — chọn template cố định để xử lý thủ công.`
+                : "Không tìm thấy hồ sơ hợp lệ để merge.",
         },
         { status: 422 },
       );
@@ -366,90 +381,118 @@ export async function POST(request: Request) {
       });
     }
 
-    const primaryTemplate = planned[0].template;
+    // Auto Route: group the plan by templateId (== DW Cũ vs DW Mới — each
+    // record resolves to exactly one template above) so each group becomes
+    // its OWN job and its OWN merged output file, instead of one job mixing
+    // both groups into a single batch-printed PDF/ZIP. Manual selection
+    // (forcedTemplate) is already a single group.
+    const groups: Planned[][] = shouldAutoRoute
+      ? [...planned.reduce((map, item) => {
+          const list = map.get(item.template.id) ?? [];
+          list.push(item);
+          map.set(item.template.id, list);
+          return map;
+        }, new Map<string, Planned[]>()).values()]
+      : [planned];
 
-    // FREEZE the GOOGLE_DOCS snapshot onto the job. The worker resolves every
-    // record from THIS immutable snapshot — template content, Google Doc id,
-    // output folder and the 49-placeholder mapping — never from live tables.
-    const googleDocsTemplates: Record<string, GoogleDocsTemplateSnapshot> = {};
-    for (const template of planned.map((item) => item.template)) {
-      if (googleDocsTemplates[template.id]) continue;
-      googleDocsTemplates[template.id] = {
-        templateId: template.id,
-        name: template.name,
-        documentKind: template.documentKind,
-        googleDocId: template.googleDocId,
-        outputFolderId: template.outputFolderId ?? null,
-        fields: (fieldsByTemplate.get(template.id) ?? []).map(toFieldSnapshot),
-      };
-    }
+    const createdJobs: { jobId: string; templateId: string; templateName: string; kind: string; total: number }[] = [];
 
-    // DURABLE ASYNC JOB — no Google call happens inside this HTTP request.
-    const [job] = await db
-      .insert(mergeJobs)
-      .values({
-        templateId: primaryTemplate.id,
-        templateNameSnapshot: shouldAutoRoute
-          ? `Auto-route A/B (${planned.length} hồ sơ)`
-          : primaryTemplate.name,
-        mergeMode: shouldBatchPrint ? "ONE_DOCUMENT" : "INDIVIDUAL_DOCUMENTS",
-        status: "QUEUED",
-        engine: "GOOGLE_DOCS",
-        recordCount: planned.length,
-        createdBy: guard.session.username,
-        metadata: {
-          autoRoute: shouldAutoRoute,
-          dispatchToApplicant: shouldDispatch,
-          batchPrint: shouldBatchPrint,
-          outputStrategy: shouldBatchPrint ? "INDIVIDUAL_DOCS_PLUS_BATCH_PDF" : "INDIVIDUAL_DOCS",
-          renderedAt: new Date().toISOString(),
-          googleDocs: {
-            batchPrint: shouldBatchPrint,
+    for (const groupPlanned of groups) {
+      const primaryTemplate = groupPlanned[0].template;
+
+      // FREEZE the GOOGLE_DOCS snapshot onto the job. The worker resolves every
+      // record from THIS immutable snapshot — template content, Google Doc id,
+      // output folder and the 49-placeholder mapping — never from live tables.
+      const googleDocsTemplates: Record<string, GoogleDocsTemplateSnapshot> = {};
+      for (const template of groupPlanned.map((item) => item.template)) {
+        if (googleDocsTemplates[template.id]) continue;
+        googleDocsTemplates[template.id] = {
+          templateId: template.id,
+          name: template.name,
+          documentKind: template.documentKind,
+          googleDocId: template.googleDocId,
+          outputFolderId: template.outputFolderId ?? null,
+          fields: (fieldsByTemplate.get(template.id) ?? []).map(toFieldSnapshot),
+        };
+      }
+
+      // DURABLE ASYNC JOB — no Google call happens inside this HTTP request.
+      const [job] = await db
+        .insert(mergeJobs)
+        .values({
+          templateId: primaryTemplate.id,
+          templateNameSnapshot: shouldAutoRoute
+            ? `Auto-route ${documentKindLabel(groupPlanned[0].kind)} (${groupPlanned.length} hồ sơ)`
+            : primaryTemplate.name,
+          mergeMode: shouldBatchPrint ? "ONE_DOCUMENT" : "INDIVIDUAL_DOCUMENTS",
+          status: "QUEUED",
+          engine: "GOOGLE_DOCS",
+          recordCount: groupPlanned.length,
+          createdBy: guard.session.username,
+          metadata: {
+            autoRoute: shouldAutoRoute,
             dispatchToApplicant: shouldDispatch,
+            batchPrint: shouldBatchPrint,
             outputStrategy: shouldBatchPrint ? "INDIVIDUAL_DOCS_PLUS_BATCH_PDF" : "INDIVIDUAL_DOCS",
-            currentUserId: guard.session.id,
-            currentUserName: guard.session.fullName,
-            templates: googleDocsTemplates,
+            renderedAt: new Date().toISOString(),
+            googleDocs: {
+              batchPrint: shouldBatchPrint,
+              dispatchToApplicant: shouldDispatch,
+              outputStrategy: shouldBatchPrint ? "INDIVIDUAL_DOCS_PLUS_BATCH_PDF" : "INDIVIDUAL_DOCS",
+              currentUserId: guard.session.id,
+              currentUserName: guard.session.fullName,
+              templates: googleDocsTemplates,
+            },
           },
-        },
-      })
-      .returning();
+        })
+        .returning();
 
-    await db.insert(mergeJobRecords).values(
-      planned.map((item, index) => ({
-        mergeJobId: job.id,
-        sourceEntity: entityType,
-        sourceRecordId: item.recordId,
-        sortOrder: index,
-        templateId: item.template.id,
-        status: ITEM_STATUS.QUEUED,
-      })),
-    );
+      await db.insert(mergeJobRecords).values(
+        groupPlanned.map((item, index) => ({
+          mergeJobId: job.id,
+          sourceEntity: entityType,
+          sourceRecordId: item.recordId,
+          sortOrder: index,
+          templateId: item.template.id,
+          status: ITEM_STATUS.QUEUED,
+        })),
+      );
 
-    // The worker is the ONLY Google Docs executor now: claim (SKIP LOCKED) →
-    // heartbeat lease → template read / copy / batchUpdate / PDF export /
-    // upload → CAS COMPLETED/FAILED. Fire-and-forget via after() — the HTTP
-    // request ends here, well inside the Vercel platform budget.
-    triggerPdfWorker(job.id, request);
+      // The worker is the ONLY Google Docs executor now: claim (SKIP LOCKED) →
+      // heartbeat lease → template read / copy / batchUpdate / PDF export /
+      // upload → CAS COMPLETED/FAILED. Fire-and-forget via after() — the HTTP
+      // request ends here, well inside the Vercel platform budget.
+      triggerPdfWorker(job.id, request);
 
-    await writeAudit(guard.session, "CREATE_MERGE_JOB", "merge_jobs", {
-      jobId: job.id,
-      engine: "GOOGLE_DOCS",
-      templateId: primaryTemplate.id,
-      autoRoute: shouldAutoRoute,
-      dispatchToApplicant: shouldDispatch,
-      batchPrint: shouldBatchPrint,
-      outputStrategy: shouldBatchPrint ? "INDIVIDUAL_DOCS_PLUS_BATCH_PDF" : "INDIVIDUAL_DOCS",
-      recordCount: planned.length,
-    });
+      await writeAudit(guard.session, "CREATE_MERGE_JOB", "merge_jobs", {
+        jobId: job.id,
+        engine: "GOOGLE_DOCS",
+        templateId: primaryTemplate.id,
+        autoRoute: shouldAutoRoute,
+        dispatchToApplicant: shouldDispatch,
+        batchPrint: shouldBatchPrint,
+        outputStrategy: shouldBatchPrint ? "INDIVIDUAL_DOCS_PLUS_BATCH_PDF" : "INDIVIDUAL_DOCS",
+        recordCount: groupPlanned.length,
+      });
+
+      createdJobs.push({
+        jobId: job.id,
+        templateId: primaryTemplate.id,
+        templateName: primaryTemplate.name,
+        kind: groupPlanned[0].kind,
+        total: groupPlanned.length,
+      });
+    }
 
     return NextResponse.json(
       {
         success: true,
-        jobId: job.id,
+        jobId: createdJobs[0].jobId,
         status: "QUEUED",
         engine: "GOOGLE_DOCS",
         total: planned.length,
+        jobs: createdJobs,
+        unresolved,
       },
       { status: 202 },
     );

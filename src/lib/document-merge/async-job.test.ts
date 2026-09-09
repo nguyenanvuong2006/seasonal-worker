@@ -25,8 +25,16 @@ const schemaStub = {
   mergeTemplateVersions: makeTable("merge_template_versions"),
 };
 
+type AsyncJobGroupResult = { jobId: string; templateId: string; templateName: string; kind: string; total: number };
 type AsyncJobModule = {
-  createAsyncMergeJob: (input: Record<string, unknown>) => Promise<{ jobId: string; status: string; total: number; engine: string }>;
+  createAsyncMergeJob: (input: Record<string, unknown>) => Promise<{
+    jobId: string;
+    status: string;
+    total: number;
+    engine: string;
+    jobs: AsyncJobGroupResult[];
+    unresolved: { recordId: string; reason: string }[];
+  }>;
 };
 
 async function load(
@@ -48,6 +56,16 @@ async function load(
    * input to override this, is unaffected.
    */
   defaultEngine: "GOOGLE_DOCS" | "HTML_PDF" = "GOOGLE_DOCS",
+  /**
+   * Override template-routing.ts's selectTemplateForApplicant/hasDwClassificationSignal
+   * for tests that exercise Auto Route grouping. Defaults match every
+   * pre-existing test's expectation (no active template found; every record
+   * carries a classification signal, matching fixtureDb's declaredType/dwMatch).
+   */
+  templateRouting: {
+    selectTemplateForApplicant?: (templates: unknown[], input: { declaredType: string; dwMatch: string }) => { template: { id: string; name: string } | null; kind: string };
+    hasDwClassificationSignal?: (input: { declaredType: string; dwMatch: string }) => boolean;
+  } = {},
 ): Promise<AsyncJobModule> {
   const mod = await loadModule(new URL("./async-job.ts", import.meta.url), {
     stubs: {
@@ -57,8 +75,9 @@ async function load(
       "@/db/schema": schemaStub,
       "./engine-config.ts": { getDocumentMergeEngine: () => defaultEngine },
       "./template-routing.ts": {
-        selectTemplateForApplicant: () => ({ template: null, kind: "GENERIC" }),
+        selectTemplateForApplicant: templateRouting.selectTemplateForApplicant ?? (() => ({ template: null, kind: "GENERIC" })),
         documentKindLabel: (k: string) => k,
+        hasDwClassificationSignal: templateRouting.hasDwClassificationSignal ?? (() => true),
       },
       "./queue-types.ts": {
         ITEM_STATUS: { QUEUED: "QUEUED" },
@@ -292,19 +311,156 @@ test("createAsyncMergeJob: with no explicit engine in the input, a new job still
   assert.equal(result.engine, "GOOGLE_DOCS");
 });
 
-test("createAsyncMergeJob: HTML_PDF rejects auto-route or a missing explicit template before creating a job", async () => {
+test("createAsyncMergeJob: HTML_PDF rejects a missing explicit template ONLY when Auto Route is also off", async () => {
   const db = fixtureDb(PUBLISHED_VERSION_ROW);
   const mod = await load(db);
 
   await assert.rejects(
     () => mod.createAsyncMergeJob({
-      autoRoute: true,
+      autoRoute: false,
       records: { entityType: "daily_applications", recordIds: ["app-1"] },
       createdBy: "admin",
       scopeDeptIds: null,
       engine: "HTML_PDF",
     }),
     /template cụ thể.*Auto Route/,
+  );
+  assert.equal(db.calls.some((c) => c.root === "insert" && c.table === "merge_jobs"), false);
+});
+
+// AUTO ROUTE — HTML_PDF now supports it (2026-09 fix): each DW group
+// resolves to exactly one templateId via selectTemplateForApplicant, so the
+// SAME per-template immutable-snapshot validation below still applies to
+// every job created — it is never allowed to mix templates/versions.
+const TEMPLATE_A = { id: "tpl-a", name: "Tài liệu A", isActive: true };
+const TEMPLATE_B = { id: "tpl-b", name: "Tài liệu B", isActive: true };
+const dwRouting = {
+  selectTemplateForApplicant: (_templates: unknown[], input: { declaredType: string; dwMatch: string }) => {
+    if (input.dwMatch === "MATCHED" || input.declaredType === "OLD") return { template: TEMPLATE_A, kind: "A" };
+    return { template: TEMPLATE_B, kind: "B" };
+  },
+  hasDwClassificationSignal: (input: { declaredType: string; dwMatch: string }) =>
+    Boolean(input.dwMatch?.trim() || input.declaredType?.trim()),
+};
+
+function autoRouteDb(records: { id: string; declaredType: string; dwMatch: string }[]): FakeDb {
+  return createFakeDb({
+    respond: (call: QueryCall) => {
+      if (call.root === "select" && call.table === "merge_templates") return [TEMPLATE_A, TEMPLATE_B];
+      if (call.root === "select" && call.table === "daily_applications") return records;
+      if (call.root === "select" && call.table === "merge_template_fields") return [];
+      if (call.root === "select" && call.table === "merge_template_versions") {
+        return [
+          { templateId: "tpl-a", version: 1, status: "PUBLISHED", retentionYears: 3, htmlBody: "<p>A</p>", printCss: "" },
+          { templateId: "tpl-b", version: 1, status: "PUBLISHED", retentionYears: 3, htmlBody: "<p>B</p>", printCss: "" },
+        ];
+      }
+      if (call.root === "insert" && call.table === "merge_jobs") {
+        return [{ id: `job-${(argOf(call, "values") as { templateId?: string })?.templateId ?? "x"}-${Math.random().toString(36).slice(2, 6)}`, ...(argOf(call, "values") as Record<string, unknown>) }];
+      }
+      if (call.root === "insert" && call.table === "merge_job_records") return [];
+      return undefined;
+    },
+  });
+}
+
+test("createAsyncMergeJob: Auto Route with only DW Cũ selected creates exactly 1 job (Tài liệu A)", async () => {
+  const db = autoRouteDb([{ id: "old-1", declaredType: "OLD", dwMatch: "MATCHED" }]);
+  const mod = await load(db, {}, {}, "HTML_PDF", dwRouting);
+
+  const result = await mod.createAsyncMergeJob({
+    autoRoute: true,
+    records: { entityType: "daily_applications", recordIds: ["old-1"] },
+    createdBy: "admin",
+    scopeDeptIds: null,
+    engine: "HTML_PDF",
+  });
+
+  assert.equal(result.jobs.length, 1);
+  assert.equal(result.jobs[0].templateId, "tpl-a");
+  assert.equal(result.jobs[0].total, 1);
+  assert.equal(result.total, 1);
+  assert.equal(result.unresolved.length, 0);
+});
+
+test("createAsyncMergeJob: Auto Route with only DW Mới selected creates exactly 1 job (Tài liệu B)", async () => {
+  const db = autoRouteDb([{ id: "new-1", declaredType: "NEW", dwMatch: "NO_MATCH" }]);
+  const mod = await load(db, {}, {}, "HTML_PDF", dwRouting);
+
+  const result = await mod.createAsyncMergeJob({
+    autoRoute: true,
+    records: { entityType: "daily_applications", recordIds: ["new-1"] },
+    createdBy: "admin",
+    scopeDeptIds: null,
+    engine: "HTML_PDF",
+  });
+
+  assert.equal(result.jobs.length, 1);
+  assert.equal(result.jobs[0].templateId, "tpl-b");
+  assert.equal(result.jobs[0].total, 1);
+});
+
+test("createAsyncMergeJob: Auto Route with BOTH DW Cũ and DW Mới selected creates exactly 2 separate jobs, one per group, no candidate duplicated or dropped", async () => {
+  const db = autoRouteDb([
+    { id: "old-1", declaredType: "OLD", dwMatch: "MATCHED" },
+    { id: "old-2", declaredType: "OLD", dwMatch: "MATCHED" },
+    { id: "new-1", declaredType: "NEW", dwMatch: "NO_MATCH" },
+  ]);
+  const mod = await load(db, {}, {}, "HTML_PDF", dwRouting);
+
+  const result = await mod.createAsyncMergeJob({
+    autoRoute: true,
+    records: { entityType: "daily_applications", recordIds: ["old-1", "old-2", "new-1"] },
+    createdBy: "admin",
+    scopeDeptIds: null,
+    engine: "HTML_PDF",
+  });
+
+  assert.equal(result.jobs.length, 2, "exactly 2 output jobs/files — one per DW group");
+  const byTemplate = new Map(result.jobs.map((j) => [j.templateId, j]));
+  assert.equal(byTemplate.get("tpl-a")?.total, 2, "both DW Cũ records land in the SAME job");
+  assert.equal(byTemplate.get("tpl-b")?.total, 1, "the DW Mới record lands in its own job");
+  assert.equal(result.total, 3, "no candidate silently dropped");
+  assert.notEqual(result.jobs[0].jobId, result.jobs[1].jobId, "no candidate duplicated across two identical jobs");
+});
+
+test("createAsyncMergeJob: a record with NO dwMatch/declaredType signal is never silently dropped — reported in unresolved[], never queued into any job", async () => {
+  const db = autoRouteDb([
+    { id: "old-1", declaredType: "OLD", dwMatch: "MATCHED" },
+    { id: "unknown-1", declaredType: "", dwMatch: "" },
+  ]);
+  const mod = await load(db, {}, {}, "HTML_PDF", dwRouting);
+
+  const result = await mod.createAsyncMergeJob({
+    autoRoute: true,
+    records: { entityType: "daily_applications", recordIds: ["old-1", "unknown-1"] },
+    createdBy: "admin",
+    scopeDeptIds: null,
+    engine: "HTML_PDF",
+  });
+
+  assert.equal(result.jobs.length, 1);
+  assert.equal(result.jobs[0].total, 1, "only the classified record is queued");
+  // JSON round-trip, not assert.deepEqual: loadModule runs the module in a
+  // vm sandbox (a separate realm), so its returned object is structurally
+  // but never reference-equal to a host-realm object literal.
+  assert.equal(JSON.stringify(result.unresolved), JSON.stringify([{ recordId: "unknown-1", reason: "UNKNOWN_DW_CLASSIFICATION" }]));
+  assert.equal(result.total, 1, "the unresolved record does not count toward the queued total");
+});
+
+test("createAsyncMergeJob: ALL selected records unresolved -> fails closed with a clear message instead of silently creating an empty job", async () => {
+  const db = autoRouteDb([{ id: "unknown-1", declaredType: "", dwMatch: "" }]);
+  const mod = await load(db, {}, {}, "HTML_PDF", dwRouting);
+
+  await assert.rejects(
+    () => mod.createAsyncMergeJob({
+      autoRoute: true,
+      records: { entityType: "daily_applications", recordIds: ["unknown-1"] },
+      createdBy: "admin",
+      scopeDeptIds: null,
+      engine: "HTML_PDF",
+    }),
+    /Không xác định được phân loại DW.*1 hồ sơ/,
   );
   assert.equal(db.calls.some((c) => c.root === "insert" && c.table === "merge_jobs"), false);
 });

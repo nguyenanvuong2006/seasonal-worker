@@ -59,16 +59,21 @@ export async function POST(request: Request) {
 
     await writeAudit(guard.session, "CREATE_MERGE_JOB", "merge_jobs", {
       jobId: result.jobId,
+      jobIds: result.jobs.map((j) => j.jobId),
       engine: result.engine,
       recordCount: result.total,
       autoRoute: Boolean(autoRoute),
+      groupCount: result.jobs.length,
+      unresolvedCount: result.unresolved.length,
     });
 
     // HTML/PDF jobs reuse the durable merge_jobs/merge_job_records queue and
     // the existing authenticated Cloud Run trigger. GOOGLE_DOCS jobs retain
     // their legacy execution path and are never claimed by this worker.
+    // Auto Route can create more than one job (one per DW Cũ/Mới group) —
+    // every one of them needs its own trigger, not just the first.
     if (result.engine === "HTML_PDF") {
-      triggerPdfWorker(result.jobId, request);
+      for (const job of result.jobs) triggerPdfWorker(job.jobId, request);
     }
 
     return NextResponse.json(result, { status: 202 });
