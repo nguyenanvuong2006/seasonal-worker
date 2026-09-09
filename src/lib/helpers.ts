@@ -54,7 +54,7 @@ export const ROLE_LABEL: Record<string, string> = {
   HR_DIRECTOR: "Giám đốc Nhân sự",
 };
 
-export { isValidCccd } from "@/lib/validators";
+export { isValidCccd } from "./validators.ts";
 
 export function isValidPhone(v: string) {
   return /^0\d{8,10}$/.test(v);

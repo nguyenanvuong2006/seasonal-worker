@@ -19,9 +19,15 @@ type Executor = typeof db | Parameters<Parameters<typeof db.transaction>[0]>[0];
    Task Center) PHẢI gọi qua đây — không tự viết lại công thức.
    ============================================================ */
 
-export type DepartmentWorkforceCount = { male: number; female: number; total: number };
+export type DepartmentWorkforceCount = { male: number; female: number; unknownGender: number; total: number };
 
-/** ACTIVE worker theo Department (mục A.1): APPROVED + end_date NULL + worker chưa xoá. */
+/**
+ * ACTIVE worker theo Department (mục A.1): APPROVED + end_date NULL + worker chưa xoá.
+ * unknownGender = total - male - female (NULL/rỗng/giá trị không nhận diện được bởi
+ * isMale/isFemale — worker_profiles.gender là varchar tự do, không có enum thứ 3 hợp lệ
+ * nào khác trong hệ thống hiện tại — xem AI Copilot drill-down gap hardening). Bất biến
+ * male + female + unknownGender === total luôn đúng theo cách tính (không suy diễn).
+ */
 export async function countActiveDepartmentWorkforce(
   executor: Executor,
   departmentId: string,
@@ -40,7 +46,7 @@ export async function countActiveDepartmentWorkforce(
     );
   const male = rows.filter((r) => isMale(r.gender)).length;
   const female = rows.filter((r) => isFemale(r.gender)).length;
-  return { male, female, total: rows.length };
+  return { male, female, unknownGender: rows.length - male - female, total: rows.length };
 }
 
 /**
@@ -83,7 +89,7 @@ export async function countQuitDuringRequest(
     );
   const male = rows.filter((r) => isMale(r.gender)).length;
   const female = rows.filter((r) => isFemale(r.gender)).length;
-  return { male, female, total: rows.length };
+  return { male, female, unknownGender: rows.length - male - female, total: rows.length };
 }
 
 export type RecruitmentKpiResult = RecruitmentKpiSnapshotResult & {

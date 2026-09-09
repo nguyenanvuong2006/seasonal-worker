@@ -1,5 +1,6 @@
 import "server-only";
 import { organizationTools } from "./tools/organization.ts";
+import { workerTools } from "./tools/workers.ts";
 import { recruitmentTools } from "./tools/recruitment.ts";
 import { workforceRequestTools } from "./tools/workforce-requests.ts";
 import { outlookTools } from "./tools/outlook.ts";
@@ -24,6 +25,7 @@ import type { ToolDefinition, ToolSchema } from "./types.ts";
  */
 const ALL_TOOLS: ToolDefinition<any, any>[] = [
   ...organizationTools,
+  ...workerTools,
   ...recruitmentTools,
   ...workforceRequestTools,
   ...outlookTools,
