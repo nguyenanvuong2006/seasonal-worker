@@ -97,3 +97,36 @@ test("array-form permission is ANY-of, never ALL-of: a single matching key out o
   assert.equal(hasNavPermission(item, new Set(["document_merge.templates.manage"])), true);
   assert.equal(hasNavPermission(item, new Set(["some.unrelated.key"])), false);
 });
+
+/* ------------------------------------------------------------------ *
+ * AI Copilot Defect 2 — "AI menu visibility does not follow permission".
+ * The nav item's `roles` was a legacy OR-bypass (like every other item's),
+ * so a role that had ai_copilot.view explicitly REVOKED still saw the menu
+ * because its role name matched `roles`. Fixed by giving this ONE item an
+ * empty `roles` array so visibility is driven ONLY by the permission
+ * capability — no hardcoded role name gates it anymore.
+ * ------------------------------------------------------------------ */
+
+test("AI Assistant nav item has NO role-based bypass — roles is empty, visibility is permission-only", () => {
+  const item = findItem("/admin/ai-assistant");
+  assert.deepEqual(item.roles, []);
+  assert.equal(item.permission, "ai_copilot.view");
+});
+
+test("AI Assistant menu is HIDDEN for a role that lacks ai_copilot.view, even though it would previously have matched the legacy roles list (e.g. HR_RECRUITER)", () => {
+  const groups = filterGroups("HR_RECRUITER", new Set());
+  const flat = groups.flatMap((g) => g.items.map((i) => i.href));
+  assert.ok(!flat.includes("/admin/ai-assistant"), "an HR_RECRUITER session with ai_copilot.view explicitly not granted must not see the menu item");
+});
+
+test("AI Assistant menu is VISIBLE the moment ai_copilot.view is granted, for any role", () => {
+  const groups = filterGroups("HR_RECRUITER", new Set(["ai_copilot.view"]));
+  const flat = groups.flatMap((g) => g.items.map((i) => i.href));
+  assert.ok(flat.includes("/admin/ai-assistant"));
+});
+
+test("AI Assistant menu is visible for ADMIN (ADMIN's permission set always includes every catalog key, including ai_copilot.view, via getSessionPermissionKeys — never via a role name check here)", () => {
+  const groups = filterGroups("ADMIN", new Set(["ai_copilot.view"]));
+  const flat = groups.flatMap((g) => g.items.map((i) => i.href));
+  assert.ok(flat.includes("/admin/ai-assistant"));
+});

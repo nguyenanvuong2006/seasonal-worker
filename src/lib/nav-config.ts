@@ -57,7 +57,12 @@ export const NAV_GROUPS: NavGroup[] = [
     items: [
       { href: "/admin/dashboard", label: "Dashboard", icon: LayoutDashboard, roles: ["ADMIN", "HR_RECRUITER", "DEPT_MANAGER"], permission: "dashboard.view" },
       { href: "/task-center", label: "Task Center", icon: ListChecks, roles: ["ADMIN", "HR_RECRUITER", "DEPT_MANAGER", "HR_DIRECTOR"], permission: "dashboard.view" },
-      { href: "/admin/ai-assistant", label: "Trợ lý AI", icon: Sparkles, roles: ["ADMIN", "HR_RECRUITER", "DEPT_MANAGER", "HR_DIRECTOR"], permission: "ai_copilot.view" },
+      // roles: [] DELIBERATE (2026-09 permission-driven navigation fix) — every other
+      // item's `roles` is a legacy OR-bypass around `permission` (see hasNavPermission),
+      // so a non-empty list here would make the menu item follow ROLE membership again
+      // and ignore a per-user ai_copilot.view revocation. AI Assistant visibility must
+      // be driven ONLY by the permission capability, never a hardcoded role name.
+      { href: "/admin/ai-assistant", label: "Trợ lý AI", icon: Sparkles, roles: [], permission: "ai_copilot.view" },
     ],
   },
   {

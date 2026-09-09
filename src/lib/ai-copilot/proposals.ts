@@ -51,6 +51,36 @@ export async function getProposalById(id: string): Promise<AiActionProposal | nu
   return row ?? null;
 }
 
+export type ProposalSummary = {
+  proposalId: string;
+  action: string;
+  humanReadablePreview: string;
+  expiresAt: string;
+  status: string;
+  executionResult: Record<string, unknown> | null;
+  errorMessage: string | null;
+};
+
+/** Used by conversation persistence (chat route replay + conversation history restore) to redraw a proposal card without re-deriving authorization from it — the card's own confirm/cancel/execute buttons still go through the real, separately-guarded endpoints. */
+export async function getProposalSummaries(ids: string[]): Promise<ProposalSummary[]> {
+  const summaries = await Promise.all(
+    ids.map(async (id) => {
+      const row = await getProposalById(id);
+      if (!row) return null;
+      return {
+        proposalId: row.id,
+        action: row.action,
+        humanReadablePreview: row.humanReadablePreview,
+        expiresAt: row.expiresAt.toISOString(),
+        status: row.status,
+        executionResult: row.executionResult ?? null,
+        errorMessage: row.errorMessage ?? null,
+      };
+    }),
+  );
+  return summaries.filter((s): s is ProposalSummary => s !== null);
+}
+
 export function toGuardShape(row: AiActionProposal): ProposalForGuard {
   return {
     id: row.id,

@@ -10,9 +10,15 @@
  *      .transaction) inside actions/*.ts appears ONLY inside that file's
  *      `execute:` handler — never inside parseArgs/validate/buildPreview,
  *      which must stay read-only (prepare causes zero business writes).
- *   2. proposals.ts (the ai_action_proposals bookkeeping table) is the
- *      ONLY file outside actions/*.ts allowed to contain a write
- *      primitive in the whole ai-copilot/ tree.
+ *   2. proposals.ts (the ai_action_proposals bookkeeping table) and
+ *      conversations.ts (ai_conversations/ai_conversation_messages — chat
+ *      persistence, 2026-09) are the ONLY files outside actions/*.ts
+ *      allowed to contain a write primitive in the whole ai-copilot/ tree.
+ *      conversations.ts is a deliberately SEPARATE, narrower write surface
+ *      from the ACTION_TOOLS one: it never touches a business table
+ *      (recruitment_requests etc.), is ownership-gated rather than
+ *      RBAC-approval-gated, and a conversation write can never trigger a
+ *      domain action — see conversations.test.ts's own IDOR coverage.
  *   3. READ_TOOLS names (tools/*.ts) and ACTION_TOOLS names (actions/*.ts)
  *      are completely disjoint sets — the two registries can never
  *      collide (mirrors the runtime throw in action-registry.ts, proven
@@ -28,6 +34,7 @@ const HERE = dirname(fileURLToPath(import.meta.url));
 const ACTIONS_DIR = join(HERE, "actions");
 const TOOLS_DIR = join(HERE, "tools");
 const PROPOSALS_FILE = join(HERE, "proposals.ts");
+const CONVERSATIONS_FILE = join(HERE, "conversations.ts");
 
 const WRITE_PATTERN = /\.(insert|update|delete|transaction)\s*\(/;
 
@@ -59,7 +66,7 @@ test("every write primitive inside actions/*.ts occurs strictly AFTER that file'
   }
 });
 
-test("outside actions/*.ts, only proposals.ts is allowed to contain a Drizzle write primitive anywhere in src/lib/ai-copilot/", () => {
+test("outside actions/*.ts, only proposals.ts and conversations.ts are allowed to contain a Drizzle write primitive anywhere in src/lib/ai-copilot/", () => {
   const root = join(HERE);
   const offenders: string[] = [];
   function walk(dir: string) {
@@ -68,7 +75,7 @@ test("outside actions/*.ts, only proposals.ts is allowed to contain a Drizzle wr
       if (entry.isDirectory()) {
         walk(full);
       } else if (entry.isFile() && entry.name.endsWith(".ts") && !entry.name.endsWith(".test.ts")) {
-        if (full === PROPOSALS_FILE || full.startsWith(ACTIONS_DIR)) continue;
+        if (full === PROPOSALS_FILE || full === CONVERSATIONS_FILE || full.startsWith(ACTIONS_DIR)) continue;
         const lines = readFileSync(full, "utf8").split("\n");
         if (lines.some((l) => WRITE_PATTERN.test(l))) offenders.push(full);
       }
@@ -76,6 +83,13 @@ test("outside actions/*.ts, only proposals.ts is allowed to contain a Drizzle wr
   }
   walk(root);
   assert.deepEqual(offenders, []);
+});
+
+test("conversations.ts never contains a write primitive targeting a business table name (recruitmentRequests/employmentSessions/workerProfiles/workforceMovements/aiActionProposals) — its writes are scoped to aiConversations/aiConversationMessages only", () => {
+  const source = readFileSync(CONVERSATIONS_FILE, "utf8");
+  for (const forbidden of ["recruitmentRequests", "employmentSessions", "workerProfiles", "workforceMovements", "aiActionProposals"]) {
+    assert.doesNotMatch(source, new RegExp(`\\b${forbidden}\\b`), `conversations.ts must never reference ${forbidden} — its write surface is conversation persistence only`);
+  }
 });
 
 test("READ_TOOLS names (tools/*.ts) and ACTION_TOOLS names (actions/*.ts) are completely disjoint — mirrors the runtime collision check in action-registry.ts", () => {
