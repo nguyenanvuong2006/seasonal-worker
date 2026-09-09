@@ -1911,3 +1911,83 @@ export const aiActionProposals = pgTable(
 
 export type AiActionProposal = typeof aiActionProposals.$inferSelect;
 export type NewAiActionProposal = typeof aiActionProposals.$inferInsert;
+
+/* ============================================================
+   AI COPILOT — CONVERSATION PERSISTENCE (2026-09, conversation
+   persistence + permission-driven navigation mission)
+   ------------------------------------------------------------
+   Durable server-side chat history — never React state, never
+   localStorage-as-source-of-truth. Ownership is `user_id` (real FK to
+   users.id, added in migration SQL per this file's own convention —
+   see organization_units/employment_sessions self-references above for
+   why FKs live in migration SQL, not inline `.references()`), and EVERY
+   read/write of a conversation or its messages must check
+   `user_id = <authenticated session id>` — a conversationId alone,
+   including for an ADMIN/global-Data-Scope session, must never grant
+   access to another user's conversation (see ai-copilot/conversations.ts).
+
+   `status` on ai_conversations is a soft-delete flag (ACTIVE/DELETED) —
+   "Cuộc trò chuyện mới" never deletes anything; only an explicit delete
+   action sets DELETED. Messages are NEVER updated/deleted individually.
+
+   ai_conversation_messages persists only what's needed to redraw the
+   visible chat: the user's question, the assistant's FINAL safe reply
+   text, and structured display metadata already produced by the existing
+   read-only-audited tool surface (tool_call_log/analysis_cards — the same
+   PII-minimized DTOs the chat route already returns to the browser today;
+   never a raw/unrestricted tool payload). `proposal_refs` stores ONLY
+   proposal ids — the actual proposal payload/preview stays solely in
+   ai_action_proposals, governed by its own RBAC/ownership re-checks; this
+   table never duplicates or re-derives authorization from that data.
+   NEVER persisted: DEEPSEEK_API_KEY, auth tokens/headers, DB credentials,
+   worker secrets, hidden chain-of-thought/raw model reasoning, or PII
+   beyond what the tool DTOs already exposed to the browser.
+
+   `client_message_id` (nullable, USER-role rows only) is the write-
+   idempotency key: a retried POST with the same (conversation_id,
+   client_message_id) must never create a second user message or trigger
+   a second DeepSeek/tool call — see the unique index below and
+   conversations.ts's idempotent-replay lookup.
+   ============================================================ */
+export const aiConversations = pgTable(
+  "ai_conversations",
+  {
+    id: uuid("id").defaultRandom().primaryKey(),
+    userId: uuid("user_id").notNull(), // FK -> users.id ON DELETE CASCADE, added in migration SQL
+    title: varchar("title", { length: 200 }),
+    status: varchar("status", { length: 16 }).notNull().default("ACTIVE"), // ACTIVE | DELETED
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+    updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
+    lastMessageAt: timestamp("last_message_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [
+    index("ai_conversation_user_idx").on(t.userId),
+    index("ai_conversation_user_last_message_idx").on(t.userId, t.lastMessageAt),
+    check("ai_conversation_status_chk", sql`${t.status} IN ('ACTIVE', 'DELETED')`),
+  ],
+);
+
+export const aiConversationMessages = pgTable(
+  "ai_conversation_messages",
+  {
+    id: uuid("id").defaultRandom().primaryKey(),
+    conversationId: uuid("conversation_id").notNull(), // FK -> ai_conversations.id ON DELETE CASCADE, added in migration SQL
+    role: varchar("role", { length: 16 }).notNull(), // USER | ASSISTANT
+    content: text("content").notNull(), // final safe text only — never hidden reasoning
+    toolCallLog: jsonb("tool_call_log").$type<{ name: string; ok: boolean; truncated?: boolean }[]>(),
+    analysisCards: jsonb("analysis_cards").$type<{ toolName: string; data: unknown; source: { domains: string[]; asOf: string } }[]>(),
+    proposalRefs: jsonb("proposal_refs").$type<string[]>(), // proposalId strings only — never the proposal payload
+    clientMessageId: varchar("client_message_id", { length: 128 }), // USER rows only — idempotency key
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [
+    index("ai_conversation_message_conversation_idx").on(t.conversationId),
+    uniqueIndex("ai_conversation_message_client_id_uq").on(t.conversationId, t.clientMessageId),
+    check("ai_conversation_message_role_chk", sql`${t.role} IN ('USER', 'ASSISTANT')`),
+  ],
+);
+
+export type AiConversation = typeof aiConversations.$inferSelect;
+export type NewAiConversation = typeof aiConversations.$inferInsert;
+export type AiConversationMessage = typeof aiConversationMessages.$inferSelect;
+export type NewAiConversationMessage = typeof aiConversationMessages.$inferInsert;

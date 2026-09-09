@@ -181,7 +181,12 @@ export const PERMISSION_CATALOG: readonly CatalogPermission[] = [
   { key: "meal.export", name: "Xuất danh sách Báo cơm", group: "bao_com" },
   // AI Admin Copilot (Phase 1) — hỏi đáp dữ liệu hệ thống bằng ngôn ngữ tự nhiên,
   // chỉ ĐỌC (read-only), mỗi tool tự re-check Data Scope của người hỏi.
-  { key: "ai_copilot.view", name: "Sử dụng Trợ lý AI Workforce", group: "ai_copilot" },
+  // Tên quyền cố tình nêu rõ ranh giới ngay trong 1 dòng (trang /admin/permissions
+  // hiện tại chỉ render `name`, không có ô mô tả riêng cho từng quyền — xem
+  // CatalogPermission): quyền này CHỈ mở giao diện Trợ lý AI, KHÔNG mở rộng Data
+  // Scope, KHÔNG cấp quyền ghi (ví dụ planning.request) — hành động vẫn cần quyền
+  // nghiệp vụ riêng của nó, xem action-registry.ts's requiredPermission.
+  { key: "ai_copilot.view", name: "Trợ lý AI — tra cứu/phân tích trong phạm vi được phân quyền (không mở rộng Data Scope, không cấp quyền ghi)", group: "ai_copilot" },
 ];
 
 /** 4 vai trò hệ thống + nền tảng cho vai trò tuỳ chỉnh. */

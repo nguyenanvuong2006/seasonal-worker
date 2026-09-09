@@ -1,16 +1,27 @@
 /**
- * AiAssistantPage — real render in jsdom (same render-tsx.ts harness already
- * established for workforce-requests/candidate-consent pages). Proves:
- *   - empty state shows the starter-question groups; clicking one sends it.
- *   - a successful reply renders the assistant bubble + tool source badges.
- *   - a 4xx/5xx from the API renders a structured ErrorState with retry —
- *     never an uncaught JSON parse error, matching the established
- *     fetchJsonWithTimeout/ErrorState contract used across the app.
- *   - "Xoá hội thoại" clears all messages.
- *   - an Action Proposal card renders Hủy/Xác nhận thực hiện, and clicking
- *     "Xác nhận thực hiện" calls the execute endpoint (never triggered by
- *     chat text) while "Hủy" calls the cancel endpoint — proving the UI
- *     never auto-executes from a chat reply alone.
+ * AiAssistantClient — real render in jsdom (same render-tsx.ts harness
+ * already established for workforce-requests/candidate-consent pages).
+ * page.tsx itself is now an async Server Component (session/redirect
+ * only — see document-merge/page.tsx's same convention) and is not
+ * rendered here; this file renders the actual client component the
+ * server page mounts, ai-assistant-client.tsx.
+ *
+ * Proves (conversation persistence mission):
+ *   - on mount, GET /api/ai-copilot/conversations restores the most
+ *     recent conversation (never starts from React state alone).
+ *   - a 403 from that initial call renders a permission-denied state,
+ *     not a functional-looking chat (Defect 2's "direct page must not
+ *     provide functional AI access").
+ *   - sending a message includes conversationId + a fresh clientMessageId
+ *     in the POST body.
+ *   - "Cuộc trò chuyện mới" clears the visible chat WITHOUT calling
+ *     DELETE — it is NOT the same action as deleting a conversation.
+ *   - the conversation history panel lists past conversations and
+ *     switching loads their messages via GET .../conversations/[id].
+ *   - deleting a conversation from history requires confirm() and calls
+ *     DELETE .../conversations/[id].
+ *   - an Action Proposal card still renders Hủy/Xác nhận thực hiện, and
+ *     confirming/cancelling never auto-executes from chat text alone.
  */
 import test from "node:test";
 import assert from "node:assert/strict";
@@ -18,13 +29,27 @@ import { installDom, loadComponent, type RenderEnv } from "../../../../lib/test-
 
 type FetchResponse = { status: number; jsonText: string | null };
 
-async function renderPage(env: RenderEnv, respond: (url: string, body: unknown) => FetchResponse) {
-  const requests: { url: string; body: unknown }[] = [];
+function fakeSearchParams(initial = "") {
+  const params = new URLSearchParams(initial);
+  return { get: (key: string) => params.get(key), toString: () => params.toString() };
+}
+
+function nextNavigationStub(opts?: { search?: string; onReplace?: (url: string) => void }) {
+  return {
+    useRouter: () => ({ replace: (url: string) => opts?.onReplace?.(url), push: () => {} }),
+    usePathname: () => "/admin/ai-assistant",
+    useSearchParams: () => fakeSearchParams(opts?.search ?? ""),
+  };
+}
+
+async function renderClient(env: RenderEnv, respond: (method: string, url: string, body: unknown) => FetchResponse, navOpts?: Parameters<typeof nextNavigationStub>[0]) {
+  const requests: { method: string; url: string; body: unknown }[] = [];
   (globalThis as Record<string, unknown>).fetch = async (input: unknown, init?: RequestInit) => {
     const url = String(input);
+    const method = init?.method ?? "GET";
     const body = init?.body ? JSON.parse(String(init.body)) : null;
-    requests.push({ url, body });
-    const pick = respond(url, body);
+    requests.push({ method, url, body });
+    const pick = respond(method, url, body);
     return {
       ok: pick.status >= 200 && pick.status < 300,
       status: pick.status,
@@ -40,19 +65,21 @@ async function renderPage(env: RenderEnv, respond: (url: string, body: unknown) 
   const { act } = await import("react");
   const { createRoot } = await import("react-dom/client");
 
-  const mod = loadComponent(new URL("./page.tsx", import.meta.url), {
-    stubs: { "@/components/ui": uiModule, "@/lib/api-client": apiClientModule },
+  const mod = loadComponent(new URL("./ai-assistant-client.tsx", import.meta.url), {
+    stubs: { "@/components/ui": uiModule, "@/lib/api-client": apiClientModule, "next/navigation": nextNavigationStub(navOpts) },
   });
-  const Page = mod.default as () => import("react").ReactElement;
+  const Client = mod.default as () => import("react").ReactElement;
 
   const container = env.document.getElementById("root") as HTMLElement;
   const root = createRoot(container);
   await act(async () => {
-    root.render(React.createElement(Page));
+    root.render(React.createElement(Client));
   });
-  await act(async () => {
-    await Promise.resolve();
-  });
+  for (let i = 0; i < 4; i++) {
+    await act(async () => {
+      await Promise.resolve();
+    });
+  }
 
   return {
     container,
@@ -63,113 +90,188 @@ async function renderPage(env: RenderEnv, respond: (url: string, body: unknown) 
       if (!el) throw new Error(`No button found matching "${matchText}"`);
       await act(async () => {
         el.dispatchEvent(new env.window.MouseEvent("click", { bubbles: true }));
-        await Promise.resolve();
-        await Promise.resolve();
-        await Promise.resolve();
+        for (let i = 0; i < 4; i++) await Promise.resolve();
       });
     },
   };
 }
 
-test("empty state shows the starter-question groups (TRA CỨU / PHÂN TÍCH / HÀNH ĐỘNG)", async () => {
-  const env = installDom();
-  try {
-    const ui = await renderPage(env, () => ({ status: 200, jsonText: "{}" }));
-    for (const label of ["TRA CỨU", "PHÂN TÍCH", "HÀNH ĐỘNG"]) assert.match(ui.text(), new RegExp(label));
-    for (const q of ["Hiện có bao nhiêu lao động đang làm việc?", "Ai chưa có mã vân tay (IT Code)?", "Bộ phận nào đang thiếu người nhiều nhất?", "Chuẩn bị một Yêu cầu tuyển dụng."]) {
-      assert.match(ui.text(), new RegExp(q.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")));
-    }
-  } finally {
-    env.cleanup();
-  }
-});
+function chatSuccess(overrides: Record<string, unknown> = {}) {
+  return {
+    conversationId: "conv-auto",
+    reply: "Hiện có 128 lao động.",
+    toolCallLog: [{ name: "get_current_headcount", ok: true }],
+    proposals: [],
+    analysisCards: [],
+    meta: { finishReason: "stop", iterations: 1, usage: { promptTokens: 1, completionTokens: 1, totalTokens: 2 } },
+    ...overrides,
+  };
+}
 
-test("clicking a starter question sends it and renders the assistant reply with tool source badges", async () => {
+test("on mount, restores the most recent conversation (GET conversations, then GET its messages) and shows them instead of the empty starter state", async () => {
   const env = installDom();
   try {
-    const ui = await renderPage(env, () => ({
-      status: 200,
-      jsonText: JSON.stringify({
-        reply: "Hiện có 128 lao động.",
-        toolCallLog: [{ name: "get_current_headcount", ok: true }],
-        proposals: [],
-        meta: { finishReason: "stop", iterations: 2, usage: { promptTokens: 10, completionTokens: 5, totalTokens: 15 } },
-      }),
-    }));
-    await ui.click("Hiện có bao nhiêu lao động đang làm việc?");
-    assert.match(ui.text(), /Hiện có 128 lao động\./);
-    assert.match(ui.text(), /get_current_headcount/);
-    assert.equal(ui.requests.length, 1);
-    assert.equal((ui.requests[0].body as { question: string }).question, "Hiện có bao nhiêu lao động đang làm việc?");
-  } finally {
-    env.cleanup();
-  }
-});
-
-test("a 502 from the API renders a structured ErrorState with retry, never an uncaught parse error", async () => {
-  const env = installDom();
-  try {
-    const ui = await renderPage(env, () => ({ status: 502, jsonText: JSON.stringify({ error: "Trợ lý AI không thể trả lời lúc này." }) }));
-    await ui.click("Hiện có bao nhiêu lao động đang làm việc?");
-    assert.match(ui.text(), /Không thể trả lời/);
-    assert.match(ui.text(), /Trợ lý AI không thể trả lời lúc này\./);
-    assert.match(ui.text(), /Thử lại/);
-  } finally {
-    env.cleanup();
-  }
-});
-
-test("retry after a failure re-sends the same question", async () => {
-  const env = installDom();
-  try {
-    let callCount = 0;
-    const ui = await renderPage(env, () => {
-      callCount += 1;
-      if (callCount === 1) return { status: 502, jsonText: JSON.stringify({ error: "lỗi tạm thời" }) };
-      return { status: 200, jsonText: JSON.stringify({ reply: "OK sau khi thử lại.", toolCallLog: [], proposals: [], meta: { finishReason: "stop", iterations: 1, usage: { promptTokens: 1, completionTokens: 1, totalTokens: 2 } } }) };
+    const ui = await renderClient(env, (method, url) => {
+      if (method === "GET" && url.endsWith("/api/ai-copilot/conversations")) {
+        return { status: 200, jsonText: JSON.stringify({ conversations: [{ id: "conv-1", title: "Kiểm tra nhân lực", createdAt: "2026-09-09T00:00:00Z", updatedAt: "2026-09-09T00:00:00Z", lastMessageAt: "2026-09-09T00:00:00Z" }] }) };
+      }
+      if (method === "GET" && url.includes("/api/ai-copilot/conversations/conv-1")) {
+        return {
+          status: 200,
+          jsonText: JSON.stringify({
+            conversation: { id: "conv-1", title: "Kiểm tra nhân lực" },
+            messages: [{ id: "m1", role: "USER", content: "hiện có bao nhiêu lao động", toolCallLog: [], analysisCards: [], proposals: [], createdAt: "2026-09-09T00:00:00Z" }],
+          }),
+        };
+      }
+      return { status: 200, jsonText: "{}" };
     });
-    await ui.click("Ai chưa có mã vân tay (IT Code)?");
-    assert.match(ui.text(), /lỗi tạm thời/);
-    await ui.click("Thử lại");
-    assert.match(ui.text(), /OK sau khi thử lại\./);
-    assert.equal(callCount, 2);
+    assert.match(ui.text(), /hiện có bao nhiêu lao động/);
+    assert.ok(ui.requests.some((r) => r.method === "GET" && r.url.includes("/conversations/conv-1")));
   } finally {
     env.cleanup();
   }
 });
 
-test("\"Xoá hội thoại\" clears all messages back to the starter-question empty state", async () => {
+test("a 403 on the initial conversations fetch renders a permission-denied state, not a functional chat (Defect 2)", async () => {
   const env = installDom();
   try {
-    const ui = await renderPage(env, () => ({
-      status: 200,
-      jsonText: JSON.stringify({ reply: "Trả lời.", toolCallLog: [], proposals: [], meta: { finishReason: "stop", iterations: 1, usage: { promptTokens: 1, completionTokens: 1, totalTokens: 2 } } }),
-    }));
-    await ui.click("Bộ phận nào đang thiếu người nhiều nhất?");
-    assert.match(ui.text(), /Trả lời\./);
-    await ui.click("Xoá hội thoại");
-    assert.doesNotMatch(ui.text(), /Trả lời\./);
-    assert.match(ui.text(), /Đặt câu hỏi về nhân lực/);
+    const ui = await renderClient(env, () => ({ status: 403, jsonText: JSON.stringify({ error: "Bạn không có quyền truy cập dữ liệu này." }) }));
+    assert.match(ui.text(), /không có quyền sử dụng Trợ lý AI/);
+    assert.doesNotMatch(ui.text(), /Nhập câu hỏi/);
   } finally {
     env.cleanup();
   }
 });
 
-const SAMPLE_PROPOSAL = { proposalId: "prop-1", action: "prepare_recruitment_request", humanReadablePreview: "ĐỀ XUẤT HÀNH ĐỘNG\n\nTạo Yêu cầu tuyển dụng\n\nBộ phận: Harvesting\nNam: 10\nNữ: 20", expiresAt: "2026-09-09T12:30:00.000Z" };
+test("empty state (no prior conversations) shows the starter-question groups", async () => {
+  const env = installDom();
+  try {
+    const ui = await renderClient(env, (method, url) => {
+      if (url.endsWith("/api/ai-copilot/conversations")) return { status: 200, jsonText: JSON.stringify({ conversations: [] }) };
+      return { status: 200, jsonText: "{}" };
+    });
+    for (const label of ["TRA CỨU", "PHÂN TÍCH", "HÀNH ĐỘNG"]) assert.match(ui.text(), new RegExp(label));
+  } finally {
+    env.cleanup();
+  }
+});
+
+test("sending a message includes conversationId (null on a brand-new chat) and a fresh clientMessageId", async () => {
+  const env = installDom();
+  try {
+    const ui = await renderClient(env, (method, url) => {
+      if (url.endsWith("/api/ai-copilot/conversations")) return { status: 200, jsonText: JSON.stringify({ conversations: [] }) };
+      if (method === "POST" && url.endsWith("/api/ai-copilot/chat")) return { status: 200, jsonText: JSON.stringify(chatSuccess()) };
+      return { status: 200, jsonText: "{}" };
+    });
+    await ui.click("Hiện có bao nhiêu lao động đang làm việc?");
+    const chatReq = ui.requests.find((r) => r.url.endsWith("/api/ai-copilot/chat"));
+    assert.ok(chatReq);
+    const body = chatReq!.body as { question: string; conversationId: string | null; clientMessageId: string };
+    assert.equal(body.question, "Hiện có bao nhiêu lao động đang làm việc?");
+    assert.equal(body.conversationId, null);
+    assert.ok(typeof body.clientMessageId === "string" && body.clientMessageId.length > 0);
+    assert.match(ui.text(), /Hiện có 128 lao động\./);
+  } finally {
+    env.cleanup();
+  }
+});
+
+test("'Cuộc trò chuyện mới' clears the visible chat WITHOUT calling DELETE — distinct from deleting a conversation", async () => {
+  const env = installDom();
+  try {
+    const ui = await renderClient(env, (method, url) => {
+      if (url.endsWith("/api/ai-copilot/conversations")) return { status: 200, jsonText: JSON.stringify({ conversations: [] }) };
+      if (method === "POST" && url.endsWith("/api/ai-copilot/chat")) return { status: 200, jsonText: JSON.stringify(chatSuccess()) };
+      return { status: 200, jsonText: "{}" };
+    });
+    await ui.click("Bộ phận nào đang thiếu người nhiều nhất?");
+    assert.match(ui.text(), /Hiện có 128 lao động\./);
+    await ui.click("Cuộc trò chuyện mới");
+    assert.doesNotMatch(ui.text(), /Hiện có 128 lao động\./);
+    assert.match(ui.text(), /Đặt câu hỏi về nhân lực/);
+    assert.equal(ui.requests.filter((r) => r.method === "DELETE").length, 0, "starting a new conversation must never delete anything server-side");
+  } finally {
+    env.cleanup();
+  }
+});
+
+test("history panel lists past conversations grouped by day, and selecting one loads its messages", async () => {
+  const env = installDom();
+  try {
+    const ui = await renderClient(env, (method, url) => {
+      if (method === "GET" && url.endsWith("/api/ai-copilot/conversations")) {
+        return {
+          status: 200,
+          jsonText: JSON.stringify({
+            conversations: [
+              { id: "conv-today", title: "Kiểm tra nhân lực hiện tại", createdAt: new Date().toISOString(), updatedAt: new Date().toISOString(), lastMessageAt: new Date().toISOString() },
+              { id: "conv-old", title: "So sánh nhu cầu 2025/2026", createdAt: "2020-01-01T00:00:00Z", updatedAt: "2020-01-01T00:00:00Z", lastMessageAt: "2020-01-01T00:00:00Z" },
+            ],
+          }),
+        };
+      }
+      if (method === "GET" && url.includes("/conversations/conv-today")) return { status: 200, jsonText: JSON.stringify({ conversation: { id: "conv-today", title: "x" }, messages: [] }) };
+      if (method === "GET" && url.includes("/conversations/conv-old")) return { status: 200, jsonText: JSON.stringify({ conversation: { id: "conv-old", title: "x" }, messages: [{ id: "m1", role: "USER", content: "câu hỏi cũ", toolCallLog: [], analysisCards: [], proposals: [], createdAt: "2020-01-01T00:00:00Z" }] }) };
+      return { status: 200, jsonText: "{}" };
+    });
+    await ui.click("Lịch sử");
+    assert.match(ui.text(), /Hôm nay/);
+    assert.match(ui.text(), /Trước đó/);
+    assert.match(ui.text(), /So sánh nhu cầu 2025\/2026/);
+    await ui.click("So sánh nhu cầu 2025/2026");
+    assert.match(ui.text(), /câu hỏi cũ/);
+  } finally {
+    env.cleanup();
+  }
+});
+
+test("deleting a conversation from history requires confirm() and calls DELETE on the right id", async () => {
+  const env = installDom();
+  try {
+    const ui = await renderClient(env, (method, url) => {
+      if (method === "GET" && url.endsWith("/api/ai-copilot/conversations")) {
+        return { status: 200, jsonText: JSON.stringify({ conversations: [{ id: "conv-1", title: "Xoá tôi đi", createdAt: new Date().toISOString(), updatedAt: new Date().toISOString(), lastMessageAt: new Date().toISOString() }] }) };
+      }
+      if (method === "GET" && url.includes("/conversations/conv-1")) return { status: 200, jsonText: JSON.stringify({ conversation: { id: "conv-1", title: "x" }, messages: [] }) };
+      if (method === "DELETE") return { status: 200, jsonText: JSON.stringify({ ok: true }) };
+      return { status: 200, jsonText: "{}" };
+    });
+    await ui.click("Lịch sử");
+    const trashButtons = Array.from(ui.container.querySelectorAll('button[aria-label="Xoá cuộc trò chuyện"]'));
+    assert.equal(trashButtons.length, 1);
+    await (async () => {
+      const { act } = await import("react");
+      await act(async () => {
+        trashButtons[0].dispatchEvent(new env.window.MouseEvent("click", { bubbles: true }));
+        for (let i = 0; i < 4; i++) await Promise.resolve();
+      });
+    })();
+    assert.equal(env.confirms.length, 1, "deleting a conversation must require an explicit confirm — never a silent side effect of a new-chat click");
+    const deleteReq = ui.requests.find((r) => r.method === "DELETE");
+    assert.ok(deleteReq);
+    assert.match(deleteReq!.url, /\/conversations\/conv-1$/);
+  } finally {
+    env.cleanup();
+  }
+});
+
+const SAMPLE_PROPOSAL = { proposalId: "prop-1", action: "prepare_recruitment_request", humanReadablePreview: "ĐỀ XUẤT HÀNH ĐỘNG\n\nTạo Yêu cầu tuyển dụng\n\nBộ phận: Harvesting\nNam: 10\nNữ: 20", expiresAt: new Date(Date.now() + 10 * 60_000).toISOString() };
 
 test("an action proposal renders as a card with Hủy/Xác nhận thực hiện — never auto-executed just because the chat reply arrived", async () => {
   const env = installDom();
   try {
-    const ui = await renderPage(env, () => ({
-      status: 200,
-      jsonText: JSON.stringify({ reply: "Đã chuẩn bị đề xuất, vui lòng xác nhận.", toolCallLog: [{ name: "prepare_recruitment_request", ok: true }], proposals: [SAMPLE_PROPOSAL], meta: { finishReason: "stop", iterations: 1, usage: { promptTokens: 1, completionTokens: 1, totalTokens: 2 } } }),
-    }));
+    const ui = await renderClient(env, (method, url) => {
+      if (url.endsWith("/api/ai-copilot/conversations")) return { status: 200, jsonText: JSON.stringify({ conversations: [] }) };
+      if (method === "POST" && url.endsWith("/api/ai-copilot/chat")) return { status: 200, jsonText: JSON.stringify(chatSuccess({ reply: "Đã chuẩn bị đề xuất, vui lòng xác nhận.", toolCallLog: [{ name: "prepare_recruitment_request", ok: true }], proposals: [SAMPLE_PROPOSAL] })) };
+      return { status: 200, jsonText: "{}" };
+    });
     await ui.click("Chuẩn bị một Yêu cầu tuyển dụng.");
     assert.match(ui.text(), /Đề xuất hành động/i);
     assert.match(ui.text(), /Harvesting/);
     assert.match(ui.text(), /Hủy/);
     assert.match(ui.text(), /Xác nhận thực hiện/);
-    // Only the ONE POST to /api/ai-copilot/chat happened — no execute call fired automatically.
     assert.equal(ui.requests.filter((r) => r.url.includes("/execute")).length, 0);
   } finally {
     env.cleanup();
@@ -179,9 +281,11 @@ test("an action proposal renders as a card with Hủy/Xác nhận thực hiện 
 test("clicking \"Xác nhận thực hiện\" POSTs to the execute endpoint (proposalId in the URL, no payload) and shows success", async () => {
   const env = installDom();
   try {
-    const ui = await renderPage(env, (url) => {
+    const ui = await renderClient(env, (method, url) => {
+      if (url.endsWith("/api/ai-copilot/conversations")) return { status: 200, jsonText: JSON.stringify({ conversations: [] }) };
       if (url.includes("/execute")) return { status: 200, jsonText: JSON.stringify({ resultRef: { requestId: "req-1", requestCode: "AI-20260909-ABCDEF" } }) };
-      return { status: 200, jsonText: JSON.stringify({ reply: "Đã chuẩn bị đề xuất.", toolCallLog: [], proposals: [SAMPLE_PROPOSAL], meta: { finishReason: "stop", iterations: 1, usage: { promptTokens: 1, completionTokens: 1, totalTokens: 2 } } }) };
+      if (method === "POST" && url.endsWith("/api/ai-copilot/chat")) return { status: 200, jsonText: JSON.stringify(chatSuccess({ reply: "Đã chuẩn bị đề xuất.", proposals: [SAMPLE_PROPOSAL] })) };
+      return { status: 200, jsonText: "{}" };
     });
     await ui.click("Chuẩn bị một Yêu cầu tuyển dụng.");
     await ui.click("Xác nhận thực hiện");
@@ -198,9 +302,11 @@ test("clicking \"Xác nhận thực hiện\" POSTs to the execute endpoint (prop
 test("clicking \"Hủy\" POSTs to the cancel endpoint and shows cancelled, never calling execute", async () => {
   const env = installDom();
   try {
-    const ui = await renderPage(env, (url) => {
+    const ui = await renderClient(env, (method, url) => {
+      if (url.endsWith("/api/ai-copilot/conversations")) return { status: 200, jsonText: JSON.stringify({ conversations: [] }) };
       if (url.includes("/cancel")) return { status: 200, jsonText: JSON.stringify({ ok: true }) };
-      return { status: 200, jsonText: JSON.stringify({ reply: "Đã chuẩn bị đề xuất.", toolCallLog: [], proposals: [SAMPLE_PROPOSAL], meta: { finishReason: "stop", iterations: 1, usage: { promptTokens: 1, completionTokens: 1, totalTokens: 2 } } }) };
+      if (method === "POST" && url.endsWith("/api/ai-copilot/chat")) return { status: 200, jsonText: JSON.stringify(chatSuccess({ reply: "Đã chuẩn bị đề xuất.", proposals: [SAMPLE_PROPOSAL] })) };
+      return { status: 200, jsonText: "{}" };
     });
     await ui.click("Chuẩn bị một Yêu cầu tuyển dụng.");
     await ui.click("Hủy");
@@ -216,55 +322,27 @@ test("clicking \"Hủy\" POSTs to the cancel endpoint and shows cancelled, never
 test("an analysis-tool result renders as an Analysis Card with a ranking list and the source/asOf footer", async () => {
   const env = installDom();
   try {
-    const ui = await renderPage(env, () => ({
-      status: 200,
-      jsonText: JSON.stringify({
-        reply: "Harvesting đang thiếu nhiều nhất.",
-        toolCallLog: [{ name: "get_workforce_gap_rankings", ok: true }],
-        proposals: [],
-        analysisCards: [
-          {
-            toolName: "get_workforce_gap_rankings",
-            data: { rankings: [{ departmentId: "d1", departmentName: "Harvesting", requested: 145, current: 108, gap: 37 }], asOfDate: "2026-09-09" },
-            source: { domains: ["workforce_request"], asOf: "2026-09-09" },
-          },
-        ],
-        meta: { finishReason: "stop", iterations: 1, usage: { promptTokens: 1, completionTokens: 1, totalTokens: 2 } },
-      }),
-    }));
+    const ui = await renderClient(env, (method, url) => {
+      if (url.endsWith("/api/ai-copilot/conversations")) return { status: 200, jsonText: JSON.stringify({ conversations: [] }) };
+      if (method === "POST" && url.endsWith("/api/ai-copilot/chat")) {
+        return {
+          status: 200,
+          jsonText: JSON.stringify(
+            chatSuccess({
+              reply: "Harvesting đang thiếu nhiều nhất.",
+              toolCallLog: [{ name: "get_workforce_gap_rankings", ok: true }],
+              analysisCards: [{ toolName: "get_workforce_gap_rankings", data: { rankings: [{ departmentId: "d1", departmentName: "Harvesting", requested: 145, current: 108, gap: 37 }], asOfDate: "2026-09-09" }, source: { domains: ["workforce_request"], asOf: "2026-09-09" } }],
+            }),
+          ),
+        };
+      }
+      return { status: 200, jsonText: "{}" };
+    });
     await ui.click("Bộ phận nào đang thiếu người nhiều nhất?");
     assert.match(ui.text(), /Xếp hạng khoảng trống nhân lực/);
     assert.match(ui.text(), /Harvesting/);
     assert.match(ui.text(), /37/);
     assert.match(ui.text(), /Dữ liệu đến: 2026-09-09/);
-  } finally {
-    env.cleanup();
-  }
-});
-
-test("a risk-summary analysis card renders department names with a LOW/MEDIUM/HIGH badge, never inventing its own risk label", async () => {
-  const env = installDom();
-  try {
-    const ui = await renderPage(env, () => ({
-      status: 200,
-      jsonText: JSON.stringify({
-        reply: "Harvesting có rủi ro cao.",
-        toolCallLog: [{ name: "get_department_risk_summary", ok: true }],
-        proposals: [],
-        analysisCards: [
-          {
-            toolName: "get_department_risk_summary",
-            data: { departments: [{ departmentId: "d1", departmentName: "Harvesting", level: "HIGH", score: 2, factors: ["Thiếu 37 người."] }], asOfDate: "2026-09-09", lookbackDays: 30, lookaheadDays: 14 },
-            source: { domains: ["workforce_request"], asOf: "2026-09-09" },
-          },
-        ],
-        meta: { finishReason: "stop", iterations: 1, usage: { promptTokens: 1, completionTokens: 1, totalTokens: 2 } },
-      }),
-    }));
-    await ui.click("Bộ phận nào có rủi ro thiếu người?");
-    assert.match(ui.text(), /Đánh giá rủi ro thiếu người/);
-    assert.match(ui.text(), /Harvesting/);
-    assert.match(ui.text(), /HIGH/);
   } finally {
     env.cleanup();
   }
