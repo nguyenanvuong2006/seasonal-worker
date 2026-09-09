@@ -101,6 +101,31 @@ test("callWorker uses POST with JSON body for /read-google-doc — the scan rout
   assert.equal(calls[0].init?.body, JSON.stringify({ docId: "abc123" }));
 });
 
+test("callWorker uses POST with JSON body for /export-doc-pdf — the candidate-document finalize route's Google-auth fallback (2026-09)", async () => {
+  process.env.PDF_MERGE_WORKER_URL = "https://worker.example";
+  const calls = captureFetch();
+
+  await callWorker("/export-doc-pdf", { docId: "abc123" });
+
+  assert.equal(calls[0].input, "https://worker.example/export-doc-pdf");
+  assert.equal(calls[0].init?.method, "POST");
+  assert.equal(calls[0].init?.body, JSON.stringify({ docId: "abc123" }));
+});
+
+test("callWorker uses POST with JSON body for /drive-upload-pdf — the SAME finalize route's storage-upload fallback (2026-09)", async () => {
+  process.env.PDF_MERGE_WORKER_URL = "https://worker.example";
+  const calls = captureFetch();
+
+  await callWorker("/drive-upload-pdf", { key: "candidate-documents/x.pdf", pdfBase64: "AAAA", contentType: "application/pdf" });
+
+  assert.equal(calls[0].input, "https://worker.example/drive-upload-pdf");
+  assert.equal(calls[0].init?.method, "POST");
+  assert.equal(
+    calls[0].init?.body,
+    JSON.stringify({ key: "candidate-documents/x.pdf", pdfBase64: "AAAA", contentType: "application/pdf" }),
+  );
+});
+
 test("callWorker omits Authorization when worker secret is empty", async () => {
   process.env.PDF_MERGE_WORKER_URL = "https://worker.example";
   delete process.env.MERGE_WORKER_SECRET;

@@ -61,7 +61,7 @@ test("script never logs storage_key/pdf_sha256 raw values — presence booleans 
   const code = readScript();
   assert.match(code, /has_storage_key/);
   assert.match(code, /has_sha256/);
-  assert.doesNotMatch(code, /SELECT[^;]*\bstorage_key\b(?!\s+IS\s+NOT\s+NULL)[^;]*FROM/is);
+  assert.doesNotMatch(code, /SELECT[^;]*\bstorage_key\b(?!\s+IS\s+NOT\s+NULL)[^;]*FROM/i);
 });
 
 test("workflow is workflow_dispatch-only, scoped to the production environment, with the same DB-hostname guardrail as other production-read scripts", () => {

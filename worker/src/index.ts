@@ -1262,6 +1262,90 @@ const server = http.createServer(async (req, res) => {
     }
 
     // ---------------------------------------------------------------
+    // POST /export-doc-pdf — read-only Google Doc → PDF export proxy for the
+    // candidate-document electronic-confirmation finalize step (2026-09,
+    // "BATCH_PDF_GOOGLE_AUTH_FAILED: Token has been expired or revoked" fix).
+    // Body: { docId }. Thin, stateless proxy to exportGoogleDocAsPdf() — the
+    // EXACT function this worker's own finalizeGoogleDocsJob() already calls
+    // successfully for batch-print (this container has a working Google
+    // credential via GOOGLE_CLIENT_ID/SECRET/REFRESH_TOKEN from Secret
+    // Manager — see deploy-worker-production.yml).
+    //
+    // Root cause this endpoint exists to close: candidate-documents/finalize
+    // (POST .../finalize) runs on Vercel and calls exportGoogleDocAsPdf()
+    // in-process — a SEPARATE runtime whose own copy of the Google OAuth
+    // credential was confirmed (via a read-only production diagnostic) to be
+    // stale, throwing this worker's identical google-drive-pdf.ts error
+    // literally: "BATCH_PDF_GOOGLE_AUTH_FAILED: Token has been expired or
+    // revoked." — while the SAME function succeeds inside this worker for
+    // the SAME job's own GOOGLE_DOCS item creation. Same pattern as
+    // /read-google-doc: no new Google auth architecture, no second OAuth
+    // connection — the Vercel route reuses THIS worker's already-authorized
+    // integration instead.
+    //
+    // Never returns a Google access token or any credential — only base64
+    // PDF bytes (or an error message).
+    // ---------------------------------------------------------------
+    if (url.pathname === "/export-doc-pdf" && req.method === "POST") {
+      if (!isAuthorized(req)) {
+        return json(res, 401, { error: "unauthorized" });
+      }
+      const body = await readBody(req);
+      const docId = String(body.docId ?? "").trim();
+      if (!docId) {
+        return json(res, 400, { error: "Thiếu docId." });
+      }
+      try {
+        const bytes = await exportGoogleDocAsPdf(docId);
+        if (bytes.byteLength > 20_000_000) {
+          return json(res, 502, { error: "PDF xuất ra quá lớn để trả qua worker." });
+        }
+        return json(res, 200, { pdfBase64: Buffer.from(bytes).toString("base64"), byteLength: bytes.byteLength });
+      } catch (e) {
+        const message = e instanceof Error ? e.message.slice(0, 800) : String(e);
+        console.error(JSON.stringify({ event: "export_doc_pdf_failed", error: message }));
+        return json(res, 502, { error: message });
+      }
+    }
+
+    // ---------------------------------------------------------------
+    // POST /drive-upload-pdf — PDF byte upload proxy for the SAME finalize
+    // step, via the SAME already-authorized storage provider this worker
+    // already uses for the HTML_PDF engine's own item storage (see
+    // getStorageProvider() usage in runHtmlPdfItem below). Body:
+    // { key, pdfBase64, contentType? }. Reuses storage/google-drive.ts
+    // verbatim — no new storage/auth mechanism.
+    //
+    // Never returns a Google access token or any credential — only the
+    // stored object's key/size (or an error message).
+    // ---------------------------------------------------------------
+    if (url.pathname === "/drive-upload-pdf" && req.method === "POST") {
+      if (!isAuthorized(req)) {
+        return json(res, 401, { error: "unauthorized" });
+      }
+      const body = await readBody(req);
+      const key = String(body.key ?? "").trim();
+      const pdfBase64 = String(body.pdfBase64 ?? "");
+      const contentType = typeof body.contentType === "string" && body.contentType ? body.contentType : "application/pdf";
+      if (!key || !pdfBase64) {
+        return json(res, 400, { error: "Thiếu key hoặc pdfBase64." });
+      }
+      try {
+        const bytes = Buffer.from(pdfBase64, "base64");
+        if (bytes.byteLength > 20_000_000) {
+          return json(res, 400, { error: "PDF quá lớn để upload qua worker." });
+        }
+        const storage = getStorageProvider();
+        const stored = await storage.put(key, bytes, contentType);
+        return json(res, 200, { key: stored.key, size: stored.size ?? bytes.byteLength });
+      } catch (e) {
+        const message = e instanceof Error ? e.message.slice(0, 800) : String(e);
+        console.error(JSON.stringify({ event: "drive_upload_pdf_failed", error: message }));
+        return json(res, 502, { error: message });
+      }
+    }
+
+    // ---------------------------------------------------------------
     // POST /run-overlay — controlled staging E2E cho PDF Overlay (PR5).
     // Body: { jobId } — job phải có engine='PDF_OVERLAY' + metadata.e2e
     // snapshot NON-PRODUCTION (xem staging-e2e.ts). Đi qua ĐÚNG queue/storage/
