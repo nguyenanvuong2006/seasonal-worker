@@ -125,6 +125,7 @@ export type WorkerEndpoint =
   | "/read-google-doc"
   | "/export-doc-pdf"
   | "/drive-upload-pdf"
+  | "/read-stored-pdf"
   | "/verify-visual"
   | "/benchmark"
   | "/diag/db-identity"
@@ -139,6 +140,7 @@ const WORKER_METHODS: Record<WorkerEndpoint, "GET" | "POST"> = {
   "/read-google-doc": "POST",
   "/export-doc-pdf": "POST",
   "/drive-upload-pdf": "POST",
+  "/read-stored-pdf": "POST",
   "/verify-visual": "POST",
   "/benchmark": "POST",
   "/diag/db-identity": "GET",
