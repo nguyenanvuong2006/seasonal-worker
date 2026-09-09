@@ -1213,6 +1213,55 @@ const server = http.createServer(async (req, res) => {
     }
 
     // ---------------------------------------------------------------
+    // POST /read-google-doc — read-only Google Docs plain-text export for
+    // interactive Admin actions (2026-09, "Quét lại Google Docs" fix). Body:
+    // { docId }. Same purpose/shape as /preview-pdf: a thin, stateless proxy
+    // to code that already exists — here, createGoogleDocsService().
+    // getDocumentContent(), the EXACT function the worker's own runJob()
+    // already calls successfully for GOOGLE_DOCS merge jobs (this container
+    // already has a working Google credential via GOOGLE_CLIENT_ID/SECRET/
+    // REFRESH_TOKEN from Secret Manager — see deploy-worker-production.yml).
+    //
+    // Root cause this endpoint exists to close: interactive Admin routes
+    // under src/app/api/document-merge/** run on Vercel, a SEPARATE runtime
+    // from this Cloud Run container. Vercel has never been guaranteed to
+    // hold its own copy of the Google OAuth credential (see
+    // docs/DOCUMENT-MERGE-VERCEL-SETUP.md — a manual, independent
+    // configuration step) even though this worker's copy is known-good. This
+    // endpoint lets a Vercel route that finds no local Google credential
+    // reuse THIS worker's already-authorized Google integration instead of
+    // requiring a second, redundant Google connection to be configured on
+    // Vercel. No new credential/provider is introduced — same
+    // google-docs-service.ts, same env vars, same Secret Manager secrets.
+    //
+    // Never returns a Google access token, refresh token, or any credential
+    // — only the plain-text document body (or an error message). Read-only:
+    // never writes to the Google Doc.
+    // ---------------------------------------------------------------
+    if (url.pathname === "/read-google-doc" && req.method === "POST") {
+      if (!isAuthorized(req)) {
+        return json(res, 401, { error: "unauthorized" });
+      }
+      const body = await readBody(req);
+      const docId = String(body.docId ?? "").trim();
+      if (!docId) {
+        return json(res, 400, { error: "Thiếu docId." });
+      }
+      try {
+        const docsService = createGoogleDocsService();
+        const content = await docsService.getDocumentContent(docId);
+        if (content.length > 5_000_000) {
+          return json(res, 502, { error: "Nội dung Google Doc quá lớn để đọc qua worker." });
+        }
+        return json(res, 200, { content });
+      } catch (e) {
+        const message = e instanceof Error ? e.message.slice(0, 800) : String(e);
+        console.error(JSON.stringify({ event: "read_google_doc_failed", error: message }));
+        return json(res, 502, { error: message });
+      }
+    }
+
+    // ---------------------------------------------------------------
     // POST /run-overlay — controlled staging E2E cho PDF Overlay (PR5).
     // Body: { jobId } — job phải có engine='PDF_OVERLAY' + metadata.e2e
     // snapshot NON-PRODUCTION (xem staging-e2e.ts). Đi qua ĐÚNG queue/storage/

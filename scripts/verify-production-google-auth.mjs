@@ -13,6 +13,13 @@
  *      only — never content)
  *   3. that access token authenticates to Google Docs (documents.get with
  *      a fields mask limited to documentId+title — never body content)
+ *   4. that the SAME access token can perform the exact plain-text export
+ *      call google-docs-service.ts's getDocumentContent() makes — the
+ *      function both the Cloud Run worker's real merge jobs and the new
+ *      POST /read-google-doc endpoint (the "Quét lại Google Docs" Admin
+ *      scan fallback, 2026-09) call. Only the HTTP status and byte length
+ *      are reported — document body content is fetched but NEVER printed
+ *      or logged.
  * against a REAL, already-committed production template
  * (production-readiness.ts's DANG_KY_TAP_NGHE_GOOGLE_DOC_ID — not a
  * secret, not PII, already public in this repo's source).
@@ -107,6 +114,28 @@ results.google_docs_auth = {
 console.log(JSON.stringify({ event: "google_docs_auth", ...results.google_docs_auth }));
 if (!docsRes.ok) exitCode = 1;
 
-const allPass = results.refresh_token_exchange.ok && results.google_drive_auth.ok && results.google_docs_auth.ok;
+// 4) Plain-text export — the EXACT call getDocumentContent() makes
+// (google-docs-service.ts), now also reachable from the Cloud Run worker's
+// POST /read-google-doc for the Admin "Quét lại Google Docs" scan fallback.
+// Content is read to measure length only; never printed/logged.
+const exportRes = await fetch(
+  `https://www.googleapis.com/drive/v3/files/${TEMPLATE_GOOGLE_DOC_ID}/export?mimeType=${encodeURIComponent("text/plain")}&supportsAllDrives=true`,
+  { headers: { Authorization: `Bearer ${accessToken}` } },
+);
+const exportText = exportRes.ok ? await exportRes.text() : await exportRes.text().catch(() => "");
+results.google_docs_plaintext_export = {
+  httpStatus: exportRes.status,
+  ok: exportRes.ok,
+  contentLength: exportRes.ok ? exportText.length : undefined,
+  error: exportRes.ok ? null : `HTTP ${exportRes.status}`,
+};
+console.log(JSON.stringify({ event: "google_docs_plaintext_export", ...results.google_docs_plaintext_export }));
+if (!exportRes.ok) exitCode = 1;
+
+const allPass =
+  results.refresh_token_exchange.ok &&
+  results.google_drive_auth.ok &&
+  results.google_docs_auth.ok &&
+  results.google_docs_plaintext_export.ok;
 console.log(JSON.stringify({ event: "done", allPass }));
 process.exit(exitCode);
