@@ -21,38 +21,46 @@ export async function GET(req: Request) {
   const guard = await requirePermission(["ADMIN", "HR_RECRUITER", "DEPT_MANAGER", "HR_DIRECTOR"], "planning.view");
   if (!guard.ok) return NextResponse.json({ error: guard.error }, { status: guard.status });
 
-  const url = new URL(req.url);
-  const filter: RecruitmentRequestFilter = {
-    month: url.searchParams.get("month") || undefined,
-    location: url.searchParams.get("location") || undefined,
-    division: url.searchParams.get("division") || undefined,
-    department: url.searchParams.get("department") || undefined,
-    section: url.searchParams.get("section") || undefined,
-    group: url.searchParams.get("group") || undefined,
-    status: url.searchParams.get("status") || undefined,
-    requester: url.searchParams.get("requester") || undefined,
-    reason: url.searchParams.get("reason") || undefined,
-    searchQuery: url.searchParams.get("q") || undefined,
-    // Yêu cầu #12 — lọc theo khoảng Ngày yêu cầu / Ngày cần nhân lực.
-    requestedFrom: url.searchParams.get("requestedFrom") || undefined,
-    requestedTo: url.searchParams.get("requestedTo") || undefined,
-    expectedFrom: url.searchParams.get("expectedFrom") || undefined,
-    expectedTo: url.searchParams.get("expectedTo") || undefined,
-    fulfillment: (url.searchParams.get("fulfillment") as RecruitmentRequestFilter["fulfillment"]) || undefined,
-    // Yêu cầu #5 — bỏ trống = sắp xếp mặc định theo Ngày cần nhân lực
-    // (quá hạn chưa xong lên đầu), KHÔNG theo ngày kết thúc mùa vụ.
-    sortBy: (url.searchParams.get("sortBy") as RecruitmentRequestFilter["sortBy"]) || undefined,
-    sortDir: url.searchParams.get("sortDir") === "desc" ? "desc" : url.searchParams.get("sortDir") === "asc" ? "asc" : undefined,
-  };
+  try {
+    const url = new URL(req.url);
+    const filter: RecruitmentRequestFilter = {
+      month: url.searchParams.get("month") || undefined,
+      location: url.searchParams.get("location") || undefined,
+      division: url.searchParams.get("division") || undefined,
+      department: url.searchParams.get("department") || undefined,
+      section: url.searchParams.get("section") || undefined,
+      group: url.searchParams.get("group") || undefined,
+      status: url.searchParams.get("status") || undefined,
+      requester: url.searchParams.get("requester") || undefined,
+      reason: url.searchParams.get("reason") || undefined,
+      searchQuery: url.searchParams.get("q") || undefined,
+      // Yêu cầu #12 — lọc theo khoảng Ngày yêu cầu / Ngày cần nhân lực.
+      requestedFrom: url.searchParams.get("requestedFrom") || undefined,
+      requestedTo: url.searchParams.get("requestedTo") || undefined,
+      expectedFrom: url.searchParams.get("expectedFrom") || undefined,
+      expectedTo: url.searchParams.get("expectedTo") || undefined,
+      fulfillment: (url.searchParams.get("fulfillment") as RecruitmentRequestFilter["fulfillment"]) || undefined,
+      // Yêu cầu #5 — bỏ trống = sắp xếp mặc định theo Ngày cần nhân lực
+      // (quá hạn chưa xong lên đầu), KHÔNG theo ngày kết thúc mùa vụ.
+      sortBy: (url.searchParams.get("sortBy") as RecruitmentRequestFilter["sortBy"]) || undefined,
+      sortDir: url.searchParams.get("sortDir") === "desc" ? "desc" : url.searchParams.get("sortDir") === "asc" ? "asc" : undefined,
+    };
 
-  const scope = await getUserScope(guard.session);
-  filter.scope = scope;
+    const scope = await getUserScope(guard.session);
+    filter.scope = scope;
 
-  const limit = Math.min(1000, Math.max(1, Number(url.searchParams.get("limit")) || 500));
-  const offset = Math.max(0, Number(url.searchParams.get("offset")) || 0);
+    const limit = Math.min(1000, Math.max(1, Number(url.searchParams.get("limit")) || 500));
+    const offset = Math.max(0, Number(url.searchParams.get("offset")) || 0);
 
-  const { rows, total } = await listRecruitmentRequests(filter, limit, offset);
-  return NextResponse.json({ rows, total });
+    const { rows, total } = await listRecruitmentRequests(filter, limit, offset);
+    return NextResponse.json({ rows, total });
+  } catch (error) {
+    console.error("[recruitment-requests] GET failed", error);
+    return NextResponse.json(
+      { error: "Không thể tải danh sách yêu cầu tuyển dụng. Vui lòng thử lại." },
+      { status: 500 },
+    );
+  }
 }
 
 /** Tạo yêu cầu tuyển dụng mới. */

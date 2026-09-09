@@ -17,18 +17,26 @@ export async function GET(req: Request) {
   );
   if (!guard.ok) return NextResponse.json({ error: guard.error }, { status: guard.status });
 
-  const url = new URL(req.url);
-  const asOfParam = url.searchParams.get("asOf");
-  const asOf = asOfParam && /^\d{4}-\d{2}-\d{2}$/.test(asOfParam) ? asOfParam : todayStr();
+  try {
+    const url = new URL(req.url);
+    const asOfParam = url.searchParams.get("asOf");
+    const asOf = asOfParam && /^\d{4}-\d{2}-\d{2}$/.test(asOfParam) ? asOfParam : todayStr();
 
-  const scope = await getUserScope(guard.session);
-  const dashboard = await getRequestDashboard(scope, asOf);
+    const scope = await getUserScope(guard.session);
+    const dashboard = await getRequestDashboard(scope, asOf);
 
-  const can = {
-    allocate: await hasPermission(guard.session.role, "workforce_request.allocate"),
-    overallocate: await hasPermission(guard.session.role, "planning.overallocate"),
-    comment: await hasPermission(guard.session.role, "workforce_request.comment"),
-  };
+    const can = {
+      allocate: await hasPermission(guard.session.role, "workforce_request.allocate"),
+      overallocate: await hasPermission(guard.session.role, "planning.overallocate"),
+      comment: await hasPermission(guard.session.role, "workforce_request.comment"),
+    };
 
-  return NextResponse.json({ ...dashboard, can });
+    return NextResponse.json({ ...dashboard, can });
+  } catch (error) {
+    console.error("[workforce-requests/dashboard] GET failed", error);
+    return NextResponse.json(
+      { error: "Không thể tải Dashboard Workforce Request. Vui lòng thử lại." },
+      { status: 500 },
+    );
+  }
 }
