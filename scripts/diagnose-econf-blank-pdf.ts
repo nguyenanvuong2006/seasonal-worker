@@ -34,12 +34,23 @@ function log(event: string, data: Record<string, unknown> = {}): void {
   console.log(JSON.stringify({ event, ...data }));
 }
 
-/** Truncates and strips anything that looks like a token/secret before logging a raw error message. */
+/**
+ * Truncates and strips anything that looks like an actual OAuth token/secret
+ * before logging a raw error message — but preserves our own internal
+ * GOOGLE_DRIVE_* error-code prefixes and Google's own (non-secret) JSON
+ * error body, which are exactly what's needed to diagnose a storage.get()
+ * failure. A blanket "redact anything 24+ chars" pattern is too aggressive:
+ * it eats our own ~30-char error-code identifiers along with real secrets.
+ * Real tokens (OAuth access/refresh tokens, client secrets) are reliably
+ * much longer (60+ chars) or match a known prefix, so only those are masked.
+ */
 function safeErrorMessage(error: unknown): string {
   const raw = error instanceof Error ? error.message : String(error ?? "");
   return raw
-    .replace(/[A-Za-z0-9_-]{24,}/g, "[redacted]")
-    .slice(0, 300);
+    .replace(/ya29\.[A-Za-z0-9_-]+/g, "[redacted-access-token]")
+    .replace(/GOCSPX-[A-Za-z0-9_-]+/g, "[redacted-client-secret]")
+    .replace(/[A-Za-z0-9_-]{60,}/g, "[redacted-long-token]")
+    .slice(0, 500);
 }
 
 async function main() {
