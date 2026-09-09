@@ -18,6 +18,21 @@
  * artifact, unguarded, so a read failure both (a) produced an unhandled
  * exception -> generic error response instead of a PDF (blank viewer) and
  * (b) had already, incorrectly, recorded the document as viewed.
+ *
+ * WORKER FALLBACK (2026-09, same root cause + fix pattern as PR #162's
+ * finalize-step fallback): this route runs on Vercel, a runtime separate
+ * from the Cloud Run worker, whose own copy of the Google OAuth credential
+ * is NOT guaranteed to be in sync with the worker's known-good, Secret-
+ * Manager-sourced copy (confirmed via a read-only production diagnostic:
+ * Vercel's local read failed with GOOGLE_DRIVE_AUTH_FAILED: invalid_grant).
+ * The local storage read is tried first (unchanged behavior when Vercel's
+ * own credential is healthy); only on a CONFIRMED local Google-auth failure
+ * does this fall back to the worker's /read-stored-pdf endpoint via the
+ * SAME callWorker() channel finalize/route.ts already uses. The worker
+ * receives only the server-resolved storage key (never the browser, never
+ * client input) and returns only PDF bytes — no credential, no storage URL,
+ * ever reaches the client. Bytes from either path are verified to start
+ * with the PDF magic signature before being trusted.
  */
 
 import { NextResponse } from "next/server";
@@ -27,13 +42,64 @@ import { auditLogs, candidateDocuments } from "@/db/schema";
 import { canView, nextStatusOnView, type CandidateDocumentStatus } from "@/lib/candidate-consent/lifecycle";
 import { resolveAccessSession, sessionCanAccess } from "@/lib/candidate-consent/session-store";
 import { getStorageProvider } from "@/lib/storage";
+import { callWorker } from "@/lib/verification/helpers";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
 const NOT_FOUND = { error: "Không tìm thấy tài liệu hoặc bạn không có quyền truy cập." };
 
-export async function GET(_request: Request, { params }: { params: Promise<{ id: string }> }) {
+/**
+ * Detects a LOCAL Google-credential failure (missing OR invalid/expired) —
+ * never a genuine content/permission error (404/403/quota) the worker would
+ * hit identically. Same literal-error matching as finalize/route.ts's
+ * identical helper (independent token-exchange implementations across
+ * google-docs-service.ts / google-drive-pdf.ts / storage/google-drive.ts all
+ * throw one of these).
+ */
+function isMissingGoogleAuthError(error: unknown): boolean {
+  const message = error instanceof Error ? error.message : String(error ?? "");
+  const lower = message.toLowerCase();
+  return (
+    lower.includes("chưa kết nối google docs") ||
+    lower.includes("missing google oauth credentials") ||
+    lower.startsWith("batch_pdf_google_auth_failed") ||
+    lower.startsWith("google_drive_auth_failed") ||
+    lower.includes("invalid_grant") ||
+    lower.includes("token has been expired or revoked")
+  );
+}
+
+function isValidPdfBytes(bytes: Buffer): boolean {
+  return bytes.byteLength > 0 && bytes.subarray(0, 5).toString("latin1") === "%PDF-";
+}
+
+async function readArtifactBytes(request: Request, storageKey: string): Promise<Buffer> {
+  const storage = getStorageProvider();
+  let bytes: Buffer;
+  try {
+    bytes = await storage.get(storageKey);
+  } catch (error) {
+    if (!isMissingGoogleAuthError(error)) throw error;
+    const result = await callWorker<{ pdfBase64?: string; error?: string }>(
+      "/read-stored-pdf",
+      { key: storageKey },
+      60_000,
+      { request },
+    );
+    const data = result.data as { pdfBase64?: string; error?: string } | undefined;
+    if (!result.ok || typeof data?.pdfBase64 !== "string") {
+      throw new Error(data?.error || "Không đọc được tài liệu qua worker.");
+    }
+    bytes = Buffer.from(data.pdfBase64, "base64");
+  }
+  if (!isValidPdfBytes(bytes)) {
+    throw new Error("Dữ liệu PDF trả về không hợp lệ.");
+  }
+  return bytes;
+}
+
+export async function GET(request: Request, { params }: { params: Promise<{ id: string }> }) {
   const session = await resolveAccessSession();
   if (!session) {
     return NextResponse.json({ error: "Phiên tra cứu đã hết hạn. Vui lòng tra cứu lại." }, { status: 401 });
@@ -52,12 +118,11 @@ export async function GET(_request: Request, { params }: { params: Promise<{ id:
     return NextResponse.json({ error: "Tài liệu chưa sẵn sàng để xem." }, { status: 409 });
   }
 
-  const storage = getStorageProvider();
   let bytes: Buffer;
   try {
-    bytes = await storage.get(doc.storageKey);
+    bytes = await readArtifactBytes(request, doc.storageKey);
   } catch (error) {
-    console.error("[candidate-consent/documents/[id]/pdf] storage.get failed:", error);
+    console.error("[candidate-consent/documents/[id]/pdf] artifact read failed:", error);
     return NextResponse.json({ error: "Không đọc được tài liệu. Vui lòng thử lại sau." }, { status: 502 });
   }
 

@@ -1346,6 +1346,52 @@ const server = http.createServer(async (req, res) => {
     }
 
     // ---------------------------------------------------------------
+    // POST /read-stored-pdf — persisted-artifact READ proxy for the SAME
+    // already-authorized storage provider /drive-upload-pdf writes through
+    // (2026-09, candidate-facing blank-PDF fix). Body: { key }. Reuses
+    // storage/google-drive.ts verbatim — no new storage/auth mechanism, no
+    // second credential. `key` is the app's OWN storage-key namespace (e.g.
+    // "Candidate Documents/2026/09/09/....pdf"), resolved server-side by the
+    // Vercel caller from an authorized candidate_documents row — never a
+    // client-supplied Google Drive file id, and never arbitrary: the
+    // storage provider's own folder-path resolution stays scoped under this
+    // app's Drive root, so this is not a generic arbitrary-Drive-file proxy.
+    //
+    // Root cause this endpoint exists to close: the SAME class of problem
+    // PR #162 fixed for finalize (GOOGLE_DOCS export/upload) — Vercel's own
+    // copy of the Google OAuth credential can go stale/invalid independently
+    // of this worker's known-good Secret-Manager-sourced copy. The
+    // candidate-facing PDF route now tries its local credential first and
+    // falls back to this endpoint only on a confirmed local-auth failure —
+    // see GET /api/candidate-consent/documents/[id]/pdf.
+    //
+    // Never returns a Google access token, refresh token, or any credential
+    // — only base64 PDF bytes (or an error message).
+    // ---------------------------------------------------------------
+    if (url.pathname === "/read-stored-pdf" && req.method === "POST") {
+      if (!isAuthorized(req)) {
+        return json(res, 401, { error: "unauthorized" });
+      }
+      const body = await readBody(req);
+      const key = String(body.key ?? "").trim();
+      if (!key) {
+        return json(res, 400, { error: "Thiếu key." });
+      }
+      try {
+        const storage = getStorageProvider();
+        const bytes = await storage.get(key);
+        if (bytes.byteLength > 20_000_000) {
+          return json(res, 502, { error: "PDF quá lớn để trả qua worker." });
+        }
+        return json(res, 200, { pdfBase64: bytes.toString("base64"), byteLength: bytes.byteLength });
+      } catch (e) {
+        const message = e instanceof Error ? e.message.slice(0, 800) : String(e);
+        console.error(JSON.stringify({ event: "read_stored_pdf_failed", error: message }));
+        return json(res, 502, { error: message });
+      }
+    }
+
+    // ---------------------------------------------------------------
     // POST /run-overlay — controlled staging E2E cho PDF Overlay (PR5).
     // Body: { jobId } — job phải có engine='PDF_OVERLAY' + metadata.e2e
     // snapshot NON-PRODUCTION (xem staging-e2e.ts). Đi qua ĐÚNG queue/storage/

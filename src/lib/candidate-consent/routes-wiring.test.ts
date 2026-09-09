@@ -176,10 +176,17 @@ test("pdf route: re-reads the document FRESH from the DB on every request (no ca
 });
 
 test("pdf route: checks sessionCanAccess (IDOR guard) BEFORE reading storage bytes — candidate A can never read candidate B's PDF", () => {
-  const idorCheckIndex = pdfRoute.indexOf("sessionCanAccess(session, doc.applicationId)");
-  const storageGetIndex = pdfRoute.indexOf("storage.get(");
+  // The actual storage read (readArtifactBytes, local + worker-fallback) is
+  // a helper defined ABOVE the GET handler in the file, so a raw file-wide
+  // indexOf("storage.get(") would find it before the IDOR check textually
+  // even though it only ever RUNS after — assert on the call SITE inside
+  // GET() instead, which reflects real execution order.
+  const getHandlerStart = pdfRoute.indexOf("export async function GET(");
+  const idorCheckIndex = pdfRoute.indexOf("sessionCanAccess(session, doc.applicationId)", getHandlerStart);
+  const readCallIndex = pdfRoute.indexOf("readArtifactBytes(", getHandlerStart);
+  assert.ok(getHandlerStart > -1, "GET handler must be present");
   assert.ok(idorCheckIndex > -1, "IDOR check must be present");
-  assert.ok(storageGetIndex > idorCheckIndex, "storage read must happen strictly after the IDOR check");
+  assert.ok(readCallIndex > idorCheckIndex, "storage read must happen strictly after the IDOR check");
 });
 
 test("pdf route: checks canView() against the FRESH status — REVOKED/SUPERSEDED/EXPIRED are denied even for a session that was valid at login", () => {
@@ -187,7 +194,15 @@ test("pdf route: checks canView() against the FRESH status — REVOKED/SUPERSEDE
 });
 
 test("pdf route: never returns a storage URL/key to the client — response body is the PDF bytes themselves", () => {
-  assert.doesNotMatch(pdfRoute, /storageKey\s*[,}]/); // storageKey is read, never echoed into a JSON response
+  // storageKey legitimately appears as a VALUE sent server-to-server to the
+  // worker (e.g. `{ key: storageKey }` in the fallback call) — that's never
+  // returned to the browser. What must never happen is storageKey being
+  // embedded as a field in a NextResponse.json(...) call sent to the client.
+  const jsonResponseCalls = [...pdfRoute.matchAll(/NextResponse\.json\(([\s\S]*?)\)/g)].map((m) => m[1]);
+  assert.ok(jsonResponseCalls.length > 0, "expected at least one NextResponse.json(...) call");
+  for (const body of jsonResponseCalls) {
+    assert.doesNotMatch(body, /storageKey/, "no NextResponse.json(...) body may embed storageKey");
+  }
   assert.match(pdfRoute, /new NextResponse\(new Uint8Array\(bytes\)/);
 });
 
