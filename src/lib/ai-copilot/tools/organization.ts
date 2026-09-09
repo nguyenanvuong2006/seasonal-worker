@@ -58,11 +58,12 @@ const list_departments: ToolDefinition<ListDepartmentsArgs, { departments: { id:
 };
 
 type HeadcountArgs = { departmentId?: string };
-type HeadcountResult = { male: number; female: number; total: number; scopeNote: string };
+type HeadcountResult = { male: number; female: number; unknownGender: number; total: number; scopeNote: string };
 
 const get_current_headcount: ToolDefinition<HeadcountArgs, HeadcountResult> = {
   name: "get_current_headcount",
-  description: "Lấy số lao động đang làm việc (ACTIVE) hiện tại theo giới tính — toàn công ty (trong phạm vi Data Scope) hoặc theo một bộ phận cụ thể. Dùng cho câu hỏi 'hiện có bao nhiêu lao động'.",
+  description:
+    "Lấy số lao động đang làm việc (ACTIVE) hiện tại theo giới tính — toàn công ty (trong phạm vi Data Scope) hoặc theo một bộ phận cụ thể. Dùng cho câu hỏi 'hiện có bao nhiêu lao động'. Trả về male + female + unknownGender = total LUÔN đúng (unknownGender = giới tính NULL/rỗng/không xác định trong hồ sơ — KHÔNG phải một giới tính thứ ba, chỉ là dữ liệu chưa phân loại được). Nếu unknownGender > 0 và người dùng hỏi ai là người đó, dùng tool find_current_workers với gender=\"UNKNOWN\" để tra cứu — KHÔNG suy đoán.",
   parameters: {
     type: "object",
     properties: { departmentId: { type: "string", description: "UUID bộ phận cần lọc (tuỳ chọn) — bỏ trống để lấy toàn bộ phạm vi được phép." } },
@@ -77,7 +78,7 @@ const get_current_headcount: ToolDefinition<HeadcountArgs, HeadcountResult> = {
     const filter = intersectDepartmentFilter(scope, args.departmentId);
     if (!filter.ok) throw new ToolExecutionError("FORBIDDEN", "Bộ phận yêu cầu nằm ngoài Data Scope của bạn.");
     if (filter.departmentIds !== null && filter.departmentIds.length === 0) {
-      return { data: { male: 0, female: 0, total: 0, scopeNote: "Không có bộ phận nào trong phạm vi." }, source: { domains: ["workforce"], asOf: todayStr() } };
+      return { data: { male: 0, female: 0, unknownGender: 0, total: 0, scopeNote: "Không có bộ phận nào trong phạm vi." }, source: { domains: ["workforce"], asOf: todayStr() } };
     }
     const conditions = [eq(employmentSessions.status, "APPROVED"), isNull(employmentSessions.endDate), isNull(workerProfiles.deletedAt)];
     if (filter.departmentIds !== null) conditions.push(inArray(employmentSessions.deptId, filter.departmentIds));
@@ -93,7 +94,13 @@ const get_current_headcount: ToolDefinition<HeadcountArgs, HeadcountResult> = {
       else if (isFemale(r.gender)) female += 1;
     }
     return {
-      data: { male, female, total: rows.length, scopeNote: scope === null ? "Toàn công ty (không giới hạn Data Scope)." : `Giới hạn trong ${scope.length} bộ phận được cấp quyền.` },
+      data: {
+        male,
+        female,
+        unknownGender: rows.length - male - female,
+        total: rows.length,
+        scopeNote: scope === null ? "Toàn công ty (không giới hạn Data Scope)." : `Giới hạn trong ${scope.length} bộ phận được cấp quyền.`,
+      },
       source: { domains: ["workforce"], asOf: todayStr() },
     };
   },
