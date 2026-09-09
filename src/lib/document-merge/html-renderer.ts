@@ -214,9 +214,16 @@ th { font-weight: 700; text-align: center; }
 `;
 
 /**
- * Layout capability utilities (v12) — opt-in, class-scoped CSS. No existing
+ * Layout capability utilities (v13) — opt-in, class-scoped CSS. No existing
  * template references these classes, so appending them to the shared print
  * CSS is a no-op for every already-PUBLISHED template.
+ *
+ * `.manual-page-break` and `.keep-together` are the standard, reusable
+ * pagination-authoring utilities exposed to every template's HTML/CSS editor
+ * (Template Editor's "Công cụ phân trang"). They live here — one definition,
+ * shared by all templates present and future — rather than being duplicated
+ * into each template's own print_css, so a template only needs to place the
+ * marker markup; the renderer already knows the rule.
  */
 export const LAYOUT_UTILITY_CSS = `
 .equal-columns-2 {
@@ -235,6 +242,14 @@ export const LAYOUT_UTILITY_CSS = `
   word-break: normal;
   white-space: normal;
   min-width: 0;
+}
+.manual-page-break {
+  break-before: page;
+  page-break-before: always;
+}
+.keep-together {
+  break-inside: avoid;
+  page-break-inside: avoid;
 }
 `;
 
