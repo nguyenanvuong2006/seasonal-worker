@@ -71,6 +71,7 @@ const V20_SIGNATURE_SECTION7_SOURCE_NAME =
   "trainee-registration/v20-signature-and-section7-flow-draft (page 1 signature space +~10mm; section 7 flows naturally after section 6 instead of forcing a new page)";
 const V20_MANUAL_BREAK_MIGRATION = "2026-09-09-trainee-registration-v20-manual-page-break-margin-restore.sql";
 const DW_CU_CHECKBOX_MAPPING_FIX_MIGRATION = "2026-09-09-dw-cu-checkbox-option-mapping-fix.sql";
+const DW_CU_HTML_ENABLED_METADATA_FIX_MIGRATION = "2026-09-09-dw-cu-html-enabled-metadata-fix.sql";
 
 const CANONICAL_TEMPLATE_ID = "a1b2c3d4-e5f6-7890-abcd-ef1234567890";
 const CANONICAL_SOURCE_NAME =
@@ -286,6 +287,7 @@ test("HOTFIX-1: the runner list is exactly the known-safe, idempotent sequence",
     V20_SIGNATURE_SECTION7_MIGRATION,
     V20_MANUAL_BREAK_MIGRATION,
     DW_CU_CHECKBOX_MAPPING_FIX_MIGRATION,
+    DW_CU_HTML_ENABLED_METADATA_FIX_MIGRATION,
   ]);
 });
 
@@ -382,9 +384,9 @@ test("PHASE 7 REGISTRATION: v20 manual-page-break/margin-restore migration is pr
   assert.doesNotMatch(code, /<br\s*\/?>/i);
 });
 
-test("PHASE 8 REGISTRATION: DW cũ checkbox/option mapping fix migration is present, LAST, idempotent/non-destructive, scoped to DW cũ only, never touches DW mới or html_body/print_css", () => {
+test("PHASE 8 REGISTRATION: DW cũ checkbox/option mapping fix migration is present, idempotent/non-destructive, scoped to DW cũ only, never touches DW mới or html_body/print_css", () => {
   const list = parseRunnerList();
-  assert.equal(list.at(-1), DW_CU_CHECKBOX_MAPPING_FIX_MIGRATION, "must be registered so the official Production migration workflow actually runs it");
+  assert.ok(list.includes(DW_CU_CHECKBOX_MAPPING_FIX_MIGRATION), "must be registered so the official Production migration workflow actually runs it");
   const sql = readRepoFile(`migrations/${DW_CU_CHECKBOX_MAPPING_FIX_MIGRATION}`);
   assertNonDestructiveSql(`migrations/${DW_CU_CHECKBOX_MAPPING_FIX_MIGRATION}`, sql);
   const code = stripSqlComments(sql);
@@ -428,6 +430,34 @@ test("PHASE 8 REGISTRATION: DW cũ checkbox/option mapping fix migration is pres
   assert.match(code, /source_type\s*=\s*'CHECKBOX_OPTION'/i, "must set source_type to CHECKBOX_OPTION (the mechanism DW mới already uses)");
 
   // Idempotent: setting the same 22 rows to the same values twice is a no-op end state — no dedupe guard needed for a pure UPDATE.
+});
+
+test("PHASE 9 REGISTRATION: DW cũ html_enabled metadata fix migration is present, LAST, idempotent/non-destructive, scoped to DW cũ only by document_kind + name, never touches DW mới or html_body/print_css/mapping_snapshot", () => {
+  const list = parseRunnerList();
+  assert.equal(list.at(-1), DW_CU_HTML_ENABLED_METADATA_FIX_MIGRATION, "must be registered so the official Production migration workflow actually runs it");
+  const sql = readRepoFile(`migrations/${DW_CU_HTML_ENABLED_METADATA_FIX_MIGRATION}`);
+  assertNonDestructiveSql(`migrations/${DW_CU_HTML_ENABLED_METADATA_FIX_MIGRATION}`, sql);
+  const code = stripSqlComments(sql);
+
+  // Pure metadata UPDATE — no version row is ever inserted, updated, or removed.
+  const inserts = code.match(/\bINSERT\s+INTO\s+merge_template_versions\b/gi) ?? [];
+  assert.equal(inserts.length, 0, "must never INSERT a new version row");
+  const versionUpdates = code.match(/\bUPDATE\s+merge_template_versions\b/gi) ?? [];
+  assert.equal(versionUpdates.length, 0, "must never UPDATE merge_template_versions (no content change)");
+  const templateUpdates = code.match(/\bUPDATE\s+merge_templates\b/gi) ?? [];
+  assert.equal(templateUpdates.length, 1, "exactly one UPDATE of merge_templates (the html_enabled flag)");
+
+  // Scoped strictly to DW cũ's own document_kind + exact name — never a
+  // hardcoded row id, never DW mới.
+  assert.match(code, /document_kind\s*=\s*'A'/i, "must scope by document_kind = 'A' (DW cũ), not a hardcoded row id");
+  assert.match(code, /html_enabled\s*=\s*true/i, "must flip html_enabled to true");
+
+  // Never touches html_body/print_css/mapping_snapshot — pure metadata fix.
+  assert.doesNotMatch(code, /\bhtml_body\s*=|\bprint_css\s*=|\bmapping_snapshot\s*=/i, "must never modify html_body/print_css/mapping_snapshot");
+  assert.doesNotMatch(code, /document_kind\s*=\s*'B'/i, "must never reference DW mới's document_kind");
+
+  // Idempotency guard: re-running finds html_enabled already true and updates 0 rows.
+  assert.match(code, /html_enabled\s*=\s*false/i, "the WHERE clause must guard on html_enabled = false so a re-run updates 0 rows");
 });
 
 test("HOTFIX-1: runner comments describe the REAL migration count", () => {
@@ -740,6 +770,11 @@ const MIGRATION_MODELS: Record<string, (state: DbState) => DbState> = {
   // removes/renames no version row, so from this model's perspective (which
   // only tracks row existence, not content) it is a no-op, same as pure DDL.
   [DW_CU_CHECKBOX_MAPPING_FIX_MIGRATION]: ddlMigration,
+  // DW cũ html_enabled metadata fix (Phase 9): in-place UPDATE of the
+  // template row's html_enabled flag only — creates/removes/renames no
+  // version row, so from this model's perspective (which only tracks row
+  // existence, not content) it is a no-op, same as pure DDL.
+  [DW_CU_HTML_ENABLED_METADATA_FIX_MIGRATION]: ddlMigration,
 };
 
 /** Re-run the recurring runner exactly as scripts/run-document-merge-migrations.mjs does. */
