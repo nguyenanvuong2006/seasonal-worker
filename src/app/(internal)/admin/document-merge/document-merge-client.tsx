@@ -3,6 +3,8 @@
 import { Suspense, useEffect, useMemo, useState } from "react";
 import { useSearchParams } from "next/navigation";
 import {
+  ChevronDown,
+  ChevronUp,
   ExternalLink,
   FileText,
   History as HistoryIcon,
@@ -17,8 +19,19 @@ import {
 import { MergeWorkspace } from "@/components/document-merge/merge-workspace";
 import { TemplateLibrary } from "@/components/document-merge/template-library";
 import { VerificationPanel } from "@/components/document-merge/verification-panel";
+import { JobProgressPanel } from "@/components/document-merge/job-progress-panel";
+import { CandidateDocumentsStatusPanel } from "@/components/document-merge/candidate-documents-status-panel";
 import dynamic from "next/dynamic";
 import { canSeeTab, firstPermittedTab, type DocumentMergeTab } from "@/lib/document-merge/module-visibility";
+
+/** Statuses JobProgressPanel itself treats as non-terminal — kept in sync with its own isTerminal logic. */
+const TERMINAL_JOB_STATUSES = new Set(["COMPLETED", "FAILED", "CANCELLED"]);
+
+function reopenLabel(status: string): string {
+  if (status === "FAILED") return "Xem lỗi";
+  if (TERMINAL_JOB_STATUSES.has(status)) return "Xem kết quả";
+  return "Xem tiến độ";
+}
 
 const DynamicPdfMapper = dynamic(
   () => import("@/components/document-merge/pdf-mapper/pdf-mapper").then((mod) => ({ default: mod.PdfMapper })),
@@ -167,10 +180,23 @@ function PdfMapperTab({ selectedTemplateId, onSelectTemplateId }: { selectedTemp
   return <DynamicPdfMapper templateId={selectedTemplateId} />;
 }
 
+/**
+ * "Lịch sử Merge" — the PERMANENT recovery point for every merge job
+ * (2026-09). Every row is reopenable purely by its persistent database
+ * jobId, driven entirely by JobProgressPanel — the SAME component already
+ * used for a freshly-started merge's live progress (see merge-workspace.tsx).
+ * Reopening never re-triggers/re-runs a job: JobProgressPanel only ever GETs
+ * /api/document-merge/jobs/[id] (read-only) and polls it on an interval —
+ * closing the UI and coming back later (even after a reload or a brand new
+ * login) reconnects to the SAME job, never creates a new one.
+ */
 function HistoryTab({ canDelete }: { canDelete: boolean }) {
   const [loading, setLoading] = useState(true);
   const [history, setHistory] = useState<any[]>([]);
   const [error, setError] = useState<string | null>(null);
+  // Persistent jobId, not transient merge-action state — reopening a row
+  // after a reload works identically to reopening it right after creation.
+  const [openJobId, setOpenJobId] = useState<string | null>(null);
 
   const load = async () => {
     setLoading(true);
@@ -201,6 +227,7 @@ function HistoryTab({ canDelete }: { canDelete: boolean }) {
       alert(data.error || "Không xoá được lịch sử merge.");
       return;
     }
+    if (openJobId === jobId) setOpenJobId(null);
     load();
   };
 
@@ -209,30 +236,54 @@ function HistoryTab({ canDelete }: { canDelete: boolean }) {
   return (
     <div className="space-y-4">
       <div className="flex items-center justify-between gap-3">
-        <div><h2 className="text-base font-bold text-slate-900">Lịch sử Merge Documents</h2><p className="text-xs text-slate-500">Theo dõi tài liệu đã tạo và mở lại Google Docs.</p></div>
+        <div><h2 className="text-base font-bold text-slate-900">Lịch sử Merge Documents</h2><p className="text-xs text-slate-500">Mọi job merge — kể cả đã đóng UI giữa chừng — luôn mở lại được tại đây bằng jobId lưu trong database.</p></div>
         <button onClick={load} className="inline-flex items-center gap-1.5 rounded-lg border border-slate-200 bg-white px-3 py-2 text-xs font-semibold text-slate-700"><RefreshCw className="h-3.5 w-3.5" /> Làm mới</button>
       </div>
       {error && <div className="rounded-xl border border-red-200 bg-red-50 p-4 text-xs text-red-700">{error}</div>}
       {history.length === 0 ? <div className="rounded-xl border border-dashed border-slate-300 bg-white p-10 text-center text-sm text-slate-500">Chưa có lịch sử merge.</div> : (
         <div className="overflow-hidden rounded-xl border border-slate-200 bg-white shadow-xs">
           <ul className="divide-y divide-slate-100">
-            {history.map((job) => (
-              <li key={job.id} className="flex flex-col gap-3 p-4 sm:flex-row sm:items-center sm:justify-between">
-                <div>
-                  <div className="flex flex-wrap items-center gap-2"><span className="text-sm font-bold text-slate-900">{job.templateNameSnapshot || "Template không tên"}</span><span className={`rounded-full px-2 py-0.5 text-[10px] font-bold ${job.status === "COMPLETED" ? "bg-emerald-50 text-emerald-700" : job.status === "FAILED" ? "bg-red-50 text-red-700" : "bg-amber-50 text-amber-700"}`}>{job.status}</span></div>
-                  <p className="mt-1 text-xs text-slate-500">{job.recordCount} hồ sơ · {job.createdBy} · {new Date(job.createdAt).toLocaleString("vi-VN")}</p>
-                </div>
-                <div className="flex items-center gap-2">
-                  {job.outputUrl && <a href={job.outputUrl} target="_blank" rel="noreferrer" className="inline-flex items-center gap-1 rounded-lg bg-emerald-50 px-3 py-2 text-xs font-semibold text-emerald-700"><ExternalLink className="h-3.5 w-3.5" /> Mở Google Docs</a>}
-                  {canDelete && (
-                    <button onClick={() => remove(job.id)} className="rounded-lg p-2 text-slate-400 hover:bg-red-50 hover:text-red-600"><Trash2 className="h-4 w-4" /></button>
+            {history.map((job) => {
+              const isOpen = openJobId === job.id;
+              return (
+                <li key={job.id}>
+                  <div className="flex flex-col gap-3 p-4 sm:flex-row sm:items-center sm:justify-between">
+                    <div>
+                      <div className="flex flex-wrap items-center gap-2">
+                        <span className="text-sm font-bold text-slate-900">{job.templateNameSnapshot || "Template không tên"}</span>
+                        <span className={`rounded-full px-2 py-0.5 text-[10px] font-bold ${job.status === "COMPLETED" ? "bg-emerald-50 text-emerald-700" : job.status === "FAILED" ? "bg-red-50 text-red-700" : "bg-amber-50 text-amber-700"}`}>{job.status}</span>
+                      </div>
+                      <p className="mt-1 text-xs text-slate-500">
+                        {job.completedRecords ?? 0}/{job.recordCount} hồ sơ hoàn tất
+                        {job.failedRecords > 0 ? ` · ${job.failedRecords} lỗi` : ""} · {job.createdBy} · {new Date(job.createdAt).toLocaleString("vi-VN")}
+                      </p>
+                    </div>
+                    <div className="flex items-center gap-2">
+                      <button
+                        onClick={() => setOpenJobId(isOpen ? null : job.id)}
+                        className="inline-flex items-center gap-1.5 rounded-lg bg-emerald-700 px-3 py-2 text-xs font-semibold text-white hover:bg-emerald-800"
+                      >
+                        {isOpen ? <ChevronUp className="h-3.5 w-3.5" /> : <ChevronDown className="h-3.5 w-3.5" />} {reopenLabel(job.status)}
+                      </button>
+                      {job.outputUrl && <a href={job.outputUrl} target="_blank" rel="noreferrer" className="inline-flex items-center gap-1 rounded-lg bg-emerald-50 px-3 py-2 text-xs font-semibold text-emerald-700"><ExternalLink className="h-3.5 w-3.5" /> Mở Google Docs</a>}
+                      {canDelete && (
+                        <button onClick={() => remove(job.id)} className="rounded-lg p-2 text-slate-400 hover:bg-red-50 hover:text-red-600"><Trash2 className="h-4 w-4" /></button>
+                      )}
+                    </div>
+                  </div>
+                  {isOpen && (
+                    <div className="border-t border-slate-100 bg-slate-50 p-4">
+                      <JobProgressPanel jobId={job.id} onClosed={() => setOpenJobId(null)} />
+                    </div>
                   )}
-                </div>
-              </li>
-            ))}
+                </li>
+              );
+            })}
           </ul>
         </div>
       )}
+
+      <CandidateDocumentsStatusPanel />
     </div>
   );
 }

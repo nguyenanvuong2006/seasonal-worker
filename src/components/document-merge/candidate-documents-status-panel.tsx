@@ -17,7 +17,7 @@
  */
 
 import { useCallback, useEffect, useRef, useState } from "react";
-import { RefreshCw, RotateCcw, Send, ShieldCheck, XCircle } from "lucide-react";
+import { Download, Eye, Printer, RefreshCw, RotateCcw, Send, ShieldCheck, XCircle } from "lucide-react";
 
 const STATUS_LABEL: Record<string, string> = {
   GENERATING: "ĐANG TẠO",
@@ -44,6 +44,11 @@ const STATUS_COLOR: Record<string, string> = {
 };
 
 const REVOCABLE = new Set(["READY", "ISSUED", "VIEWED"]);
+// A PDF exists (storageKey set) from READY onward — never for GENERATING/
+// FAILED. Staff can preview READY documents BEFORE issuing them, unlike the
+// candidate-facing route which requires ISSUED+ (see the pdf route's own
+// docblock for why the gate deliberately differs).
+const HAS_PDF_STATUSES = new Set(["READY", "ISSUED", "VIEWED", "CONFIRMED", "REVOKED", "SUPERSEDED", "EXPIRED"]);
 const FINALIZE_POLL_MS = 4000;
 
 type CandidateDocumentRow = {
@@ -239,6 +244,35 @@ export function CandidateDocumentsStatusPanel() {
                 <td className="py-1.5 pr-2 text-slate-500">{doc.confirmation ? doc.confirmation.receiptId : "—"}</td>
                 <td className="py-1.5 text-right">
                   <div className="flex justify-end gap-1">
+                    {HAS_PDF_STATUSES.has(doc.status) && (
+                      <>
+                        <a
+                          href={`/api/document-merge/candidate-documents/${doc.id}/pdf?mode=view`}
+                          target="_blank"
+                          rel="noreferrer"
+                          title="Xem PDF"
+                          className="inline-flex items-center gap-1 rounded-lg border border-slate-200 px-2 py-0.5 text-[10px] font-semibold text-slate-600 hover:bg-slate-50"
+                        >
+                          <Eye className="h-3 w-3" /> Xem
+                        </a>
+                        <a
+                          href={`/api/document-merge/candidate-documents/${doc.id}/pdf?mode=download`}
+                          title="Tải PDF"
+                          className="inline-flex items-center gap-1 rounded-lg border border-slate-200 px-2 py-0.5 text-[10px] font-semibold text-slate-600 hover:bg-slate-50"
+                        >
+                          <Download className="h-3 w-3" /> Tải
+                        </a>
+                        <a
+                          href={`/api/document-merge/candidate-documents/${doc.id}/pdf?mode=view`}
+                          target="_blank"
+                          rel="noreferrer"
+                          title="In PDF (mở PDF gốc — dùng nút In của trình xem PDF)"
+                          className="inline-flex items-center gap-1 rounded-lg border border-slate-200 px-2 py-0.5 text-[10px] font-semibold text-slate-600 hover:bg-slate-50"
+                        >
+                          <Printer className="h-3 w-3" /> In
+                        </a>
+                      </>
+                    )}
                     {doc.status === "READY" && (
                       <button
                         type="button"
