@@ -69,6 +69,7 @@ const LAYOUT_COMPACTION_SOURCE_NAME =
 const V20_SIGNATURE_SECTION7_MIGRATION = "2026-09-07-trainee-registration-v20-signature-and-section7-flow-draft.sql";
 const V20_SIGNATURE_SECTION7_SOURCE_NAME =
   "trainee-registration/v20-signature-and-section7-flow-draft (page 1 signature space +~10mm; section 7 flows naturally after section 6 instead of forcing a new page)";
+const V20_MANUAL_BREAK_MIGRATION = "2026-09-09-trainee-registration-v20-manual-page-break-margin-restore.sql";
 
 const CANONICAL_TEMPLATE_ID = "a1b2c3d4-e5f6-7890-abcd-ef1234567890";
 const CANONICAL_SOURCE_NAME =
@@ -282,6 +283,7 @@ test("HOTFIX-1: the runner list is exactly the known-safe, idempotent sequence",
     MARGINS_MIGRATION,
     LAYOUT_COMPACTION_MIGRATION,
     V20_SIGNATURE_SECTION7_MIGRATION,
+    V20_MANUAL_BREAK_MIGRATION,
   ]);
 });
 
@@ -324,9 +326,9 @@ test("PHASE 5 REGISTRATION: layout-compaction draft migration is present, dedupe
   assert.equal(inserts.length, 1, "exactly one INSERT into merge_template_versions");
 });
 
-test("PHASE 6 REGISTRATION: v20 signature/section7-flow draft migration is present, LAST, dedupe-guarded, and idempotent/non-destructive per the runner's own invariant checks", () => {
+test("PHASE 6 REGISTRATION: v20 signature/section7-flow draft migration is present, dedupe-guarded, and idempotent/non-destructive per the runner's own invariant checks", () => {
   const list = parseRunnerList();
-  assert.equal(list.at(-1), V20_SIGNATURE_SECTION7_MIGRATION, "must be registered so the official Production migration workflow actually runs it");
+  assert.ok(list.includes(V20_SIGNATURE_SECTION7_MIGRATION), "must be registered so the official Production migration workflow actually runs it");
   const sql = readRepoFile(`migrations/${V20_SIGNATURE_SECTION7_MIGRATION}`);
   assertNonDestructiveSql(`migrations/${V20_SIGNATURE_SECTION7_MIGRATION}`, sql);
   const code = stripSqlComments(sql);
@@ -337,6 +339,45 @@ test("PHASE 6 REGISTRATION: v20 signature/section7-flow draft migration is prese
   const inserts = code.match(/\bINSERT\s+INTO\s+merge_template_versions\b/gi) ?? [];
   assert.equal(inserts.length, 1, "exactly one INSERT into merge_template_versions");
   assert.ok(code.includes("keep-with-next-small"), "must reuse the existing shared keep-with-next-small utility, not invent a new break rule");
+});
+
+test("PHASE 7 REGISTRATION: v20 manual-page-break/margin-restore migration is present, LAST, idempotent/non-destructive, scoped to DRAFT + this exact row, never inserts a version", () => {
+  const list = parseRunnerList();
+  assert.equal(list.at(-1), V20_MANUAL_BREAK_MIGRATION, "must be registered so the official Production migration workflow actually runs it");
+  const sql = readRepoFile(`migrations/${V20_MANUAL_BREAK_MIGRATION}`);
+  assertNonDestructiveSql(`migrations/${V20_MANUAL_BREAK_MIGRATION}`, sql);
+  const code = stripSqlComments(sql);
+
+  // This is an in-place EDIT of the existing v20 row, never a new version.
+  const inserts = code.match(/\bINSERT\s+INTO\s+merge_template_versions\b/gi) ?? [];
+  assert.equal(inserts.length, 0, "must never INSERT a new version row (edits the existing v20 DRAFT in place, no v21)");
+  const updates = code.match(/\bUPDATE\s+merge_template_versions\b/gi) ?? [];
+  assert.equal(updates.length, 1, "exactly one UPDATE of the existing row");
+
+  // Scoped to DRAFT + this row's own source_docx_name — never PUBLISHED/ARCHIVED, never any other template's row.
+  assert.match(code, /WHERE\s+status\s*=\s*'DRAFT'/i, "must only ever touch a DRAFT row");
+  assert.ok(code.includes(V20_SIGNATURE_SECTION7_SOURCE_NAME), "must scope to the v20 row's own, stable source_docx_name");
+  assert.doesNotMatch(code, /current_published_version\s*=|UPDATE\s+merge_templates\b/i, "must never touch the template's published-version pointer");
+  assert.doesNotMatch(code, /\bmapping_snapshot\s*=|\bpublished_at\s*=|\bstatus\s*=\s*'PUBLISHED'/i, "must never publish or touch mapping_snapshot");
+
+  // Idempotency guard against double-inserting the marker div on a re-run.
+  assert.match(code, /NOT LIKE[\s\S]*manual-page-break/i, "must guard against re-applying the page-break insertion on a second run");
+
+  // Requested content: restores 10/10/12/12 margins, inserts the manual page break div/class exactly as specified.
+  assert.match(code, /margin_top_mm\s*=\s*10/i);
+  assert.match(code, /margin_bottom_mm\s*=\s*10/i);
+  assert.match(code, /margin_left_mm\s*=\s*12/i);
+  assert.match(code, /margin_right_mm\s*=\s*12/i);
+  assert.ok(code.includes('<div class="manual-page-break"></div>'));
+  // The SQL embeds this via an E'...' string literal with literal `\n`
+  // (backslash-n) escape sequences in the source text, not real newlines —
+  // match either form.
+  const WS = "(?:\\\\n|\\s)*";
+  assert.match(code, new RegExp(`\\.manual-page-break${WS}\\{${WS}break-before:${WS}page;${WS}page-break-before:${WS}always;${WS}\\}`));
+  assert.ok(code.includes("Phải đăng ký đầy đủ danh sách"), "must target item e specifically");
+
+  // No <br> spam / empty spacer simulation of pagination.
+  assert.doesNotMatch(code, /<br\s*\/?>/i);
 });
 
 test("HOTFIX-1: runner comments describe the REAL migration count", () => {
@@ -638,6 +679,11 @@ const MIGRATION_MODELS: Record<string, (state: DbState) => DbState> = {
   // DRAFT, never touches PUBLISHED/current_published_version — modelled
   // like the v7/v8/layout-compaction draft producers above.
   [V20_SIGNATURE_SECTION7_MIGRATION]: v20SignatureSection7Migration,
+  // v20 manual-page-break/margin-restore (Phase 7): in-place UPDATE of the
+  // EXISTING v20 row's html_body/print_css/margins — creates/removes/
+  // renames no version row, so from this model's perspective (which only
+  // tracks row existence, not content) it is a no-op, same as pure DDL.
+  [V20_MANUAL_BREAK_MIGRATION]: ddlMigration,
 };
 
 /** Re-run the recurring runner exactly as scripts/run-document-merge-migrations.mjs does. */
