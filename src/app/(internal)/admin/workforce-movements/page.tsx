@@ -8,6 +8,7 @@ import {
   Card,
   CardContent,
   CardHeader,
+  ConfirmDialog,
   EmptyState,
   FormField,
   Input,
@@ -69,6 +70,34 @@ const ACTION_TONE_CLASS: Record<string, string> = {
   gray: "bg-surface-hover text-fg-secondary hover:bg-border",
 };
 
+// BULK APPROVAL — eligibility is derived from the SAME lookup the single-row "Duyệt nghỉ
+// việc" button already uses (STATUS_ACTIONS[`${movementType}_${status}`]), never from any
+// display text. A row is bulk-selectable iff it currently exposes the canonical
+// APPROVE_RESIGNATION action — i.e. movementType="resignation" AND status="PENDING_HR" (the
+// only FROM status allowed by ALLOWED_ACTIONS in lib/workforce-movements.ts).
+function isEligibleForBulkApproval(m: Movement): boolean {
+  return (STATUS_ACTIONS[`${m.movementType}_${m.status}`] ?? []).some((a) => a.action === "APPROVE_RESIGNATION");
+}
+
+type BulkResultItem = { id: string; outcome: "APPROVED" | "ALREADY_APPROVED" | "NO_LONGER_ELIGIBLE" | "OUT_OF_SCOPE" | "FAILED"; reason?: string };
+type BulkResult = {
+  bulkOperationId: string;
+  requested: number;
+  approved: number;
+  alreadyApproved: number;
+  outOfScope: number;
+  noLongerEligible: number;
+  failed: number;
+  results: BulkResultItem[];
+};
+
+const BULK_OUTCOME_LABEL: Record<string, string> = {
+  ALREADY_APPROVED: "Đã được duyệt trước đó (bởi thao tác khác)",
+  OUT_OF_SCOPE: "Ngoài phạm vi Data Scope",
+  NO_LONGER_ELIGIBLE: "Không còn ở trạng thái chờ duyệt",
+  FAILED: "Lỗi xử lý",
+};
+
 function MovementListSkeleton() {
   return (
     <div className="divide-y divide-border">
@@ -98,6 +127,13 @@ export default function WorkforceMovementsPage() {
   const [saving, setSaving] = useState(false);
   const [searching, setSearching] = useState(false);
 
+  const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
+  const [bulkConfirmOpen, setBulkConfirmOpen] = useState(false);
+  const [bulkSaving, setBulkSaving] = useState(false);
+  const [bulkResult, setBulkResult] = useState<BulkResult | null>(null);
+  const [bulkResultLabels, setBulkResultLabels] = useState<Map<string, string>>(new Map());
+  const [bulkResultDetailOpen, setBulkResultDetailOpen] = useState(false);
+
   const [cccdSearch, setCccdSearch] = useState("");
   const [foundWorker, setFoundWorker] = useState<{ id: string; fullName: string; cccd: string; currentDeptId: string | null } | null>(null);
   const [form, setForm] = useState({ movementType: "resignation" as "resignation" | "transfer", toDeptId: "", effectiveDate: "", reason: "", note: "" });
@@ -114,8 +150,14 @@ export default function WorkforceMovementsPage() {
       }
       const movData = await movRes.json();
       const deptData = await deptRes.json();
-      setRows(movData.rows ?? []);
+      const freshRows: Movement[] = movData.rows ?? [];
+      setRows(freshRows);
       setDepts(deptData.rows ?? []);
+      // A selection must never keep pointing at a row that is no longer eligible after a
+      // refresh (approved by someone else in the meantime, rejected, etc.) — prune it against
+      // the freshly loaded canonical eligibility, same rule as isEligibleForBulkApproval.
+      const stillEligible = new Set(freshRows.filter(isEligibleForBulkApproval).map((m) => m.id));
+      setSelectedIds((prev) => new Set([...prev].filter((id) => stillEligible.has(id))));
     } catch {
       toast({ title: "Không kết nối được tới máy chủ — thử lại.", variant: "destructive" });
     } finally {
@@ -225,6 +267,55 @@ export default function WorkforceMovementsPage() {
     }
   };
 
+  // BULK APPROVAL (nghỉ việc hàng loạt) — chỉ áp dụng cho các dòng đang lộ nút "Duyệt nghỉ
+  // việc" đơn lẻ (xem isEligibleForBulkApproval). Danh sách KHÔNG phân trang (GET
+  // /api/workforce-movements trả tối đa 500 dòng trong 1 lần gọi, không có "load more") nên
+  // "Chọn tất cả đang chờ duyệt" chọn đúng và đủ mọi dòng hợp lệ ĐANG được tải — không có
+  // trang ẩn nào bị bỏ sót phía sau.
+  const eligibleIds = rows.filter(isEligibleForBulkApproval).map((m) => m.id);
+  const allEligibleSelected = eligibleIds.length > 0 && eligibleIds.every((id) => selectedIds.has(id));
+  const toggleSelected = (id: string) => {
+    setSelectedIds((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+  };
+  const toggleSelectAll = () => setSelectedIds(allEligibleSelected ? new Set() : new Set(eligibleIds));
+  const clearSelection = () => setSelectedIds(new Set());
+
+  const runBulkApprove = async () => {
+    const ids = [...selectedIds];
+    if (ids.length === 0) return;
+    // Chụp tên lao động TRƯỚC khi load() làm mới danh sách — dùng để hiển thị "Xem chi tiết"
+    // dễ đọc hơn id thô, không ảnh hưởng gì tới việc server tự xác định lại toàn bộ (server
+    // không nhận tên/trạng thái từ đây, chỉ nhận requestIds).
+    setBulkResultLabels(new Map(rows.map((m) => [m.id, m.workerName ?? m.workerCccd ?? m.id])));
+    setBulkSaving(true);
+    try {
+      const res = await fetch("/api/workforce-movements/bulk-approve-resignation", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ requestIds: ids }),
+      });
+      const d = await res.json();
+      if (!res.ok) {
+        toast({ title: d.error ?? "Không duyệt được hàng loạt.", variant: "destructive" });
+        return;
+      }
+      setBulkConfirmOpen(false);
+      setBulkResult(d);
+      setBulkResultDetailOpen(false);
+      setSelectedIds(new Set());
+      await load();
+    } catch {
+      toast({ title: "Không kết nối được tới máy chủ — thử lại.", variant: "destructive" });
+    } finally {
+      setBulkSaving(false);
+    }
+  };
+
   return (
     <div className="space-y-5">
       <PageHeader
@@ -238,7 +329,23 @@ export default function WorkforceMovementsPage() {
       />
 
       <Card className="p-0">
-        <CardHeader title={`${rows.length} yêu cầu gần nhất`} />
+        <CardHeader
+          title={`${rows.length} yêu cầu gần nhất`}
+          right={
+            eligibleIds.length > 0 ? (
+              <label className="flex cursor-pointer items-center gap-2 text-[12.5px] font-medium text-fg-secondary">
+                <input
+                  type="checkbox"
+                  className="h-4 w-4 rounded border-border-strong"
+                  checked={allEligibleSelected}
+                  onChange={toggleSelectAll}
+                  aria-label="Chọn tất cả đang chờ duyệt"
+                />
+                Chọn tất cả đang chờ duyệt ({eligibleIds.length})
+              </label>
+            ) : null
+          }
+        />
         <CardContent className="p-0">
           {loading ? (
             <MovementListSkeleton />
@@ -252,6 +359,7 @@ export default function WorkforceMovementsPage() {
             <ul className="divide-y divide-border">
               {rows.map((m) => {
                 const actions = STATUS_ACTIONS[`${m.movementType}_${m.status}`] ?? [];
+                const eligible = isEligibleForBulkApproval(m);
                 return (
                   <li
                     key={m.id}
@@ -260,6 +368,20 @@ export default function WorkforceMovementsPage() {
                       m.id === highlightId && "bg-primary-tint ring-1 ring-inset ring-primary/30",
                     )}
                   >
+                    {/* Checkbox chỉ hiển thị cho dòng ĐANG hợp lệ để duyệt hàng loạt (không
+                        suy từ chữ hiển thị) — dòng khác (đã nghỉ việc, đã từ chối, thuyên
+                        chuyển, ...) không chọn được, giữ chỗ 20px để các dòng thẳng hàng. */}
+                    {eligible ? (
+                      <input
+                        type="checkbox"
+                        className="h-[18px] w-[18px] shrink-0 rounded border-border-strong"
+                        checked={selectedIds.has(m.id)}
+                        onChange={() => toggleSelected(m.id)}
+                        aria-label={`Chọn duyệt nghỉ việc cho ${m.workerName ?? m.workerCccd ?? m.id}`}
+                      />
+                    ) : (
+                      <span className="w-[18px] shrink-0" aria-hidden />
+                    )}
                     <Badge tone={m.movementType === "resignation" ? "red" : "blue"}>{m.movementType === "resignation" ? "Nghỉ việc" : "Thuyên chuyển"}</Badge>
                     <div className="min-w-[160px]">
                       <p className="font-semibold text-fg">{m.workerName ?? m.workerCccd}</p>
@@ -289,6 +411,101 @@ export default function WorkforceMovementsPage() {
           )}
         </CardContent>
       </Card>
+
+      {/* BULK ACTION BAR — chỉ khi có >=1 dòng đang chọn. Sticky đáy màn hình để dùng tốt trên
+          mobile (không cần cuộn xuống cuối danh sách) và vẫn gọn trên desktop; không tràn
+          ngang nhờ flex-wrap + max-width nội dung. */}
+      {selectedIds.size > 0 && (
+        <div className="sticky bottom-3 z-40 flex flex-wrap items-center gap-3 rounded-[14px] border border-border-strong bg-surface-raised p-3 shadow-lg">
+          <span className="text-[13px] font-semibold text-fg">Đã chọn: {selectedIds.size}</span>
+          <div className="ml-auto flex flex-wrap gap-2">
+            <Button variant="ghost" size="sm" onClick={clearSelection} disabled={bulkSaving}>
+              Bỏ chọn
+            </Button>
+            <Button variant="primary" size="sm" onClick={() => setBulkConfirmOpen(true)} disabled={bulkSaving}>
+              Duyệt nghỉ việc đã chọn ({selectedIds.size})
+            </Button>
+          </div>
+        </div>
+      )}
+
+      {/* MỘT xác nhận duy nhất cho toàn bộ lô — không hỏi lại từng người. */}
+      <ConfirmDialog
+        open={bulkConfirmOpen}
+        onClose={() => setBulkConfirmOpen(false)}
+        onConfirm={runBulkApprove}
+        title="Xác nhận duyệt nghỉ việc"
+        description={
+          <>
+            Bạn sắp duyệt nghỉ việc cho {selectedIds.size} người. Sau khi xác nhận, hệ thống sẽ xử lý từng hồ sơ theo quy trình
+            nghỉ việc hiện tại.
+          </>
+        }
+        confirmLabel={`Xác nhận duyệt ${selectedIds.size} người`}
+        loading={bulkSaving}
+      />
+
+      {/* KẾT QUẢ — 1 bản tóm tắt duy nhất, KHÔNG toast riêng cho từng người. */}
+      <Modal
+        open={!!bulkResult}
+        onClose={() => {
+          setBulkResult(null);
+          setBulkResultDetailOpen(false);
+        }}
+        title="Duyệt nghỉ việc hoàn tất"
+        width="max-w-md"
+      >
+        {bulkResult && (
+          <div className="space-y-3">
+            <dl className="grid grid-cols-2 gap-2 text-[13px]">
+              <div className="rounded-[10px] bg-surface-hover p-3">
+                <dt className="text-fg-muted">Đã chọn</dt>
+                <dd className="text-lg font-semibold text-fg">{bulkResult.requested}</dd>
+              </div>
+              <div className="rounded-[10px] bg-success-tint p-3">
+                <dt className="text-success">Thành công</dt>
+                <dd className="text-lg font-semibold text-success">{bulkResult.approved}</dd>
+              </div>
+              <div className="rounded-[10px] bg-surface-hover p-3">
+                <dt className="text-fg-muted">Bỏ qua</dt>
+                <dd className="text-lg font-semibold text-fg-secondary">
+                  {bulkResult.alreadyApproved + bulkResult.outOfScope + bulkResult.noLongerEligible}
+                </dd>
+              </div>
+              <div className="rounded-[10px] bg-danger-tint p-3">
+                <dt className="text-danger">Lỗi</dt>
+                <dd className="text-lg font-semibold text-danger">{bulkResult.failed}</dd>
+              </div>
+            </dl>
+            {bulkResult.results.some((r) => r.outcome !== "APPROVED") && (
+              <div>
+                <button
+                  type="button"
+                  className="text-[12.5px] font-semibold text-primary underline underline-offset-2"
+                  onClick={() => setBulkResultDetailOpen((v) => !v)}
+                >
+                  {bulkResultDetailOpen ? "Ẩn chi tiết" : "Xem chi tiết"}
+                </button>
+                {bulkResultDetailOpen && (
+                  <ul className="mt-2 max-h-56 space-y-1.5 overflow-y-auto rounded-[10px] border border-border p-2.5 text-[12.5px]">
+                    {bulkResult.results
+                      .filter((r) => r.outcome !== "APPROVED")
+                      .map((r) => (
+                        <li key={r.id} className="flex flex-col">
+                          <span className="font-medium text-fg">{bulkResultLabels.get(r.id) ?? r.id}</span>
+                          <span className="text-fg-muted">
+                            {BULK_OUTCOME_LABEL[r.outcome] ?? r.outcome}
+                            {r.reason ? ` — ${r.reason}` : ""}
+                          </span>
+                        </li>
+                      ))}
+                  </ul>
+                )}
+              </div>
+            )}
+          </div>
+        )}
+      </Modal>
 
       <Modal open={createOpen} onClose={() => setCreateOpen(false)} title="Tạo yêu cầu Nghỉ việc / Thuyên chuyển" width="max-w-xl">
         <div className="space-y-4">
