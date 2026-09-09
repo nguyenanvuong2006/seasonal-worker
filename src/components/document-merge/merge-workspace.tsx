@@ -18,6 +18,7 @@ import {
 } from "lucide-react";
 import {
   documentKindLabel,
+  hasDwClassificationSignal,
   resolveDocumentKind,
   resolveDwClassification,
 } from "@/lib/document-merge/template-routing";
@@ -141,6 +142,50 @@ function daysAgo(n: number): string {
   const date = new Date();
   date.setDate(date.getDate() - n);
   return date.toISOString().slice(0, 10);
+}
+
+/** Default browsing window for the Document Merge candidate list — search bypasses this (see /api/registrations's q handling). */
+const CANDIDATE_LIST_WINDOW_DAYS = 30;
+
+function mapApplicantRows(rows: unknown): ApplicantRow[] {
+  const list = Array.isArray(rows) ? (rows as ApplicantRow[]) : [];
+  return list.map((item) => ({
+    id: item.id,
+    fullName: item.fullName,
+    cccd: item.cccd,
+    phone: item.phone,
+    gender: item.gender,
+    declaredType: item.declaredType,
+    dwMatch: item.dwMatch,
+    deptName: item.deptName,
+    groupName: item.groupName,
+    status: item.status,
+    startingDate: item.startingDate,
+    mergedDocUrl: item.mergedDocUrl,
+    documentSentAt: item.documentSentAt,
+    signatureConfirmedAt: item.signatureConfirmedAt,
+  }));
+}
+
+/**
+ * Both /api/document-merge/jobs and /api/document-merge/merge/execute now
+ * return jobs[] (Auto Route may create one job per DW Cũ/Mới group) plus a
+ * back-compat top-level jobId (the first group). Prefer jobs[] so a
+ * multi-group submit shows a Progress panel for EVERY group, not just one.
+ */
+function applyJobIds(data: { jobId?: string; jobs?: { jobId: string }[] }): string[] {
+  if (Array.isArray(data.jobs) && data.jobs.length > 0) return data.jobs.map((j) => j.jobId);
+  return data.jobId ? [data.jobId] : [];
+}
+
+/** Resolve unresolved[] (recordId only) against the loaded candidate list for display. */
+function applyUnresolved(
+  data: { unresolved?: { recordId: string }[] },
+  records: ApplicantRow[],
+): { recordId: string; fullName: string }[] {
+  if (!Array.isArray(data.unresolved) || data.unresolved.length === 0) return [];
+  const byId = new Map(records.map((r) => [r.id, r]));
+  return data.unresolved.map((u) => ({ recordId: u.recordId, fullName: byId.get(u.recordId)?.fullName ?? u.recordId }));
 }
 
 function isMappedField(field: MergeField): boolean {
@@ -597,7 +642,14 @@ export function MergeWorkspace({
   const [diagnostic, setDiagnostic] = useState<Diagnostic | null>(null);
   // --- Async engines — Phase 11 + GOOGLE_DOCS async worker (sự cố 28–29/08) ---
   const [engine, setEngine] = useState<"GOOGLE_DOCS" | "HTML_PDF">("GOOGLE_DOCS");
-  const [activeJobId, setActiveJobId] = useState<string | null>(null);
+  // Auto Route (DW Cũ vs DW Mới) can create MORE THAN ONE job — one per
+  // group — so every job created by the latest submit is tracked here, not
+  // just a single id. Order is preserved (DW Cũ/Mới in whichever order the
+  // server created them) so each gets its own Progress panel below.
+  const [activeJobIds, setActiveJobIds] = useState<string[]>([]);
+  // Auto Route only — candidates from the latest submit with no DW
+  // classification signal at all (never silently dropped — see async-job.ts).
+  const [unresolvedDw, setUnresolvedDw] = useState<{ recordId: string; fullName: string }[]>([]);
   // --- Cá nhân hoá + Xác nhận điện tử: "Tạo & gửi hồ sơ xác nhận" ---
   const [issuing, setIssuing] = useState(false);
   const [issueError, setIssueError] = useState<string | null>(null);
@@ -625,45 +677,58 @@ export function MergeWorkspace({
 
   useEffect(() => {
     setLoadingRecords(true);
-    const from = daysAgo(14);
+    const from = daysAgo(CANDIDATE_LIST_WINDOW_DAYS);
     fetch(`/api/registrations?from=${from}&to=${daysAgo(0)}&assigned=1`)
       .then((res) => res.json())
       .then((data) => {
-        const list = Array.isArray(data?.rows) ? data.rows : [];
-        setRecords(
-          list.map((item: ApplicantRow) => ({
-            id: item.id,
-            fullName: item.fullName,
-            cccd: item.cccd,
-            phone: item.phone,
-            gender: item.gender,
-            declaredType: item.declaredType,
-            dwMatch: item.dwMatch,
-            deptName: item.deptName,
-            groupName: item.groupName,
-            status: item.status,
-            startingDate: item.startingDate,
-            mergedDocUrl: item.mergedDocUrl,
-            documentSentAt: item.documentSentAt,
-            signatureConfirmedAt: item.signatureConfirmedAt,
-          })),
-        );
+        setRecords(mapApplicantRows(data?.rows));
         setSelectedIds(new Set());
       })
       .catch(() => setRecords([]))
       .finally(() => setLoadingRecords(false));
   }, []);
 
-  const filtered = useMemo(() => {
-    const q = searchTerm.toLowerCase().trim();
-    if (!q) return records;
-    return records.filter(
-      (row) =>
-        row.fullName.toLowerCase().includes(q) ||
-        row.cccd.toLowerCase().includes(q) ||
-        (row.phone && row.phone.includes(q)),
-    );
-  }, [records, searchTerm]);
+  // SEARCH must cover the full eligible historical dataset — the 30-day
+  // window above is only the DEFAULT browsing list, never a hard limit on
+  // search (a candidate merged/registered before that window must still be
+  // findable by name/CCCD/phone/mã số). Debounced server-side search via
+  // /api/registrations?q=... (which itself drops the date filter when q is
+  // present — see that route). searchResults === null means "not searching,
+  // show the default 30-day list"; searching an empty string clears it.
+  const [searchResults, setSearchResults] = useState<ApplicantRow[] | null>(null);
+  const [searching, setSearching] = useState(false);
+  const searchSeq = useRef(0);
+  useEffect(() => {
+    const term = searchTerm.trim();
+    if (!term) {
+      setSearchResults(null);
+      setSearching(false);
+      return;
+    }
+    const seq = ++searchSeq.current;
+    setSearching(true);
+    const timer = setTimeout(() => {
+      fetch(`/api/registrations?q=${encodeURIComponent(term)}&assigned=1`)
+        .then((res) => res.json())
+        .then((data) => {
+          if (seq !== searchSeq.current) return;
+          setSearchResults(mapApplicantRows(data?.rows));
+        })
+        .catch(() => {
+          if (seq === searchSeq.current) setSearchResults([]);
+        })
+        .finally(() => {
+          if (seq === searchSeq.current) setSearching(false);
+        });
+    }, 300);
+    return () => clearTimeout(timer);
+  }, [searchTerm]);
+
+  // Search is server-side (see the effect above) and covers the full
+  // eligible historical dataset, not just the default 30-day window —
+  // searchResults !== null means "showing search results", never a
+  // client-side substring filter over the narrow default list.
+  const filtered = searchResults ?? records;
 
   const selectedTemplate = templates.find((item) => item.id === templateId);
   const selectedRecord = records.find((item) => item.id === previewTargetId) ?? records.find((item) => selectedIds.has(item.id));
@@ -674,13 +739,12 @@ export function MergeWorkspace({
     ? templates.find((item) => item.isActive && item.documentKind === selectedKind)
     : undefined;
   const effectiveTemplate = autoRoute ? routedTemplate : selectedTemplate;
-  // HTML/PDF uses an immutable published version of the template the operator
-  // selected. Do not silently auto-route a legal PDF to a different version.
-  const templateReady = engine === "HTML_PDF" ? Boolean(selectedTemplate) : autoRoute || Boolean(selectedTemplate);
-
-  useEffect(() => {
-    if (engine === "HTML_PDF" && autoRoute) setAutoRoute(false);
-  }, [engine, autoRoute]);
+  // Auto Route resolves each record to exactly one active template (DW Cũ ->
+  // Tài liệu A, DW Mới -> Tài liệu B) before any job is created — the SAME
+  // immutable-published-version snapshot guarantee a manually-selected
+  // template already has (see async-job.ts / merge/execute route). No
+  // engine-specific restriction needed here anymore.
+  const templateReady = autoRoute || Boolean(selectedTemplate);
 
   const toggleAll = () => {
     if (selectedIds.size === filtered.length && filtered.length > 0) {
@@ -831,7 +895,7 @@ export function MergeWorkspace({
       const outputUrl = await waitForMergeJobOutput(data.jobId);
       if (!outputUrl) {
         alert("Google Doc đang được tạo bởi worker — mở bảng tiến độ/lịch sử merge để xem kết quả trong giây lát.");
-        setActiveJobId(data.jobId);
+        setActiveJobIds([data.jobId]);
         return;
       }
       window.open(outputUrl, "_blank", "noopener");
@@ -896,7 +960,8 @@ export function MergeWorkspace({
     setIsMerging(true);
     setMergeError(null);
     setDiagnostic(null);
-    setActiveJobId(null);
+    setActiveJobIds([]);
+    setUnresolvedDw([]);
     try {
       // Cả 2 engine giờ đều ASYNC (GOOGLE_DOCS chạy trên Cloud Run worker từ
       // sự cố 28–29/08): POST tạo durable job rồi trả jobId ngay — Progress
@@ -925,7 +990,10 @@ export function MergeWorkspace({
           });
           return;
         }
-        setActiveJobId(data.jobId);
+        // Auto Route may have created MORE THAN ONE job — one per DW Cũ/Mới
+        // group. jobs[] always has at least the primary jobId in it.
+        setActiveJobIds(applyJobIds(data));
+        setUnresolvedDw(applyUnresolved(data, records));
         return;
       }
 
@@ -954,8 +1022,10 @@ export function MergeWorkspace({
         });
         return;
       }
-      // Durable async job — Progress UI poll tới khi worker hoàn tất.
-      setActiveJobId(data.jobId);
+      // Durable async job — Progress UI poll tới khi worker hoàn tất. Auto
+      // Route may have created MORE THAN ONE job (one per DW Cũ/Mới group).
+      setActiveJobIds(applyJobIds(data));
+      setUnresolvedDw(applyUnresolved(data, records));
     } catch (error) {
       setDiagnostic({
         code: "MERGE_NETWORK_ERROR",
@@ -977,12 +1047,20 @@ export function MergeWorkspace({
         </p>
       </div>
 
-      {activeJobId && (
+      {activeJobIds.length > 0 && (
         <>
-          <JobProgressPanel
-            jobId={activeJobId}
-            onClosed={() => setActiveJobId(null)}
-          />
+          {activeJobIds.length > 1 && (
+            <p className="text-xs font-semibold text-emerald-800">
+              Auto Route đã tạo {activeJobIds.length} file merge riêng biệt (mỗi nhóm DW một file) — theo dõi từng file bên dưới.
+            </p>
+          )}
+          {activeJobIds.map((jobId) => (
+            <JobProgressPanel
+              key={jobId}
+              jobId={jobId}
+              onClosed={() => setActiveJobIds((ids) => ids.filter((id) => id !== jobId))}
+            />
+          ))}
           <button
             type="button"
             onClick={onSwitchToHistory}
@@ -993,6 +1071,21 @@ export function MergeWorkspace({
         </>
       )}
 
+      {unresolvedDw.length > 0 && (
+        <div className="flex items-start gap-2 rounded-xl border border-amber-200 bg-amber-50 p-3 text-xs text-amber-800">
+          <AlertCircle className="mt-0.5 h-4 w-4 shrink-0" />
+          <div>
+            <p className="font-bold">Chưa xác định phân loại DW cho {unresolvedDw.length} ứng viên — không được đưa vào file nào:</p>
+            <ul className="mt-1 list-disc pl-4">
+              {unresolvedDw.map((u) => (
+                <li key={u.recordId}>{u.fullName}</li>
+              ))}
+            </ul>
+            <p className="mt-1">Chọn template cố định cho những ứng viên này để xử lý thủ công.</p>
+          </div>
+        </div>
+      )}
+
       {diagnostic && <DiagnosticBox diagnostic={diagnostic} />}
       {mergeError && !diagnostic && (
         <div className="flex items-start gap-2 rounded-xl border border-red-200 bg-red-50 p-3 text-xs text-red-700">
@@ -1001,10 +1094,22 @@ export function MergeWorkspace({
       )}
 
       {selectedRecord && (
-        <div className={`rounded-xl border p-4 text-xs ${effectiveTemplate ? "border-emerald-200 bg-emerald-50/60" : "border-amber-200 bg-amber-50"}`}>
+        <div
+          className={`rounded-xl border p-4 text-xs ${
+            autoRoute && !hasDwClassificationSignal({ declaredType: selectedRecord.declaredType, dwMatch: selectedRecord.dwMatch })
+              ? "border-red-200 bg-red-50"
+              : effectiveTemplate
+                ? "border-emerald-200 bg-emerald-50/60"
+                : "border-amber-200 bg-amber-50"
+          }`}
+        >
           <p className="font-bold text-slate-900">Template thực tế sẽ được sử dụng</p>
           <p className="mt-1 text-slate-700">
-            {autoRoute ? (
+            {autoRoute && !hasDwClassificationSignal({ declaredType: selectedRecord.declaredType, dwMatch: selectedRecord.dwMatch }) ? (
+              <>
+                <b>Chưa xác định phân loại DW</b> — hồ sơ không có dwMatch/declaredType. Sẽ không được đưa vào file merge nào; chọn template cố định để xử lý thủ công.
+              </>
+            ) : autoRoute ? (
               <>
                 {resolveDwClassification({ declaredType: selectedRecord.declaredType, dwMatch: selectedRecord.dwMatch }) === "OLD" ? "DW Cũ" : "DW Mới"}
                 {" → "}Tài liệu {selectedKind ?? "—"}{" → "}
@@ -1033,16 +1138,13 @@ export function MergeWorkspace({
             <input
               type="checkbox"
               checked={autoRoute}
-              disabled={engine === "HTML_PDF"}
               onChange={(e) => setAutoRoute(e.target.checked)}
-              className="mt-0.5 disabled:cursor-not-allowed"
+              className="mt-0.5"
             />
             <span>
               <b>Auto Route theo phân loại DW (tùy chọn)</b>
               <span className="mt-0.5 block text-[11px] text-slate-500">
-                {engine === "HTML_PDF"
-                  ? "HTML/PDF yêu cầu mẫu cố định được chọn rõ ràng để snapshot đúng phiên bản và contract."
-                  : "Tắt mặc định: dùng đúng template bạn chọn. Bật: DW Cũ → Tài liệu A, DW Mới → Tài liệu B."}
+                Tắt mặc định: dùng đúng template bạn chọn. Bật: hệ thống tự tách DW Cũ → Tài liệu A và DW Mới → Tài liệu B thành 2 file merge riêng biệt (mỗi nhóm 1 file). Ứng viên chưa xác định được phân loại DW sẽ được liệt kê riêng để xử lý thủ công, không bị bỏ sót.
               </span>
             </span>
           </label>
@@ -1065,8 +1167,21 @@ export function MergeWorkspace({
 
           <div className="relative">
             <Search className="absolute left-3 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-slate-400" />
-            <input value={searchTerm} onChange={(e) => setSearchTerm(e.target.value)} placeholder="Tìm họ tên / CCCD / SĐT" className="w-full rounded-lg border border-slate-200 py-1.5 pl-8 pr-3 text-xs" />
+            <input
+              value={searchTerm}
+              onChange={(e) => setSearchTerm(e.target.value)}
+              placeholder="Tìm họ tên / CCCD / SĐT / mã số — kể cả ứng viên cũ hơn 30 ngày"
+              className="w-full rounded-lg border border-slate-200 py-1.5 pl-8 pr-3 text-xs"
+            />
           </div>
+
+          <p className="text-[11px] text-slate-500">
+            {searchResults !== null
+              ? searching
+                ? "Đang tìm trong toàn bộ dữ liệu..."
+                : `Tìm thấy ${filtered.length} ứng viên phù hợp (toàn bộ dữ liệu, không giới hạn 30 ngày).`
+              : `Hiển thị ${filtered.length} ứng viên trong ${CANDIDATE_LIST_WINDOW_DAYS} ngày gần nhất, mới nhất trước.`}
+          </p>
 
           <div className="flex items-center justify-between text-[11px]">
             <button type="button" onClick={toggleAll} className="font-semibold text-emerald-800">
@@ -1076,10 +1191,14 @@ export function MergeWorkspace({
           </div>
 
           <div className="max-h-[460px] overflow-y-auto rounded-lg border border-slate-100">
-            {loadingRecords ? (
-              <p className="p-6 text-center text-xs text-slate-400">Đang tải ứng viên đã xếp việc...</p>
+            {loadingRecords || searching ? (
+              <p className="p-6 text-center text-xs text-slate-400">{searching ? "Đang tìm ứng viên..." : "Đang tải ứng viên đã xếp việc..."}</p>
             ) : filtered.length === 0 ? (
-              <p className="p-6 text-center text-xs text-slate-500">Không có ứng viên đã xếp việc (có bộ phận) trong 14 ngày gần đây.</p>
+              <p className="p-6 text-center text-xs text-slate-500">
+                {searchResults !== null
+                  ? "Không tìm thấy ứng viên phù hợp."
+                  : `Không có ứng viên đã xếp việc (có bộ phận) trong ${CANDIDATE_LIST_WINDOW_DAYS} ngày gần đây.`}
+              </p>
             ) : (
               <table className="w-full text-left text-xs">
                 <thead className="sticky top-0 bg-slate-50 text-[10px] uppercase tracking-wider text-slate-500">
@@ -1089,6 +1208,7 @@ export function MergeWorkspace({
                   {filtered.map((row) => {
                     const kind = resolveDocumentKind({ declaredType: row.declaredType, dwMatch: row.dwMatch });
                     const dw = resolveDwClassification({ declaredType: row.declaredType, dwMatch: row.dwMatch });
+                    const dwUnknown = !hasDwClassificationSignal({ declaredType: row.declaredType, dwMatch: row.dwMatch });
                     const selected = selectedIds.has(row.id);
                     const rowTemplate = autoRoute
                       ? templates.find((item) => item.isActive && item.documentKind === kind)
@@ -1118,13 +1238,19 @@ export function MergeWorkspace({
                         </td>
                         <td className="px-3 py-2">
                           {autoRoute ? (
-                            <>
-                              <span className={`inline-flex rounded-full px-2 py-0.5 text-[10px] font-bold ${dw === "OLD" ? "bg-sky-100 text-sky-800" : "bg-amber-100 text-amber-800"}`}>{dw === "OLD" ? "DW Cũ" : "DW Mới"}</span>
-                              <div className="mt-1 text-[10px] font-semibold text-slate-600">Tài liệu {kind}</div>
-                              <div className={`mt-0.5 max-w-[150px] truncate text-[9px] ${rowTemplate ? "text-emerald-700" : "text-red-600"}`} title={rowTemplate?.name}>
-                                {rowTemplate?.name ?? "Chưa cấu hình mẫu"}
-                              </div>
-                            </>
+                            dwUnknown ? (
+                              <span className="inline-flex rounded-full bg-red-100 px-2 py-0.5 text-[10px] font-bold text-red-700" title="Không có dwMatch/declaredType — chọn template cố định để xử lý thủ công">
+                                Chưa xác định phân loại DW
+                              </span>
+                            ) : (
+                              <>
+                                <span className={`inline-flex rounded-full px-2 py-0.5 text-[10px] font-bold ${dw === "OLD" ? "bg-sky-100 text-sky-800" : "bg-amber-100 text-amber-800"}`}>{dw === "OLD" ? "DW Cũ" : "DW Mới"}</span>
+                                <div className="mt-1 text-[10px] font-semibold text-slate-600">Tài liệu {kind}</div>
+                                <div className={`mt-0.5 max-w-[150px] truncate text-[9px] ${rowTemplate ? "text-emerald-700" : "text-red-600"}`} title={rowTemplate?.name}>
+                                  {rowTemplate?.name ?? "Chưa cấu hình mẫu"}
+                                </div>
+                              </>
+                            )
                           ) : (
                             <div className={`max-w-[180px] truncate text-[10px] font-semibold ${selectedTemplate ? "text-emerald-700" : "text-amber-700"}`} title={selectedTemplate?.name}>
                               {selectedTemplate?.name ?? "Chưa chọn template"}

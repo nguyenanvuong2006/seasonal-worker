@@ -38,6 +38,24 @@ export function resolveDwClassification(input: ApplicantClassificationInput): Dw
   return isReturningWorker(input) ? "OLD" : "NEW";
 }
 
+/**
+ * True when there is at least one real signal (dwMatch or declaredType) to
+ * classify DW Cũ/Mới from. resolveDwClassification() above is intentionally
+ * total (always returns OLD or NEW, defaulting empty input to NEW) because
+ * every OTHER caller (Preview, manual template selection, single-record
+ * merge) needs a template to render even with sparse data. Auto Route is
+ * different: it silently DEFAULTS an unclassifiable candidate into the DW
+ * Mới group unless this check gates it first — used ONLY by the auto-route
+ * planning path (async-job.ts) and the UI badge that shows "Chưa xác định
+ * phân loại DW" for such a candidate, never by resolveDwClassification/
+ * resolveDocumentKind/selectTemplateForApplicant themselves.
+ */
+export function hasDwClassificationSignal(input: ApplicantClassificationInput): boolean {
+  const match = String(input.dwMatch ?? "").trim();
+  const declared = String(input.declaredType ?? "").trim();
+  return match.length > 0 || declared.length > 0;
+}
+
 export function resolveDocumentKind(input: ApplicantClassificationInput): Exclude<DocumentKind, "GENERIC"> {
   return resolveDwClassification(input) === "OLD" ? "A" : "B";
 }

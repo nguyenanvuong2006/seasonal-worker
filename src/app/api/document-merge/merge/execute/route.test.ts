@@ -291,6 +291,182 @@ test("ASYNC — NO Google module is imported or called in-request (zero Google w
   assert.equal(res.status, 202);
 });
 
+// AUTO ROUTE — GOOGLE_DOCS must split selected DW Cũ / DW Mới records into
+// SEPARATE jobs (one merged output per group), never one job mixing both.
+const TEMPLATE_A = { id: "tpl-a", name: "Tài liệu A", isActive: true, googleDocId: "gdoc-a", outputFolderId: "folder-a", documentKind: "A" };
+const TEMPLATE_B = { id: "tpl-b", name: "Tài liệu B", isActive: true, googleDocId: "gdoc-b", outputFolderId: "folder-b", documentKind: "B" };
+
+function loadAutoRoutePost(opts: {
+  events: string[];
+  applications: { id: string; declaredType: string; dwMatch: string }[];
+}): { POST: (r: Request) => Promise<RoutePostResult>; db: FakeDb } {
+  const events = opts.events;
+  const insertedJobs: Record<string, unknown>[] = [];
+  const db: FakeDb = createFakeDb({
+    respond: (call: QueryCall) => {
+      if (call.root === "select" && call.table === "merge_templates") return [TEMPLATE_A, TEMPLATE_B];
+      if (call.root === "select" && call.table === "daily_applications") {
+        return opts.applications.map((a) => ({ application: { id: a.id }, deptName: null }));
+      }
+      if (call.root === "select" && call.table === "merge_template_fields") return [FIELD_ROW];
+      if (call.root === "insert" && call.table === "merge_jobs") {
+        const values = (call.ops.find((o) => o.fn === "values")?.args[0] ?? {}) as Record<string, unknown>;
+        const id = `job-${insertedJobs.length + 1}`;
+        insertedJobs.push({ id, ...values });
+        events.push("insert-merge-jobs");
+        return [{ id }];
+      }
+      if (call.root === "insert" && call.table === "merge_job_records") {
+        events.push("insert-merge-job-records");
+        return [];
+      }
+      return undefined;
+    },
+  });
+
+  const byId = new Map(opts.applications.map((a) => [a.id, a]));
+  const stubs: Record<string, unknown> = {
+    "next/server": {
+      NextResponse: { json: (body: unknown, init?: { status?: number }) => ({ status: init?.status ?? 200, body }) },
+    },
+    "drizzle-orm": drizzleStub,
+    "@/lib/auth": {
+      requirePermission: async () => ({
+        ok: true,
+        status: 200,
+        session: { id: "user-1", username: "hr", fullName: "HR Staff", role: "HR_RECRUITER" },
+      }),
+      writeAudit: async () => undefined,
+    },
+    "@/db": { db },
+    "@/db/schema": schemaStub,
+    "@/lib/document-merge/data-resolver": {
+      resolveAllFields: () => ({}),
+      validateRequiredFields: () => ({ missingFields: [] }),
+    },
+    "@/lib/document-merge/preview-merge": {
+      applyFallbackPlaceholders: (_data: unknown, mapped: Record<string, string>) => ({ ...mapped }),
+      buildPreviewContent: (content: string) => ({ content }),
+    },
+    "@/lib/document-merge/applicant-record": {
+      buildApplicantMergeRecord: ({ application }: { application: { id: string } }) => {
+        const a = byId.get(application.id)!;
+        return { id: a.id, fullName: `Ung vien ${a.id}`, declaredType: a.declaredType, dwMatch: a.dwMatch };
+      },
+    },
+    "@/lib/document-merge/template-routing": {
+      documentKindLabel: (k: string) => String(k),
+      hasDwClassificationSignal: (input: { declaredType: string; dwMatch: string }) =>
+        Boolean(input.dwMatch?.trim() || input.declaredType?.trim()),
+      selectTemplateForApplicant: (_templates: unknown[], input: { declaredType: string; dwMatch: string }) => {
+        if (input.dwMatch === "MATCHED" || input.declaredType === "OLD") return { template: TEMPLATE_A, kind: "A" };
+        return { template: TEMPLATE_B, kind: "B" };
+      },
+    },
+    "@/lib/document-merge/queue-types": { ITEM_STATUS: { QUEUED: "QUEUED", PROCESSING: "PROCESSING" } },
+    "@/lib/document-merge/pre-merge-recovery": {
+      runPreMergeStaleRecovery: async () => {
+        events.push("pre-merge-recovery");
+        return { syncFailed: 0 };
+      },
+    },
+    "@/lib/document-merge/worker-trigger": {
+      triggerPdfWorker: (jobId: string) => events.push(`worker-trigger:${jobId}`),
+    },
+  };
+
+  const moduleObj = { exports: {} as Record<string, unknown> };
+  const context = vm.createContext({
+    module: moduleObj,
+    exports: moduleObj.exports,
+    require: (specifier: string): unknown => {
+      if (specifier in stubs) return stubs[specifier];
+      throw new Error(`Unexpected require("${specifier}") in merge/execute route`);
+    },
+    console,
+    process,
+    Date,
+    Promise,
+    JSON,
+    Object,
+    Array,
+    String,
+    Number,
+    Boolean,
+    Map,
+    Set,
+    Error,
+    Uint8Array,
+    Request,
+    Headers,
+    URL,
+    TextEncoder,
+    TextDecoder,
+  });
+  vm.runInContext(jsSource, context);
+
+  const POST = (moduleObj.exports as { POST: (r: Request) => Promise<RoutePostResult> }).POST;
+  return { POST, db };
+}
+
+test("AUTO ROUTE — GOOGLE_DOCS: both DW Cũ and DW Mới selected creates exactly 2 separate jobs (one merged output per group), no candidate duplicated or dropped", async () => {
+  const events: string[] = [];
+  const { POST } = loadAutoRoutePost({
+    events,
+    applications: [
+      { id: "old-1", declaredType: "OLD", dwMatch: "MATCHED" },
+      { id: "old-2", declaredType: "OLD", dwMatch: "MATCHED" },
+      { id: "new-1", declaredType: "NEW", dwMatch: "NO_MATCH" },
+    ],
+  });
+
+  const res = await POST(
+    mergeRequest({
+      templateId: undefined,
+      autoRoute: true,
+      records: { entityType: "daily_applications", recordIds: ["old-1", "old-2", "new-1"] },
+    }),
+  );
+
+  assert.equal(res.status, 202, JSON.stringify(res.body));
+  const jobs = res.body.jobs as { jobId: string; templateId: string; total: number }[];
+  assert.equal(jobs.length, 2, "exactly 2 output jobs/files — one per DW group");
+  const byTemplate = new Map(jobs.map((j) => [j.templateId, j]));
+  assert.equal(byTemplate.get("tpl-a")?.total, 2, "both DW Cũ records land in the SAME job");
+  assert.equal(byTemplate.get("tpl-b")?.total, 1, "the DW Mới record lands in its own job");
+  assert.equal(res.body.total, 3, "no candidate silently dropped");
+  assert.notEqual(jobs[0].jobId, jobs[1].jobId, "no candidate duplicated across two identical jobs");
+  assert.equal(events.filter((e) => e.startsWith("worker-trigger:")).length, 2, "each group's job triggers the worker independently");
+});
+
+test("AUTO ROUTE — GOOGLE_DOCS: a record with no dwMatch/declaredType signal is reported in unresolved[], never silently dropped or merged into a group", async () => {
+  const events: string[] = [];
+  const { POST } = loadAutoRoutePost({
+    events,
+    applications: [
+      { id: "old-1", declaredType: "OLD", dwMatch: "MATCHED" },
+      { id: "unknown-1", declaredType: "", dwMatch: "" },
+    ],
+  });
+
+  const res = await POST(
+    mergeRequest({
+      templateId: undefined,
+      autoRoute: true,
+      records: { entityType: "daily_applications", recordIds: ["old-1", "unknown-1"] },
+    }),
+  );
+
+  assert.equal(res.status, 202, JSON.stringify(res.body));
+  const jobs = res.body.jobs as { templateId: string; total: number }[];
+  assert.equal(jobs.length, 1);
+  assert.equal(jobs[0].total, 1, "only the classified record is queued");
+  const unresolved = res.body.unresolved as { recordId: string; reason: string }[];
+  assert.equal(unresolved.length, 1);
+  assert.equal(unresolved[0].recordId, "unknown-1");
+  assert.equal(unresolved[0].reason, "UNKNOWN_DW_CLASSIFICATION");
+});
+
 test("PREFLIGHT stays read-only: 200 valid, no job insert, no worker trigger", async () => {
   const events: string[] = [];
   const { POST, db } = loadPost({ events, recoveryImpl: async () => ({ syncFailed: 0 }) });
