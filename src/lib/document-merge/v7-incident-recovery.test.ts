@@ -70,6 +70,7 @@ const V20_SIGNATURE_SECTION7_MIGRATION = "2026-09-07-trainee-registration-v20-si
 const V20_SIGNATURE_SECTION7_SOURCE_NAME =
   "trainee-registration/v20-signature-and-section7-flow-draft (page 1 signature space +~10mm; section 7 flows naturally after section 6 instead of forcing a new page)";
 const V20_MANUAL_BREAK_MIGRATION = "2026-09-09-trainee-registration-v20-manual-page-break-margin-restore.sql";
+const DW_CU_CHECKBOX_MAPPING_FIX_MIGRATION = "2026-09-09-dw-cu-checkbox-option-mapping-fix.sql";
 
 const CANONICAL_TEMPLATE_ID = "a1b2c3d4-e5f6-7890-abcd-ef1234567890";
 const CANONICAL_SOURCE_NAME =
@@ -284,6 +285,7 @@ test("HOTFIX-1: the runner list is exactly the known-safe, idempotent sequence",
     LAYOUT_COMPACTION_MIGRATION,
     V20_SIGNATURE_SECTION7_MIGRATION,
     V20_MANUAL_BREAK_MIGRATION,
+    DW_CU_CHECKBOX_MAPPING_FIX_MIGRATION,
   ]);
 });
 
@@ -341,9 +343,9 @@ test("PHASE 6 REGISTRATION: v20 signature/section7-flow draft migration is prese
   assert.ok(code.includes("keep-with-next-small"), "must reuse the existing shared keep-with-next-small utility, not invent a new break rule");
 });
 
-test("PHASE 7 REGISTRATION: v20 manual-page-break/margin-restore migration is present, LAST, idempotent/non-destructive, scoped to DRAFT + this exact row, never inserts a version", () => {
+test("PHASE 7 REGISTRATION: v20 manual-page-break/margin-restore migration is present, idempotent/non-destructive, scoped to DRAFT + this exact row, never inserts a version", () => {
   const list = parseRunnerList();
-  assert.equal(list.at(-1), V20_MANUAL_BREAK_MIGRATION, "must be registered so the official Production migration workflow actually runs it");
+  assert.ok(list.includes(V20_MANUAL_BREAK_MIGRATION), "must be registered so the official Production migration workflow actually runs it");
   const sql = readRepoFile(`migrations/${V20_MANUAL_BREAK_MIGRATION}`);
   assertNonDestructiveSql(`migrations/${V20_MANUAL_BREAK_MIGRATION}`, sql);
   const code = stripSqlComments(sql);
@@ -378,6 +380,54 @@ test("PHASE 7 REGISTRATION: v20 manual-page-break/margin-restore migration is pr
 
   // No <br> spam / empty spacer simulation of pagination.
   assert.doesNotMatch(code, /<br\s*\/?>/i);
+});
+
+test("PHASE 8 REGISTRATION: DW cũ checkbox/option mapping fix migration is present, LAST, idempotent/non-destructive, scoped to DW cũ only, never touches DW mới or html_body/print_css", () => {
+  const list = parseRunnerList();
+  assert.equal(list.at(-1), DW_CU_CHECKBOX_MAPPING_FIX_MIGRATION, "must be registered so the official Production migration workflow actually runs it");
+  const sql = readRepoFile(`migrations/${DW_CU_CHECKBOX_MAPPING_FIX_MIGRATION}`);
+  assertNonDestructiveSql(`migrations/${DW_CU_CHECKBOX_MAPPING_FIX_MIGRATION}`, sql);
+  const code = stripSqlComments(sql);
+
+  // Pure UPDATE of existing rows — no version row is ever inserted or removed.
+  const inserts = code.match(/\bINSERT\s+INTO\s+merge_template_versions\b/gi) ?? [];
+  assert.equal(inserts.length, 0, "must never INSERT a new version row");
+  const fieldUpdates = code.match(/\bUPDATE\s+merge_template_fields\b/gi) ?? [];
+  assert.equal(fieldUpdates.length, 1, "exactly one UPDATE of merge_template_fields");
+  const versionUpdates = code.match(/\bUPDATE\s+merge_template_versions\b/gi) ?? [];
+  assert.equal(versionUpdates.length, 1, "exactly one UPDATE of merge_template_versions (mapping_snapshot regeneration)");
+
+  // Scoped strictly to DW cũ's own google_doc_id — never DW mới's.
+  const DW_CU_GOOGLE_DOC_ID = "1l3BpzoXcW2vvOa9gAZ0vF_kEGeq_U3NEvXdR8mwcYL4";
+  assert.ok(code.includes(DW_CU_GOOGLE_DOC_ID), "must scope to DW cũ's own google_doc_id");
+  const docIdOccurrences = code.match(new RegExp(DW_CU_GOOGLE_DOC_ID, "g")) ?? [];
+  assert.ok(docIdOccurrences.length >= 2, "both the fields UPDATE and the mapping_snapshot UPDATE must scope by DW cũ's google_doc_id");
+
+  // Never touches html_body/print_css or wording/layout — mapping-only fix.
+  assert.doesNotMatch(code, /\bhtml_body\s*=|\bprint_css\s*=/i, "must never modify html_body/print_css (no wording/layout change)");
+  assert.doesNotMatch(code, /UPDATE\s+merge_templates\b|current_published_version\s*=/i, "must never touch the template's published-version pointer");
+  // Never SETs status/published_at (may legitimately WHERE-filter by status='PUBLISHED' below).
+  assert.doesNotMatch(code, /\bSET[\s\S]{0,120}?\bstatus\s*=\s*'PUBLISHED'|\bpublished_at\s*=/i, "must never publish a version (edits the already-PUBLISHED row's mapping_snapshot in place)");
+
+  // Only PUBLISHED rows get their mapping_snapshot regenerated.
+  assert.match(code, /v\.status\s*=\s*'PUBLISHED'/i, "mapping_snapshot regeneration must be scoped to the PUBLISHED version only");
+
+  // The exact 22 checkbox placeholders reported as broken must all be re-mapped to CHECKBOX_OPTION.
+  const CHECKBOX_PLACEHOLDERS = [
+    "Cong_viec_hien_tai_Khac", "Cong_viec_hien_tai_Sinh_vien", "Da_tung_lam_DHF_Co", "Da_tung_lam_DHF_Khong",
+    "Khu_vuc_Da_Lat", "Khu_vuc_Da_Quy", "Khu_vuc_Da_Ron", "Khu_vuc_Khac", "Khu_vuc_Lam_Ha",
+    "Loai_cong_viec_Cong_nhan", "Loai_cong_viec_Lao_dong_tap_nghe", "Loai_cong_viec_Nhan_vien",
+    "TKNH_Chua_co", "TKNH_Da_co", "Tap_nghe_Ban_hang", "Tap_nghe_Dong_goi", "Tap_nghe_Khac",
+    "Tap_nghe_Trong_cham_soc_thu_hoach", "Thu_nhap_Chi_DHF", "Thu_nhap_Ngoai_DHF",
+    "Tien_an_tien_su_Co", "Tien_an_tien_su_Khong",
+  ];
+  assert.equal(CHECKBOX_PLACEHOLDERS.length, 22, "sanity: the reported placeholder set has exactly 22 entries");
+  for (const placeholder of CHECKBOX_PLACEHOLDERS) {
+    assert.ok(code.includes(`'${placeholder}'`), `must remap placeholder ${placeholder}`);
+  }
+  assert.match(code, /source_type\s*=\s*'CHECKBOX_OPTION'/i, "must set source_type to CHECKBOX_OPTION (the mechanism DW mới already uses)");
+
+  // Idempotent: setting the same 22 rows to the same values twice is a no-op end state — no dedupe guard needed for a pure UPDATE.
 });
 
 test("HOTFIX-1: runner comments describe the REAL migration count", () => {
@@ -684,6 +734,12 @@ const MIGRATION_MODELS: Record<string, (state: DbState) => DbState> = {
   // renames no version row, so from this model's perspective (which only
   // tracks row existence, not content) it is a no-op, same as pure DDL.
   [V20_MANUAL_BREAK_MIGRATION]: ddlMigration,
+  // DW cũ checkbox/option mapping fix (Phase 8): in-place UPDATE of 22
+  // existing merge_template_fields rows + in-place UPDATE of the existing
+  // PUBLISHED merge_template_versions row's mapping_snapshot — creates/
+  // removes/renames no version row, so from this model's perspective (which
+  // only tracks row existence, not content) it is a no-op, same as pure DDL.
+  [DW_CU_CHECKBOX_MAPPING_FIX_MIGRATION]: ddlMigration,
 };
 
 /** Re-run the recurring runner exactly as scripts/run-document-merge-migrations.mjs does. */
