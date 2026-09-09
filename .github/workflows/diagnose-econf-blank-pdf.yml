@@ -4,19 +4,28 @@ name: Diagnose Electronic-Confirmation Blank PDF — PRODUCTION
 # reported for the single authorized candidate_document
 # (9bd3e051-c9f5-48b7-b495-dd73db8a9340). Verifies whether the STORED
 # ARTIFACT itself is valid (exists, non-empty, valid PDF signature/structure,
-# sha256 matches). Never writes to the database, never uploads/regenerates a
-# PDF, never calls the candidate-facing PDF route (which would advance
-# ISSUED -> VIEWED on this real document).
+# sha256 matches) via both the local storage credential AND the new worker
+# fallback endpoint (POST /read-stored-pdf). Never writes to the database,
+# never uploads/regenerates a PDF, never calls the candidate-facing PDF
+# route (which would advance ISSUED -> VIEWED on this real document) — the
+# worker endpoint it verifies is a separate, session-less, status-mutation-
+# free artifact fetch.
 
 on:
   workflow_dispatch: {}
 
 permissions:
   contents: read
+  id-token: write
 
 concurrency:
   group: diagnose-econf-blank-pdf
   cancel-in-progress: false
+
+env:
+  REGION: ${{ vars.GCP_REGION || 'asia-southeast1' }}
+  PROJECT_ID: ${{ vars.GCP_PROJECT_ID }}
+  SERVICE: ${{ vars.GCP_RUN_SERVICE_PRODUCTION || 'seasonal-worker-pdf-production' }}
 
 jobs:
   diagnose:
@@ -34,6 +43,39 @@ jobs:
 
       - name: Install dependencies
         run: npm ci --no-audit --no-fund
+
+      - name: Authenticate to Google Cloud
+        uses: google-github-actions/auth@v2
+        with:
+          workload_identity_provider: ${{ secrets.GCP_WORKLOAD_IDENTITY_PROVIDER }}
+          service_account: ${{ secrets.GCP_SERVICE_ACCOUNT }}
+
+      - name: Setup gcloud
+        uses: google-github-actions/setup-gcloud@v2
+        with:
+          project_id: ${{ env.PROJECT_ID }}
+
+      - name: Resolve production worker URL
+        id: worker-url
+        run: |
+          set -euo pipefail
+          URL=$(gcloud run services describe "${SERVICE}" --region "${REGION}" --project "${PROJECT_ID}" --format='value(status.url)')
+          if [ -z "${URL}" ]; then
+            echo "ERROR: Cloud Run service URL is empty." >&2
+            exit 1
+          fi
+          echo "✅ Worker production: ${URL}"
+          echo "url=${URL}" >> "${GITHUB_OUTPUT}"
+
+      - name: Get Cloud Run ID token (audience = worker URL)
+        id: worker-auth
+        uses: google-github-actions/auth@v2
+        with:
+          workload_identity_provider: ${{ secrets.GCP_WORKLOAD_IDENTITY_PROVIDER }}
+          service_account: ${{ secrets.GCP_SERVICE_ACCOUNT }}
+          token_format: id_token
+          id_token_audience: ${{ steps.worker-url.outputs.url }}
+          id_token_include_email: true
 
       - name: "Guardrail — hostname PROD_DATABASE_URL không được khớp staging đã biết"
         env:
@@ -82,7 +124,7 @@ jobs:
             console.log(JSON.stringify(body));
           "
 
-      - name: Diagnose stored PDF artifact (read-only)
+      - name: Diagnose stored PDF artifact — local credential AND worker fallback (read-only)
         env:
           DATABASE_URL: ${{ secrets.PROD_DATABASE_URL }}
           STORAGE_PROVIDER: google_drive
@@ -90,5 +132,8 @@ jobs:
           GOOGLE_CLIENT_SECRET: ${{ secrets.PROD_GOOGLE_CLIENT_SECRET }}
           GOOGLE_REFRESH_TOKEN: ${{ secrets.PROD_GOOGLE_REFRESH_TOKEN }}
           GOOGLE_DRIVE_ROOT_FOLDER_ID: ${{ secrets.PROD_GOOGLE_DRIVE_ROOT_FOLDER_ID }}
+          PDF_MERGE_WORKER_URL: ${{ steps.worker-url.outputs.url }}
+          MERGE_WORKER_SECRET: ${{ secrets.PROD_MERGE_WORKER_SECRET }}
+          WORKER_ID_TOKEN: ${{ steps.worker-auth.outputs.id_token }}
           CANDIDATE_DOCUMENT_ID: "9bd3e051-c9f5-48b7-b495-dd73db8a9340"
         run: node --import tsx scripts/diagnose-econf-blank-pdf.ts
