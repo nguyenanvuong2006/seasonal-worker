@@ -33,6 +33,7 @@ import {
   BadgeCheck,
   ScanFace,
   UtensilsCrossed,
+  Sparkles,
   type LucideIcon,
 } from "lucide-react";
 import { DOCUMENT_MERGE_PERMISSION_KEYS } from "./document-merge/module-visibility.ts";
@@ -56,6 +57,7 @@ export const NAV_GROUPS: NavGroup[] = [
     items: [
       { href: "/admin/dashboard", label: "Dashboard", icon: LayoutDashboard, roles: ["ADMIN", "HR_RECRUITER", "DEPT_MANAGER"], permission: "dashboard.view" },
       { href: "/task-center", label: "Task Center", icon: ListChecks, roles: ["ADMIN", "HR_RECRUITER", "DEPT_MANAGER", "HR_DIRECTOR"], permission: "dashboard.view" },
+      { href: "/admin/ai-assistant", label: "Trợ lý AI", icon: Sparkles, roles: ["ADMIN", "HR_RECRUITER", "DEPT_MANAGER", "HR_DIRECTOR"], permission: "ai_copilot.view" },
     ],
   },
   {

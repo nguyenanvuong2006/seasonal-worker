@@ -54,6 +54,7 @@ export const PERMISSION_GROUPS: readonly CatalogGroup[] = [
   { key: "hanh_chinh", label: "Hành chính — Mã số công nhật" },
   { key: "van_tay", label: "Vân tay — IT Code" },
   { key: "bao_com", label: "Báo cơm" },
+  { key: "ai_copilot", label: "Trợ lý AI Workforce" },
 ];
 
 /** ~42 quyền — danh mục đầy đủ. Key phải trùng với key mà ROUTE thật sự kiểm tra. */
@@ -178,6 +179,9 @@ export const PERMISSION_CATALOG: readonly CatalogPermission[] = [
   // Báo cơm (mục IX, X)
   { key: "meal.view", name: "Xem danh sách Báo cơm", group: "bao_com" },
   { key: "meal.export", name: "Xuất danh sách Báo cơm", group: "bao_com" },
+  // AI Admin Copilot (Phase 1) — hỏi đáp dữ liệu hệ thống bằng ngôn ngữ tự nhiên,
+  // chỉ ĐỌC (read-only), mỗi tool tự re-check Data Scope của người hỏi.
+  { key: "ai_copilot.view", name: "Sử dụng Trợ lý AI Workforce", group: "ai_copilot" },
 ];
 
 /** 4 vai trò hệ thống + nền tảng cho vai trò tuỳ chỉnh. */
@@ -310,6 +314,7 @@ export const BASELINE_ROLE_PERMISSIONS: Readonly<Record<string, readonly string[
     "history.restore",
     "notifications.manage",
     "dashboard.view",
+    "ai_copilot.view",
     "global_search.use",
     "privacy.view_cccd",
     "privacy.view_phone",
@@ -343,6 +348,7 @@ export const BASELINE_ROLE_PERMISSIONS: Readonly<Record<string, readonly string[
     "employment.view",
     "employment.resignation.report",
     "dashboard.view",
+    "ai_copilot.view",
     "global_search.use",
   ],
   // Mục G trong PR — "Business authority": xem hồ sơ/planning/workforce/export/audit;
@@ -361,6 +367,7 @@ export const BASELINE_ROLE_PERMISSIONS: Readonly<Record<string, readonly string[
     "history.view",
     "audit.view",
     "dashboard.view",
+    "ai_copilot.view",
     "global_search.use",
     "privacy.view_cccd",
     "privacy.view_phone",
