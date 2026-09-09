@@ -203,6 +203,28 @@ test("pdf route: writes a DOCUMENT_VIEWED audit event exactly on the ISSUED->VIE
   assert.ok(transitionIndex > -1 && auditIndex > transitionIndex, "DOCUMENT_VIEWED audit must be inside the status-transition branch");
 });
 
+// 2026-09 blank-PDF defect fix: a real candidate hit a storage.get() failure
+// (invalid Google Drive credential) that was, at the time, marked VIEWED
+// BEFORE the bytes were ever successfully read — the candidate saw nothing
+// but the document was recorded as viewed anyway, and the unguarded throw
+// produced a generic error response instead of a diagnosable one.
+test("pdf route: storage.get() is called and must succeed BEFORE the VIEWED status write — a storage failure must never mark a document viewed when nothing was delivered", () => {
+  const code = stripComments(pdfRoute);
+  const storageGetIndex = code.indexOf("await storage.get(");
+  const viewedWriteIndex = code.indexOf("status: nextStatus");
+  assert.ok(storageGetIndex > -1, "storage.get() call must be present");
+  assert.ok(viewedWriteIndex > storageGetIndex, "the VIEWED status write must come strictly after storage.get() succeeds");
+});
+
+test("pdf route: storage.get() is wrapped in try/catch and returns a clean 502 instead of an unhandled exception — a storage outage must be diagnosable, not a silent blank response", () => {
+  const code = stripComments(pdfRoute);
+  const tryIndex = code.indexOf("try {");
+  const getIndex = code.indexOf("await storage.get(");
+  const catchIndex = code.indexOf("} catch (error) {", tryIndex);
+  assert.ok(tryIndex > -1 && tryIndex < getIndex && getIndex < catchIndex, "storage.get() must be inside a try block");
+  assert.match(code, /status: 502/);
+});
+
 test("confirm route: re-reads the document FRESH from the DB (never trusts a session-time snapshot of document status)", () => {
   assert.match(confirmRoute, /const \[doc\] = await db\.select\(\)\.from\(candidateDocuments\)\.where\(eq\(candidateDocuments\.id, id\)\)/);
 });
@@ -259,6 +281,30 @@ test("confirm route: stores evidenceSchemaVersion alongside the hash/HMAC, and p
 /* ============================================================ *
  * 7. Audit chain
  * ============================================================ */
+
+// 2026-09 "Xin chào, bạn" defect: the greeting fell back to a generic "bạn"
+// whenever the candidate had no dwData row (only matched via
+// daily_applications), because fullName was sourced from dwFullName alone.
+// dailyApplications.fullName is already selected by the SAME CCCD+phone
+// query — not additional PII — so it's a safe display-name fallback.
+test("lookup route: response fullName falls back to applicationFullName when dwFullName is null, instead of silently defaulting to empty/'bạn'", () => {
+  assert.match(lookupRoute, /identity\.dwFullName\s*\?\?\s*identity\.applicationFullName\s*\?\?\s*""/);
+});
+
+test("lookup-identity: applicationFullName is sourced from the SAME CCCD+phone-scoped daily_applications query as appPhoneMatch — no new/broader query introduced", () => {
+  const code = stripComments(readRoute("src/lib/lookup-identity.ts"));
+  const appMatchIndex = code.indexOf("appPhoneMatch] = await db");
+  const appMatchBlockEnd = code.indexOf(".limit(1);", appMatchIndex);
+  const appMatchBlock = code.slice(appMatchIndex, appMatchBlockEnd);
+  assert.match(appMatchBlock, /fullName:\s*dailyApplications\.fullName/);
+  assert.match(code, /applicationFullName:\s*appPhoneMatch\?\.fullName\s*\?\?\s*null/);
+});
+
+test("lookup-identity: isVerified-affecting dwFullName semantics are untouched — /api/lookup (legacy route) still reads dwFullName alone for isVerified, not the new applicationFullName fallback", () => {
+  const legacyLookupRoute = readRoute("src/app/api/lookup/route.ts");
+  assert.match(legacyLookupRoute, /isVerified:\s*Boolean\(identity\.dwFullName\)/);
+  assert.doesNotMatch(legacyLookupRoute, /applicationFullName/);
+});
 
 test("lookup route: writes IDENTITY_VERIFIED — never with raw CCCD/phone in the audit payload", () => {
   const code = stripComments(lookupRoute);

@@ -9,6 +9,15 @@
  * scoped to candidate A's applications can never read candidate B's
  * document by guessing/incrementing an id. First successful view marks the
  * document VIEWED (never regresses CONFIRMED back to VIEWED).
+ *
+ * ORDERING (2026-09 fix): the artifact read from storage MUST succeed
+ * BEFORE the VIEWED transition is written. A candidate who requests this
+ * route while the artifact is unreachable (storage outage, stale
+ * credentials) must never have their document marked as viewed — they saw
+ * nothing. The previous ordering wrote VIEWED first and only then read the
+ * artifact, unguarded, so a read failure both (a) produced an unhandled
+ * exception -> generic error response instead of a PDF (blank viewer) and
+ * (b) had already, incorrectly, recorded the document as viewed.
  */
 
 import { NextResponse } from "next/server";
@@ -43,6 +52,17 @@ export async function GET(_request: Request, { params }: { params: Promise<{ id:
     return NextResponse.json({ error: "Tài liệu chưa sẵn sàng để xem." }, { status: 409 });
   }
 
+  const storage = getStorageProvider();
+  let bytes: Buffer;
+  try {
+    bytes = await storage.get(doc.storageKey);
+  } catch (error) {
+    console.error("[candidate-consent/documents/[id]/pdf] storage.get failed:", error);
+    return NextResponse.json({ error: "Không đọc được tài liệu. Vui lòng thử lại sau." }, { status: 502 });
+  }
+
+  // Only a successful, authorized artifact retrieval qualifies for the
+  // VIEWED transition — see the ORDERING note above.
   const nextStatus = nextStatusOnView(doc.status as CandidateDocumentStatus);
   if (nextStatus !== doc.status) {
     await db
@@ -62,9 +82,6 @@ export async function GET(_request: Request, { params }: { params: Promise<{ id:
       /* audit must never break the request */
     }
   }
-
-  const storage = getStorageProvider();
-  const bytes = await storage.get(doc.storageKey);
 
   return new NextResponse(new Uint8Array(bytes), {
     status: 200,

@@ -96,8 +96,12 @@ async function resolveAccessToken(): Promise<string> {
   const result = hasOAuth ? await exchangeRefreshToken() : await exchangeServiceAccountToken();
 
   if (!result.access_token) {
+    // Include BOTH the OAuth error code and its description — `error`
+    // (e.g. "invalid_grant") is the actionable signal, `error_description`
+    // is often a generic string like "Bad Request" on its own and useless
+    // for diagnosis without the code alongside it.
     throw new Error(
-      `GOOGLE_DRIVE_AUTH_FAILED: ${result?.error_description || result?.error || "missing credentials"}`,
+      `GOOGLE_DRIVE_AUTH_FAILED: ${result?.error ?? "unknown_error"} — ${result?.error_description ?? "no description"}`,
     );
   }
   cachedToken = { value: result.access_token, expiresAt: Date.now() + Math.max(300, result.expires_in ?? 3600) * 1000 };

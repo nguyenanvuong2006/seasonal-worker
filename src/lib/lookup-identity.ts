@@ -11,6 +11,8 @@ export type LookupIdentity =
       phone: string;
       phoneTail: string;
       dwFullName: string | null;
+      /** fullName from the matched daily_applications row — already scoped by the same CCCD+phone check, not additional PII. Display-only fallback; never used for isVerified (that stays DW-specific). */
+      applicationFullName: string | null;
     };
 
 const NOT_FOUND_MESSAGE = "Không tìm thấy hồ sơ khớp với CCCD và số điện thoại đã nhập.";
@@ -37,7 +39,7 @@ export async function verifyLookupIdentity(cccdRaw: unknown, phoneRaw: unknown):
     .limit(1);
 
   const [appPhoneMatch] = await db
-    .select({ id: dailyApplications.id })
+    .select({ id: dailyApplications.id, fullName: dailyApplications.fullName })
     .from(dailyApplications)
     .where(and(eq(dailyApplications.cccd, cccd), sql`${dailyApplications.phone} LIKE ${"%" + phoneTail}`))
     .limit(1);
@@ -52,6 +54,7 @@ export async function verifyLookupIdentity(cccdRaw: unknown, phoneRaw: unknown):
     phone,
     phoneTail,
     dwFullName: dwMatch?.fullName ?? null,
+    applicationFullName: appPhoneMatch?.fullName ?? null,
   };
 }
 
