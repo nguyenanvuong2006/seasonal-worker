@@ -16,6 +16,20 @@ import {
 
 const MAX_HISTORY_TURNS = 8;
 
+/** Tool names whose successful result also renders as a UI Analysis Card (see orchestrator-core.ts's analysisCards) — the analytics.ts family (Phase 2 "AI Analyst"). */
+const ANALYSIS_TOOL_NAMES = new Set([
+  "compare_workforce_periods",
+  "compare_demand_periods",
+  "compare_demand_years",
+  "get_workforce_gap_rankings",
+  "get_recruitment_gap_rankings",
+  "get_workforce_trend",
+  "get_demand_trend",
+  "get_movement_summary",
+  "get_hiring_exit_summary",
+  "get_department_risk_summary",
+]);
+
 /**
  * Server boundary for the AI Copilot orchestrator — binds the pure
  * runToolCallingLoop() (orchestrator-core.ts) to the REAL DeepSeek provider,
@@ -34,7 +48,12 @@ const MAX_HISTORY_TURNS = 8;
  * guarantee, not a policy the model is trusted to follow.
  */
 export async function runCopilotTurn(session: Session, question: string, rawHistory: unknown): Promise<OrchestratorResult> {
-  const provider = getCopilotProvider();
+  // Model routing (Phase 4 cost control): every turn currently runs on the
+  // "reasoning" tier — tool-calling chat inherently needs the stronger
+  // model for multi-step analysis. A future classifier could route a
+  // single, obviously-simple lookup question to "fast" per-turn; the
+  // capability exists in getCopilotProvider() without requiring one yet.
+  const provider = getCopilotProvider("reasoning");
   const readRegistry = getToolRegistry();
   const actionRegistry = getActionRegistry();
   const schemas = [...getToolSchemas(), ...getActionSchemas()];
@@ -100,5 +119,8 @@ export async function runCopilotTurn(session: Session, question: string, rawHist
     return { ok: false, code: "NOT_FOUND", message: "Tool không tồn tại trong danh sách được phép." };
   };
 
-  return runToolCallingLoop(provider, COPILOT_SYSTEM_PROMPT, schemas, history, question, dispatch, DEFAULT_ORCHESTRATOR_CONFIG);
+  return runToolCallingLoop(provider, COPILOT_SYSTEM_PROMPT, schemas, history, question, dispatch, {
+    ...DEFAULT_ORCHESTRATOR_CONFIG,
+    analysisToolNames: ANALYSIS_TOOL_NAMES,
+  });
 }

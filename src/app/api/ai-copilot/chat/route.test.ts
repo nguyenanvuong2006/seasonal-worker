@@ -256,6 +256,27 @@ test("a turn that proposes an action surfaces the proposal (proposalId/preview/e
   assert.deepEqual(audits[0].detail.proposalIds, ["prop-1"]);
 });
 
+test("a turn that calls an analytics tool surfaces analysisCards in the response, distinct from proposals", async () => {
+  const { mod } = loadRoute({
+    guard: ADMIN_GUARD,
+    runCopilotTurn: async () => ({
+      reply: "Harvesting đang thiếu nhiều nhất.",
+      finishReason: "stop",
+      toolCallLog: [{ name: "get_workforce_gap_rankings", ok: true, durationMs: 15 }],
+      proposals: [],
+      analysisCards: [{ toolName: "get_workforce_gap_rankings", data: { rankings: [{ departmentName: "Harvesting", gap: 37 }] }, source: { domains: ["workforce_request"], asOf: "2026-09-09" } }],
+      usage: { promptTokens: 10, completionTokens: 5, totalTokens: 15 },
+      iterations: 1,
+    }),
+  });
+  const res = await mod.POST(makeReq({ question: "bộ phận nào thiếu người nhiều nhất" }));
+  assert.equal(res.status, 200);
+  const cards = res.body.analysisCards as { toolName: string }[];
+  assert.equal(cards.length, 1);
+  assert.equal(cards[0].toolName, "get_workforce_gap_rankings");
+  assert.deepEqual(res.body.proposals, []);
+});
+
 test("ToolCallingProviderError (provider down) -> 503, safe message, no internal detail leaked", async () => {
   const { mod } = loadRoute({
     guard: ADMIN_GUARD,

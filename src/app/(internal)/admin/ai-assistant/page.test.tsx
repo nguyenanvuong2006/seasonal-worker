@@ -212,3 +212,60 @@ test("clicking \"Hủy\" POSTs to the cancel endpoint and shows cancelled, never
     env.cleanup();
   }
 });
+
+test("an analysis-tool result renders as an Analysis Card with a ranking list and the source/asOf footer", async () => {
+  const env = installDom();
+  try {
+    const ui = await renderPage(env, () => ({
+      status: 200,
+      jsonText: JSON.stringify({
+        reply: "Harvesting đang thiếu nhiều nhất.",
+        toolCallLog: [{ name: "get_workforce_gap_rankings", ok: true }],
+        proposals: [],
+        analysisCards: [
+          {
+            toolName: "get_workforce_gap_rankings",
+            data: { rankings: [{ departmentId: "d1", departmentName: "Harvesting", requested: 145, current: 108, gap: 37 }], asOfDate: "2026-09-09" },
+            source: { domains: ["workforce_request"], asOf: "2026-09-09" },
+          },
+        ],
+        meta: { finishReason: "stop", iterations: 1, usage: { promptTokens: 1, completionTokens: 1, totalTokens: 2 } },
+      }),
+    }));
+    await ui.click("Bộ phận nào đang thiếu người nhiều nhất?");
+    assert.match(ui.text(), /Xếp hạng khoảng trống nhân lực/);
+    assert.match(ui.text(), /Harvesting/);
+    assert.match(ui.text(), /37/);
+    assert.match(ui.text(), /Dữ liệu đến: 2026-09-09/);
+  } finally {
+    env.cleanup();
+  }
+});
+
+test("a risk-summary analysis card renders department names with a LOW/MEDIUM/HIGH badge, never inventing its own risk label", async () => {
+  const env = installDom();
+  try {
+    const ui = await renderPage(env, () => ({
+      status: 200,
+      jsonText: JSON.stringify({
+        reply: "Harvesting có rủi ro cao.",
+        toolCallLog: [{ name: "get_department_risk_summary", ok: true }],
+        proposals: [],
+        analysisCards: [
+          {
+            toolName: "get_department_risk_summary",
+            data: { departments: [{ departmentId: "d1", departmentName: "Harvesting", level: "HIGH", score: 2, factors: ["Thiếu 37 người."] }], asOfDate: "2026-09-09", lookbackDays: 30, lookaheadDays: 14 },
+            source: { domains: ["workforce_request"], asOf: "2026-09-09" },
+          },
+        ],
+        meta: { finishReason: "stop", iterations: 1, usage: { promptTokens: 1, completionTokens: 1, totalTokens: 2 } },
+      }),
+    }));
+    await ui.click("Bộ phận nào có rủi ro thiếu người?");
+    assert.match(ui.text(), /Đánh giá rủi ro thiếu người/);
+    assert.match(ui.text(), /Harvesting/);
+    assert.match(ui.text(), /HIGH/);
+  } finally {
+    env.cleanup();
+  }
+});

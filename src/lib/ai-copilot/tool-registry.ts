@@ -8,6 +8,7 @@ import { fingerprintTools } from "./tools/fingerprint.ts";
 import { dailyApplicationTools } from "./tools/daily-applications.ts";
 import { documentTools } from "./tools/documents.ts";
 import { analyticsTools } from "./tools/analytics.ts";
+import { knowledgeTools } from "./tools/knowledge.ts";
 import type { ToolDefinition, ToolSchema } from "./types.ts";
 
 /**
@@ -31,6 +32,7 @@ const ALL_TOOLS: ToolDefinition<any, any>[] = [
   ...dailyApplicationTools,
   ...documentTools,
   ...analyticsTools,
+  ...knowledgeTools,
 ];
 
 const REGISTRY = new Map<string, ToolDefinition<any, any>>(ALL_TOOLS.map((t) => [t.name, t]));

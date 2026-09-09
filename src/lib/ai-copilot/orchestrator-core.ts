@@ -50,6 +50,8 @@ export type OrchestratorConfig = {
   maxToolCallsPerIteration: number;
   maxOutputTokens: number;
   timeoutMs: number;
+  /** Tool names whose successful result is ALSO surfaced as an "Analysis Card" (see result.analysisCards) — e.g. the analytics.ts tool family. Not every tool needs this; most are answered purely in natural language. */
+  analysisToolNames?: ReadonlySet<string>;
 };
 
 export const DEFAULT_ORCHESTRATOR_CONFIG: OrchestratorConfig = {
@@ -64,12 +66,17 @@ export type ToolCallLogEntry = { name: string; ok: boolean; durationMs: number; 
 /** Surfaced verbatim to the UI so it can render an Action Proposal card — see action-types.ts's ActionDefinition and orchestrator.ts's action-dispatch branch, the only place this shape is ever produced. */
 export type ProposalSummary = { proposalId: string; action: string; humanReadablePreview: string; expiresAt: string };
 
+/** Surfaced verbatim to the UI so it can render an Analysis Card (KPI values, comparisons, risk level, period, sources) alongside the natural-language reply — see OrchestratorConfig.analysisToolNames. */
+export type AnalysisCardSummary = { toolName: string; data: unknown; source: ToolSource };
+
 export type OrchestratorResult = {
   reply: string;
   finishReason: "stop" | "max_iterations";
   toolCallLog: ToolCallLogEntry[];
   /** Any action proposals CREATED during this turn (prepare-only — never executed). Empty for a turn with no action tool calls. */
   proposals: ProposalSummary[];
+  /** Structured results from any analysisToolNames tool called this turn — the deterministic numbers behind the reply, for a UI Analysis Card. */
+  analysisCards: AnalysisCardSummary[];
   usage: { promptTokens: number; completionTokens: number; totalTokens: number };
   iterations: number;
 };
@@ -98,6 +105,8 @@ export async function runToolCallingLoop(
   ];
   const toolCallLog: ToolCallLogEntry[] = [];
   const proposals: ProposalSummary[] = [];
+  const analysisCards: AnalysisCardSummary[] = [];
+  const analysisToolNames = config.analysisToolNames ?? new Set<string>();
   const usage = { promptTokens: 0, completionTokens: 0, totalTokens: 0 };
 
   for (let iteration = 0; iteration < config.maxIterations; iteration++) {
@@ -121,6 +130,7 @@ export async function runToolCallingLoop(
         finishReason: "stop",
         toolCallLog,
         proposals,
+        analysisCards,
         usage,
         iterations: iteration + 1,
       };
@@ -158,6 +168,7 @@ export async function runToolCallingLoop(
           truncated = dispatched.truncated;
           const proposal = asProposalSummary(dispatched.data);
           if (proposal) proposals.push(proposal);
+          if (analysisToolNames.has(call.name)) analysisCards.push({ toolName: call.name, data: dispatched.data, source: dispatched.source });
           toolMessageContent = JSON.stringify({
             data: dispatched.data,
             source: dispatched.source,
@@ -188,6 +199,7 @@ export async function runToolCallingLoop(
     finishReason: "max_iterations",
     toolCallLog,
     proposals,
+    analysisCards,
     usage,
     iterations: config.maxIterations,
   };

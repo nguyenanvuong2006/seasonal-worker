@@ -2,22 +2,24 @@
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import { Button, Card, CardContent, ErrorState, PageHeader, Textarea, cn } from "@/components/ui";
-import { Sparkles, Send, Loader2, Trash2, Wrench, ShieldAlert, Check, X } from "lucide-react";
+import { Sparkles, Send, Loader2, Trash2, Wrench, ShieldAlert, Check, X, BarChart3 } from "lucide-react";
 import { fetchJsonWithTimeout } from "@/lib/api-client";
 
 type ChatTurn = { role: "user" | "assistant"; content: string };
 type ToolCallLogItem = { name: string; ok: boolean; truncated?: boolean };
 type ProposalItem = { proposalId: string; action: string; humanReadablePreview: string; expiresAt: string };
+type AnalysisCardItem = { toolName: string; data: unknown; source: { domains: string[]; asOf: string } };
 type ChatResponse = {
   reply: string;
   toolCallLog: ToolCallLogItem[];
   proposals: ProposalItem[];
+  analysisCards: AnalysisCardItem[];
   meta: { finishReason: string; iterations: number; usage: { promptTokens: number; completionTokens: number; totalTokens: number } };
 };
 
 type Message =
   | { id: string; role: "user"; content: string }
-  | { id: string; role: "assistant"; content: string; toolCallLog: ToolCallLogItem[]; proposals: ProposalItem[]; meta: ChatResponse["meta"] }
+  | { id: string; role: "assistant"; content: string; toolCallLog: ToolCallLogItem[]; proposals: ProposalItem[]; analysisCards: AnalysisCardItem[]; meta: ChatResponse["meta"] }
   | { id: string; role: "error"; content: string };
 
 type ProposalUiState =
@@ -80,9 +82,10 @@ export default function AiAssistantPage() {
       setLoading(false);
       if (result.ok) {
         const proposals = result.data.proposals ?? [];
+        const analysisCards = result.data.analysisCards ?? [];
         setMessages((prev) => [
           ...prev,
-          { id: uid(), role: "assistant", content: result.data.reply, toolCallLog: result.data.toolCallLog ?? [], proposals, meta: result.data.meta },
+          { id: uid(), role: "assistant", content: result.data.reply, toolCallLog: result.data.toolCallLog ?? [], proposals, analysisCards, meta: result.data.meta },
         ]);
         if (proposals.length > 0) {
           setProposalStates((prev) => {
@@ -290,6 +293,9 @@ function MessageBubble({
             ))}
           </div>
         ) : null}
+        {message.analysisCards.map((c, i) => (
+          <AnalysisCard key={`${c.toolName}-${i}`} card={c} />
+        ))}
         {message.proposals.map((p) => (
           <ProposalCard
             key={p.proposalId}
@@ -344,4 +350,119 @@ function ProposalCard({ proposal, state, onConfirm, onCancel }: { proposal: Prop
       )}
     </div>
   );
+}
+
+const ANALYSIS_TOOL_LABELS: Record<string, string> = {
+  compare_workforce_periods: "So sánh nhân lực theo kỳ",
+  compare_demand_periods: "So sánh nhu cầu theo kỳ",
+  compare_demand_years: "So sánh nhu cầu theo năm",
+  get_workforce_gap_rankings: "Xếp hạng khoảng trống nhân lực",
+  get_recruitment_gap_rankings: "Xếp hạng Recruitment Balance",
+  get_workforce_trend: "Xu hướng nhân lực",
+  get_demand_trend: "Xu hướng nhu cầu",
+  get_movement_summary: "Tổng hợp thuyên chuyển / nghỉ việc",
+  get_hiring_exit_summary: "Tổng hợp tuyển mới / nghỉ việc",
+  get_department_risk_summary: "Đánh giá rủi ro thiếu người",
+};
+
+function riskBadgeClass(level: string) {
+  if (level === "HIGH") return "bg-danger-tint text-danger";
+  if (level === "MEDIUM") return "bg-warning-tint text-warning";
+  return "bg-success-tint text-success";
+}
+
+function AnalysisCard({ card }: { card: AnalysisCardItem }) {
+  const data = (card.data ?? {}) as Record<string, unknown>;
+  const label = ANALYSIS_TOOL_LABELS[card.toolName] ?? card.toolName;
+  return (
+    <div className="rounded-xl border border-border-strong bg-surface-raised p-3.5">
+      <div className="mb-2 flex items-center gap-1.5 text-[11px] font-semibold uppercase tracking-wide text-accent">
+        <BarChart3 className="h-3.5 w-3.5" aria-hidden />
+        {label}
+      </div>
+      <div className="space-y-1.5 text-[13px] text-fg">{renderAnalysisBody(data)}</div>
+      <div className="mt-3 border-t border-border-subtle pt-2 text-[11px] text-fg-muted">
+        Nguồn: {card.source.domains.join(" · ") || "—"} · Dữ liệu đến: {card.source.asOf}
+      </div>
+    </div>
+  );
+}
+
+function renderAnalysisBody(data: Record<string, unknown>) {
+  if (Array.isArray(data.rankings)) {
+    return (
+      <ul className="space-y-1">
+        {(data.rankings as Record<string, unknown>[]).slice(0, 10).map((r, i) => (
+          <li key={i} className="flex items-center justify-between gap-2">
+            <span className="truncate">{String(r.departmentName ?? r.departmentId ?? "—")}</span>
+            <span className="font-semibold">{String(r.gap ?? r.total ?? "")}</span>
+          </li>
+        ))}
+      </ul>
+    );
+  }
+  if (Array.isArray(data.departments)) {
+    return (
+      <ul className="space-y-1">
+        {(data.departments as Record<string, unknown>[]).slice(0, 10).map((d, i) => (
+          <li key={i} className="flex items-center justify-between gap-2">
+            <span className="truncate">{String(d.departmentName ?? d.departmentId ?? "—")}</span>
+            <span className={cn("rounded-full px-2 py-0.5 text-[11px] font-semibold", riskBadgeClass(String(d.level ?? "")))}>{String(d.level ?? "")}</span>
+          </li>
+        ))}
+      </ul>
+    );
+  }
+  if (Array.isArray(data.points)) {
+    return (
+      <ul className="space-y-1">
+        {(data.points as Record<string, unknown>[]).slice(-8).map((p, i) => (
+          <li key={i} className="flex items-center justify-between gap-2">
+            <span>{String(p.label ?? p.bucket ?? "")}</span>
+            <span className="font-semibold">{String(p.total ?? "")}</span>
+          </li>
+        ))}
+      </ul>
+    );
+  }
+  if (data.current && data.comparison && typeof data.current === "object" && typeof data.comparison === "object") {
+    const current = data.current as Record<string, unknown>;
+    const comparison = data.comparison as Record<string, unknown>;
+    return (
+      <div className="flex items-center justify-between gap-3">
+        <div>
+          <div className="text-[10.5px] text-fg-muted">Kỳ hiện tại</div>
+          <div className="text-[15px] font-semibold">{String(current.total ?? "")}</div>
+        </div>
+        <div>
+          <div className="text-[10.5px] text-fg-muted">Kỳ so sánh</div>
+          <div className="text-[15px] font-semibold text-fg-secondary">{String(comparison.total ?? "")}</div>
+        </div>
+        {typeof data.absoluteDifference === "number" ? (
+          <div>
+            <div className="text-[10.5px] text-fg-muted">Chênh lệch</div>
+            <div className={cn("text-[15px] font-semibold", data.absoluteDifference >= 0 ? "text-success" : "text-danger")}>
+              {data.absoluteDifference >= 0 ? "+" : ""}
+              {data.absoluteDifference}
+              {typeof data.percentDifference === "number" ? ` (${data.percentDifference >= 0 ? "+" : ""}${data.percentDifference}%)` : ""}
+            </div>
+          </div>
+        ) : null}
+      </div>
+    );
+  }
+  const scalarEntries = Object.entries(data).filter(([, v]) => typeof v === "number" || typeof v === "string" || typeof v === "boolean");
+  if (scalarEntries.length > 0) {
+    return (
+      <div className="grid grid-cols-2 gap-2 sm:grid-cols-3">
+        {scalarEntries.slice(0, 9).map(([k, v]) => (
+          <div key={k} className="rounded-lg bg-surface-hover px-2.5 py-1.5">
+            <div className="truncate text-[10.5px] text-fg-muted">{k}</div>
+            <div className="truncate text-[13.5px] font-semibold text-fg">{String(v)}</div>
+          </div>
+        ))}
+      </div>
+    );
+  }
+  return null;
 }

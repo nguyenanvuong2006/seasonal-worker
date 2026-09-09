@@ -246,3 +246,37 @@ test("result.proposals is always present (empty array) for a plain-text turn wit
   const result = await runToolCallingLoop(provider, "system", [], [], "q", NEVER_CALLED);
   assert.deepEqual(result.proposals, []);
 });
+
+test("a successful call to a tool named in analysisToolNames is surfaced in result.analysisCards", async () => {
+  const provider = fakeProvider([() => toolCallResult("get_workforce_gap_rankings", "{}"), () => textResult("Harvesting thiếu nhiều nhất.")]);
+  const dispatch: ToolDispatcher = async () => ({ ok: true, data: { rankings: [{ departmentName: "Harvesting", gap: 37 }] }, source: { domains: ["workforce_request"], asOf: "2026-09-09" } });
+  const result = await runToolCallingLoop(provider, "system", [], [], "q", dispatch, {
+    maxIterations: 6,
+    maxToolCallsPerIteration: 5,
+    maxOutputTokens: 900,
+    timeoutMs: 20_000,
+    analysisToolNames: new Set(["get_workforce_gap_rankings"]),
+  });
+  assert.equal(result.analysisCards.length, 1);
+  assert.deepEqual(result.analysisCards[0], { toolName: "get_workforce_gap_rankings", data: { rankings: [{ departmentName: "Harvesting", gap: 37 }] }, source: { domains: ["workforce_request"], asOf: "2026-09-09" } });
+});
+
+test("a tool call NOT named in analysisToolNames never produces an analysis card, even on success", async () => {
+  const provider = fakeProvider([() => toolCallResult("get_current_headcount", "{}"), () => textResult("ok")]);
+  const dispatch: ToolDispatcher = async () => ({ ok: true, data: { total: 128 }, source: { domains: [], asOf: "now" } });
+  const result = await runToolCallingLoop(provider, "system", [], [], "q", dispatch, {
+    maxIterations: 6,
+    maxToolCallsPerIteration: 5,
+    maxOutputTokens: 900,
+    timeoutMs: 20_000,
+    analysisToolNames: new Set(["get_workforce_gap_rankings"]),
+  });
+  assert.deepEqual(result.analysisCards, []);
+});
+
+test("result.analysisCards defaults to empty when analysisToolNames is omitted from config entirely", async () => {
+  const provider = fakeProvider([() => toolCallResult("get_workforce_gap_rankings", "{}"), () => textResult("ok")]);
+  const dispatch: ToolDispatcher = async () => ({ ok: true, data: { rankings: [] }, source: { domains: [], asOf: "now" } });
+  const result = await runToolCallingLoop(provider, "system", [], [], "q", dispatch);
+  assert.deepEqual(result.analysisCards, []);
+});

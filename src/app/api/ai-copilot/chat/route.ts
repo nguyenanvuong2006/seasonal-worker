@@ -77,6 +77,7 @@ export async function POST(req: Request) {
       reply: result.reply,
       toolCallLog: result.toolCallLog.map((t) => ({ name: t.name, ok: t.ok, truncated: t.truncated })),
       proposals: result.proposals,
+      analysisCards: result.analysisCards,
       meta: { finishReason: result.finishReason, iterations: result.iterations, usage: result.usage },
     });
   } catch (error) {
