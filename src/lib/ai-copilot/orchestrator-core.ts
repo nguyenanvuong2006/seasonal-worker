@@ -61,13 +61,26 @@ export const DEFAULT_ORCHESTRATOR_CONFIG: OrchestratorConfig = {
 
 export type ToolCallLogEntry = { name: string; ok: boolean; durationMs: number; truncated?: boolean };
 
+/** Surfaced verbatim to the UI so it can render an Action Proposal card — see action-types.ts's ActionDefinition and orchestrator.ts's action-dispatch branch, the only place this shape is ever produced. */
+export type ProposalSummary = { proposalId: string; action: string; humanReadablePreview: string; expiresAt: string };
+
 export type OrchestratorResult = {
   reply: string;
   finishReason: "stop" | "max_iterations";
   toolCallLog: ToolCallLogEntry[];
+  /** Any action proposals CREATED during this turn (prepare-only — never executed). Empty for a turn with no action tool calls. */
+  proposals: ProposalSummary[];
   usage: { promptTokens: number; completionTokens: number; totalTokens: number };
   iterations: number;
 };
+
+function asProposalSummary(data: unknown): ProposalSummary | null {
+  if (!data || typeof data !== "object") return null;
+  const d = data as Record<string, unknown>;
+  if (d.requiresConfirmation !== true) return null;
+  if (typeof d.proposalId !== "string" || typeof d.action !== "string" || typeof d.humanReadablePreview !== "string" || typeof d.expiresAt !== "string") return null;
+  return { proposalId: d.proposalId, action: d.action, humanReadablePreview: d.humanReadablePreview, expiresAt: d.expiresAt };
+}
 
 export async function runToolCallingLoop(
   provider: ToolCallingProvider,
@@ -84,6 +97,7 @@ export async function runToolCallingLoop(
     { role: "user", content: question },
   ];
   const toolCallLog: ToolCallLogEntry[] = [];
+  const proposals: ProposalSummary[] = [];
   const usage = { promptTokens: 0, completionTokens: 0, totalTokens: 0 };
 
   for (let iteration = 0; iteration < config.maxIterations; iteration++) {
@@ -106,6 +120,7 @@ export async function runToolCallingLoop(
         reply: result.message.content?.trim() || "Không có nội dung trả lời.",
         finishReason: "stop",
         toolCallLog,
+        proposals,
         usage,
         iterations: iteration + 1,
       };
@@ -141,6 +156,8 @@ export async function runToolCallingLoop(
         ok = dispatched.ok;
         if (dispatched.ok) {
           truncated = dispatched.truncated;
+          const proposal = asProposalSummary(dispatched.data);
+          if (proposal) proposals.push(proposal);
           toolMessageContent = JSON.stringify({
             data: dispatched.data,
             source: dispatched.source,
@@ -170,6 +187,7 @@ export async function runToolCallingLoop(
     reply: "Câu hỏi này cần quá nhiều bước tra cứu để trả lời an toàn trong giới hạn hiện tại — vui lòng hỏi cụ thể hơn hoặc chia nhỏ câu hỏi.",
     finishReason: "max_iterations",
     toolCallLog,
+    proposals,
     usage,
     iterations: config.maxIterations,
   };

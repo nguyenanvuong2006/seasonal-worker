@@ -218,3 +218,31 @@ test("sanitizeClientHistory returns [] for non-array input", () => {
   assert.deepEqual(sanitizeClientHistory("not an array", 10), []);
   assert.deepEqual(sanitizeClientHistory(null, 10), []);
 });
+
+test("a dispatch result shaped like an action proposal (requiresConfirmation:true) is surfaced in result.proposals", async () => {
+  const provider = fakeProvider([
+    () => toolCallResult("prepare_recruitment_request", '{"departmentId":"dept-1"}'),
+    () => textResult("Đã chuẩn bị đề xuất."),
+  ]);
+  const dispatch: ToolDispatcher = async () => ({
+    ok: true,
+    data: { proposalId: "prop-1", action: "prepare_recruitment_request", humanReadablePreview: "ĐỀ XUẤT...", expiresAt: "2026-09-09T12:15:00.000Z", requiresConfirmation: true },
+    source: { domains: ["ai_copilot_action"], asOf: "now" },
+  });
+  const result = await runToolCallingLoop(provider, "system", [], [], "tạo yêu cầu tuyển dụng", dispatch);
+  assert.equal(result.proposals.length, 1);
+  assert.deepEqual(result.proposals[0], { proposalId: "prop-1", action: "prepare_recruitment_request", humanReadablePreview: "ĐỀ XUẤT...", expiresAt: "2026-09-09T12:15:00.000Z" });
+});
+
+test("an ordinary read-tool result (no requiresConfirmation flag) never gets misclassified as a proposal", async () => {
+  const provider = fakeProvider([() => toolCallResult("get_current_headcount", "{}"), () => textResult("ok")]);
+  const dispatch: ToolDispatcher = async () => ({ ok: true, data: { total: 128, proposalId: "looks-like-one-but-isnt" }, source: { domains: [], asOf: "now" } });
+  const result = await runToolCallingLoop(provider, "system", [], [], "q", dispatch);
+  assert.deepEqual(result.proposals, []);
+});
+
+test("result.proposals is always present (empty array) for a plain-text turn with no tool calls at all", async () => {
+  const provider = fakeProvider([() => textResult("no tools needed")]);
+  const result = await runToolCallingLoop(provider, "system", [], [], "q", NEVER_CALLED);
+  assert.deepEqual(result.proposals, []);
+});

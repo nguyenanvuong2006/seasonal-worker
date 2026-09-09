@@ -1863,3 +1863,51 @@ export type CandidateDocument = typeof candidateDocuments.$inferSelect;
 export type CandidateAccessSession = typeof candidateAccessSessions.$inferSelect;
 export type DocumentConfirmation = typeof documentConfirmations.$inferSelect;
 export type IdentityLookupAttempt = typeof identityLookupAttempts.$inferSelect;
+
+/* ============================================================
+   AI COPILOT — ACTION PROPOSALS (Phase 3 "Safe Action Copilot")
+   ------------------------------------------------------------
+   Tamper-proof, server-persisted proposal for a write the AI Copilot
+   prepared but must NEVER execute on its own. `payload` is the FULL
+   canonical, already-validated action payload computed at prepare time —
+   the execute endpoint takes ONLY the proposal id from the client, never
+   a payload, so a browser cannot turn "30 workers" into "300 workers"
+   before confirmation (see lib/ai-copilot/action-execution-guard.ts).
+   `data_scope_snapshot` is audit-trail-only — execution ALWAYS re-checks
+   the confirming session's LIVE Data Scope/permission, never this value.
+   ============================================================ */
+export const aiActionProposals = pgTable(
+  "ai_action_proposals",
+  {
+    id: uuid("id").defaultRandom().primaryKey(),
+    action: varchar("action", { length: 64 }).notNull(),
+    status: varchar("status", { length: 16 }).notNull().default("PENDING"),
+    payload: jsonb("payload").$type<Record<string, unknown>>().notNull(),
+    humanReadablePreview: text("human_readable_preview").notNull(),
+    departmentId: uuid("department_id"),
+    requiredPermission: varchar("required_permission", { length: 120 }).notNull(),
+    dataScopeSnapshot: jsonb("data_scope_snapshot").$type<string[] | null>(),
+    idempotencyKey: varchar("idempotency_key", { length: 128 }).notNull(),
+    createdBy: varchar("created_by", { length: 64 }).notNull(),
+    expiresAt: timestamp("expires_at", { withTimezone: true }).notNull(),
+    confirmedBy: varchar("confirmed_by", { length: 64 }),
+    confirmedAt: timestamp("confirmed_at", { withTimezone: true }),
+    executedAt: timestamp("executed_at", { withTimezone: true }),
+    executionResult: jsonb("execution_result").$type<Record<string, unknown>>(),
+    errorMessage: text("error_message"),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+    updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [
+    uniqueIndex("ai_action_proposal_idempotency_uq").on(t.idempotencyKey),
+    index("ai_action_proposal_created_by_idx").on(t.createdBy),
+    index("ai_action_proposal_status_idx").on(t.status),
+    check(
+      "ai_action_proposal_status_chk",
+      sql`${t.status} IN ('PENDING', 'CONFIRMED', 'EXECUTED', 'FAILED', 'EXPIRED', 'CANCELLED')`,
+    ),
+  ],
+);
+
+export type AiActionProposal = typeof aiActionProposals.$inferSelect;
+export type NewAiActionProposal = typeof aiActionProposals.$inferInsert;

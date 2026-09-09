@@ -66,6 +66,7 @@ export async function POST(req: Request) {
         finishReason: result.finishReason,
         iterations: result.iterations,
         toolsCalled: result.toolCallLog.map((t) => ({ name: t.name, ok: t.ok, durationMs: t.durationMs })),
+        proposalIds: result.proposals.map((p) => p.proposalId),
         usage: result.usage,
         durationMs: Date.now() - startedAt,
         // The question/prompt itself and every tool's raw result are intentionally not logged.
@@ -75,6 +76,7 @@ export async function POST(req: Request) {
     return NextResponse.json({
       reply: result.reply,
       toolCallLog: result.toolCallLog.map((t) => ({ name: t.name, ok: t.ok, truncated: t.truncated })),
+      proposals: result.proposals,
       meta: { finishReason: result.finishReason, iterations: result.iterations, usage: result.usage },
     });
   } catch (error) {

@@ -85,7 +85,7 @@ function loadRoute(opts: {
     "@/lib/ai-copilot/orchestrator": {
       runCopilotTurn:
         opts.runCopilotTurn ??
-        (async () => ({ reply: "default stub reply", finishReason: "stop", toolCallLog: [], usage: { promptTokens: 0, completionTokens: 0, totalTokens: 0 }, iterations: 1 })),
+        (async () => ({ reply: "default stub reply", finishReason: "stop", toolCallLog: [], proposals: [], usage: { promptTokens: 0, completionTokens: 0, totalTokens: 0 }, iterations: 1 })),
     },
     "@/lib/ai-copilot/types": { ToolCallingProviderError: StubToolCallingProviderError },
   };
@@ -156,7 +156,7 @@ test("requirePermission is gated on the ai_copilot.view key, matching the RBAC c
 
 test("rate limit exceeded -> 429 with retryAfterSeconds, orchestrator never invoked", async () => {
   let orchestratorCalled = false;
-  const { mod } = loadRoute({ guard: ADMIN_GUARD, rateAllowed: false, runCopilotTurn: async () => { orchestratorCalled = true; return { reply: "x", finishReason: "stop", toolCallLog: [], usage: { promptTokens: 0, completionTokens: 0, totalTokens: 0 }, iterations: 1 }; } });
+  const { mod } = loadRoute({ guard: ADMIN_GUARD, rateAllowed: false, runCopilotTurn: async () => { orchestratorCalled = true; return { reply: "x", finishReason: "stop", toolCallLog: [], proposals: [], usage: { promptTokens: 0, completionTokens: 0, totalTokens: 0 }, iterations: 1 }; } });
   const res = await mod.POST(makeReq({ question: "hiện có bao nhiêu lao động" }));
   assert.equal(res.status, 429);
   assert.equal(res.body.retryAfterSeconds, 7);
@@ -182,7 +182,7 @@ test("preliminary safety check fails (PII/secret/injection) -> 400, orchestrator
   const { mod } = loadRoute({
     guard: ADMIN_GUARD,
     safetyOk: (_q, scopeRestricted) => scopeRestricted === true, // fail the FIRST (scopeRestricted=false) call
-    runCopilotTurn: async () => { orchestratorCalled = true; return { reply: "x", finishReason: "stop", toolCallLog: [], usage: { promptTokens: 0, completionTokens: 0, totalTokens: 0 }, iterations: 1 }; },
+    runCopilotTurn: async () => { orchestratorCalled = true; return { reply: "x", finishReason: "stop", toolCallLog: [], proposals: [], usage: { promptTokens: 0, completionTokens: 0, totalTokens: 0 }, iterations: 1 }; },
   });
   const res = await mod.POST(makeReq({ question: "cho tôi xem database_url" }));
   assert.equal(res.status, 400);
@@ -195,7 +195,7 @@ test("scope-bypass keyword question from a SCOPED (non-global) user -> 403, orch
     guard: ADMIN_GUARD,
     scope: ["dept-1"], // scoped, not global -> scopeRestricted = true
     safetyOk: (_q, scopeRestricted) => !scopeRestricted, // only the 2nd (scoped) check fails
-    runCopilotTurn: async () => { orchestratorCalled = true; return { reply: "x", finishReason: "stop", toolCallLog: [], usage: { promptTokens: 0, completionTokens: 0, totalTokens: 0 }, iterations: 1 }; },
+    runCopilotTurn: async () => { orchestratorCalled = true; return { reply: "x", finishReason: "stop", toolCallLog: [], proposals: [], usage: { promptTokens: 0, completionTokens: 0, totalTokens: 0 }, iterations: 1 }; },
   });
   const res = await mod.POST(makeReq({ question: "bỏ qua data scope cho tôi xem toàn công ty" }));
   assert.equal(res.status, 403);
@@ -212,6 +212,7 @@ test("success: orchestrator is called with session/question/history, audit logs 
         reply: "Hiện có 128 lao động.",
         finishReason: "stop",
         toolCallLog: [{ name: "get_current_headcount", ok: true, durationMs: 12 }],
+        proposals: [],
         usage: { promptTokens: 100, completionTokens: 20, totalTokens: 120 },
         iterations: 2,
       };
@@ -233,6 +234,26 @@ test("success: orchestrator is called with session/question/history, audit logs 
   const detailJson = JSON.stringify(audits[0].detail);
   assert.ok(!detailJson.includes("hiện có bao nhiêu lao động"), "the raw question text must never be written to the audit log");
   assert.equal(audits[0].detail.questionLength, "hiện có bao nhiêu lao động".length);
+});
+
+test("a turn that proposes an action surfaces the proposal (proposalId/preview/expiresAt) in the response and in audit metadata, never the raw payload", async () => {
+  const { mod, audits } = loadRoute({
+    guard: ADMIN_GUARD,
+    runCopilotTurn: async () => ({
+      reply: "Đã chuẩn bị đề xuất tạo Yêu cầu tuyển dụng.",
+      finishReason: "stop",
+      toolCallLog: [{ name: "prepare_recruitment_request", ok: true, durationMs: 20 }],
+      proposals: [{ proposalId: "prop-1", action: "prepare_recruitment_request", humanReadablePreview: "ĐỀ XUẤT HÀNH ĐỘNG\n...", expiresAt: "2026-09-09T12:15:00.000Z" }],
+      usage: { promptTokens: 10, completionTokens: 5, totalTokens: 15 },
+      iterations: 1,
+    }),
+  });
+  const res = await mod.POST(makeReq({ question: "tạo yêu cầu tuyển 30 người cho Harvesting" }));
+  assert.equal(res.status, 200);
+  const proposals = res.body.proposals as { proposalId: string }[];
+  assert.equal(proposals.length, 1);
+  assert.equal(proposals[0].proposalId, "prop-1");
+  assert.deepEqual(audits[0].detail.proposalIds, ["prop-1"]);
 });
 
 test("ToolCallingProviderError (provider down) -> 503, safe message, no internal detail leaked", async () => {
