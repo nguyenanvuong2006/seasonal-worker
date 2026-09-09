@@ -173,13 +173,17 @@ const fkCheck = await client.query(
    FROM pg_constraint WHERE contype = 'f' AND conname = ANY($1::text[])`,
   [EXPECTED_FKS.map((f) => f.name)],
 );
+// ::regclass::text bỏ qua tiền tố schema ("public.") khi schema đó nằm trên
+// search_path (hành vi chuẩn của Postgres) — so sánh phải bỏ tiền tố "public."
+// nếu có ở CẢ HAI phía, không giả định luôn có mặt.
+const stripPublicSchema = (name) => name.replace(/^public\./, "");
 const fkByName = new Map(fkCheck.rows.map((r) => [r.conname, r]));
 let fksOk = true;
 for (const fk of EXPECTED_FKS) {
   const row = fkByName.get(fk.name);
-  const ok = Boolean(row) && row.ref_table === `public.${fk.refTable}` && row.table_name === `public.${fk.table}`;
+  const ok = Boolean(row) && stripPublicSchema(row.ref_table) === fk.refTable && stripPublicSchema(row.table_name) === fk.table;
   if (!ok) fksOk = false;
-  console.log(`  ${ok ? "✅" : "❌"} ${fk.name}: ${fk.table}.* -> ${fk.refTable}.id${row ? "" : " (KHÔNG TÌM THẤY)"}`);
+  console.log(`  ${ok ? "✅" : "❌"} ${fk.name}: ${fk.table}.* -> ${fk.refTable}.id${row ? ` (thực tế: ${row.table_name} -> ${row.ref_table})` : " (KHÔNG TÌM THẤY)"}`);
 }
 
 console.log("\n=== BƯỚC 6: Chụp row count các bảng nghiệp vụ (kể cả users) SAU migration, so sánh ===");
