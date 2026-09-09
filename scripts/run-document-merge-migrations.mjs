@@ -145,6 +145,16 @@ const DOCUMENT_MERGE_MIGRATIONS = [
   // affects 0 rows if DW Cũ doesn't exist yet in an environment. Never
   // touches DW Mới, html_body, print_css, or any other DW Cũ field.
   "2026-09-09-dw-cu-checkbox-option-mapping-fix.sql",
+  // DW Cũ (Tài liệu A) — flips merge_templates.html_enabled to TRUE. Its
+  // currently PUBLISHED version already has real, complete html_body/
+  // print_css/mapping_snapshot (confirmed via
+  // scripts/diagnose-dw-old-template-eligibility.ts against real
+  // production) — only the template-level metadata flag was false,
+  // blocking candidate-document HTML/PDF generation with "Template này
+  // chưa được bật chế độ HTML/PDF." Pure UPDATE, scoped by document_kind =
+  // 'A' + exact name (never a hardcoded row id) — never touches DW Mới or
+  // any html_body/print_css/mapping_snapshot content.
+  "2026-09-09-dw-cu-html-enabled-metadata-fix.sql",
 ];
 
 const client = new pg.Client({ connectionString: DATABASE_URL, ssl: { rejectUnauthorized: false } });
