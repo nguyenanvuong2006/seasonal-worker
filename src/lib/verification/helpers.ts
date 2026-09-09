@@ -122,6 +122,7 @@ export type WorkerEndpoint =
   | "/health"
   | "/run"
   | "/preview-pdf"
+  | "/read-google-doc"
   | "/verify-visual"
   | "/benchmark"
   | "/diag/db-identity"
@@ -133,6 +134,7 @@ const WORKER_METHODS: Record<WorkerEndpoint, "GET" | "POST"> = {
   "/health": "GET",
   "/run": "POST",
   "/preview-pdf": "POST",
+  "/read-google-doc": "POST",
   "/verify-visual": "POST",
   "/benchmark": "POST",
   "/diag/db-identity": "GET",

@@ -12,8 +12,52 @@ import { extractUniquePlaceholders } from "@/lib/document-merge/placeholder-extr
 import { createGoogleDocsService } from "@/lib/document-merge/google-docs-service";
 import { autoMapAllPlaceholders } from "@/lib/document-merge/auto-mapping";
 import { extractGoogleDocId } from "@/lib/document-merge/template-routing";
+import { callWorker } from "@/lib/verification/helpers";
 
 type RouteContext = { params: Promise<{ id: string }> };
+
+function isMissingGoogleAuthError(error: unknown): boolean {
+  const message = error instanceof Error ? error.message : String(error ?? "");
+  const lower = message.toLowerCase();
+  return lower.includes("chưa kết nối google docs") || lower.includes("missing google oauth credentials");
+}
+
+/**
+ * Đọc plain-text Google Docs cho thao tác Admin tương tác ("Quét lại Google
+ * Docs"). Route này chạy trên Vercel — một runtime HOÀN TOÀN TÁCH BIỆT với
+ * Cloud Run worker, và Vercel không được đảm bảo có sẵn credential Google
+ * riêng (xem docs/DOCUMENT-MERGE-VERCEL-SETUP.md — bước cấu hình THỦ CÔNG,
+ * độc lập với secret Cloud Run worker đã dùng để merge/upload PDF thành
+ * công). Thử credential cục bộ (createGoogleDocsService()) trước — giữ
+ * nguyên hành vi hiện có cho deployment Vercel ĐÃ cấu hình đúng theo tài
+ * liệu trên. CHỈ khi lỗi cụ thể là "thiếu credential Google cục bộ" (không
+ * phải 403/404/lỗi khác), mới gọi sang Cloud Run worker's /read-google-doc
+ * qua callWorker() — kênh gọi worker ĐÃ CÓ SẴN (giống /preview-pdf, /run) —
+ * để dùng lại ĐÚNG credential Google (GOOGLE_CLIENT_ID/SECRET/REFRESH_TOKEN
+ * qua GCP Secret Manager) mà worker đã có sẵn và đã được xác minh hoạt
+ * động, thay vì bắt Admin cấu hình một kết nối Google THỨ HAI chỉ cho thao
+ * tác đọc-tương tác này. Không tạo kiến trúc auth Google mới; không lộ
+ * token/secret ra response — callWorker() chỉ gửi Authorization tới worker,
+ * không bao giờ trả về client.
+ */
+async function getGoogleDocPlainText(docId: string, request: Request): Promise<string> {
+  try {
+    return await createGoogleDocsService().getDocumentContent(docId);
+  } catch (error) {
+    if (!isMissingGoogleAuthError(error)) throw error;
+    const result = await callWorker<{ content?: string; error?: string }>(
+      "/read-google-doc",
+      { docId },
+      30_000,
+      { request },
+    );
+    const data = result.data as { content?: string; error?: string } | undefined;
+    if (!result.ok || typeof data?.content !== "string") {
+      throw new Error(data?.error || "Không đọc được Google Docs qua worker.");
+    }
+    return data.content;
+  }
+}
 
 type ScanDiagnostic = {
   code: string;
@@ -131,9 +175,10 @@ export async function POST(request: Request, context: RouteContext) {
     }
 
     // Không dùng GOOGLE_ACCESS_TOKEN tĩnh cho production scan. Service tự lấy
-    // credential bền vững (Service Account / OAuth Refresh Token) và refresh token.
-    const docsService = createGoogleDocsService();
-    const content = await docsService.getDocumentContent(docId);
+    // credential bền vững (Service Account / OAuth Refresh Token) và refresh
+    // token; nếu Vercel không có credential cục bộ, tự dùng lại credential đã
+    // xác minh hoạt động của Cloud Run worker (xem getGoogleDocPlainText()).
+    const content = await getGoogleDocPlainText(docId, request);
     const placeholders = extractUniquePlaceholders(content);
 
     const existingFields = await db

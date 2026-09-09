@@ -58,6 +58,13 @@ test("script requires all 3 credential env vars and exits non-zero without them"
   assert.match(code, /process\.exit\(1\)/);
 });
 
+test("plaintext export check mirrors google-docs-service.ts's getDocumentContent() exactly (mimeType=text/plain) and never logs the document body — length only", () => {
+  const code = stripJsComments(readScript());
+  assert.match(code, /export\?mimeType=\$\{encodeURIComponent\("text\/plain"\)\}/);
+  assert.doesNotMatch(code, /console\.log\([^)]*exportText[^)]*\)/);
+  assert.match(code, /contentLength:\s*exportRes\.ok \? exportText\.length : undefined/);
+});
+
 test("workflow never passes the Google secrets through GITHUB_OUTPUT/GITHUB_ENV (fetch + mask + use in one step only) and is workflow_dispatch-only in the production environment", () => {
   const workflow = readFileSync(join(ROOT, ".github/workflows/verify-production-google-auth.yml"), "utf8");
   assert.match(workflow, /on:\s*\n\s*workflow_dispatch: \{\}/);

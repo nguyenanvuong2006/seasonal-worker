@@ -90,6 +90,17 @@ test("callWorker uses POST with JSON body for /preview-pdf — the A4 PDF Previe
   assert.equal(calls[0].init?.body, JSON.stringify({ html: "<html></html>" }));
 });
 
+test("callWorker uses POST with JSON body for /read-google-doc — the scan route's Google-auth fallback (2026-09)", async () => {
+  process.env.PDF_MERGE_WORKER_URL = "https://worker.example";
+  const calls = captureFetch();
+
+  await callWorker("/read-google-doc", { docId: "abc123" });
+
+  assert.equal(calls[0].input, "https://worker.example/read-google-doc");
+  assert.equal(calls[0].init?.method, "POST");
+  assert.equal(calls[0].init?.body, JSON.stringify({ docId: "abc123" }));
+});
+
 test("callWorker omits Authorization when worker secret is empty", async () => {
   process.env.PDF_MERGE_WORKER_URL = "https://worker.example";
   delete process.env.MERGE_WORKER_SECRET;
