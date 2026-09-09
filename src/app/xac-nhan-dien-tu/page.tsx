@@ -34,6 +34,7 @@ const STATUS_LABEL: Record<string, string> = {
 
 export default function CandidateConsentPage() {
   const [step, setStep] = useState<1 | 2 | 3 | 4>(1);
+  const [initializing, setInitializing] = useState(true);
   const [cccd, setCccd] = useState("");
   const [phone, setPhone] = useState("");
   const [loading, setLoading] = useState(false);
@@ -45,12 +46,43 @@ export default function CandidateConsentPage() {
   const [receipt, setReceipt] = useState<{ receiptId: string; confirmedAtServer: string; documentVersion: number | null } | null>(null);
   const [viewed, setViewed] = useState(false);
 
-  const loadDocuments = async () => {
+  /**
+   * Loads the document list for the CURRENT session cookie (no CCCD/phone
+   * re-entry). Returns whether the session is still valid: a 401 means the
+   * access session (issued by /lookup, 20-minute TTL — see session-store.ts)
+   * has expired or been revoked, and is the ONLY case that sends the
+   * candidate back to the CCCD+phone lookup screen (step 1) — never a plain
+   * page reload or navigating back from a confirmed document, which must
+   * reuse this same still-valid session instead of forcing a re-lookup.
+   */
+  const loadDocuments = async (): Promise<boolean> => {
     const res = await fetch("/api/candidate-consent/documents", { cache: "no-store" });
-    if (!res.ok) return;
+    if (res.status === 401) {
+      setDocuments([]);
+      setStep(1);
+      return false;
+    }
+    if (!res.ok) return false;
     const data = await res.json();
     setDocuments(data.documents ?? []);
+    return true;
   };
+
+  // Session-aware mount check: a page reload (common on mobile — background
+  // tab reclaim, opening the link fresh from a message) must not force a
+  // re-lookup while the httpOnly access-session cookie is still valid. Only
+  // when it genuinely isn't (401) does the lookup screen show.
+  useEffect(() => {
+    let cancelled = false;
+    void (async () => {
+      const ok = await loadDocuments();
+      if (!cancelled && ok) setStep(2);
+      if (!cancelled) setInitializing(false);
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, []);
 
   const search = async () => {
     if (!isValidCccd(cccd)) {
@@ -120,7 +152,11 @@ export default function CandidateConsentPage() {
         <BrandLogo />
       </div>
 
-      {step === 1 && (
+      {initializing && (
+        <p className="py-8 text-center text-xs text-slate-500">Đang kiểm tra phiên...</p>
+      )}
+
+      {!initializing && step === 1 && (
         <Card>
           <CardContent className="space-y-4 p-4">
             <h1 className="text-center text-base font-bold text-slate-900">TRA CỨU HỒ SƠ</h1>
@@ -195,7 +231,20 @@ export default function CandidateConsentPage() {
                 <p>Trạng thái: ĐÃ XÁC NHẬN</p>
               </div>
             )}
-            <Button variant="outline" className="w-full" onClick={() => setStep(2)}>
+            <Button
+              variant="outline"
+              className="w-full"
+              onClick={() =>
+                void loadDocuments().then((ok) => {
+                  // loadDocuments() already routes to step 1 on a genuinely
+                  // expired/revoked session (401) — otherwise reuse the SAME
+                  // session to show the refreshed list (the just-confirmed
+                  // document must show ĐÃ XÁC NHẬN, not the stale pre-confirm
+                  // status still held in local state).
+                  if (ok) setStep(2);
+                })
+              }
+            >
               <FileText className="mr-1.5 h-4 w-4" /> Xem hồ sơ khác
             </Button>
           </CardContent>

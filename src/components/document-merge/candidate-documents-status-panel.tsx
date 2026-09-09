@@ -73,6 +73,8 @@ export function CandidateDocumentsStatusPanel() {
   const [reissuingId, setReissuingId] = useState<string | null>(null);
   const [issuingId, setIssuingId] = useState<string | null>(null);
   const [batchIssuing, setBatchIssuing] = useState(false);
+  const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
+  const [bulkIssuing, setBulkIssuing] = useState(false);
   const finalizingRef = useRef(false);
 
   const load = useCallback(async () => {
@@ -91,6 +93,17 @@ export function CandidateDocumentsStatusPanel() {
   useEffect(() => {
     void load();
   }, [load]);
+
+  // Prune the selection whenever the row set refreshes — a document that
+  // left READY (issued by this action, by another staff member, or revoked)
+  // must never remain selected, and a bulk request must never re-target it.
+  useEffect(() => {
+    setSelectedIds((prev) => {
+      const readyNow = new Set(documents.filter((d) => d.status === "READY").map((d) => d.id));
+      const next = new Set([...prev].filter((id) => readyNow.has(id)));
+      return next.size === prev.size ? prev : next;
+    });
+  }, [documents]);
 
   // Write-side finalizer poll: explicit POST, only while something is
   // GENERATING, never a passive side effect of the read-only GET above.
@@ -150,6 +163,55 @@ export function CandidateDocumentsStatusPanel() {
     }
   };
 
+  const readyDocuments = documents.filter((d) => d.status === "READY");
+  const toggleSelected = (id: string) => {
+    setSelectedIds((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+  };
+  const allReadySelected = readyDocuments.length > 0 && readyDocuments.every((d) => selectedIds.has(d.id));
+  const toggleSelectAll = () => {
+    setSelectedIds((prev) => {
+      // Toggling never trusts client-side staleness blindly: it operates
+      // strictly on the CURRENTLY VISIBLE READY rows, and the server still
+      // independently re-checks status='READY' via its own CAS UPDATE
+      // regardless of what this selection sends.
+      if (allReadySelected) return new Set();
+      return new Set(readyDocuments.map((d) => d.id));
+    });
+  };
+
+  const issueSelected = async () => {
+    if (selectedIds.size === 0) return;
+    const ids = [...selectedIds];
+    if (!confirm(`Phát hành ${ids.length} hồ sơ đã chọn cho ứng viên?`)) return;
+    setBulkIssuing(true);
+    try {
+      const res = await fetch("/api/document-merge/candidate-documents/issue-ready", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ ids }),
+      });
+      if (!res.ok) {
+        const data = await res.json().catch(() => ({}));
+        alert(data.error || "Không phát hành được.");
+        return;
+      }
+      const data: { results?: { id: string; outcome: string }[] } = await res.json().catch(() => ({}));
+      const notReady = (data.results ?? []).filter((r) => r.outcome === "not_ready").length;
+      if (notReady > 0) {
+        alert(`${notReady} hồ sơ trong số đã chọn không còn ở trạng thái SẴN SÀNG (có thể đã được phát hành/thu hồi bởi thao tác khác) — đã bỏ qua, các hồ sơ còn lại vẫn được phát hành.`);
+      }
+      setSelectedIds(new Set());
+      await load();
+    } finally {
+      setBulkIssuing(false);
+    }
+  };
+
   const revoke = async (id: string) => {
     if (!confirm("Thu hồi hồ sơ này? Ứng viên sẽ không thể xem/xác nhận nữa.")) return;
     setRevokingId(id);
@@ -191,6 +253,16 @@ export function CandidateDocumentsStatusPanel() {
           <ShieldCheck className="h-4 w-4 text-indigo-700" /> Hồ sơ xác nhận điện tử
         </h3>
         <div className="flex items-center gap-2">
+          {selectedIds.size > 0 && (
+            <button
+              type="button"
+              onClick={() => void issueSelected()}
+              disabled={bulkIssuing}
+              className="inline-flex items-center gap-1 rounded-lg bg-emerald-600 px-2.5 py-1 text-[11px] font-bold text-white hover:bg-emerald-700 disabled:opacity-50"
+            >
+              <Send className="h-3 w-3" /> {bulkIssuing ? "Đang phát hành..." : `Phát hành đã chọn (${selectedIds.size})`}
+            </button>
+          )}
           {summary && summary.ready > 0 && (
             <button
               type="button"
@@ -206,6 +278,10 @@ export function CandidateDocumentsStatusPanel() {
           </button>
         </div>
       </div>
+
+      {selectedIds.size > 0 && (
+        <p className="mt-2 text-[11px] font-semibold text-emerald-700">Đã chọn {selectedIds.size} hồ sơ SẴN SÀNG.</p>
+      )}
 
       {summary && (
         <div className="mt-2 flex flex-wrap gap-2 text-[10px] font-semibold">
@@ -223,6 +299,17 @@ export function CandidateDocumentsStatusPanel() {
         <table className="w-full text-left text-[11px]">
           <thead className="sticky top-0 bg-white text-slate-400">
             <tr>
+              <th className="py-1.5 pr-2 font-semibold">
+                {readyDocuments.length > 0 && (
+                  <input
+                    type="checkbox"
+                    aria-label="Chọn tất cả hồ sơ sẵn sàng"
+                    title="Chọn tất cả"
+                    checked={allReadySelected}
+                    onChange={toggleSelectAll}
+                  />
+                )}
+              </th>
               <th className="py-1.5 pr-2 font-semibold">Ứng viên</th>
               <th className="py-1.5 pr-2 font-semibold">Mẫu</th>
               <th className="py-1.5 pr-2 font-semibold">Trạng thái</th>
@@ -233,6 +320,16 @@ export function CandidateDocumentsStatusPanel() {
           <tbody>
             {documents.map((doc) => (
               <tr key={doc.id} className="border-t border-slate-100">
+                <td className="py-1.5 pr-2">
+                  {doc.status === "READY" && (
+                    <input
+                      type="checkbox"
+                      aria-label={`Chọn hồ sơ của ${doc.applicantFullName ?? doc.id}`}
+                      checked={selectedIds.has(doc.id)}
+                      onChange={() => toggleSelected(doc.id)}
+                    />
+                  )}
+                </td>
                 <td className="py-1.5 pr-2 text-slate-800">{doc.applicantFullName ?? "—"}</td>
                 <td className="py-1.5 pr-2 text-slate-500">{doc.templateName ?? "—"}</td>
                 <td className="py-1.5 pr-2">

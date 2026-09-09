@@ -35,6 +35,9 @@ type Options = {
   doc?: Record<string, unknown> | null;
   storageBytes?: Buffer | null;
   storageThrows?: boolean;
+  /** Custom error thrown by the local storage.get() call — overrides storageThrows's default GOOGLE_DRIVE_FILE_NOT_FOUND. */
+  storageError?: string;
+  workerResult?: { ok: boolean; status: number; data: Record<string, unknown> };
 };
 
 type Context = {
@@ -42,6 +45,7 @@ type Context = {
   db: FakeDb;
   updates: Record<string, unknown>[];
   storageGetCalls: string[];
+  workerCalls: { path: string; body: unknown }[];
 };
 
 type NextResponseLike = { status: number; headers: Map<string, string>; bodyBytes?: Uint8Array; jsonBody?: unknown };
@@ -68,6 +72,7 @@ function makeContext(opts: Options = {}): Context {
   });
 
   const storageGetCalls: string[] = [];
+  const workerCalls: { path: string; body: unknown }[] = [];
   const bytes = opts.storageBytes === undefined ? Buffer.from("%PDF-1.4 fake bytes") : opts.storageBytes;
 
   const moduleObj = { exports: {} as Record<string, unknown> };
@@ -107,11 +112,19 @@ function makeContext(opts: Options = {}): Context {
             getStorageProvider: () => ({
               get: async (key: string) => {
                 storageGetCalls.push(key);
-                if (opts.storageThrows) throw new Error("GOOGLE_DRIVE_FILE_NOT_FOUND");
+                if (opts.storageThrows) throw new Error(opts.storageError ?? "GOOGLE_DRIVE_FILE_NOT_FOUND");
                 if (bytes === null) throw new Error("no bytes configured");
                 return bytes;
               },
             }),
+          };
+        case "@/lib/verification/helpers":
+          return {
+            callWorker: async (path: string, body: unknown) => {
+              workerCalls.push({ path, body });
+              if (opts.workerResult) return opts.workerResult;
+              return { ok: false, status: 503, data: { error: "no worker mock configured for this test" } };
+            },
           };
         default:
           throw new Error(`Unexpected require("${id}") — route không được phụ thuộc module này.`);
@@ -138,7 +151,7 @@ function makeContext(opts: Options = {}): Context {
     return result as NextResponseLike;
   };
 
-  return { GET, db, updates, storageGetCalls };
+  return { GET, db, updates, storageGetCalls, workerCalls };
 }
 
 function requestFor(mode?: string): Request {
@@ -219,4 +232,85 @@ test("READY (not yet ISSUED) document is still viewable by staff — unlike the 
   const ctx = makeContext({ doc: { ...DOC, status: "READY" } });
   const res = await callGet(ctx, "view");
   assert.equal(res.status, 200);
+});
+
+/* ============================================================ *
+ * Worker fallback (2026-09, Defect 1 fix) — same mechanism as the
+ * candidate-facing route (PR #170): local read first, worker
+ * /read-stored-pdf only on a confirmed Google-auth failure.
+ * ============================================================ */
+
+test("healthy local storage read → 200 PDF bytes, worker never called", async () => {
+  const ctx = makeContext();
+  const res = await callGet(ctx, "view");
+
+  assert.equal(res.status, 200);
+  assert.deepEqual(ctx.storageGetCalls, [DOC.storageKey]);
+  assert.equal(ctx.workerCalls.length, 0, "healthy local read must never call the worker");
+});
+
+test("local invalid_grant → falls back to worker /read-stored-pdf → valid PDF → 200", async () => {
+  const ctx = makeContext({
+    storageThrows: true,
+    storageError: "GOOGLE_DRIVE_AUTH_FAILED: invalid_grant — Bad Request",
+    workerResult: { ok: true, status: 200, data: { pdfBase64: Buffer.from("%PDF-1.4 fake bytes").toString("base64") } },
+  });
+  const res = await callGet(ctx, "view");
+
+  assert.equal(res.status, 200);
+  assert.equal(new TextDecoder().decode(res.bodyBytes), "%PDF-1.4 fake bytes");
+  assert.equal(ctx.workerCalls.length, 1);
+  assert.equal(ctx.workerCalls[0].path, "/read-stored-pdf");
+  assert.equal((ctx.workerCalls[0].body as { key?: string }).key, DOC.storageKey);
+  assert.equal(ctx.updates.length, 0, "worker-fallback view must still never mutate the document");
+});
+
+test("local non-auth failure (file genuinely missing) does NOT fall back to the worker — 502 directly", async () => {
+  const ctx = makeContext({ storageThrows: true, storageError: "GOOGLE_DRIVE_FILE_NOT_FOUND" });
+  const res = await callGet(ctx, "view");
+
+  assert.equal(res.status, 502);
+  assert.equal(ctx.workerCalls.length, 0, "a non-auth failure must never trigger the worker fallback");
+});
+
+test("worker fallback itself fails → clean 502, no crash, no mutation", async () => {
+  const ctx = makeContext({
+    storageThrows: true,
+    storageError: "Token has been expired or revoked.",
+    workerResult: { ok: false, status: 502, data: { error: "worker could not reach storage either" } },
+  });
+  const res = await callGet(ctx, "view");
+
+  assert.equal(res.status, 502);
+  assert.equal(ctx.workerCalls.length, 1);
+  assert.equal(ctx.updates.length, 0);
+});
+
+test("invalid PDF body (bad signature) from the worker fallback is rejected — 502, not streamed to staff", async () => {
+  const ctx = makeContext({
+    storageThrows: true,
+    storageError: "GOOGLE_DRIVE_AUTH_FAILED: invalid_grant — Bad Request",
+    workerResult: { ok: true, status: 200, data: { pdfBase64: Buffer.from("not a pdf at all").toString("base64") } },
+  });
+  const res = await callGet(ctx, "view");
+
+  assert.equal(res.status, 502);
+});
+
+test("mode=download still works via the worker fallback path — attachment disposition, same bytes", async () => {
+  const ctx = makeContext({
+    storageThrows: true,
+    storageError: "GOOGLE_DRIVE_AUTH_FAILED: invalid_grant — Bad Request",
+    workerResult: { ok: true, status: 200, data: { pdfBase64: Buffer.from("%PDF-1.4 fake bytes").toString("base64") } },
+  });
+  const res = await callGet(ctx, "download");
+
+  assert.equal(res.status, 200);
+  assert.match(res.headers.get("content-disposition") ?? "", /^attachment;/);
+  assert.equal(new TextDecoder().decode(res.bodyBytes), "%PDF-1.4 fake bytes");
+});
+
+test("route never calls any render/generation function — no regeneration, only the persisted artifact is ever streamed", () => {
+  const routeSource = readFileSync(new URL(`../../../../../${ROUTE_PATH}`, import.meta.url), "utf8");
+  assert.doesNotMatch(routeSource, /renderPdfBytes|renderApplicantHtml|exportGoogleDocAsPdf/);
 });
