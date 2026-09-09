@@ -171,6 +171,9 @@ export async function POST(request: Request) {
   return NextResponse.json({
     success: true,
     sessionId,
-    fullName: normalizePersonName(identity.dwFullName ?? ""),
+    // Fall back to the matched application's own fullName (already scoped by
+    // the same CCCD+phone check — not additional PII) when the candidate has
+    // no dwData row, so the greeting never silently falls back to "bạn".
+    fullName: normalizePersonName(identity.dwFullName ?? identity.applicationFullName ?? ""),
   });
 }
