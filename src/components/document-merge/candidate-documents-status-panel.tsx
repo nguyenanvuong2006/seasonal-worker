@@ -17,7 +17,7 @@
  */
 
 import { useCallback, useEffect, useRef, useState } from "react";
-import { Download, Eye, Printer, RefreshCw, RotateCcw, Send, ShieldCheck, XCircle } from "lucide-react";
+import { Download, Eye, FileCheck2, Printer, RefreshCw, RotateCcw, Send, ShieldCheck, XCircle } from "lucide-react";
 
 const STATUS_LABEL: Record<string, string> = {
   GENERATING: "ĐANG TẠO",
@@ -367,6 +367,37 @@ export function CandidateDocumentsStatusPanel() {
                           className="inline-flex items-center gap-1 rounded-lg border border-slate-200 px-2 py-0.5 text-[10px] font-semibold text-slate-600 hover:bg-slate-50"
                         >
                           <Printer className="h-3 w-3" /> In
+                        </a>
+                      </>
+                    )}
+                    {doc.status === "CONFIRMED" && doc.confirmation && (
+                      <>
+                        <a
+                          href={`/xac-thuc-ho-so/${encodeURIComponent(doc.confirmation.receiptId)}/bien-nhan`}
+                          target="_blank"
+                          rel="noreferrer"
+                          title="Xem biên nhận xác nhận điện tử"
+                          className="inline-flex items-center gap-1 rounded-lg border border-emerald-200 px-2 py-0.5 text-[10px] font-semibold text-emerald-700 hover:bg-emerald-50"
+                        >
+                          <FileCheck2 className="h-3 w-3" /> Xem biên nhận
+                        </a>
+                        <a
+                          href={`/xac-thuc-ho-so/${encodeURIComponent(doc.confirmation.receiptId)}/bien-nhan?print=1`}
+                          target="_blank"
+                          rel="noreferrer"
+                          title="Tải biên nhận (mở hộp thoại in — chọn 'Lưu dưới dạng PDF')"
+                          className="inline-flex items-center gap-1 rounded-lg border border-emerald-200 px-2 py-0.5 text-[10px] font-semibold text-emerald-700 hover:bg-emerald-50"
+                        >
+                          <Download className="h-3 w-3" /> Tải biên nhận
+                        </a>
+                        <a
+                          href={`/xac-thuc-ho-so/${encodeURIComponent(doc.confirmation.receiptId)}`}
+                          target="_blank"
+                          rel="noreferrer"
+                          title="Xác thực công khai (trang bên thứ ba dùng để kiểm tra)"
+                          className="inline-flex items-center gap-1 rounded-lg border border-indigo-200 px-2 py-0.5 text-[10px] font-semibold text-indigo-700 hover:bg-indigo-50"
+                        >
+                          <ShieldCheck className="h-3 w-3" /> Xác thực
                         </a>
                       </>
                     )}

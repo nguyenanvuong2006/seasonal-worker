@@ -40,6 +40,18 @@ export function ipLimiterKey(ip: string, secret: string): string {
   return hmacSha256Hex(`ip:${ip}`, secret);
 }
 
+/**
+ * Separate namespace from ipLimiterKey (distinct "verify-ip:" prefix) so the
+ * public verification endpoint's rate-limit bucket never shares state with
+ * the CCCD+phone lookup endpoint's — a burst of legitimate verification
+ * checks must never accidentally lock a candidate out of /lookup, or vice
+ * versa, even though both are stored in the same identity_lookup_attempts
+ * table (see rate-limiter.ts's own docblock for why that table is reused).
+ */
+export function verifyIpLimiterKey(ip: string, secret: string): string {
+  return hmacSha256Hex(`verify-ip:${ip}`, secret);
+}
+
 export function cccdHmac(cccd: string, secret: string): string {
   return hmacSha256Hex(`cccd:${normalizeCccd(cccd)}`, secret);
 }
