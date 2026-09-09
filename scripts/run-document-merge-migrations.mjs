@@ -4,7 +4,7 @@
  *
  * KHÁC với scripts/run-migrations.mjs (thiết kế cho fresh/staging DB — chạy
  * TOÀN BỘ schema.sql + TOÀN BỘ migrations/*.sql, kể cả các migration không
- * liên quan Document Merge): script này CHỈ chạy 12 migration Document Merge
+ * liên quan Document Merge): script này CHỈ chạy 13 migration Document Merge
  * cụ thể, theo đúng thứ tự khai báo bên dưới, trên 1 database ĐÃ CÓ schema
  * nền tảng (production) — không đụng tới bất kỳ bảng/migration nào khác.
  *
@@ -12,7 +12,7 @@
  *   export DATABASE_URL=postgresql://...   # PROD_DATABASE_URL — KHÔNG dùng staging!
  *   node scripts/run-document-merge-migrations.mjs
  *
- * An toàn: cả 12 migration đều idempotent (ADD COLUMN IF NOT EXISTS / CREATE
+ * An toàn: cả 13 migration đều idempotent (ADD COLUMN IF NOT EXISTS / CREATE
  * TABLE IF NOT EXISTS / ON CONFLICT DO NOTHING / WHERE NOT EXISTS). Không
  * DROP/TRUNCATE/DELETE. Không seed dữ liệu test/verification — chỉ seed
  * permissions hệ thống + 1 template thật (Đăng ký tập nghề) ở trạng thái
@@ -58,7 +58,7 @@ if (!DATABASE_URL) {
   process.exit(1);
 }
 
-// Đúng 12 migration Document Merge, ĐÚNG THỨ TỰ — KHÔNG đọc toàn bộ thư mục
+// Đúng 13 migration Document Merge, ĐÚNG THỨ TỰ — KHÔNG đọc toàn bộ thư mục
 // migrations/ (khác run-migrations.mjs) để không vô tình chạy migration của
 // tính năng khác trên production (production có lịch sử migration riêng,
 // không đảm bảo đồng bộ với danh sách file hiện tại của thư mục này).
@@ -125,6 +125,15 @@ const DOCUMENT_MERGE_MIGRATIONS = [
   // touches PUBLISHED or current_published_version. See the migration
   // file's own docblock for the full measured root-cause analysis.
   "2026-09-07-trainee-registration-v20-signature-and-section7-flow-draft.sql",
+  // In-place edit of the EXISTING v20 DRAFT row (NOT a new version, NOT an
+  // INSERT): restores margins to 10/10/12/12, inserts one forced page
+  // break (.manual-page-break) before "e. Phải đăng ký đầy đủ danh sách"
+  // in the Trainee Regulation section. Targeted string REPLACE — any other
+  // content already saved on this DRAFT is preserved. Guarded by
+  // status='DRAFT' + this row's own source_docx_name + a NOT LIKE
+  // idempotency check — a second run is a no-op. Never touches PUBLISHED
+  // or current_published_version.
+  "2026-09-09-trainee-registration-v20-manual-page-break-margin-restore.sql",
 ];
 
 const client = new pg.Client({ connectionString: DATABASE_URL, ssl: { rejectUnauthorized: false } });
