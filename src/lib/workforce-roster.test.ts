@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { createFakeDb, drizzleStub, makeTable, eqValue, inArrayValues, type QueryCall } from "./test-support/fake-drizzle.ts";
+import { createFakeDb, drizzleStub, makeTable, eqValue, inArrayValues, sqlTexts, type QueryCall } from "./test-support/fake-drizzle.ts";
 import { loadModule, serverOnlyStub } from "./test-support/load-module.ts";
 
 /**
@@ -16,14 +16,17 @@ import { loadModule, serverOnlyStub } from "./test-support/load-module.ts";
  *   - UPCOMING_RESIGNATION/UPCOMING_TRANSFER narrow ACTIVE rows to those carrying the matching
  *     upcoming-movement badge data.
  *   - RESIGNED/TRANSFERRED (history) only ever return movements in the terminal APPROVED status
- *     (INACTIVE/TRANSFER_COMPLETED), and apply the SAME movementScopeVisibility Data Scope rule
- *     GET /api/workforce-movements already uses (FULL/REDACTED_INCOMING/NONE) — never a second,
- *     looser definition of who may see a movement.
- *   - PRODUCTION INCIDENT REGRESSION (2026-09-10, "Lỗi tải hồ sơ"): activeRows()/historyRows()
- *     never reference workforce_movements.lifecycle_applied_at — that column doesn't exist yet
- *     in Production (the migration that adds it was never applied there), so referencing it
- *     anywhere in these queries makes the WHOLE query throw (Postgres 42703), not just silently
- *     omit a field. See src/lib/worker-360-profile.ts's own note for the same finding.
+ *     (INACTIVE/TRANSFER_COMPLETED) that have ALSO already taken effect (lifecycleAppliedAt IS
+ *     NOT NULL — a future-dated approval stays out of history until its effective date), and
+ *     apply the SAME movementScopeVisibility Data Scope rule GET /api/workforce-movements
+ *     already uses (FULL/REDACTED_INCOMING/NONE) — never a second, looser definition of who may
+ *     see a movement.
+ *   - PRODUCTION INCIDENT REGRESSION (2026-09-10, "Lỗi tải hồ sơ"): workforce_movements.
+ *     lifecycle_applied_at didn't exist in Production at the time (the migration that adds it
+ *     had been merged but never applied there), so any reference to it made the WHOLE query
+ *     throw (Postgres 42703). That migration has since been applied and verified read-only —
+ *     activeRows()/historyRows() now use the real column again (see src/lib/worker-360-
+ *     profile.ts's own note for the same history).
  */
 
 const employmentSessions = makeTable("employment_sessions");
@@ -38,21 +41,24 @@ const ACTIVE_SESSION_ROWS = [
   { workerId: "w3", fullName: "Le Van C", cccd: "010000000003", gender: "Nam", phone: "0900000003", deptId: "d2", deptName: "Vận hành", groupName: null, section: null, startingDate: "2026-01-01", upcomingType: "transfer", upcomingEffectiveDate: "2026-09-22", upcomingToDeptName: "Kho" },
 ];
 
-// Each list carries one terminal-status row (should appear in history) and one
-// STILL-PENDING row (must be excluded) — proves historyRows()'s status-based
-// filter (the incident-regression replacement for the missing-column
-// lifecycle_applied_at check) actually reaches the fake db's WHERE, not just
-// that movementType alone narrows the result.
-type MovementRow = { workerId: string; fullName: string; cccd: string; gender: string; phone: string; fromDeptId: string; toDeptId: string | null; effectiveDate: string; status: string };
+// Each list carries: one terminal-status + ALREADY-APPLIED row (must appear in history), one
+// STILL-PENDING row (must be excluded by the status filter), and one terminal-status but
+// NOT-YET-APPLIED row (approved with a future effective date — must be excluded from history
+// despite its terminal status, the exact reconciliation this canonical-column restore fixes:
+// such a movement belongs in activeRows()'s "upcoming" badge, not in history, until
+// lifecycle_applied_at is actually set).
+type MovementRow = { workerId: string; fullName: string; cccd: string; gender: string; phone: string; fromDeptId: string; toDeptId: string | null; effectiveDate: string; status: string; lifecycleAppliedAt: Date | null };
 
 const RESIGNED_MOVEMENT_ROWS: MovementRow[] = [
-  { workerId: "w9", fullName: "Pham Thi D", cccd: "010000000009", gender: "Nữ", phone: "0900000009", fromDeptId: "d1", toDeptId: null, effectiveDate: "2026-08-01", status: "INACTIVE" },
-  { workerId: "w10", fullName: "Vo Thi F", cccd: "010000000010", gender: "Nữ", phone: "0900000010", fromDeptId: "d1", toDeptId: null, effectiveDate: "2026-09-30", status: "PENDING_HR" },
+  { workerId: "w9", fullName: "Pham Thi D", cccd: "010000000009", gender: "Nữ", phone: "0900000009", fromDeptId: "d1", toDeptId: null, effectiveDate: "2026-08-01", status: "INACTIVE", lifecycleAppliedAt: new Date("2026-08-01") },
+  { workerId: "w10", fullName: "Vo Thi F", cccd: "010000000010", gender: "Nữ", phone: "0900000010", fromDeptId: "d1", toDeptId: null, effectiveDate: "2026-09-30", status: "PENDING_HR", lifecycleAppliedAt: null },
+  { workerId: "w12", fullName: "Bui Thi H", cccd: "010000000012", gender: "Nữ", phone: "0900000012", fromDeptId: "d1", toDeptId: null, effectiveDate: "2026-09-30", status: "INACTIVE", lifecycleAppliedAt: null },
 ];
 
 const TRANSFERRED_MOVEMENT_ROWS: MovementRow[] = [
-  { workerId: "w8", fullName: "Hoang Van E", cccd: "010000000008", gender: "Nam", phone: "0900000008", fromDeptId: "d1", toDeptId: "d2", effectiveDate: "2026-08-15", status: "TRANSFER_COMPLETED" },
-  { workerId: "w11", fullName: "Dang Van G", cccd: "010000000011", gender: "Nam", phone: "0900000011", fromDeptId: "d1", toDeptId: "d2", effectiveDate: "2026-09-28", status: "PENDING_HR" },
+  { workerId: "w8", fullName: "Hoang Van E", cccd: "010000000008", gender: "Nam", phone: "0900000008", fromDeptId: "d1", toDeptId: "d2", effectiveDate: "2026-08-15", status: "TRANSFER_COMPLETED", lifecycleAppliedAt: new Date("2026-08-15") },
+  { workerId: "w11", fullName: "Dang Van G", cccd: "010000000011", gender: "Nam", phone: "0900000011", fromDeptId: "d1", toDeptId: "d2", effectiveDate: "2026-09-28", status: "PENDING_HR", lifecycleAppliedAt: null },
+  { workerId: "w13", fullName: "Ly Van I", cccd: "010000000013", gender: "Nam", phone: "0900000013", fromDeptId: "d1", toDeptId: "d2", effectiveDate: "2026-09-28", status: "TRANSFER_COMPLETED", lifecycleAppliedAt: null },
 ];
 
 function respond(call: QueryCall): unknown {
@@ -72,8 +78,10 @@ function respond(call: QueryCall): unknown {
   if (call.table === "workforce_movements" && call.root === "select") {
     const movementTypeEq = eqValue(call, "workforce_movements.movementType");
     const statusEq = eqValue(call, "workforce_movements.status");
+    const requiresApplied = sqlTexts(call).some((t) => t.includes("is not null"));
     let rows = movementTypeEq === "resignation" ? RESIGNED_MOVEMENT_ROWS : movementTypeEq === "transfer" ? TRANSFERRED_MOVEMENT_ROWS : [];
     if (typeof statusEq === "string") rows = rows.filter((r) => r.status === statusEq);
+    if (requiresApplied) rows = rows.filter((r) => r.lifecycleAppliedAt !== null);
     return rows;
   }
   return undefined;
@@ -139,6 +147,18 @@ test("RESIGNED -> history rows from workforce_movements, lifecycleState=RESIGNED
   assert.equal(rows.length, 1);
   assert.equal(rows[0].lifecycleState, "RESIGNED");
   assert.equal(rows[0].fullName, "Pham Thi D");
+});
+
+test("RESIGNED excludes a terminal-status (INACTIVE) movement whose effect hasn't been applied yet (lifecycleAppliedAt still null, future effective date) — it belongs in 'upcoming', not history", async () => {
+  const mod = await load();
+  const rows = await mod.getDepartmentWorkforceRoster(null, "RESIGNED");
+  assert.ok(!rows.some((r) => r.workerId === "w12"), "a not-yet-applied resignation must not appear in history despite its terminal status");
+});
+
+test("TRANSFERRED excludes a terminal-status (TRANSFER_COMPLETED) movement whose effect hasn't been applied yet", async () => {
+  const mod = await load();
+  const rows = await mod.getDepartmentWorkforceRoster(null, "TRANSFERRED");
+  assert.ok(!rows.some((r) => r.workerId === "w13"), "a not-yet-applied transfer must not appear in history despite its terminal status");
 });
 
 test("RESIGNED, scope excludes the resignation's department -> NONE visibility hides the row entirely", async () => {
