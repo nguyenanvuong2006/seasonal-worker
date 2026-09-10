@@ -114,6 +114,15 @@ const HANDLERS: Record<string, () => Promise<Record<string, unknown>>> = {
     const count = await recomputeRequestKpiCache();
     return { recomputed: count };
   },
+  APPLY_EFFECTIVE_WORKFORCE_MOVEMENTS: async () => {
+    // WORKER LIFECYCLE CONSISTENCY (2026-09-10) — backstop trigger cho các yêu cầu Nghỉ
+    // việc/Thuyên chuyển đã được HR duyệt với ngày hiệu lực trong tương lai (lúc duyệt còn
+    // chưa tới ngày nên effect bị hoãn — xem lib/workforce-movements.ts). Đảm bảo hệ thống
+    // ĐÚNG dù không ai mở UI vào đúng ngày hiệu lực: mỗi lần cron chạy (kể cả nhiều lần/ngày)
+    // đều quét lại và áp dụng những gì đã tới hạn — idempotent (lifecycleAppliedAt guard).
+    const { applyEffectiveWorkforceMovements } = await import("@/lib/workforce-movements");
+    return applyEffectiveWorkforceMovements();
+  },
 };
 
 export const DEFAULT_SCHEDULED_JOBS: { jobKey: string; label: string; schedule: string; handlerKey: string }[] = [
@@ -124,6 +133,7 @@ export const DEFAULT_SCHEDULED_JOBS: { jobKey: string; label: string; schedule: 
   { jobKey: "cleanup_import_staging", label: "Dọn staging của Import Job đã hoàn tất/huỷ (>24h)", schedule: "daily", handlerKey: "CLEANUP_IMPORT_STAGING" },
   { jobKey: "recompute_request_kpi_cache", label: "Recompute KPI cache của Workforce Request", schedule: "hourly", handlerKey: "RECOMPUTE_REQUEST_KPI_CACHE" },
   { jobKey: "recover_stale_merge_jobs", label: "Watchdog: phục hồi Merge Job bị treo (GOOGLE_DOCS kẹt PROCESSING)", schedule: "daily", handlerKey: "RECOVER_STALE_MERGE_JOBS" },
+  { jobKey: "apply_effective_workforce_movements", label: "Áp dụng hiệu lực Nghỉ việc/Thuyên chuyển đến ngày hiệu lực", schedule: "daily", handlerKey: "APPLY_EFFECTIVE_WORKFORCE_MOVEMENTS" },
 ];
 
 /** Chạy toàn bộ job đang Active — gọi từ /api/cron/run. */

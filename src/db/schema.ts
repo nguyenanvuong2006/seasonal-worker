@@ -727,6 +727,16 @@ export const workforceMovements = pgTable(
     confirmedAt: timestamp("confirmed_at", { withTimezone: true }),
     source: varchar("source", { length: 32 }),
     requestedBy: varchar("requested_by", { length: 64 }).notNull(),
+    // EFFECTIVE-DATE LIFECYCLE (2026-09-10) — confirmedAt records WHEN HR approved the
+    // REQUEST; lifecycleAppliedAt records WHEN the actual workforce state change (session
+    // ended / department moved, allocation cleanup, KPI recompute) was APPLIED. These can
+    // differ: approving a future-dated resignation/transfer sets confirmedAt now but leaves
+    // lifecycleAppliedAt NULL until effectiveDate arrives — applyMovementAction() applies it
+    // immediately when effectiveDate <= today, otherwise applyEffectiveWorkforceMovements(asOf)
+    // (run by the cron scheduler, see lib/scheduler.ts) applies it later. NULL = "approved but
+    // not yet in effect" (worker/department still shows the PRE-movement state — "Sắp nghỉ"/
+    // "Sắp chuyển"); non-null = the idempotency guard preventing a double-apply.
+    lifecycleAppliedAt: timestamp("lifecycle_applied_at", { withTimezone: true }),
     createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
     updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
   },
@@ -735,6 +745,12 @@ export const workforceMovements = pgTable(
     index("workforce_movement_worker_idx").on(t.workerId),
     index("workforce_movement_status_idx").on(t.status),
     index("workforce_movement_type_status_idx").on(t.movementType, t.status),
+    // EFFECTIVE-DATE LIFECYCLE — applyEffectiveWorkforceMovements(asOf) scans exactly this
+    // shape (not-yet-applied, due by date) on every cron tick; partial index keeps that scan
+    // cheap regardless of how large the fully-applied history grows.
+    index("workforce_movement_pending_effect_idx")
+      .on(t.effectiveDate)
+      .where(sql`lifecycle_applied_at is null`),
     // P1-2 (Production Hardening Audit) — lưới an toàn cấp DB chống SPAWN_RESIGNATION sinh
     // trùng (double-click/retry/race) — 1 movement (`relatedMovementId`) chỉ được sinh ra ĐÚNG
     // 1 resignation liên kết. Kiểm tra idempotent ở tầng transaction (lib/workforce-movements.ts)
