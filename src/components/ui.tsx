@@ -758,29 +758,55 @@ const TONE_FILL: Record<Tone, string> = {
 };
 
 /** Compact inline metric: icon · value · label · context. Replaces the
- *  row of identical white KPI cards on operational screens. */
+ *  row of identical white KPI cards on operational screens. Optionally
+ *  clickable (Daily Operations KPI-click-to-filter — DAY OPS Phase 4):
+ *  pass `onClick` to render as a real <button> (keyboard/AT accessible)
+ *  instead of an inert <div>; `active` highlights it as the currently
+ *  applied filter. Non-clickable usages (no onClick) are unchanged. */
 export function MetricStripItem({
   icon,
   value,
   label,
   context,
   tone = "primary",
+  onClick,
+  active = false,
 }: {
   icon: React.ReactNode;
   value: React.ReactNode;
   label: string;
   context?: React.ReactNode;
   tone?: Tone;
+  onClick?: () => void;
+  active?: boolean;
 }) {
-  return (
-    <div className="flex min-w-0 items-center gap-3 px-4 py-2.5">
+  const content = (
+    <>
       <div className={cn("flex h-9 w-9 shrink-0 items-center justify-center rounded-[10px] ring-1 ring-black/[0.03]", TONE_ICON[tone])}>{icon}</div>
       <div className="min-w-0">
         <p className="text-[20px] font-bold leading-none tracking-tight tabular-nums text-fg">{value}</p>
         <p className="mt-1 truncate text-[11.5px] font-semibold text-fg-secondary">{label}</p>
         {context ? <p className="mt-0.5 truncate text-[10.5px] text-fg-muted">{context}</p> : null}
       </div>
-    </div>
+    </>
+  );
+
+  if (!onClick) {
+    return <div className="flex min-w-0 items-center gap-3 px-4 py-2.5">{content}</div>;
+  }
+
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      aria-pressed={active}
+      className={cn(
+        "flex min-w-0 items-center gap-3 px-4 py-2.5 text-left transition-colors hover:bg-primary-tint/40 focus:outline-none focus-visible:ring-2 focus-visible:ring-primary/40",
+        active && "bg-primary-tint/60",
+      )}
+    >
+      {content}
+    </button>
   );
 }
 

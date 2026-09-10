@@ -1,9 +1,9 @@
 "use client";
 
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { Badge, Button, Card, EmptyState, ErrorState, Input, MetricStrip, MetricStripItem, PageHeader, SkeletonTable } from "@/components/ui";
 import { formatDate, todayStr } from "@/lib/helpers";
-import { Calendar, Download, RefreshCw, Search, UtensilsCrossed } from "lucide-react";
+import { Calendar, CheckCircle2, Download, RefreshCw, Search, UtensilsCrossed, XCircle } from "lucide-react";
 
 type Row = {
   dailyApplicationId: string;
@@ -18,11 +18,15 @@ type Row = {
 };
 
 type DeptOption = { id: string; deptName: string; groupName: string | null };
+type StatusFilter = "ALL" | "ELIGIBLE" | "INELIGIBLE";
+
+const isEligible = (r: Row) => !!(r.code && r.code.trim());
 
 export default function MealExportPage() {
   const [date, setDate] = useState(todayStr());
   const [deptId, setDeptId] = useState("");
   const [q, setQ] = useState("");
+  const [status, setStatus] = useState<StatusFilter>("ELIGIBLE");
   const [depts, setDepts] = useState<DeptOption[]>([]);
   const [rows, setRows] = useState<Row[] | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -40,11 +44,14 @@ export default function MealExportPage() {
     })();
   }, []);
 
+  // Luôn tải TOÀN BỘ (status=ALL, server-authorized theo date/deptId/q) — bộ
+  // lọc trạng thái áp dụng ở client trên CÙNG tập dữ liệu, để KPI và danh
+  // sách hiển thị luôn nhất quán (bấm 1 thẻ KPI không cần gọi lại API).
   const load = useCallback(async (d: string, dept: string, query: string) => {
     setLoading(true);
     setError(null);
     try {
-      const params = new URLSearchParams({ date: d });
+      const params = new URLSearchParams({ date: d, status: "ALL" });
       if (dept) params.set("deptId", dept);
       if (query.trim()) params.set("q", query.trim());
       const res = await fetch(`/api/meal?${params.toString()}`);
@@ -75,8 +82,21 @@ export default function MealExportPage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [q]);
 
+  const stats = useMemo(() => {
+    const total = rows?.length ?? 0;
+    const eligible = rows?.filter(isEligible).length ?? 0;
+    return { total, eligible, ineligible: total - eligible };
+  }, [rows]);
+
+  const displayRows = useMemo(() => {
+    if (!rows) return rows;
+    if (status === "ELIGIBLE") return rows.filter(isEligible);
+    if (status === "INELIGIBLE") return rows.filter((r) => !isEligible(r));
+    return rows;
+  }, [rows, status]);
+
   const exportHref = (() => {
-    const params = new URLSearchParams({ date });
+    const params = new URLSearchParams({ date, status });
     if (deptId) params.set("deptId", deptId);
     if (q.trim()) params.set("q", q.trim());
     return `/api/meal/export?${params.toString()}`;
@@ -91,7 +111,9 @@ export default function MealExportPage() {
 
       <MetricStrip
         items={[
-          <MetricStripItem key="total" icon={<UtensilsCrossed className="h-4 w-4" />} value={rows?.length ?? 0} label="Đủ điều kiện báo cơm" context={formatDate(date)} tone="primary" />,
+          <MetricStripItem key="total" icon={<UtensilsCrossed className="h-4 w-4" />} value={stats.total} label="Đã nhập DW" context={formatDate(date)} tone="primary" onClick={() => setStatus("ALL")} active={status === "ALL"} />,
+          <MetricStripItem key="eligible" icon={<CheckCircle2 className="h-4 w-4" />} value={stats.eligible} label="Đủ điều kiện" tone="success" onClick={() => setStatus("ELIGIBLE")} active={status === "ELIGIBLE"} />,
+          <MetricStripItem key="ineligible" icon={<XCircle className="h-4 w-4" />} value={stats.ineligible} label="Không đủ điều kiện" tone="warning" onClick={() => setStatus("INELIGIBLE")} active={status === "INELIGIBLE"} />,
         ]}
       />
 
@@ -115,6 +137,18 @@ export default function MealExportPage() {
                   {d.groupName ? ` — ${d.groupName}` : ""}
                 </option>
               ))}
+            </select>
+          </div>
+          <div>
+            <p className="mb-1 text-[11px] font-semibold text-fg-muted">Lọc</p>
+            <select
+              value={status}
+              onChange={(e) => setStatus(e.target.value as StatusFilter)}
+              className="h-10 rounded-[10px] border border-border-strong bg-surface px-3 text-[13px] font-medium text-fg outline-none focus:border-primary focus:ring-2 focus:ring-primary/15"
+            >
+              <option value="ALL">Tất cả</option>
+              <option value="ELIGIBLE">Đủ điều kiện</option>
+              <option value="INELIGIBLE">Không đủ điều kiện</option>
             </select>
           </div>
           <Button variant="outline" className="h-10" onClick={() => setDate(todayStr())}>
@@ -146,10 +180,10 @@ export default function MealExportPage() {
           </div>
         ) : error ? (
           <ErrorState description={error} onRetry={() => void load(date, deptId, q)} />
-        ) : !rows || rows.length === 0 ? (
+        ) : !displayRows || displayRows.length === 0 ? (
           <EmptyState
-            title="Chưa có lao động nào đủ điều kiện báo cơm"
-            description="Danh sách chỉ gồm lao động đã nhập DW Data và đã có Mã số công nhật trong ngày đã chọn."
+            title="Không có lao động nào phù hợp bộ lọc"
+            description="Danh sách hiển thị lao động đã được Recruiter đưa vào DW Data, khớp bộ lọc hiện tại."
           />
         ) : (
           <div className="v2-scroll max-h-[65vh] overflow-auto">
@@ -165,11 +199,11 @@ export default function MealExportPage() {
                 </tr>
               </thead>
               <tbody>
-                {rows.map((r, idx) => (
+                {displayRows.map((r, idx) => (
                   <tr key={r.dailyApplicationId} className="border-b border-border/70 bg-surface hover:bg-botanical-50">
                     <td className="px-3 py-1.5 text-fg-muted">{idx + 1}</td>
                     <td className="px-3 py-1.5">
-                      <Badge tone="green">{r.code}</Badge>
+                      {r.code ? <Badge tone="green">{r.code}</Badge> : <Badge tone="amber">Chưa có mã</Badge>}
                     </td>
                     <td className="px-3 py-1.5 font-semibold text-fg">{r.fullName}</td>
                     <td className="px-3 py-1.5 font-mono">{r.cccd}</td>

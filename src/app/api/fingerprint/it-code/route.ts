@@ -1,12 +1,13 @@
 import { NextResponse } from "next/server";
-import { and, desc, eq, inArray, isNotNull, isNull } from "drizzle-orm";
+import { and, eq, inArray, isNull } from "drizzle-orm";
 import { db } from "@/db";
-import { dailyApplications, departments, dwData, workerProfiles } from "@/db/schema";
+import { dailyApplications, dwData, workerProfiles } from "@/db/schema";
 import { getUserScope, hasPermission, requirePermission, writeAudit } from "@/lib/auth";
 import { scopeAllowsDepartment } from "@/lib/data-scope";
 import { normalizePersonName } from "@/lib/person-name";
 import { todayStr } from "@/lib/helpers";
-import { hasDailyCode, isEligibleForFingerprintQueue, maskCccd } from "@/lib/daily-intake-workflow";
+import { hasDailyCode, maskCccd } from "@/lib/daily-intake-workflow";
+import { getFingerprintItCodeRows, type FingerprintStatusFilter } from "@/lib/fingerprint-it-code-list";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -15,7 +16,9 @@ export const dynamic = "force-dynamic";
  * FINGERPRINT_STAFF — "IT Code / Vân tay" (mục VIII).
  * Hàng chờ = lao động đã nhập DW Data VÀ đã có Mã số công nhật (dw_data.code).
  * IT CODE KHÔNG phải điều kiện của Meal/Merge/Employment — chỉ là ĐẦU RA của
- * chính màn này (mục IX, XV).
+ * chính màn này (mục IX, XV). Hỗ trợ deptId + q + filter(=status) — CÙNG bộ
+ * filter với GET /api/fingerprint/it-code/export để danh sách hiển thị và
+ * file xuất luôn khớp nhau (theo đúng mẫu lib/meal-list.ts).
  */
 export async function GET(req: Request) {
   const guard = await requirePermission(["ADMIN", "FINGERPRINT_STAFF"], "fingerprint.view");
@@ -23,53 +26,21 @@ export async function GET(req: Request) {
 
   const url = new URL(req.url);
   const date = url.searchParams.get("date") || todayStr();
-  const filter = url.searchParams.get("filter"); // ALL | MISSING | DONE
+  const deptId = url.searchParams.get("deptId") || null;
+  const q = url.searchParams.get("q") || null;
+  const filter = (url.searchParams.get("filter") as FingerprintStatusFilter | null) || "ALL"; // ALL | MISSING | DONE
 
   const scope = await getUserScope(guard.session);
-  const conditions = [
-    eq(dailyApplications.regDate, date),
-    isNull(dailyApplications.deletedAt),
-    isNotNull(dailyApplications.dwImportedAt),
-  ];
-  if (scope !== null) {
-    if (scope.length === 0) return NextResponse.json({ rows: [], date });
-    conditions.push(inArray(dailyApplications.deptId, scope));
+  if (deptId && !scopeAllowsDepartment(scope, deptId)) {
+    return NextResponse.json({ error: "Ngoài phạm vi dữ liệu được cấp." }, { status: 403 });
   }
 
-  const rows = await db
-    .select({
-      dailyApplicationId: dailyApplications.id,
-      cccd: dailyApplications.cccd,
-      fullName: dailyApplications.fullName,
-      deptId: dailyApplications.deptId,
-      deptName: departments.deptName,
-      groupName: departments.groupName,
-      dwImportedAt: dailyApplications.dwImportedAt,
-      dwDataId: dwData.id,
-      code: dwData.code,
-      itCode: dwData.itCode,
-      itCodeUpdatedAt: dwData.itCodeUpdatedAt,
-      itCodeUpdatedBy: dwData.itCodeUpdatedBy,
-    })
-    .from(dailyApplications)
-    .innerJoin(dwData, eq(dailyApplications.dwId, dwData.id))
-    .leftJoin(departments, eq(dailyApplications.deptId, departments.id))
-    .where(and(...conditions))
-    .orderBy(desc(dailyApplications.dwImportedAt));
+  const rows = await getFingerprintItCodeRows(date, scope, { deptId, q, status: filter });
 
   // BLOCKER #3 — FINGERPRINT_STAFF không có privacy.view_cccd theo baseline:
   // KHÔNG được trả CCCD đầy đủ mặc định — mục IX, X.
   const canViewCccd = await hasPermission(guard.session.role, "privacy.view_cccd");
-  const eligible = rows
-    .filter((r) => isEligibleForFingerprintQueue({ status: "APPROVED", dwImportedAt: r.dwImportedAt }, { code: r.code }))
-    .map((r) => ({ ...r, fullName: normalizePersonName(r.fullName), cccd: maskCccd(r.cccd, canViewCccd) ?? r.cccd }));
-
-  const finalRows =
-    filter === "MISSING"
-      ? eligible.filter((r) => !r.itCode)
-      : filter === "DONE"
-        ? eligible.filter((r) => !!r.itCode)
-        : eligible;
+  const finalRows = rows.map((r) => ({ ...r, fullName: normalizePersonName(r.fullName), cccd: maskCccd(r.cccd, canViewCccd) ?? r.cccd }));
 
   return NextResponse.json({ rows: finalRows, date });
 }
