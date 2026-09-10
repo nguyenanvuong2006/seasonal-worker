@@ -70,10 +70,22 @@ async function activeRows(scope: string[] | null, deptId: string | undefined, to
       section: departments.section,
       startingDate: employmentSessions.startingDate,
       // Sắp nghỉ/Sắp chuyển: nearest approved-but-not-yet-effective movement for this worker.
+      //
+      // PRODUCTION INCIDENT (2026-09-10): these subqueries used to also filter
+      // `wm.lifecycle_applied_at is null`. A read-only Production diagnostic
+      // proved that column doesn't exist yet in Production (Postgres 42703) —
+      // the migration that adds it (migrations/2026-09-10-workforce-movement-
+      // effective-lifecycle.sql) was apparently never actually applied there,
+      // so ANY reference to it — including this one — makes the WHOLE query
+      // throw, not just silently omit "upcoming". Filtering by effective_date
+      // + terminal status alone (dropped below) matches this repo's own
+      // pre-migration semantics — "an approved movement whose effective date
+      // hasn't arrived yet" — and is the same fallback worker-360-profile.ts
+      // uses for the identical reason. Restore the lifecycle_applied_at
+      // filter once that migration is applied to Production.
       upcomingType: sql<string | null>`(
         select wm.movement_type from workforce_movements wm
         where wm.worker_id = ${employmentSessions.workerId}
-          and wm.lifecycle_applied_at is null
           and wm.effective_date > ${today}
           and wm.status in ('INACTIVE', 'TRANSFER_COMPLETED')
         order by wm.effective_date asc limit 1
@@ -81,7 +93,6 @@ async function activeRows(scope: string[] | null, deptId: string | undefined, to
       upcomingEffectiveDate: sql<string | null>`(
         select wm.effective_date::text from workforce_movements wm
         where wm.worker_id = ${employmentSessions.workerId}
-          and wm.lifecycle_applied_at is null
           and wm.effective_date > ${today}
           and wm.status in ('INACTIVE', 'TRANSFER_COMPLETED')
         order by wm.effective_date asc limit 1
@@ -90,7 +101,6 @@ async function activeRows(scope: string[] | null, deptId: string | undefined, to
         select d.dept_name from workforce_movements wm
         left join departments d on d.id = wm.to_dept_id
         where wm.worker_id = ${employmentSessions.workerId}
-          and wm.lifecycle_applied_at is null
           and wm.effective_date > ${today}
           and wm.status in ('INACTIVE', 'TRANSFER_COMPLETED')
         order by wm.effective_date asc limit 1
@@ -134,10 +144,12 @@ async function historyRows(
   deptId: string | undefined,
   movementType: "resignation" | "transfer",
 ): Promise<RosterRow[]> {
-  const conditions = [
-    eq(workforceMovements.movementType, movementType),
-    sql`${workforceMovements.lifecycleAppliedAt} is not null`,
-  ];
+  // PRODUCTION INCIDENT (2026-09-10): lifecycleAppliedAt does not exist yet in
+  // Production (see activeRows()'s note above — same missing-column finding).
+  // Falls back to the terminal-status predicate instead, which is what
+  // "already took effect" actually means while that migration is unapplied.
+  const terminalStatus = movementType === "resignation" ? "INACTIVE" : "TRANSFER_COMPLETED";
+  const conditions = [eq(workforceMovements.movementType, movementType), eq(workforceMovements.status, terminalStatus)];
   const rows = await db
     .select({
       workerId: workerProfiles.id,

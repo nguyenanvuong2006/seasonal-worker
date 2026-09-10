@@ -31,6 +31,7 @@ import { desc, sql } from "drizzle-orm";
 import { db, pool } from "../src/db/index.ts";
 import { employmentSessions } from "../src/db/schema.ts";
 import { getWorker360Profile } from "../src/lib/worker-360-profile.ts";
+import { getDepartmentWorkforceRoster } from "../src/lib/workforce-roster.ts";
 
 function log(event: string, data: Record<string, unknown> = {}): void {
   console.log(JSON.stringify({ event, ...data }));
@@ -102,6 +103,17 @@ async function main() {
   // A workerId that does NOT exist (valid UUID shape, no row) — must resolve
   // to profile:null, never throw.
   await tryProfile("nonexistent", "00000000-0000-0000-0000-000000000000");
+
+  // "Bộ phận của tôi" (department/page.tsx) shares the SAME lifecycle_applied_at
+  // dependency via activeRows()/historyRows() in workforce-roster.ts — verify
+  // it too, since the same missing column would break it independently of
+  // Worker 360 Profile.
+  try {
+    const roster = await getDepartmentWorkforceRoster(null, "ALL");
+    log("ROSTER_OK", { rowCount: roster.length });
+  } catch (error) {
+    log("ROSTER_ERROR", describeError(error));
+  }
 
   log("diagnostic_complete", { note: "Read-only — zero rows written or modified." });
   await pool.end();

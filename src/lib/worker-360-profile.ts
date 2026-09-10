@@ -97,7 +97,7 @@ export type Worker360Profile = {
 };
 
 function toMovement(
-  m: { id: string; movementType: string; fromDeptId: string | null; toDeptId: string | null; effectiveDate: string; status: string; reason: string | null; confirmedBy: string | null; confirmedAt: Date | null; lifecycleAppliedAt: Date | null },
+  m: { id: string; movementType: string; fromDeptId: string | null; toDeptId: string | null; effectiveDate: string; status: string; reason: string | null; confirmedBy: string | null; confirmedAt: Date | null },
   deptNameById: Map<string, string>,
 ): EngagementMovement {
   return {
@@ -112,7 +112,10 @@ function toMovement(
     reason: m.reason,
     confirmedBy: m.confirmedBy,
     confirmedAt: m.confirmedAt ? m.confirmedAt.toISOString() : null,
-    lifecycleAppliedAt: m.lifecycleAppliedAt ? m.lifecycleAppliedAt.toISOString() : null,
+    // lifecycle_applied_at doesn't exist in Production yet (see the incident
+    // note at movementRows' query above) — never guessed, always null until
+    // the migration lands; the UI falls back to showing the raw status.
+    lifecycleAppliedAt: null,
   };
 }
 
@@ -161,7 +164,35 @@ export async function getWorker360Profile(workerId: string, scope: string[] | nu
   // session's CURRENT deptId (see TRANSFER DOES NOT CREATE A NEW SESSION in the
   // module docblock) — the departments query below must cover BOTH sources or a
   // completed transfer's historical "from" department name resolves to null.
-  const movementRows = await db.select().from(workforceMovements).where(eq(workforceMovements.workerId, workerId)).orderBy(desc(workforceMovements.effectiveDate));
+  //
+  // PRODUCTION INCIDENT (2026-09-10, "Lỗi tải hồ sơ"): this used to be a blind
+  // db.select() (every column schema.ts declares for workforce_movements,
+  // including lifecycleAppliedAt). A read-only Production diagnostic proved
+  // Postgres error 42703 "column lifecycle_applied_at does not exist" — the
+  // migration that adds it (migrations/2026-09-10-workforce-movement-effective-
+  // lifecycle.sql, from the EARLIER Worker Lifecycle Consistency mission) was
+  // apparently never actually applied to Production. Explicit column list
+  // below WITHOUT lifecycleAppliedAt works around that until the migration is
+  // applied — toMovement() below is given lifecycleAppliedAt: null for every
+  // row rather than guessing, which the UI already renders as "chưa hiệu lực
+  // rõ ràng" (falls back to showing the raw status instead).
+  const movementRows = await db
+    .select({
+      id: workforceMovements.id,
+      movementType: workforceMovements.movementType,
+      workerId: workforceMovements.workerId,
+      fromDeptId: workforceMovements.fromDeptId,
+      toDeptId: workforceMovements.toDeptId,
+      effectiveDate: workforceMovements.effectiveDate,
+      reason: workforceMovements.reason,
+      status: workforceMovements.status,
+      employmentSessionId: workforceMovements.employmentSessionId,
+      confirmedBy: workforceMovements.confirmedBy,
+      confirmedAt: workforceMovements.confirmedAt,
+    })
+    .from(workforceMovements)
+    .where(eq(workforceMovements.workerId, workerId))
+    .orderBy(desc(workforceMovements.effectiveDate));
 
   const deptIds = [
     ...new Set([
