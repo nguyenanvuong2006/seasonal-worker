@@ -78,7 +78,7 @@ export async function GET(req: Request) {
           id: r.id,
           title: normalizePersonName(r.fullName),
           subtitle: `CCCD: ${mask(r.cccd, canViewCccd)}${r.phone ? " • SĐT: " + mask(r.phone, canViewPhone) : ""}`,
-          href: `/admin/worker-profiles?cccd=${encodeURIComponent(r.cccd)}`,
+          href: `/admin/worker-profiles/${r.id}`,
         })),
       });
     }

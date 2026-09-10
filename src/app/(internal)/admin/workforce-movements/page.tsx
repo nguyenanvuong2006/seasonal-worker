@@ -1,6 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useState } from "react";
+import Link from "next/link";
 import { useSearchParams } from "next/navigation";
 import {
   Badge,
@@ -38,6 +39,7 @@ type Movement = {
   createdAt: string;
 };
 type Dept = { id: string; deptName: string; groupName: string | null };
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 type Stage = { stageKey: string; label: string; color: string };
 
 const STATUS_ACTIONS: Record<string, { action: string; label: string; tone: "green" | "red" | "amber" | "gray"; icon: LucideIcon }[]> = {
@@ -384,7 +386,15 @@ export default function WorkforceMovementsPage() {
                     )}
                     <Badge tone={m.movementType === "resignation" ? "red" : "blue"}>{m.movementType === "resignation" ? "Nghỉ việc" : "Thuyên chuyển"}</Badge>
                     <div className="min-w-[160px]">
-                      <p className="font-semibold text-fg">{m.workerName ?? m.workerCccd}</p>
+                      <p className="font-semibold text-fg">
+                        {UUID_RE.test(m.workerId) ? (
+                          <Link href={`/admin/worker-profiles/${m.workerId}`} className="hover:underline">
+                            {m.workerName ?? m.workerCccd}
+                          </Link>
+                        ) : (
+                          (m.workerName ?? m.workerCccd)
+                        )}
+                      </p>
                       <p className="text-xs text-fg-muted">{m.workerCccd}</p>
                     </div>
                     <p className="text-xs text-fg-secondary">

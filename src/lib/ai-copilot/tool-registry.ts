@@ -10,6 +10,7 @@ import { dailyApplicationTools } from "./tools/daily-applications.ts";
 import { documentTools } from "./tools/documents.ts";
 import { analyticsTools } from "./tools/analytics.ts";
 import { knowledgeTools } from "./tools/knowledge.ts";
+import { worker360ProfileTools } from "./tools/worker-360-profile.ts";
 import type { ToolDefinition, ToolSchema } from "./types.ts";
 
 /**
@@ -35,6 +36,7 @@ const ALL_TOOLS: ToolDefinition<any, any>[] = [
   ...documentTools,
   ...analyticsTools,
   ...knowledgeTools,
+  ...worker360ProfileTools,
 ];
 
 const REGISTRY = new Map<string, ToolDefinition<any, any>>(ALL_TOOLS.map((t) => [t.name, t]));

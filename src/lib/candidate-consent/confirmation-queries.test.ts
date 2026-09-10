@@ -22,7 +22,8 @@ const employmentSessions = makeTable("employment_sessions");
 const candidateDocuments = makeTable("candidate_documents");
 const documentConfirmations = makeTable("document_confirmations");
 const dailyApplications = makeTable("daily_applications");
-const schemaStub = { employmentSessions, candidateDocuments, documentConfirmations, dailyApplications };
+const mergeTemplates = makeTable("merge_templates");
+const schemaStub = { employmentSessions, candidateDocuments, documentConfirmations, dailyApplications, mergeTemplates };
 
 function isPastDeadlineReal(deadlineAt: Date | null, now: Date): boolean {
   return deadlineAt !== null && now.getTime() > deadlineAt.getTime();
