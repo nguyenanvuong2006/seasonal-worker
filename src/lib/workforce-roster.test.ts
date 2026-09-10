@@ -15,10 +15,15 @@ import { loadModule, serverOnlyStub } from "./test-support/load-module.ts";
  *     countActiveDepartmentWorkforce's own established canonical query).
  *   - UPCOMING_RESIGNATION/UPCOMING_TRANSFER narrow ACTIVE rows to those carrying the matching
  *     upcoming-movement badge data.
- *   - RESIGNED/TRANSFERRED (history) only ever return movements whose lifecycle_applied_at IS
- *     NOT NULL, and apply the SAME movementScopeVisibility Data Scope rule
+ *   - RESIGNED/TRANSFERRED (history) only ever return movements in the terminal APPROVED status
+ *     (INACTIVE/TRANSFER_COMPLETED), and apply the SAME movementScopeVisibility Data Scope rule
  *     GET /api/workforce-movements already uses (FULL/REDACTED_INCOMING/NONE) — never a second,
  *     looser definition of who may see a movement.
+ *   - PRODUCTION INCIDENT REGRESSION (2026-09-10, "Lỗi tải hồ sơ"): activeRows()/historyRows()
+ *     never reference workforce_movements.lifecycle_applied_at — that column doesn't exist yet
+ *     in Production (the migration that adds it was never applied there), so referencing it
+ *     anywhere in these queries makes the WHOLE query throw (Postgres 42703), not just silently
+ *     omit a field. See src/lib/worker-360-profile.ts's own note for the same finding.
  */
 
 const employmentSessions = makeTable("employment_sessions");
@@ -33,12 +38,21 @@ const ACTIVE_SESSION_ROWS = [
   { workerId: "w3", fullName: "Le Van C", cccd: "010000000003", gender: "Nam", phone: "0900000003", deptId: "d2", deptName: "Vận hành", groupName: null, section: null, startingDate: "2026-01-01", upcomingType: "transfer", upcomingEffectiveDate: "2026-09-22", upcomingToDeptName: "Kho" },
 ];
 
-const RESIGNED_MOVEMENT_ROWS = [
-  { workerId: "w9", fullName: "Pham Thi D", cccd: "010000000009", gender: "Nữ", phone: "0900000009", fromDeptId: "d1", toDeptId: null, effectiveDate: "2026-08-01" },
+// Each list carries one terminal-status row (should appear in history) and one
+// STILL-PENDING row (must be excluded) — proves historyRows()'s status-based
+// filter (the incident-regression replacement for the missing-column
+// lifecycle_applied_at check) actually reaches the fake db's WHERE, not just
+// that movementType alone narrows the result.
+type MovementRow = { workerId: string; fullName: string; cccd: string; gender: string; phone: string; fromDeptId: string; toDeptId: string | null; effectiveDate: string; status: string };
+
+const RESIGNED_MOVEMENT_ROWS: MovementRow[] = [
+  { workerId: "w9", fullName: "Pham Thi D", cccd: "010000000009", gender: "Nữ", phone: "0900000009", fromDeptId: "d1", toDeptId: null, effectiveDate: "2026-08-01", status: "INACTIVE" },
+  { workerId: "w10", fullName: "Vo Thi F", cccd: "010000000010", gender: "Nữ", phone: "0900000010", fromDeptId: "d1", toDeptId: null, effectiveDate: "2026-09-30", status: "PENDING_HR" },
 ];
 
-const TRANSFERRED_MOVEMENT_ROWS = [
-  { workerId: "w8", fullName: "Hoang Van E", cccd: "010000000008", gender: "Nam", phone: "0900000008", fromDeptId: "d1", toDeptId: "d2", effectiveDate: "2026-08-15" },
+const TRANSFERRED_MOVEMENT_ROWS: MovementRow[] = [
+  { workerId: "w8", fullName: "Hoang Van E", cccd: "010000000008", gender: "Nam", phone: "0900000008", fromDeptId: "d1", toDeptId: "d2", effectiveDate: "2026-08-15", status: "TRANSFER_COMPLETED" },
+  { workerId: "w11", fullName: "Dang Van G", cccd: "010000000011", gender: "Nam", phone: "0900000011", fromDeptId: "d1", toDeptId: "d2", effectiveDate: "2026-09-28", status: "PENDING_HR" },
 ];
 
 function respond(call: QueryCall): unknown {
@@ -57,7 +71,10 @@ function respond(call: QueryCall): unknown {
   }
   if (call.table === "workforce_movements" && call.root === "select") {
     const movementTypeEq = eqValue(call, "workforce_movements.movementType");
-    return movementTypeEq === "resignation" ? RESIGNED_MOVEMENT_ROWS : movementTypeEq === "transfer" ? TRANSFERRED_MOVEMENT_ROWS : [];
+    const statusEq = eqValue(call, "workforce_movements.status");
+    let rows = movementTypeEq === "resignation" ? RESIGNED_MOVEMENT_ROWS : movementTypeEq === "transfer" ? TRANSFERRED_MOVEMENT_ROWS : [];
+    if (typeof statusEq === "string") rows = rows.filter((r) => r.status === statusEq);
+    return rows;
   }
   return undefined;
 }
