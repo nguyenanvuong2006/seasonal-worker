@@ -253,7 +253,7 @@ export default function EmploymentReconciliationPage() {
                         ))}
                       </div>
                       <p className="text-[12px] text-fg-muted">
-                        Xem chi tiết từng session tại <a className="font-semibold text-primary underline-offset-2 hover:underline" href={`/admin/worker-profiles?cccd=${r.cccd}`}>Hồ sơ Tập nghề</a> trước khi quyết định.
+                        Xem chi tiết từng session tại <a className="font-semibold text-primary underline-offset-2 hover:underline" href={`/admin/worker-profiles/${r.workerId}`}>Hồ sơ Tập nghề</a> trước khi quyết định.
                       </p>
                     </li>
                   ))}
@@ -265,6 +265,11 @@ export default function EmploymentReconciliationPage() {
                 description="Application được xếp việc nhưng thiếu session — dùng “Đồng bộ dữ liệu cũ” tại Hồ sơ Tập nghề hoặc liên kết thủ công."
                 count={report.approvedAppsWithoutSession.length}
               >
+                {/* This row has NO employment_session at all yet (that's exactly the
+                    finding being reported), so there is no employment_sessions.worker_id
+                    to resolve a canonical workerId from without guessing — kept on the
+                    CCCD-search fallback (still exact-match, not a name heuristic) until
+                    the application is actually backfilled into a session. */}
                 <ul className="divide-y divide-border">
                   {report.approvedAppsWithoutSession.map((r) => (
                     <li key={r.id} className="flex items-center justify-between gap-3 px-5 py-3 text-sm">
@@ -285,7 +290,7 @@ export default function EmploymentReconciliationPage() {
                     <li key={r.id} className="flex items-center justify-between gap-3 px-5 py-3 text-sm">
                       <span className="text-fg">{r.fullName} <span className="font-mono text-[12px] text-fg-muted">{r.cccd}</span> · Đăng ký {formatDate(r.regDate)}</span>
                       <div className="flex shrink-0 gap-2">
-                        <a className="text-[12px] font-semibold text-primary underline-offset-2 hover:underline" href={`/admin/worker-profiles?cccd=${r.cccd}`}>Mở hồ sơ →</a>
+                        <a className="text-[12px] font-semibold text-primary underline-offset-2 hover:underline" href={`/admin/worker-profiles/${r.workerId}`}>Mở hồ sơ →</a>
                         <Button size="sm" variant="outline" onClick={() => setCloseModal({ sessionId: r.id, label: `${r.fullName} · ${r.id.slice(0, 8)}…` })}>Đóng session</Button>
                       </div>
                     </li>

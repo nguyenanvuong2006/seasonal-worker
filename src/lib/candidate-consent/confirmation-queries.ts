@@ -29,7 +29,7 @@
 import "server-only";
 import { and, eq, inArray } from "drizzle-orm";
 import { db } from "@/db";
-import { candidateDocuments, dailyApplications, documentConfirmations, employmentSessions, workerProfiles } from "@/db/schema";
+import { candidateDocuments, dailyApplications, documentConfirmations, employmentSessions, mergeTemplates, workerProfiles } from "@/db/schema";
 import { effectiveStatus, isPastDeadline, type CandidateDocumentStatus } from "./lifecycle";
 
 const HARD_MAX_ROWS = 50;
@@ -40,6 +40,7 @@ export type ConfirmationHistoryEntry = {
   employmentSessionId: string | null;
   engagementStartingDate: string | null;
   templateVersion: number | null;
+  templateName: string | null;
   documentKind: string | null;
   status: CandidateDocumentStatus;
   effectiveStatus: string;
@@ -48,6 +49,8 @@ export type ConfirmationHistoryEntry = {
   viewedAt: string | null;
   confirmedAt: string | null;
   receiptId: string | null;
+  /** Non-null when this document was created BY a reissue that replaced an older one — the version-chain link ("Lịch sử phiên bản"), never used to infer engagement membership (employmentSessionId alone decides that). */
+  supersedesDocumentId: string | null;
 };
 
 /**
@@ -73,13 +76,16 @@ export async function getElectronicConfirmationHistory(workerId: string): Promis
       applicationId: candidateDocuments.applicationId,
       employmentSessionId: candidateDocuments.employmentSessionId,
       templateVersion: candidateDocuments.templateVersion,
+      templateName: mergeTemplates.name,
       documentKind: candidateDocuments.documentKind,
       status: candidateDocuments.status,
       issuedAt: candidateDocuments.issuedAt,
       confirmationDeadlineAt: candidateDocuments.confirmationDeadlineAt,
       viewedAt: candidateDocuments.viewedAt,
+      supersedesDocumentId: candidateDocuments.supersedesDocumentId,
     })
     .from(candidateDocuments)
+    .leftJoin(mergeTemplates, eq(candidateDocuments.templateId, mergeTemplates.id))
     .where(inArray(candidateDocuments.employmentSessionId, sessionIds));
   if (rows.length === 0) return [];
 
@@ -98,6 +104,7 @@ export async function getElectronicConfirmationHistory(workerId: string): Promis
       employmentSessionId: r.employmentSessionId,
       engagementStartingDate: r.employmentSessionId ? (startingDateBySession.get(r.employmentSessionId) ?? null) : null,
       templateVersion: r.templateVersion,
+      templateName: r.templateName,
       documentKind: r.documentKind,
       status: r.status as CandidateDocumentStatus,
       effectiveStatus: effectiveStatus(r.status as CandidateDocumentStatus, r.confirmationDeadlineAt, now),
@@ -106,6 +113,7 @@ export async function getElectronicConfirmationHistory(workerId: string): Promis
       viewedAt: r.viewedAt ? r.viewedAt.toISOString() : null,
       confirmedAt: confirmation ? confirmation.confirmedAtServer.toISOString() : null,
       receiptId: confirmation ? confirmation.receiptId : null,
+      supersedesDocumentId: r.supersedesDocumentId,
     };
   });
 

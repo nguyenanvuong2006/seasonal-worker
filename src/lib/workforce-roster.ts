@@ -51,10 +51,11 @@ export type RosterRow = {
 
 const MAX_ROWS = 2000;
 
-async function activeRows(scope: string[] | null, deptId: string | undefined, today: string): Promise<RosterRow[]> {
+async function activeRows(scope: string[] | null, deptId: string | undefined, today: string, workerId?: string): Promise<RosterRow[]> {
   const conditions = [eq(employmentSessions.status, "APPROVED"), isNull(employmentSessions.endDate), isNull(workerProfiles.deletedAt)];
   if (scope !== null) conditions.push(inArray(employmentSessions.deptId, scope));
   if (deptId) conditions.push(eq(employmentSessions.deptId, deptId));
+  if (workerId) conditions.push(eq(employmentSessions.workerId, workerId));
 
   const rows = await db
     .select({
@@ -179,6 +180,47 @@ async function historyRows(
       };
     })
     .filter((r): r is RosterRow => r !== null);
+}
+
+export type WorkerCurrentState = {
+  lifecycleState: "ACTIVE" | "INACTIVE";
+  deptId: string | null;
+  deptName: string | null;
+  groupName: string | null;
+  section: string | null;
+  startingDate: string | null;
+  upcoming: { type: "resignation" | "transfer"; effectiveDate: string; toDeptName: string | null } | null;
+};
+
+/**
+ * Single-worker current-state lookup (360° profile header) — the SAME
+ * ACTIVE predicate as activeRows() above (status='APPROVED' AND end_date
+ * IS NULL), scoped to exactly one workerId instead of scanning a whole
+ * roster. Never a second, competing definition of "current." The caller's
+ * OWN engagement list (assembled separately from the same employment_sessions
+ * rows) is what identifies WHICH session is current — this DTO only answers
+ * "what is true right now", so it deliberately carries no session id.
+ *
+ * Data Scope is NOT applied here deliberately: by the time a caller reaches
+ * this function it has ALREADY been authorized to view this specific
+ * worker (via the profile service's own scoped session check) — this only
+ * answers "what IS the current state", not "may the caller see it."
+ */
+export async function getWorkerCurrentState(workerId: string): Promise<WorkerCurrentState> {
+  const today = todayStr();
+  const [active] = await activeRows(null, undefined, today, workerId);
+  if (active) {
+    return {
+      lifecycleState: "ACTIVE",
+      deptId: active.deptId,
+      deptName: active.deptName,
+      groupName: active.groupName,
+      section: active.section,
+      startingDate: active.startingDate,
+      upcoming: active.upcoming,
+    };
+  }
+  return { lifecycleState: "INACTIVE", deptId: null, deptName: null, groupName: null, section: null, startingDate: null, upcoming: null };
 }
 
 export async function getDepartmentWorkforceRoster(

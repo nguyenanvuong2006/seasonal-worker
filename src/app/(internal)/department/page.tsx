@@ -1,6 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useState } from "react";
+import Link from "next/link";
 import {
   Badge,
   Button,
@@ -62,6 +63,12 @@ type Dept = {
 // default is now "ACTIVE" (Đang làm việc) sourced from the SAME canonical employment_sessions
 // predicate get_current_headcount/countActiveDepartmentWorkforce already use — never a
 // competing "current" definition. See /api/employment/current-workforce + lib/workforce-roster.ts.
+// A REDACTED_INCOMING roster row's workerId is a truncated placeholder
+// ("${id.slice(0,4)}…"), never a real UUID — only link the name to the
+// canonical 360° profile when it IS a real workerId, never for a
+// Data-Scope-redacted row.
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
 const FILTERS: { value: string; label: string }[] = [
   { value: "ACTIVE", label: "Đang làm việc" },
   { value: "UPCOMING_RESIGNATION", label: "Sắp nghỉ" },
@@ -615,7 +622,15 @@ export default function MyDepartmentPage() {
                           )}
                         </td>
                         <td className="px-3 py-2.5 text-center text-xs text-fg-muted">{i + 1}</td>
-                        <td className="px-3 py-2.5 font-bold text-fg">{r.fullName}</td>
+                        <td className="px-3 py-2.5 font-bold text-fg">
+                          {UUID_RE.test(r.workerId) ? (
+                            <Link href={`/admin/worker-profiles/${r.workerId}`} onClick={(e) => e.stopPropagation()} className="hover:underline">
+                              {r.fullName}
+                            </Link>
+                          ) : (
+                            r.fullName
+                          )}
+                        </td>
                         <td className="px-3 py-2.5 text-center">
                           <Badge tone={r.gender === "Nữ" ? "purple" : "blue"}>{r.gender ?? "—"}</Badge>
                         </td>

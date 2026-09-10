@@ -1,113 +1,71 @@
 "use client";
 
 import { useEffect, useState } from "react";
+import Link from "next/link";
 import { useSearchParams } from "next/navigation";
-import {
-  Badge,
-  Button,
-  Card,
-  CardContent,
-  CardHeader,
-  EmptyState,
-  FormField,
-  Input,
-  PageHeader,
-  StatusBadge,
-  toast,
-} from "@/components/ui";
-import { Fingerprint, RefreshCw, Search, UserX } from "lucide-react";
+import { Button, Card, CardContent, EmptyState, Input, PageHeader, toast } from "@/components/ui";
+import { RefreshCw, Search, UserX } from "lucide-react";
 import { CCCD_ERROR_MESSAGE, isValidCccd } from "@/lib/validators";
-import { formatDeadline } from "@/lib/candidate-consent/confirmation-deadline";
 
-const CONFIRMATION_STATUS_LABEL: Record<string, string> = {
-  GENERATING: "ĐANG TẠO",
-  READY: "SẴN SÀNG",
-  ISSUED: "ĐÃ PHÁT HÀNH",
-  VIEWED: "ĐÃ XEM",
-  CONFIRMED: "ĐÃ XÁC NHẬN",
-  REVOKED: "ĐÃ THU HỒI",
-  SUPERSEDED: "ĐÃ THAY THẾ",
-  EXPIRED: "HẾT HẠN",
-  FAILED: "LỖI",
-};
+type SearchResult = { workerId: string; fullName: string; cccdMasked: string; phoneMasked: string | null };
 
-type ConfirmationHistoryEntry = {
-  documentId: string;
-  applicationId: string;
-  employmentSessionId: string | null;
-  engagementStartingDate: string | null;
-  templateVersion: number | null;
-  documentKind: string | null;
-  status: string;
-  effectiveStatus: string;
-  issuedAt: string | null;
-  confirmationDeadlineAt: string | null;
-  viewedAt: string | null;
-  confirmedAt: string | null;
-  receiptId: string | null;
-};
-
-type Session = {
-  id: string;
-  regDate: string;
-  status: string;
-  startingDate: string | null;
-  endDate: string | null;
-  endReason: string | null;
-  endedBy: string | null;
-  startDateSource: string | null;
-  dailyApplicationId: string | null;
-  endMovementId: string | null;
-  note: string | null;
-  deptName: string | null;
-  groupName: string | null;
-  section: string | null;
-};
-type Profile = {
-  id: string;
-  cccd: string;
-  fullName: string;
-  gender: string | null;
-  dob: string | null;
-  phone: string | null;
-  permanentAddress: string | null;
-  residentialAddress: string | null;
-  fingerprintCode: string | null;
-  fingerprintDevice: string | null;
-  fingerprintStatus: string | null;
-};
-
+/**
+ * "Hồ sơ Tập nghề" — canonical entry point for a person's 360° profile
+ * (PR follow-up mission, 2026-09-10+). This page is now SEARCH ONLY: it
+ * never renders profile detail inline (that moved to the canonical
+ * /admin/worker-profiles/[workerId] route, addressed by the OPAQUE
+ * worker_profiles.id — never CCCD/phone in a URL). Two search paths:
+ *   - exact CCCD (pre-existing, via the CCCD-keyed /api/worker-profiles/[cccd]
+ *     lookup — kept unchanged so existing deep-links/workflows never break)
+ *   - name/phone fuzzy search (new, /api/worker-profiles/search — mirrors
+ *     global-search's own worker_profile.view scoping/masking rules)
+ */
 export default function WorkerProfilesPage() {
   const searchParams = useSearchParams();
   const [cccd, setCccd] = useState(() => searchParams.get("cccd") ?? "");
-  const [profile, setProfile] = useState<Profile | null>(null);
-  const [sessions, setSessions] = useState<Session[]>([]);
-  const [confirmationHistory, setConfirmationHistory] = useState<ConfirmationHistoryEntry[]>([]);
+  const [query, setQuery] = useState("");
+  const [results, setResults] = useState<SearchResult[]>([]);
   const [loading, setLoading] = useState(false);
   const [notFound, setNotFound] = useState(false);
+  const [searched, setSearched] = useState(false);
   const [backfilling, setBackfilling] = useState(false);
-  const [saving, setSaving] = useState(false);
-  const [fp, setFp] = useState({ fingerprintCode: "", fingerprintDevice: "" });
 
-  const search = async () => {
-    if (!isValidCccd(cccd)) {
+  const searchByCccd = async (value: string) => {
+    if (!isValidCccd(value)) {
       toast({ title: CCCD_ERROR_MESSAGE, variant: "destructive" });
       return;
     }
     setLoading(true);
     setNotFound(false);
-    setProfile(null);
+    setSearched(true);
     try {
-      const res = await fetch(`/api/worker-profiles/${cccd.trim()}`);
+      const res = await fetch(`/api/worker-profiles/${value.trim()}`);
       if (!res.ok) {
+        setResults([]);
         setNotFound(true);
         return;
       }
       const data = await res.json();
-      setProfile(data.profile);
-      setSessions(data.sessions ?? []);
-      setConfirmationHistory(data.confirmationHistory ?? []);
-      setFp({ fingerprintCode: data.profile.fingerprintCode ?? "", fingerprintDevice: data.profile.fingerprintDevice ?? "" });
+      setResults([{ workerId: data.profile.id, fullName: data.profile.fullName, cccdMasked: data.profile.cccd, phoneMasked: data.profile.phone ?? null }]);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const searchByName = async () => {
+    if (query.trim().length < 2) {
+      toast({ title: "Nhập ít nhất 2 ký tự để tìm kiếm.", variant: "destructive" });
+      return;
+    }
+    setLoading(true);
+    setNotFound(false);
+    setSearched(true);
+    try {
+      const res = await fetch(`/api/worker-profiles/search?q=${encodeURIComponent(query.trim())}`);
+      const data = await res.json();
+      const found: SearchResult[] = data.results ?? [];
+      setResults(found);
+      setNotFound(found.length === 0);
     } finally {
       setLoading(false);
     }
@@ -115,29 +73,9 @@ export default function WorkerProfilesPage() {
 
   // Deep-link từ Tìm kiếm toàn hệ thống (?cccd=...) — tự tra cứu ngay khi vào trang
   useEffect(() => {
-    if (searchParams.get("cccd")) void search();
+    if (searchParams.get("cccd")) void searchByCccd(searchParams.get("cccd")!);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
-
-  const saveFingerprint = async () => {
-    if (!profile) return;
-    setSaving(true);
-    try {
-      const res = await fetch(`/api/worker-profiles/${profile.cccd}`, {
-        method: "PATCH",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ ...fp, fingerprintStatus: fp.fingerprintCode ? "DA_CAP" : "CHUA_CAP" }),
-      });
-      if (!res.ok) {
-        toast({ title: "Lưu thất bại", variant: "destructive" });
-        return;
-      }
-      toast({ title: "Đã cập nhật mã vân tay" });
-      await search();
-    } finally {
-      setSaving(false);
-    }
-  };
 
   const runBackfill = async () => {
     setBackfilling(true);
@@ -169,164 +107,65 @@ export default function WorkerProfilesPage() {
       />
 
       <Card>
-        <CardContent className="flex gap-2 pt-6">
-          <Input
-            value={cccd}
-            inputMode="numeric"
-            maxLength={12}
-            onChange={(e) => setCccd(e.target.value.replace(/\D/g, ""))}
-            onKeyDown={(e) => e.key === "Enter" && search()}
-            placeholder="Nhập số CCCD để tra cứu hồ sơ Tập nghề..."
-            className="h-11 flex-1"
-          />
-          <Button onClick={search} loading={loading}>
-            <Search className="h-4 w-4" /> Tra cứu
-          </Button>
+        <CardContent className="space-y-3 pt-6">
+          <div className="flex flex-wrap gap-2">
+            <Input
+              value={cccd}
+              inputMode="numeric"
+              maxLength={12}
+              onChange={(e) => setCccd(e.target.value.replace(/\D/g, ""))}
+              onKeyDown={(e) => e.key === "Enter" && searchByCccd(cccd)}
+              placeholder="Nhập đúng số CCCD..."
+              className="h-11 flex-1 basis-64"
+            />
+            <Button onClick={() => searchByCccd(cccd)} loading={loading}>
+              <Search className="h-4 w-4" /> Tra cứu theo CCCD
+            </Button>
+          </div>
+          <div className="flex flex-wrap gap-2">
+            <Input
+              value={query}
+              onChange={(e) => setQuery(e.target.value)}
+              onKeyDown={(e) => e.key === "Enter" && searchByName()}
+              placeholder="Hoặc tìm theo họ tên / số điện thoại..."
+              className="h-11 flex-1 basis-64"
+            />
+            <Button variant="outline" onClick={searchByName} loading={loading}>
+              <Search className="h-4 w-4" /> Tìm theo tên/SĐT
+            </Button>
+          </div>
         </CardContent>
       </Card>
 
-      {notFound && (
+      {notFound && searched && (
         <Card>
           <EmptyState
             icon={<UserX className="h-5 w-5" aria-hidden />}
             title="Không tìm thấy hồ sơ Tập nghề"
-            description="Chưa có hồ sơ Tập nghề điện tử cho số CCCD này."
+            description="Chưa có hồ sơ Tập nghề điện tử khớp với thông tin tìm kiếm, hoặc nằm ngoài phạm vi dữ liệu được cấp."
           />
         </Card>
       )}
 
-      {profile && (
-        <>
-          <Card>
-            <CardHeader title={profile.fullName} subtitle={`CCCD: ${profile.cccd}`} />
-            <CardContent className="grid gap-x-6 gap-y-1.5 text-sm text-fg-secondary sm:grid-cols-2">
-              <p>Giới tính: <span className="text-fg">{profile.gender ?? "—"}</span></p>
-              <p>Ngày sinh: <span className="text-fg">{profile.dob ?? "—"}</span></p>
-              <p>SĐT: <span className="text-fg">{profile.phone ?? "—"}</span></p>
-              <p>Địa chỉ: <span className="text-fg">{profile.residentialAddress ?? profile.permanentAddress ?? "—"}</span></p>
-            </CardContent>
-          </Card>
-
-          <Card>
-            <CardHeader
-              title={
-                <span className="flex items-center gap-2">
-                  <Fingerprint className="h-4 w-4" /> Biometric — Mã vân tay người tập nghề
-                </span>
-              }
-              subtitle={<Badge tone={profile.fingerprintStatus === "DA_CAP" ? "green" : "amber"} dot>{profile.fingerprintStatus === "DA_CAP" ? "Đã cấp" : "Chưa cấp"}</Badge>}
-            />
-            <CardContent className="grid gap-4 sm:grid-cols-3">
-              <FormField label="Mã vân tay">
-                <Input value={fp.fingerprintCode} onChange={(e) => setFp({ ...fp, fingerprintCode: e.target.value })} />
-              </FormField>
-              <FormField label="Thiết bị">
-                <Input value={fp.fingerprintDevice} onChange={(e) => setFp({ ...fp, fingerprintDevice: e.target.value })} />
-              </FormField>
-              <div className="flex items-end">
-                <Button variant="primary" onClick={saveFingerprint} loading={saving} className="h-10 w-full">
-                  Lưu
-                </Button>
-              </div>
-            </CardContent>
-          </Card>
-
-          <Card className="p-0">
-            <CardHeader
-              title={`Lịch sử làm việc — ${sessions.length} đợt`}
-              subtitle="Nguồn sự thật: Employment Sessions (không phải Daily Application). Mỗi lần nhận việc = 1 đợt; ĐANG LÀM = APPROVED chưa có ngày kết thúc."
-            />
-            <CardContent className="p-0">
-              {sessions.length === 0 ? (
-                <EmptyState title="Chưa có lịch sử làm việc" description="Người này chưa có đợt làm việc nào được ghi nhận." />
-              ) : (
-                <ul className="divide-y divide-border">
-                  {[...sessions].reverse().map((s, idx) => {
-                    const isActive = s.status === "APPROVED" && !s.endDate;
-                    const days = s.startingDate
-                      ? Math.max(0, Math.round((Date.parse(s.endDate ?? new Date().toISOString().slice(0, 10)) - Date.parse(s.startingDate)) / 86400000))
-                      : null;
-                    return (
-                      <li key={s.id} className="space-y-1.5 p-4 text-sm">
-                        <div className="flex flex-wrap items-center gap-2">
-                          <span className="rounded-full bg-surface-hover px-2 py-0.5 text-[11px] font-bold text-fg-secondary">LẦN {idx + 1}</span>
-                          <span className="font-semibold text-fg">{s.deptName ?? "Chưa xếp bộ phận"}{s.groupName ? ` — ${s.groupName}` : ""}</span>
-                          {s.section && <span className="text-[12px] text-fg-muted">Section: {s.section}</span>}
-                          {isActive ? (
-                            <Badge tone="green" dot>Đang làm</Badge>
-                          ) : s.endDate || s.status === "ENDED" ? (
-                            <Badge tone="red">Đã nghỉ</Badge>
-                          ) : (
-                            <StatusBadge status={s.status} />
-                          )}
-                        </div>
-                        <div className="flex flex-wrap gap-x-4 gap-y-1 text-[12.5px] text-fg-muted">
-                          <span>Đăng ký: {s.regDate}</span>
-                          {s.startingDate && <span>Nhận việc: {s.startingDate}{s.startDateSource === "CORRECTION" ? " (đã điều chỉnh)" : ""}</span>}
-                          <span>{s.endDate ? `Nghỉ: ${s.endDate}` : "→ Hiện tại"}</span>
-                          {days !== null && <span>Thời gian: {days} ngày</span>}
-                          {s.endReason && <span>Lý do nghỉ: {s.endReason}</span>}
-                          {s.endedBy && <span>Xác nhận nghỉ: {s.endedBy}</span>}
-                        </div>
-                        {(s.dailyApplicationId || s.endMovementId) && (
-                          <div className="flex flex-wrap gap-3 text-[11.5px] text-fg-muted">
-                            {s.dailyApplicationId && <span className="font-mono">Application: {s.dailyApplicationId.slice(0, 8)}…</span>}
-                            {s.endMovementId && <span className="font-mono">Movement: {s.endMovementId.slice(0, 8)}…</span>}
-                          </div>
-                        )}
-                        {s.note && <p className="text-[12px] italic text-fg-secondary">{s.note}</p>}
-                      </li>
-                    );
-                  })}
-                </ul>
-              )}
-            </CardContent>
-          </Card>
-
-          <Card className="p-0">
-            <CardHeader
-              title={`Lịch sử hồ sơ xác nhận điện tử — ${confirmationHistory.length} hồ sơ`}
-              subtitle="Mỗi lần bắt đầu công việc có MỘT hồ sơ xác nhận điện tử độc lập, không bao giờ ghi đè hồ sơ cũ. Mới nhất trước."
-            />
-            <CardContent className="p-0">
-              {confirmationHistory.length === 0 ? (
-                <EmptyState title="Chưa có hồ sơ xác nhận điện tử" description="Người này chưa có hồ sơ xác nhận điện tử nào được tạo." />
-              ) : (
-                <ul className="divide-y divide-border">
-                  {confirmationHistory.map((h) => (
-                    <li key={h.documentId} className="space-y-1.5 p-4 text-sm">
-                      <div className="flex flex-wrap items-center gap-2">
-                        <span className="font-semibold text-fg">
-                          {h.engagementStartingDate ? `Đợt bắt đầu ${h.engagementStartingDate}` : "Đợt làm việc (chưa liên kết)"}
-                        </span>
-                        {h.templateVersion !== null && <span className="text-[12px] text-fg-muted">Mẫu v{h.templateVersion}</span>}
-                        <Badge tone={h.effectiveStatus === "CONFIRMED" ? "green" : h.effectiveStatus === "EXPIRED" ? "gray" : h.effectiveStatus === "REVOKED" || h.effectiveStatus === "FAILED" ? "red" : "amber"}>
-                          {CONFIRMATION_STATUS_LABEL[h.effectiveStatus] ?? h.effectiveStatus}
-                        </Badge>
-                      </div>
-                      <div className="flex flex-wrap gap-x-4 gap-y-1 text-[12.5px] text-fg-muted">
-                        <span>Phát hành: {h.issuedAt ? new Date(h.issuedAt).toLocaleString("vi-VN") : "—"}</span>
-                        {h.confirmationDeadlineAt && <span>Hạn xác nhận: {formatDeadline(h.confirmationDeadlineAt)}</span>}
-                        {h.viewedAt && <span>Đã xem: {new Date(h.viewedAt).toLocaleString("vi-VN")}</span>}
-                        {h.confirmedAt && <span>Đã xác nhận: {new Date(h.confirmedAt).toLocaleString("vi-VN")}</span>}
-                      </div>
-                      {h.receiptId && (
-                        <div className="flex flex-wrap gap-3 text-[11.5px]">
-                          <a href={`/xac-thuc-ho-so/${encodeURIComponent(h.receiptId)}/bien-nhan`} target="_blank" rel="noreferrer" className="font-semibold text-accent hover:underline">
-                            Xem biên nhận
-                          </a>
-                          <a href={`/xac-thuc-ho-so/${encodeURIComponent(h.receiptId)}`} target="_blank" rel="noreferrer" className="font-semibold text-accent hover:underline">
-                            Xác thực công khai
-                          </a>
-                        </div>
-                      )}
-                    </li>
-                  ))}
-                </ul>
-              )}
-            </CardContent>
-          </Card>
-        </>
+      {results.length > 0 && (
+        <Card className="p-0">
+          <ul className="divide-y divide-border">
+            {results.map((r) => (
+              <li key={r.workerId} className="flex items-center justify-between gap-3 p-4 text-sm">
+                <div>
+                  <p className="font-semibold text-fg">{r.fullName}</p>
+                  <p className="text-[12.5px] text-fg-muted">
+                    CCCD: {r.cccdMasked}
+                    {r.phoneMasked && ` • SĐT: ${r.phoneMasked}`}
+                  </p>
+                </div>
+                <Link href={`/admin/worker-profiles/${r.workerId}`} className="shrink-0 rounded-lg border border-border px-3 py-1.5 text-[12.5px] font-semibold text-accent hover:bg-surface-hover">
+                  Xem hồ sơ →
+                </Link>
+              </li>
+            ))}
+          </ul>
+        </Card>
       )}
     </div>
   );
