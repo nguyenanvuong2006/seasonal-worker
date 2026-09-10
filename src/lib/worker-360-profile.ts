@@ -97,7 +97,7 @@ export type Worker360Profile = {
 };
 
 function toMovement(
-  m: { id: string; movementType: string; fromDeptId: string | null; toDeptId: string | null; effectiveDate: string; status: string; reason: string | null; confirmedBy: string | null; confirmedAt: Date | null },
+  m: { id: string; movementType: string; fromDeptId: string | null; toDeptId: string | null; effectiveDate: string; status: string; reason: string | null; confirmedBy: string | null; confirmedAt: Date | null; lifecycleAppliedAt: Date | null },
   deptNameById: Map<string, string>,
 ): EngagementMovement {
   return {
@@ -112,10 +112,7 @@ function toMovement(
     reason: m.reason,
     confirmedBy: m.confirmedBy,
     confirmedAt: m.confirmedAt ? m.confirmedAt.toISOString() : null,
-    // lifecycle_applied_at doesn't exist in Production yet (see the incident
-    // note at movementRows' query above) — never guessed, always null until
-    // the migration lands; the UI falls back to showing the raw status.
-    lifecycleAppliedAt: null,
+    lifecycleAppliedAt: m.lifecycleAppliedAt ? m.lifecycleAppliedAt.toISOString() : null,
   };
 }
 
@@ -166,16 +163,15 @@ export async function getWorker360Profile(workerId: string, scope: string[] | nu
   // completed transfer's historical "from" department name resolves to null.
   //
   // PRODUCTION INCIDENT (2026-09-10, "Lỗi tải hồ sơ"): this used to be a blind
-  // db.select() (every column schema.ts declares for workforce_movements,
-  // including lifecycleAppliedAt). A read-only Production diagnostic proved
-  // Postgres error 42703 "column lifecycle_applied_at does not exist" — the
-  // migration that adds it (migrations/2026-09-10-workforce-movement-effective-
-  // lifecycle.sql, from the EARLIER Worker Lifecycle Consistency mission) was
-  // apparently never actually applied to Production. Explicit column list
-  // below WITHOUT lifecycleAppliedAt works around that until the migration is
-  // applied — toMovement() below is given lifecycleAppliedAt: null for every
-  // row rather than guessing, which the UI already renders as "chưa hiệu lực
-  // rõ ràng" (falls back to showing the raw status instead).
+  // db.select() (every column schema.ts declares for workforce_movements).
+  // A read-only Production diagnostic proved Postgres error 42703 "column
+  // lifecycle_applied_at does not exist" — the migration that adds it
+  // (migrations/2026-09-10-workforce-movement-effective-lifecycle.sql) had
+  // been merged but never actually applied to Production. That migration has
+  // now been applied (verified read-only against Production) — the explicit
+  // column list below still avoids a blind select() (never re-introduce that;
+  // the whole incident was schema/DB drift on exactly that pattern), but now
+  // includes the real lifecycleAppliedAt column since it genuinely exists.
   const movementRows = await db
     .select({
       id: workforceMovements.id,
@@ -189,6 +185,7 @@ export async function getWorker360Profile(workerId: string, scope: string[] | nu
       employmentSessionId: workforceMovements.employmentSessionId,
       confirmedBy: workforceMovements.confirmedBy,
       confirmedAt: workforceMovements.confirmedAt,
+      lifecycleAppliedAt: workforceMovements.lifecycleAppliedAt,
     })
     .from(workforceMovements)
     .where(eq(workforceMovements.workerId, workerId))

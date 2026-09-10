@@ -69,25 +69,20 @@ async function activeRows(scope: string[] | null, deptId: string | undefined, to
       groupName: departments.groupName,
       section: departments.section,
       startingDate: employmentSessions.startingDate,
-      // Sắp nghỉ/Sắp chuyển: nearest approved-but-not-yet-effective movement for this worker.
-      //
-      // PRODUCTION INCIDENT (2026-09-10): these subqueries used to also filter
-      // `wm.lifecycle_applied_at is null`. A read-only Production diagnostic
-      // proved that column doesn't exist yet in Production (Postgres 42703) —
-      // the migration that adds it (migrations/2026-09-10-workforce-movement-
-      // effective-lifecycle.sql) was apparently never actually applied there,
-      // so ANY reference to it — including this one — makes the WHOLE query
-      // throw, not just silently omit "upcoming". Filtering by effective_date
-      // + terminal status alone (dropped below) matches this repo's own
-      // pre-migration semantics — "an approved movement whose effective date
-      // hasn't arrived yet" — and is the same fallback worker-360-profile.ts
-      // uses for the identical reason. Restore the lifecycle_applied_at
-      // filter once that migration is applied to Production.
+      // Sắp nghỉ/Sắp chuyển: nearest approved-but-not-yet-effective movement for this worker
+      // (lifecycle_applied_at IS NULL is the canonical "not yet applied" predicate — see
+      // lib/workforce-movements.ts's effective-date lifecycle. The migration that adds this
+      // column has been applied to Production and verified read-only; a movement whose effect
+      // was already applied — including the pre-existing rows finalized by the OLD, pre-
+      // effective-date-aware code before that fix deployed — correctly falls OUT of "upcoming"
+      // since its lifecycle_applied_at is already set, matching its real employment_sessions
+      // state).
       upcomingType: sql<string | null>`(
         select wm.movement_type from workforce_movements wm
         where wm.worker_id = ${employmentSessions.workerId}
           and wm.effective_date > ${today}
           and wm.status in ('INACTIVE', 'TRANSFER_COMPLETED')
+          and wm.lifecycle_applied_at is null
         order by wm.effective_date asc limit 1
       )`,
       upcomingEffectiveDate: sql<string | null>`(
@@ -95,6 +90,7 @@ async function activeRows(scope: string[] | null, deptId: string | undefined, to
         where wm.worker_id = ${employmentSessions.workerId}
           and wm.effective_date > ${today}
           and wm.status in ('INACTIVE', 'TRANSFER_COMPLETED')
+          and wm.lifecycle_applied_at is null
         order by wm.effective_date asc limit 1
       )`,
       upcomingToDeptName: sql<string | null>`(
@@ -103,6 +99,7 @@ async function activeRows(scope: string[] | null, deptId: string | undefined, to
         where wm.worker_id = ${employmentSessions.workerId}
           and wm.effective_date > ${today}
           and wm.status in ('INACTIVE', 'TRANSFER_COMPLETED')
+          and wm.lifecycle_applied_at is null
         order by wm.effective_date asc limit 1
       )`,
     })
@@ -144,12 +141,15 @@ async function historyRows(
   deptId: string | undefined,
   movementType: "resignation" | "transfer",
 ): Promise<RosterRow[]> {
-  // PRODUCTION INCIDENT (2026-09-10): lifecycleAppliedAt does not exist yet in
-  // Production (see activeRows()'s note above — same missing-column finding).
-  // Falls back to the terminal-status predicate instead, which is what
-  // "already took effect" actually means while that migration is unapplied.
+  // Canonical "already took effect" predicate: lifecycleAppliedAt IS NOT NULL — a terminal-
+  // status movement (INACTIVE/TRANSFER_COMPLETED) whose effective date hasn't arrived yet
+  // must NOT appear in history (it belongs in activeRows()'s "upcoming" badge instead).
   const terminalStatus = movementType === "resignation" ? "INACTIVE" : "TRANSFER_COMPLETED";
-  const conditions = [eq(workforceMovements.movementType, movementType), eq(workforceMovements.status, terminalStatus)];
+  const conditions = [
+    eq(workforceMovements.movementType, movementType),
+    eq(workforceMovements.status, terminalStatus),
+    sql`${workforceMovements.lifecycleAppliedAt} is not null`,
+  ];
   const rows = await db
     .select({
       workerId: workerProfiles.id,
