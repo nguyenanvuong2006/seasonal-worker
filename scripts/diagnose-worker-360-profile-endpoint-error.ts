@@ -27,13 +27,31 @@
  * unrelated to the real Production incident):
  *   DATABASE_URL=... node --conditions=react-server --import tsx scripts/diagnose-worker-360-profile-endpoint-error.ts
  */
-import { desc, eq, sql } from "drizzle-orm";
+import { desc, sql } from "drizzle-orm";
 import { db, pool } from "../src/db/index.ts";
 import { employmentSessions } from "../src/db/schema.ts";
 import { getWorker360Profile } from "../src/lib/worker-360-profile.ts";
 
 function log(event: string, data: Record<string, unknown> = {}): void {
   console.log(JSON.stringify({ event, ...data }));
+}
+
+/** Drizzle wraps the real Postgres error as `.cause` — the wrapper's own
+ * `.message` is just "Failed query: <sql>", never the actual DB reason
+ * (e.g. "column X does not exist"). Walk the full cause chain so the real
+ * reason is never lost. */
+function describeError(error: unknown): { name: string | null; code: string | null; message: string | null; causeChain: string[] } {
+  const causeChain: string[] = [];
+  let cur: unknown = error;
+  let depth = 0;
+  while (cur && typeof cur === "object" && depth < 5) {
+    const e = cur as { message?: string; code?: string; cause?: unknown };
+    causeChain.push(`${e.code ? `[${e.code}] ` : ""}${e.message ?? String(cur)}`.slice(0, 300));
+    cur = e.cause;
+    depth += 1;
+  }
+  const top = error as { name?: string; message?: string; code?: string };
+  return { name: top.name ?? null, code: top.code ?? null, message: top.message ? top.message.slice(0, 300) : null, causeChain };
 }
 
 async function tryProfile(label: string, workerId: string) {
@@ -47,14 +65,7 @@ async function tryProfile(label: string, workerId: string) {
       unlinkedMovementCount: profile?.unlinkedMovements.length ?? null,
     });
   } catch (error) {
-    const err = error as { name?: string; message?: string; code?: string; stack?: string };
-    log("PROFILE_ERROR", {
-      label,
-      name: err.name ?? null,
-      code: err.code ?? null,
-      message: err.message ? err.message.slice(0, 500) : null,
-      stack: err.stack ? err.stack.split("\n").slice(0, 8).join(" | ").slice(0, 1000) : null,
-    });
+    log("PROFILE_ERROR", { label, ...describeError(error) });
   }
 }
 
@@ -63,6 +74,15 @@ async function main() {
     console.error("❌ Thiếu DATABASE_URL. KHÔNG chạy nếu không chắc chắn đây là production!");
     process.exit(1);
   }
+
+  // Ground truth: the ACTUAL columns Production's workforce_movements table
+  // has right now, vs. what schema.ts declares — a mismatch here (a column
+  // schema.ts expects that Production doesn't have yet, or a type drift)
+  // is the leading suspect for a "select *"-shaped query failing universally.
+  const actualColumns = await db.execute(
+    sql`select column_name, data_type from information_schema.columns where table_name = 'workforce_movements' order by ordinal_position`,
+  );
+  log("WORKFORCE_MOVEMENTS_ACTUAL_COLUMNS", { columns: actualColumns.rows.map((r) => `${r.column_name}:${r.data_type}`) });
 
   // A worker with the MOST sessions (multi-engagement — the exact case this
   // mission's "returning worker" invariant is about) and, separately, a
@@ -82,20 +102,6 @@ async function main() {
   // A workerId that does NOT exist (valid UUID shape, no row) — must resolve
   // to profile:null, never throw.
   await tryProfile("nonexistent", "00000000-0000-0000-0000-000000000000");
-
-  // Every worker with >=2 sessions, capped to a small batch — to see whether
-  // the failure is universal or specific to one worker's data shape.
-  const multi = await db
-    .select({ workerId: employmentSessions.workerId, sessionCount: sql<number>`count(*)::int` })
-    .from(employmentSessions)
-    .groupBy(employmentSessions.workerId)
-    .having(sql`count(*) >= 2`)
-    .orderBy(desc(sql`count(*)`))
-    .limit(10);
-  log("MULTI_SESSION_SAMPLE_SIZE", { value: multi.length });
-  for (const m of multi) {
-    await tryProfile(`multi-session (${m.sessionCount})`, m.workerId);
-  }
 
   log("diagnostic_complete", { note: "Read-only — zero rows written or modified." });
   await pool.end();
