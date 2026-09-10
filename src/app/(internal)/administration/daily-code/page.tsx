@@ -15,7 +15,7 @@ import {
   toast,
 } from "@/components/ui";
 import { formatDate, todayStr } from "@/lib/helpers";
-import { BadgeCheck, Calendar, CheckCircle2, RefreshCw, Users } from "lucide-react";
+import { BadgeCheck, Calendar, CheckCircle2, Download, RefreshCw, Search, Users } from "lucide-react";
 
 type Row = {
   dailyApplicationId: string;
@@ -32,8 +32,17 @@ type Row = {
   dailyCodeUpdatedBy: string | null;
 };
 
+type DeptOption = { id: string; deptName: string; groupName: string | null };
+type StatusFilter = "ALL" | "MISSING" | "DONE";
+
+const hasCode = (r: Row) => !!(r.code && r.code.trim());
+
 export default function AdministrationDailyCodePage() {
   const [date, setDate] = useState(todayStr());
+  const [deptId, setDeptId] = useState("");
+  const [q, setQ] = useState("");
+  const [status, setStatus] = useState<StatusFilter>("ALL");
+  const [depts, setDepts] = useState<DeptOption[]>([]);
   const [rows, setRows] = useState<Row[] | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
@@ -41,11 +50,29 @@ export default function AdministrationDailyCodePage() {
   const [selected, setSelected] = useState<Record<string, boolean>>({});
   const [busy, setBusy] = useState(false);
 
-  const load = useCallback(async (d: string) => {
+  useEffect(() => {
+    void (async () => {
+      try {
+        const res = await fetch("/api/departments");
+        const data = await res.json();
+        if (res.ok) setDepts(data.rows ?? []);
+      } catch {
+        // Bộ lọc bộ phận là tiện ích phụ — lỗi tải không chặn danh sách chính.
+      }
+    })();
+  }, []);
+
+  // Luôn tải TOÀN BỘ (status=ALL, server-authorized theo date/deptId/q) — bộ
+  // lọc trạng thái áp dụng ở client trên CÙNG tập dữ liệu, để KPI và danh
+  // sách hiển thị luôn nhất quán (bấm 1 thẻ KPI không cần gọi lại API).
+  const load = useCallback(async (d: string, dept: string, query: string) => {
     setLoading(true);
     setError(null);
     try {
-      const res = await fetch(`/api/administration/daily-code?date=${d}`);
+      const params = new URLSearchParams({ date: d, status: "ALL" });
+      if (dept) params.set("deptId", dept);
+      if (query.trim()) params.set("q", query.trim());
+      const res = await fetch(`/api/administration/daily-code?${params.toString()}`);
       const data = await res.json();
       if (!res.ok) {
         setError(data.error ?? "Không tải được danh sách.");
@@ -64,22 +91,43 @@ export default function AdministrationDailyCodePage() {
   }, []);
 
   useEffect(() => {
-    void load(date);
+    void load(date, deptId, q);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [date]);
+  }, [date, deptId]);
+
+  // Tìm nhanh: debounce để không gọi API theo từng ký tự gõ.
+  useEffect(() => {
+    const timer = setTimeout(() => void load(date, deptId, q), 350);
+    return () => clearTimeout(timer);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [q]);
 
   const stats = useMemo(() => {
     const total = rows?.length ?? 0;
-    const done = rows?.filter((r) => r.code && r.code.trim()).length ?? 0;
+    const done = rows?.filter(hasCode).length ?? 0;
     return { total, done, missing: total - done };
   }, [rows]);
 
+  const displayRows = useMemo(() => {
+    if (!rows) return rows;
+    if (status === "MISSING") return rows.filter((r) => !hasCode(r));
+    if (status === "DONE") return rows.filter(hasCode);
+    return rows;
+  }, [rows, status]);
+
   const selectedIds = Object.keys(selected).filter((k) => selected[k]);
 
+  const exportHref = (() => {
+    const params = new URLSearchParams({ date, status });
+    if (deptId) params.set("deptId", deptId);
+    if (q.trim()) params.set("q", q.trim());
+    return `/api/administration/daily-code/export?${params.toString()}`;
+  })();
+
   const submit = async () => {
-    if (!rows) return;
+    if (!displayRows) return;
     const items = selectedIds
-      .map((id) => rows.find((r) => r.dailyApplicationId === id))
+      .map((id) => displayRows.find((r) => r.dailyApplicationId === id))
       .filter((r): r is Row => !!r)
       .map((r) => ({ dailyApplicationId: r.dailyApplicationId, dwDataId: r.dwDataId, code: drafts[r.dailyApplicationId] ?? "" }));
     if (items.length === 0) {
@@ -99,7 +147,7 @@ export default function AdministrationDailyCodePage() {
         return;
       }
       toast({ title: `✅ Đã cập nhật ${d.updated}${d.skipped ? ` • Không thành công ${d.skipped}` : ""}` });
-      await load(date);
+      await load(date, deptId, q);
     } finally {
       setBusy(false);
     }
@@ -114,9 +162,9 @@ export default function AdministrationDailyCodePage() {
 
       <MetricStrip
         items={[
-          <MetricStripItem key="total" icon={<Users className="h-4 w-4" />} value={stats.total} label="Đã nhập DW" context={formatDate(date)} tone="primary" />,
-          <MetricStripItem key="done" icon={<CheckCircle2 className="h-4 w-4" />} value={stats.done} label="Đã có mã" tone="success" />,
-          <MetricStripItem key="missing" icon={<BadgeCheck className="h-4 w-4" />} value={stats.missing} label="Chưa có mã" tone="warning" />,
+          <MetricStripItem key="total" icon={<Users className="h-4 w-4" />} value={stats.total} label="Đã nhập DW" context={formatDate(date)} tone="primary" onClick={() => setStatus("ALL")} active={status === "ALL"} />,
+          <MetricStripItem key="done" icon={<CheckCircle2 className="h-4 w-4" />} value={stats.done} label="Đã có mã" tone="success" onClick={() => setStatus("DONE")} active={status === "DONE"} />,
+          <MetricStripItem key="missing" icon={<BadgeCheck className="h-4 w-4" />} value={stats.missing} label="Chưa có mã" tone="warning" onClick={() => setStatus("MISSING")} active={status === "MISSING"} />,
         ]}
       />
 
@@ -126,13 +174,53 @@ export default function AdministrationDailyCodePage() {
             <p className="mb-1 text-[11px] font-semibold text-fg-muted">Ngày</p>
             <Input type="date" value={date} onChange={(e) => setDate(e.target.value)} className="h-10 w-40" />
           </div>
+          <div>
+            <p className="mb-1 text-[11px] font-semibold text-fg-muted">Bộ phận</p>
+            <select
+              value={deptId}
+              onChange={(e) => setDeptId(e.target.value)}
+              className="h-10 rounded-[10px] border border-border-strong bg-surface px-3 text-[13px] font-medium text-fg outline-none focus:border-primary focus:ring-2 focus:ring-primary/15"
+            >
+              <option value="">Tất cả bộ phận</option>
+              {depts.map((d) => (
+                <option key={d.id} value={d.id}>
+                  {d.deptName}
+                  {d.groupName ? ` — ${d.groupName}` : ""}
+                </option>
+              ))}
+            </select>
+          </div>
+          <div>
+            <p className="mb-1 text-[11px] font-semibold text-fg-muted">Lọc</p>
+            <select
+              value={status}
+              onChange={(e) => setStatus(e.target.value as StatusFilter)}
+              className="h-10 rounded-[10px] border border-border-strong bg-surface px-3 text-[13px] font-medium text-fg outline-none focus:border-primary focus:ring-2 focus:ring-primary/15"
+            >
+              <option value="ALL">Tất cả</option>
+              <option value="MISSING">Chưa có mã</option>
+              <option value="DONE">Đã có mã</option>
+            </select>
+          </div>
           <Button variant="outline" className="h-10" onClick={() => setDate(todayStr())}>
             <Calendar className="h-4 w-4" /> Về hôm nay
           </Button>
-          <Button variant="outline" className="h-10" onClick={() => void load(date)}>
+          <Button variant="outline" className="h-10" onClick={() => void load(date, deptId, q)}>
             <RefreshCw className={loading ? "h-4 w-4 animate-spin" : "h-4 w-4"} /> Tải lại
           </Button>
-          <div className="flex-1" />
+          <div className="min-w-[180px] flex-1">
+            <p className="mb-1 text-[11px] font-semibold text-fg-muted">Tìm nhanh</p>
+            <div className="relative">
+              <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-fg-muted" aria-hidden />
+              <Input value={q} onChange={(e) => setQ(e.target.value)} placeholder="Tên / CCCD / Mã công nhật" className="h-10 pl-9" />
+            </div>
+          </div>
+          <a
+            href={exportHref}
+            className="inline-flex h-10 items-center gap-1.5 rounded-[10px] border border-border-strong bg-surface px-4 text-[13px] font-semibold text-fg shadow-sm transition-colors hover:bg-botanical-50"
+          >
+            <Download className="h-4 w-4" /> Xuất Excel
+          </a>
           <Button
             variant="primary"
             className="h-10"
@@ -151,11 +239,11 @@ export default function AdministrationDailyCodePage() {
             <SkeletonTable rows={6} cols={7} />
           </div>
         ) : error ? (
-          <ErrorState description={error} onRetry={() => void load(date)} />
-        ) : !rows || rows.length === 0 ? (
+          <ErrorState description={error} onRetry={() => void load(date, deptId, q)} />
+        ) : !displayRows || displayRows.length === 0 ? (
           <EmptyState
             title="Chưa có lao động nào cần nhập mã công nhật"
-            description="Danh sách hiển thị lao động đã được Recruiter đưa vào DW Data trong ngày đã chọn."
+            description="Danh sách hiển thị lao động đã được Recruiter đưa vào DW Data, khớp bộ lọc hiện tại."
           />
         ) : (
           <div className="v2-scroll max-h-[65vh] overflow-auto">
@@ -165,8 +253,8 @@ export default function AdministrationDailyCodePage() {
                   <th className="w-10 px-2 py-2.5 text-center text-[10px] font-bold uppercase text-primary">
                     <input
                       type="checkbox"
-                      checked={rows.length > 0 && selectedIds.length === rows.length}
-                      onChange={(e) => setSelected(Object.fromEntries(rows.map((r) => [r.dailyApplicationId, e.target.checked])))}
+                      checked={displayRows.length > 0 && selectedIds.length === displayRows.length}
+                      onChange={(e) => setSelected(Object.fromEntries(displayRows!.map((r) => [r.dailyApplicationId, e.target.checked])))}
                       className="h-4 w-4 accent-primary"
                     />
                   </th>
@@ -181,7 +269,7 @@ export default function AdministrationDailyCodePage() {
                 </tr>
               </thead>
               <tbody>
-                {rows.map((r, idx) => (
+                {displayRows.map((r, idx) => (
                   <tr key={r.dailyApplicationId} className="border-b border-border/70 bg-surface hover:bg-botanical-50">
                     <td className="px-2 py-1.5 text-center">
                       <input

@@ -128,7 +128,7 @@ function loadMealList(rows: Record<string, unknown>[]) {
     getMealEligibleWorkers: (
       date: string,
       scope: string[] | null,
-      filters?: { deptId?: string | null; q?: string | null },
+      filters?: { deptId?: string | null; q?: string | null; status?: "ALL" | "ELIGIBLE" | "INELIGIBLE" },
     ) => Promise<Record<string, unknown>[]>;
   };
 }
@@ -175,4 +175,62 @@ test("BLOCKER #4: cùng (date, scope, deptId, q) -> list và export nhận CÙNG
   const exportIds = exportRows.map((r) => r.dailyApplicationId).sort();
   assert.deepEqual(listIds, exportIds);
   assert.ok(listIds.length > 0);
+});
+
+test("status mặc định (không truyền) giữ ĐÚNG hành vi cũ: chỉ trả về hàng ĐỦ ĐIỀU KIỆN (ELIGIBLE)", async () => {
+  const { getMealEligibleWorkers } = loadMealList(ROWS);
+  const rows = await getMealEligibleWorkers("2026-08-17", null);
+  assert.equal(rows.length, 2, "app-1 và app-2 đã nhập DW + có Mã số công nhật; app-3 chưa nhập DW nên bị loại");
+  assert.deepEqual(rows.map((r) => r.dailyApplicationId).sort(), ["app-1", "app-2"]);
+});
+
+test("status=ELIGIBLE: tường minh giống hệt hành vi mặc định", async () => {
+  const { getMealEligibleWorkers } = loadMealList(ROWS);
+  const rows = await getMealEligibleWorkers("2026-08-17", null, { status: "ELIGIBLE" });
+  assert.deepEqual(rows.map((r) => r.dailyApplicationId).sort(), ["app-1", "app-2"]);
+});
+
+test("status=INELIGIBLE: chỉ trả về hàng KHÔNG ĐỦ ĐIỀU KIỆN (đã nhập DW nhưng chưa có Mã số công nhật)", async () => {
+  const rowsWithIneligible = [
+    ...ROWS,
+    { dailyApplicationId: "app-4", cccd: "010000000004", fullName: "Pham Van D", phone: "0904", deptId: "dept-A", startingDate: null, regDate: "2026-08-17", deletedAt: null, dwImportedAt: new Date(), code: null },
+  ];
+  const { getMealEligibleWorkers } = loadMealList(rowsWithIneligible);
+  const rows = await getMealEligibleWorkers("2026-08-17", null, { status: "INELIGIBLE" });
+  assert.equal(rows.length, 1, "chỉ app-4 (đã nhập DW nhưng chưa có Mã số công nhật) — app-3 chưa nhập DW nên không nằm trong hàng chờ vận hành trong ngày");
+  assert.equal(rows[0].dailyApplicationId, "app-4");
+});
+
+test("status=ALL: trả về mọi hàng đã nhập DW, bất kể ĐỦ ĐIỀU KIỆN hay không", async () => {
+  const { getMealEligibleWorkers } = loadMealList(ROWS);
+  const rows = await getMealEligibleWorkers("2026-08-17", null, { status: "ALL" });
+  assert.equal(rows.length, 2, "app-3 (chưa nhập DW) vẫn bị loại vì không nằm trong hàng chờ vận hành trong ngày");
+});
+
+/* ------------------------------------------------------------
+   PHASE 6 — HISTORICAL DATA: ngày được chọn phải thực sự điều khiển
+   truy vấn nghiệp vụ (eq(regDate, date)) — đổi ngày KHÔNG được vô tình
+   trả về dữ liệu của ngày khác (vd. hôm nay).
+   ------------------------------------------------------------ */
+test("ngày lịch sử (10/08/2026, khác regDate của mọi hàng) -> zero rows, KHÔNG lẫn dữ liệu ngày khác", async () => {
+  const { getMealEligibleWorkers } = loadMealList(ROWS);
+  const rows = await getMealEligibleWorkers("2026-08-10", null);
+  assert.equal(rows.length, 0, "mọi hàng fixture có regDate=2026-08-17 — đổi ngày phải trả về rỗng, không phải dữ liệu của 2026-08-17");
+});
+
+test("đúng ngày regDate (2026-08-17) -> trả về đúng dữ liệu của ngày đó", async () => {
+  const { getMealEligibleWorkers } = loadMealList(ROWS);
+  const rows = await getMealEligibleWorkers("2026-08-17", null);
+  assert.ok(rows.length > 0);
+});
+
+test("KPI/list nhất quán: list và export cùng status=INELIGIBLE nhận CÙNG một tập kết quả", async () => {
+  const rowsWithIneligible = [
+    ...ROWS,
+    { dailyApplicationId: "app-4", cccd: "010000000004", fullName: "Pham Van D", phone: "0904", deptId: "dept-A", startingDate: null, regDate: "2026-08-17", deletedAt: null, dwImportedAt: new Date(), code: null },
+  ];
+  const { getMealEligibleWorkers } = loadMealList(rowsWithIneligible);
+  const listRows = await getMealEligibleWorkers("2026-08-17", ["dept-A", "dept-B"], { status: "INELIGIBLE" });
+  const exportRows = await getMealEligibleWorkers("2026-08-17", ["dept-A", "dept-B"], { status: "INELIGIBLE" });
+  assert.deepEqual(listRows.map((r) => r.dailyApplicationId).sort(), exportRows.map((r) => r.dailyApplicationId).sort());
 });

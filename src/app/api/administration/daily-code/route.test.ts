@@ -118,6 +118,9 @@ function loadRoute(opts: {
         return value.length > 4 ? `••••••••${value.slice(-4)}` : "••••••••";
       },
     },
+    "@/lib/daily-code-list": {
+      getDailyCodeRows: async () => opts.getRows ?? [],
+    },
   };
 
   const moduleObj = { exports: {} as Record<string, unknown> };
@@ -263,4 +266,40 @@ test("BLOCKER #3: GET trả CCCD đầy đủ khi role CÓ privacy.view_cccd", a
 
   const rows = res.body.rows as { cccd: string }[];
   assert.equal(rows[0].cccd, "012345678901");
+});
+
+/* ------------------------------------------------------------
+   PHASE 7 — RBAC / Data Scope: GET với deptId ngoài phạm vi phải bị
+   từ chối NGAY từ route, không được truy vấn getDailyCodeRows. Trực
+   tiếp thao túng deptId qua query string không được mở rộng Data Scope.
+   ------------------------------------------------------------ */
+test("Data Scope: Department Manager (scope=dept-A) truyền deptId=dept-B trên query string -> 403, KHÔNG rò rỉ dữ liệu ngoài phạm vi", async () => {
+  const getRows = [{ dailyApplicationId: APP_ID, cccd: "012345678901", fullName: "Nguyen Van A", deptId: "dept-B", deptName: "Dept B", groupName: null, startingDate: null, dwImportedAt: new Date(), dwDataId: DW_ID, code: "CN-001", dailyCodeUpdatedAt: null, dailyCodeUpdatedBy: null }];
+  const { mod } = loadRoute({ guardFor: () => ADMIN_GUARD, scope: ["dept-A"], getRows });
+  const GET = mod.GET as (req: Request) => Promise<{ status: number; body: Record<string, unknown> }>;
+  const res = await GET(makeReq(undefined, "http://localhost/api/administration/daily-code?date=2026-08-17&deptId=dept-B"));
+
+  assert.equal(res.status, 403);
+  assert.match(res.body.error as string, /Ngoài phạm vi/);
+  assert.equal(res.body.rows, undefined, "response 403 KHÔNG được kèm theo dữ liệu");
+});
+
+test("Data Scope: Department Manager (scope=dept-A) truyền deptId=dept-A -> 200, được phép xem đúng phạm vi của mình", async () => {
+  const getRows = [{ dailyApplicationId: APP_ID, cccd: "012345678901", fullName: "Nguyen Van A", deptId: "dept-A", deptName: "Dept A", groupName: null, startingDate: null, dwImportedAt: new Date(), dwDataId: DW_ID, code: "CN-001", dailyCodeUpdatedAt: null, dailyCodeUpdatedBy: null }];
+  const { mod } = loadRoute({ guardFor: () => ADMIN_GUARD, scope: ["dept-A"], getRows });
+  const GET = mod.GET as (req: Request) => Promise<{ status: number; body: Record<string, unknown> }>;
+  const res = await GET(makeReq(undefined, "http://localhost/api/administration/daily-code?date=2026-08-17&deptId=dept-A"));
+
+  assert.equal(res.status, 200);
+  const rows = res.body.rows as { dailyApplicationId: string }[];
+  assert.equal(rows.length, 1);
+});
+
+test("Data Scope: ADMIN/global (scope=null) không bị chặn bởi bất kỳ deptId nào", async () => {
+  const getRows = [{ dailyApplicationId: APP_ID, cccd: "012345678901", fullName: "Nguyen Van A", deptId: "dept-ANY", deptName: "Dept Any", groupName: null, startingDate: null, dwImportedAt: new Date(), dwDataId: DW_ID, code: "CN-001", dailyCodeUpdatedAt: null, dailyCodeUpdatedBy: null }];
+  const { mod } = loadRoute({ guardFor: () => ADMIN_GUARD, scope: null, getRows });
+  const GET = mod.GET as (req: Request) => Promise<{ status: number; body: Record<string, unknown> }>;
+  const res = await GET(makeReq(undefined, "http://localhost/api/administration/daily-code?date=2026-08-17&deptId=dept-ANY"));
+
+  assert.equal(res.status, 200);
 });

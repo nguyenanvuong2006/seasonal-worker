@@ -1,12 +1,13 @@
 import { NextResponse } from "next/server";
-import { and, desc, eq, inArray, isNotNull, isNull } from "drizzle-orm";
+import { eq, inArray } from "drizzle-orm";
 import { db } from "@/db";
-import { dailyApplications, departments, dwData } from "@/db/schema";
+import { dailyApplications, dwData } from "@/db/schema";
 import { getUserScope, hasPermission, requirePermission, writeAudit } from "@/lib/auth";
 import { scopeAllowsDepartment } from "@/lib/data-scope";
 import { normalizePersonName } from "@/lib/person-name";
 import { todayStr } from "@/lib/helpers";
 import { maskCccd } from "@/lib/daily-intake-workflow";
+import { getDailyCodeRows, type DailyCodeStatusFilter } from "@/lib/daily-code-list";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -16,6 +17,9 @@ export const dynamic = "force-dynamic";
  * Hàng chờ = lao động ĐÃ được Recruiter đưa vào DW Data (dw_imported_at IS NOT
  * NULL) trong ngày đang chọn. Mã số công nhật = dw_data.code (giữ nguyên
  * semantics đã audit — cột này đã được dùng làm mã định danh DW từ trước).
+ * Hỗ trợ deptId + q + status — CÙNG bộ filter với GET
+ * /api/administration/daily-code/export để danh sách hiển thị và file xuất
+ * luôn khớp nhau (theo đúng mẫu lib/meal-list.ts).
  */
 export async function GET(req: Request) {
   const guard = await requirePermission(["ADMIN", "ADMINISTRATION"], "administration.daily_code.view");
@@ -23,38 +27,16 @@ export async function GET(req: Request) {
 
   const url = new URL(req.url);
   const date = url.searchParams.get("date") || todayStr();
+  const deptId = url.searchParams.get("deptId") || null;
+  const q = url.searchParams.get("q") || null;
+  const status = (url.searchParams.get("status") as DailyCodeStatusFilter | null) || "ALL";
 
   const scope = await getUserScope(guard.session);
-  const conditions = [
-    eq(dailyApplications.regDate, date),
-    isNull(dailyApplications.deletedAt),
-    isNotNull(dailyApplications.dwImportedAt),
-  ];
-  if (scope !== null) {
-    if (scope.length === 0) return NextResponse.json({ rows: [], date });
-    conditions.push(inArray(dailyApplications.deptId, scope));
+  if (deptId && !scopeAllowsDepartment(scope, deptId)) {
+    return NextResponse.json({ error: "Ngoài phạm vi dữ liệu được cấp." }, { status: 403 });
   }
 
-  const rows = await db
-    .select({
-      dailyApplicationId: dailyApplications.id,
-      cccd: dailyApplications.cccd,
-      fullName: dailyApplications.fullName,
-      deptId: dailyApplications.deptId,
-      deptName: departments.deptName,
-      groupName: departments.groupName,
-      startingDate: dailyApplications.startingDate,
-      dwImportedAt: dailyApplications.dwImportedAt,
-      dwDataId: dwData.id,
-      code: dwData.code,
-      dailyCodeUpdatedAt: dwData.dailyCodeUpdatedAt,
-      dailyCodeUpdatedBy: dwData.dailyCodeUpdatedBy,
-    })
-    .from(dailyApplications)
-    .innerJoin(dwData, eq(dailyApplications.dwId, dwData.id))
-    .leftJoin(departments, eq(dailyApplications.deptId, departments.id))
-    .where(and(...conditions))
-    .orderBy(desc(dailyApplications.dwImportedAt));
+  const rows = await getDailyCodeRows(date, scope, { deptId, q, status });
 
   // BLOCKER #3 — ADMINISTRATION không có privacy.view_cccd theo baseline: KHÔNG
   // được trả CCCD đầy đủ mặc định, phải áp dụng đúng permission hiện có
