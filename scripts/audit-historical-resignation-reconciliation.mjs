@@ -46,7 +46,7 @@ console.log(`✅ Kết nối DB. today=${today}\n`);
 const { rows: movements } = await client.query(
   `select wm.id as movement_id, wm.status, wm.effective_date, wm.confirmed_at, wm.lifecycle_applied_at,
           wm.employment_session_id, wm.worker_id,
-          es.id as session_id, es.status as session_status, es.start_date, es.end_date, es.end_reason
+          es.id as session_id, es.status as session_status, es.starting_date, es.end_date, es.end_reason
    from workforce_movements wm
    left join employment_sessions es on es.id = wm.employment_session_id
    where wm.movement_type = 'resignation'
@@ -112,7 +112,7 @@ function printBucket(label, list) {
   console.log(`${label}=${list.length}`);
   for (const m of list) {
     console.log(
-      `  movement=${m.movement_id} session=${m.session_id ?? "null"} effective_date=${new Date(m.effective_date).toISOString().slice(0, 10)} confirmed_at=${m.confirmed_at ? new Date(m.confirmed_at).toISOString() : null} lifecycle_applied_at=${m.lifecycle_applied_at ? new Date(m.lifecycle_applied_at).toISOString() : null} session_status=${m.session_status ?? "null"} session_start_date=${m.start_date ? new Date(m.start_date).toISOString().slice(0, 10) : null} session_end_date=${m.end_date ? new Date(m.end_date).toISOString().slice(0, 10) : null} session_end_reason=${m.end_reason ?? "null"}`,
+      `  movement=${m.movement_id} session=${m.session_id ?? "null"} effective_date=${new Date(m.effective_date).toISOString().slice(0, 10)} confirmed_at=${m.confirmed_at ? new Date(m.confirmed_at).toISOString() : null} lifecycle_applied_at=${m.lifecycle_applied_at ? new Date(m.lifecycle_applied_at).toISOString() : null} session_status=${m.session_status ?? "null"} session_starting_date=${m.starting_date ? new Date(m.starting_date).toISOString().slice(0, 10) : null} session_end_date=${m.end_date ? new Date(m.end_date).toISOString().slice(0, 10) : null} session_end_reason=${m.end_reason ?? "null"}`,
     );
   }
 }
