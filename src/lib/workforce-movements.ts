@@ -56,7 +56,43 @@ export function isActionAllowed(movementType: string, currentStatus: string, act
 }
 
 type Executor = typeof db | Parameters<Parameters<typeof db.transaction>[0]>[0];
-type MovementRow = typeof workforceMovements.$inferSelect;
+
+// PRODUCTION HARDENING (2026-09-10, defense-in-depth after the Worker 360
+// Profile "Lỗi tải hồ sơ" incident): finalizeResignationEffect()/
+// finalizeTransferEffect() only ever read this subset of workforceMovements
+// columns — every call site below selects EXACTLY this shape (never a blind
+// db.select(), which selects every column schema.ts declares and would
+// throw for the WHOLE row the moment schema.ts drifts ahead of the real
+// Production table on ANY column, not just an unused one).
+type MovementForFinalize = {
+  id: string;
+  movementType: string;
+  workerId: string;
+  fromDeptId: string | null;
+  toDeptId: string | null;
+  effectiveDate: string;
+  status: string;
+  source: string | null;
+  note: string | null;
+  requestedBy: string;
+  lifecycleAppliedAt: Date | null;
+  employmentSessionId: string | null;
+};
+
+const MOVEMENT_FINALIZE_COLUMNS = {
+  id: workforceMovements.id,
+  movementType: workforceMovements.movementType,
+  workerId: workforceMovements.workerId,
+  fromDeptId: workforceMovements.fromDeptId,
+  toDeptId: workforceMovements.toDeptId,
+  effectiveDate: workforceMovements.effectiveDate,
+  status: workforceMovements.status,
+  source: workforceMovements.source,
+  note: workforceMovements.note,
+  requestedBy: workforceMovements.requestedBy,
+  lifecycleAppliedAt: workforceMovements.lifecycleAppliedAt,
+  employmentSessionId: workforceMovements.employmentSessionId,
+};
 
 /**
  * Kết thúc ĐÚNG employment session đang ACTIVE của worker vì nghỉ việc — session ACTIVE thật
@@ -68,11 +104,11 @@ type MovementRow = typeof workforceMovements.$inferSelect;
  */
 async function finalizeResignationEffect(
   tx: Executor,
-  movement: MovementRow,
+  movement: MovementForFinalize,
   actorUsername: string,
 ): Promise<{ employmentSessionId: string | null }> {
   const [activeSession] = await tx
-    .select()
+    .select({ id: employmentSessions.id })
     .from(employmentSessions)
     .where(and(
       eq(employmentSessions.workerId, movement.workerId),
@@ -84,7 +120,7 @@ async function finalizeResignationEffect(
   const fallbackSession = activeSession
     ? null
     : (await tx
-        .select()
+        .select({ id: employmentSessions.id })
         .from(employmentSessions)
         .where(eq(employmentSessions.workerId, movement.workerId))
         .orderBy(desc(employmentSessions.regDate))
@@ -126,10 +162,10 @@ async function finalizeResignationEffect(
  * (ngay khi effectiveDate <= hôm nay) HOẶC từ applyEffectiveWorkforceMovements() (khi
  * effectiveDate vừa tới) — CÙNG MỘT logic.
  */
-async function finalizeTransferEffect(tx: Executor, movement: MovementRow, actorUsername: string): Promise<void> {
+async function finalizeTransferEffect(tx: Executor, movement: MovementForFinalize, actorUsername: string): Promise<void> {
   if (!movement.toDeptId) return;
   const [currentSession] = await tx
-    .select()
+    .select({ id: employmentSessions.id, dailyApplicationId: employmentSessions.dailyApplicationId })
     .from(employmentSessions)
     .where(and(
       eq(employmentSessions.workerId, movement.workerId),
@@ -181,7 +217,7 @@ export async function applyMovementAction(
   extra: { newEffectiveDate?: string; note?: string } = {},
 ) {
   const result = await db.transaction(async (tx) => {
-    const [movement] = await tx.select().from(workforceMovements).where(eq(workforceMovements.id, movementId)).for("update");
+    const [movement] = await tx.select(MOVEMENT_FINALIZE_COLUMNS).from(workforceMovements).where(eq(workforceMovements.id, movementId)).for("update");
     if (!movement) throw new Error("Không tìm thấy yêu cầu.");
     if (!isActionAllowed(movement.movementType, movement.status, action)) {
       throw new Error(`Không thể thực hiện hành động này ở trạng thái hiện tại (${movement.status}).`);
@@ -320,7 +356,7 @@ export async function applyEffectiveWorkforceMovements(asOf: string = todayStr()
 
   for (const { id } of due) {
     await db.transaction(async (tx) => {
-      const [locked] = await tx.select().from(workforceMovements).where(eq(workforceMovements.id, id)).for("update");
+      const [locked] = await tx.select(MOVEMENT_FINALIZE_COLUMNS).from(workforceMovements).where(eq(workforceMovements.id, id)).for("update");
       // Race guard: đã bị applyMovementAction() hoặc 1 lần chạy cron khác áp dụng giữa lúc quét
       // và lúc khoá dòng này — bỏ qua, không áp dụng lại.
       if (!locked || locked.lifecycleAppliedAt || locked.effectiveDate > asOf) return;
