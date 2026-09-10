@@ -1791,6 +1791,24 @@ export const candidateDocuments = pgTable(
     revokedBy: varchar("revoked_by", { length: 64 }),
     revokeReason: text("revoke_reason"),
     errorMessage: text("error_message"),
+    // ENGAGEMENT LINKAGE (2026-09-10, Electronic Confirmation deadline + history mission) —
+    // the canonical "one beginning of work" entity per schema.ts's own EMPLOYMENT LIFECYCLE
+    // SOURCE OF TRUTH docblock (see employmentSessions above) is employment_sessions, NOT
+    // worker identity/CCCD alone. Resolved and FROZEN at document-generation time (looked up
+    // from employment_sessions.daily_application_id = candidate_documents.application_id,
+    // which is unique when set — see employment_session_daily_app_uq — so the lookup is
+    // deterministic, never guessed). NULL for legacy documents created before this column
+    // existed where no deterministic match exists — deliberately left "unlinked" rather than
+    // guessed (see migration for the one-time deterministic backfill it DOES attempt).
+    employmentSessionId: uuid("employment_session_id"),
+    // CONFIRMATION DEADLINE (same mission) — frozen at ISSUE time (not generation time — the
+    // reading window starts when the candidate can actually see the document). NULL for
+    // pre-existing documents (issued before this feature existed) — deliberately never
+    // backfilled onto historical rows, since retroactively imposing a deadline on a document a
+    // candidate is already mid-flow with would be a silent, surprising behavior change; NULL
+    // means "no deadline enforced" everywhere this column is read (see lib/candidate-consent/
+    // lifecycle.ts's effectiveStatus/isPastDeadline).
+    confirmationDeadlineAt: timestamp("confirmation_deadline_at", { withTimezone: true }),
     createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
     updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
   },
@@ -1798,6 +1816,12 @@ export const candidateDocuments = pgTable(
     index("candidate_document_application_idx").on(t.applicationId),
     index("candidate_document_status_idx").on(t.status),
     index("candidate_document_merge_job_record_idx").on(t.mergeJobRecordId),
+    index("candidate_document_employment_session_idx").on(t.employmentSessionId),
+    // Powers the "expiring soon" / "expired unconfirmed" reporting queries (Part 16/17) —
+    // partial index scoped to exactly the rows that can ever transition through EXPIRED.
+    index("candidate_document_status_deadline_idx")
+      .on(t.status, t.confirmationDeadlineAt)
+      .where(sql`status in ('ISSUED', 'VIEWED')`),
   ],
 );
 

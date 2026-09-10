@@ -11,13 +11,22 @@
  * POST /api/document-merge/candidate-documents/finalize — never as a side
  * effect of someone polling this list (see routes-wiring.test.ts for the
  * structural proof, and finalize.ts's own docblock for why).
+ *
+ * CONFIRMATION DEADLINE + ENGAGEMENT (2026-09-10) — every row now also
+ * exposes confirmationDeadlineAt, a derived effectiveStatus (EXPIRED
+ * computed via the SAME lifecycle.ts effectiveStatus() every other read
+ * path uses, never a bespoke check here), and the linked engagement's
+ * "Ngày bắt đầu" (employment_sessions.starting_date) for the new admin
+ * "Lần bắt đầu công việc" column — a document with no employmentSessionId
+ * (legacy, pre-linkage) simply shows a null start date.
  */
 
 import { NextResponse } from "next/server";
 import { eq, inArray } from "drizzle-orm";
 import { requirePermission } from "@/lib/auth";
 import { db } from "@/db";
-import { candidateDocuments, dailyApplications, documentConfirmations, mergeTemplates } from "@/db/schema";
+import { candidateDocuments, dailyApplications, documentConfirmations, employmentSessions, mergeTemplates } from "@/db/schema";
+import { effectiveStatus, type CandidateDocumentStatus } from "@/lib/candidate-consent/lifecycle";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -45,10 +54,14 @@ export async function GET() {
       errorMessage: candidateDocuments.errorMessage,
       applicantFullName: dailyApplications.fullName,
       createdAt: candidateDocuments.createdAt,
+      confirmationDeadlineAt: candidateDocuments.confirmationDeadlineAt,
+      employmentSessionId: candidateDocuments.employmentSessionId,
+      engagementStartingDate: employmentSessions.startingDate,
     })
     .from(candidateDocuments)
     .leftJoin(dailyApplications, eq(candidateDocuments.applicationId, dailyApplications.id))
     .leftJoin(mergeTemplates, eq(candidateDocuments.templateId, mergeTemplates.id))
+    .leftJoin(employmentSessions, eq(candidateDocuments.employmentSessionId, employmentSessions.id))
     .orderBy(candidateDocuments.createdAt);
 
   const confirmations = rows.length
@@ -59,21 +72,23 @@ export async function GET() {
     : [];
   const confirmedAtByDoc = new Map(confirmations.map((c) => [c.candidateDocumentId, { confirmedAtServer: c.confirmedAtServer, receiptId: c.receiptId }]));
 
+  const now = new Date();
+  const documents = rows.map((r) => ({
+    ...r,
+    effectiveStatus: effectiveStatus(r.status as CandidateDocumentStatus, r.confirmationDeadlineAt, now),
+    confirmation: confirmedAtByDoc.get(r.id) ?? null,
+  }));
+
   const summary = {
-    total: rows.length,
-    generating: rows.filter((r) => r.status === "GENERATING").length,
-    ready: rows.filter((r) => r.status === "READY").length,
-    issued: rows.filter((r) => r.status === "ISSUED").length,
-    viewed: rows.filter((r) => r.status === "VIEWED").length,
-    confirmed: rows.filter((r) => r.status === "CONFIRMED").length,
-    failed: rows.filter((r) => r.status === "FAILED").length,
+    total: documents.length,
+    generating: documents.filter((r) => r.effectiveStatus === "GENERATING").length,
+    ready: documents.filter((r) => r.effectiveStatus === "READY").length,
+    issued: documents.filter((r) => r.effectiveStatus === "ISSUED").length,
+    viewed: documents.filter((r) => r.effectiveStatus === "VIEWED").length,
+    confirmed: documents.filter((r) => r.effectiveStatus === "CONFIRMED").length,
+    failed: documents.filter((r) => r.effectiveStatus === "FAILED").length,
+    expired: documents.filter((r) => r.effectiveStatus === "EXPIRED").length,
   };
 
-  return NextResponse.json({
-    summary,
-    documents: rows.map((r) => ({
-      ...r,
-      confirmation: confirmedAtByDoc.get(r.id) ?? null,
-    })),
-  });
+  return NextResponse.json({ summary, documents });
 }

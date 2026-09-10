@@ -13,6 +13,15 @@
  * document's failure (or simply not being eligible) never blocks the rest
  * of the batch. Never issues GENERATING/FAILED/REVOKED/SUPERSEDED/EXPIRED/
  * CONFIRMED documents — the CAS predicate structurally cannot match them.
+ *
+ * CONFIRMATION DEADLINE (2026-09-10) — ONE shared deadline POLICY applies to
+ * the whole batch request (same deadlineDays/deadlineAt body fields as the
+ * single-document route), but each document gets its OWN frozen absolute
+ * confirmation_deadline_at computed against the SAME server `now` used for
+ * its own issuedAt — a batch of 50 documents issued in the same request all
+ * get the identical absolute instant, not 50 independently-drifting clocks.
+ * Invalid policy input rejects the entire batch before any row is touched
+ * (nothing partially applied against a policy nobody actually chose).
  */
 
 import { NextResponse } from "next/server";
@@ -20,6 +29,7 @@ import { and, eq, inArray, isNotNull } from "drizzle-orm";
 import { requirePermission, writeAudit } from "@/lib/auth";
 import { db } from "@/db";
 import { candidateDocuments } from "@/db/schema";
+import { parseDeadlinePolicyFromBody, resolveConfirmationDeadline } from "@/lib/candidate-consent/confirmation-deadline";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -35,13 +45,20 @@ export async function POST(request: Request) {
     return NextResponse.json({ error: guard.error }, { status: guard.status });
   }
 
-  let body: { ids?: unknown } = {};
+  let body: { ids?: unknown; deadlineDays?: unknown; deadlineAt?: unknown } = {};
   try {
     body = await request.json();
   } catch {
-    /* ids filter is optional — empty body means "all READY" */
+    /* ids/deadline filter is optional — empty body means "all READY" + default 3-day window */
   }
   const scopedIds = Array.isArray(body.ids) ? body.ids.filter((v): v is string => typeof v === "string") : null;
+
+  const batchNow = new Date();
+  const deadlineResult = resolveConfirmationDeadline(parseDeadlinePolicyFromBody(body), batchNow);
+  if (!deadlineResult.ok) {
+    return NextResponse.json({ error: deadlineResult.error }, { status: 400 });
+  }
+  const confirmationDeadlineAt = deadlineResult.deadlineAt;
 
   const candidateWhere = scopedIds ? inArray(candidateDocuments.id, scopedIds) : eq(candidateDocuments.status, "READY");
   const candidates = await db
@@ -62,7 +79,7 @@ export async function POST(request: Request) {
       const now = new Date();
       const [updated] = await db
         .update(candidateDocuments)
-        .set({ status: "ISSUED", issuedAt: now, issuedBy: guard.session.username, updatedAt: now })
+        .set({ status: "ISSUED", issuedAt: now, issuedBy: guard.session.username, confirmationDeadlineAt, updatedAt: now })
         .where(
           and(
             eq(candidateDocuments.id, candidate.id),
@@ -77,6 +94,11 @@ export async function POST(request: Request) {
         await writeAudit(guard.session, "DOCUMENT_ISSUED", "candidate_documents", {
           candidateDocumentId: updated.id,
           applicationId: updated.applicationId,
+          confirmationDeadlineAt: confirmationDeadlineAt.toISOString(),
+        });
+        await writeAudit(guard.session, "CONFIRMATION_DEADLINE_SET", "candidate_documents", {
+          candidateDocumentId: updated.id,
+          deadlineAt: confirmationDeadlineAt.toISOString(),
         });
         results.push({ id: candidate.id, outcome: "issued" });
       } else {
@@ -90,6 +112,7 @@ export async function POST(request: Request) {
   return NextResponse.json({
     processed: results.length,
     issued: results.filter((r) => r.outcome === "issued").length,
+    confirmationDeadlineAt,
     results,
   });
 }

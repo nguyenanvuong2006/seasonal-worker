@@ -17,6 +17,35 @@ import {
 } from "@/components/ui";
 import { Fingerprint, RefreshCw, Search, UserX } from "lucide-react";
 import { CCCD_ERROR_MESSAGE, isValidCccd } from "@/lib/validators";
+import { formatDeadline } from "@/lib/candidate-consent/confirmation-deadline";
+
+const CONFIRMATION_STATUS_LABEL: Record<string, string> = {
+  GENERATING: "ĐANG TẠO",
+  READY: "SẴN SÀNG",
+  ISSUED: "ĐÃ PHÁT HÀNH",
+  VIEWED: "ĐÃ XEM",
+  CONFIRMED: "ĐÃ XÁC NHẬN",
+  REVOKED: "ĐÃ THU HỒI",
+  SUPERSEDED: "ĐÃ THAY THẾ",
+  EXPIRED: "HẾT HẠN",
+  FAILED: "LỖI",
+};
+
+type ConfirmationHistoryEntry = {
+  documentId: string;
+  applicationId: string;
+  employmentSessionId: string | null;
+  engagementStartingDate: string | null;
+  templateVersion: number | null;
+  documentKind: string | null;
+  status: string;
+  effectiveStatus: string;
+  issuedAt: string | null;
+  confirmationDeadlineAt: string | null;
+  viewedAt: string | null;
+  confirmedAt: string | null;
+  receiptId: string | null;
+};
 
 type Session = {
   id: string;
@@ -53,6 +82,7 @@ export default function WorkerProfilesPage() {
   const [cccd, setCccd] = useState(() => searchParams.get("cccd") ?? "");
   const [profile, setProfile] = useState<Profile | null>(null);
   const [sessions, setSessions] = useState<Session[]>([]);
+  const [confirmationHistory, setConfirmationHistory] = useState<ConfirmationHistoryEntry[]>([]);
   const [loading, setLoading] = useState(false);
   const [notFound, setNotFound] = useState(false);
   const [backfilling, setBackfilling] = useState(false);
@@ -76,6 +106,7 @@ export default function WorkerProfilesPage() {
       const data = await res.json();
       setProfile(data.profile);
       setSessions(data.sessions ?? []);
+      setConfirmationHistory(data.confirmationHistory ?? []);
       setFp({ fingerprintCode: data.profile.fingerprintCode ?? "", fingerprintDevice: data.profile.fingerprintDevice ?? "" });
     } finally {
       setLoading(false);
@@ -247,6 +278,50 @@ export default function WorkerProfilesPage() {
                       </li>
                     );
                   })}
+                </ul>
+              )}
+            </CardContent>
+          </Card>
+
+          <Card className="p-0">
+            <CardHeader
+              title={`Lịch sử hồ sơ xác nhận điện tử — ${confirmationHistory.length} hồ sơ`}
+              subtitle="Mỗi lần bắt đầu công việc có MỘT hồ sơ xác nhận điện tử độc lập, không bao giờ ghi đè hồ sơ cũ. Mới nhất trước."
+            />
+            <CardContent className="p-0">
+              {confirmationHistory.length === 0 ? (
+                <EmptyState title="Chưa có hồ sơ xác nhận điện tử" description="Người này chưa có hồ sơ xác nhận điện tử nào được tạo." />
+              ) : (
+                <ul className="divide-y divide-border">
+                  {confirmationHistory.map((h) => (
+                    <li key={h.documentId} className="space-y-1.5 p-4 text-sm">
+                      <div className="flex flex-wrap items-center gap-2">
+                        <span className="font-semibold text-fg">
+                          {h.engagementStartingDate ? `Đợt bắt đầu ${h.engagementStartingDate}` : "Đợt làm việc (chưa liên kết)"}
+                        </span>
+                        {h.templateVersion !== null && <span className="text-[12px] text-fg-muted">Mẫu v{h.templateVersion}</span>}
+                        <Badge tone={h.effectiveStatus === "CONFIRMED" ? "green" : h.effectiveStatus === "EXPIRED" ? "gray" : h.effectiveStatus === "REVOKED" || h.effectiveStatus === "FAILED" ? "red" : "amber"}>
+                          {CONFIRMATION_STATUS_LABEL[h.effectiveStatus] ?? h.effectiveStatus}
+                        </Badge>
+                      </div>
+                      <div className="flex flex-wrap gap-x-4 gap-y-1 text-[12.5px] text-fg-muted">
+                        <span>Phát hành: {h.issuedAt ? new Date(h.issuedAt).toLocaleString("vi-VN") : "—"}</span>
+                        {h.confirmationDeadlineAt && <span>Hạn xác nhận: {formatDeadline(h.confirmationDeadlineAt)}</span>}
+                        {h.viewedAt && <span>Đã xem: {new Date(h.viewedAt).toLocaleString("vi-VN")}</span>}
+                        {h.confirmedAt && <span>Đã xác nhận: {new Date(h.confirmedAt).toLocaleString("vi-VN")}</span>}
+                      </div>
+                      {h.receiptId && (
+                        <div className="flex flex-wrap gap-3 text-[11.5px]">
+                          <a href={`/xac-thuc-ho-so/${encodeURIComponent(h.receiptId)}/bien-nhan`} target="_blank" rel="noreferrer" className="font-semibold text-accent hover:underline">
+                            Xem biên nhận
+                          </a>
+                          <a href={`/xac-thuc-ho-so/${encodeURIComponent(h.receiptId)}`} target="_blank" rel="noreferrer" className="font-semibold text-accent hover:underline">
+                            Xác thực công khai
+                          </a>
+                        </div>
+                      )}
+                    </li>
+                  ))}
                 </ul>
               )}
             </CardContent>

@@ -14,7 +14,8 @@ import { useEffect, useState } from "react";
 import { Badge, Button, Card, CardContent, Input, Label, toast } from "@/components/ui";
 import { BrandLogo } from "@/components/brand-logo";
 import { CCCD_ERROR_MESSAGE, isValidCccd } from "@/lib/validators";
-import { CheckCircle2, FileText, Search, ShieldCheck } from "lucide-react";
+import { formatDeadline, formatRemainingTime } from "@/lib/candidate-consent/confirmation-deadline";
+import { CheckCircle2, Clock, FileText, Search, ShieldCheck } from "lucide-react";
 
 type DocumentRow = {
   id: string;
@@ -23,6 +24,9 @@ type DocumentRow = {
   regDate: string | null;
   issuedAt: string | null;
   status: string;
+  effectiveStatus: string;
+  actionable: boolean;
+  confirmationDeadlineAt: string | null;
   receipt: { receiptId: string; confirmedAtServer: string } | null;
 };
 
@@ -30,6 +34,7 @@ const STATUS_LABEL: Record<string, string> = {
   ISSUED: "CẦN XÁC NHẬN",
   VIEWED: "CẦN XÁC NHẬN",
   CONFIRMED: "ĐÃ XÁC NHẬN",
+  EXPIRED: "HẾT HẠN XÁC NHẬN",
 };
 
 export default function CandidateConsentPage() {
@@ -118,7 +123,11 @@ export default function CandidateConsentPage() {
     setAgree(false);
     setViewed(false);
     setReceipt(doc.receipt ? { ...doc.receipt, documentVersion: doc.templateVersion } : null);
-    setStep(doc.status === "CONFIRMED" ? 4 : 3);
+    // effectiveStatus (not raw status) decides the destination step — a
+    // document past its deadline (EXPIRED, server-derived) still opens
+    // STEP 3 to stay VIEWABLE (per the mission's expired-but-viewable
+    // requirement); only the confirm action itself is disabled there.
+    setStep(doc.effectiveStatus === "CONFIRMED" ? 4 : 3);
   };
 
   useEffect(() => {
@@ -180,24 +189,83 @@ export default function CandidateConsentPage() {
           <p className="text-center text-sm font-semibold text-slate-700">Xin chào, {fullName || "bạn"}</p>
           <h2 className="text-sm font-bold text-slate-900">HỒ SƠ CỦA BẠN</h2>
           {documents.length === 0 && <p className="rounded-lg bg-white p-4 text-center text-xs text-slate-500">Chưa có hồ sơ nào cần xác nhận.</p>}
-          {documents.map((doc) => (
-            <Card key={doc.id} className="cursor-pointer" onClick={() => openDocument(doc)}>
-              <CardContent className="flex items-center justify-between p-3">
-                <div>
-                  <p className="text-xs font-bold text-slate-900">{doc.templateName ?? "Hồ sơ tập nghề"}</p>
-                  <p className="text-[11px] text-slate-500">Ngày phát hành: {doc.issuedAt ? new Date(doc.issuedAt).toLocaleDateString("vi-VN") : "—"}</p>
-                </div>
-                <Badge tone={doc.status === "CONFIRMED" ? "green" : "amber"}>{STATUS_LABEL[doc.status] ?? doc.status}</Badge>
-              </CardContent>
-            </Card>
-          ))}
+
+          {/* CẦN XÁC NHẬN — documents.route.ts already sorts actionable rows
+              first (soonest deadline first); this section is exactly that
+              prefix, never re-sorted here. */}
+          {documents.some((d) => d.actionable) && (
+            <>
+              <h3 className="text-xs font-bold uppercase tracking-wide text-amber-700">CẦN XÁC NHẬN</h3>
+              {documents.filter((d) => d.actionable).map((doc) => (
+                <Card key={doc.id} className="cursor-pointer" onClick={() => openDocument(doc)}>
+                  <CardContent className="flex items-center justify-between p-3">
+                    <div>
+                      <p className="text-xs font-bold text-slate-900">{doc.templateName ?? "Hồ sơ tập nghề"}</p>
+                      <p className="text-[11px] text-slate-500">Ngày phát hành: {doc.issuedAt ? new Date(doc.issuedAt).toLocaleDateString("vi-VN") : "—"}</p>
+                      {doc.confirmationDeadlineAt && (
+                        <p className="mt-0.5 flex items-center gap-1 text-[11px] font-semibold text-amber-700">
+                          <Clock className="h-3 w-3" /> Hạn xác nhận: {formatDeadline(doc.confirmationDeadlineAt)}
+                          {(() => {
+                            const remaining = formatRemainingTime(doc.confirmationDeadlineAt, new Date());
+                            return remaining ? ` (${remaining})` : "";
+                          })()}
+                        </p>
+                      )}
+                    </div>
+                    <Badge tone="amber">{STATUS_LABEL[doc.effectiveStatus] ?? doc.effectiveStatus}</Badge>
+                  </CardContent>
+                </Card>
+              ))}
+            </>
+          )}
+
+          {/* LỊCH SỬ — CONFIRMED (từ mọi lần bắt đầu công việc) và EXPIRED
+              chưa xác nhận. Không bao giờ xoá/ẩn hồ sơ cũ — mỗi hồ sơ thuộc
+              đúng 1 lần bắt đầu công việc, độc lập, luôn tra cứu được. */}
+          {documents.some((d) => !d.actionable) && (
+            <>
+              <h3 className="mt-4 text-xs font-bold uppercase tracking-wide text-slate-500">LỊCH SỬ</h3>
+              {documents.filter((d) => !d.actionable).map((doc) => (
+                <Card key={doc.id} className="cursor-pointer" onClick={() => openDocument(doc)}>
+                  <CardContent className="flex items-center justify-between p-3">
+                    <div>
+                      <p className="text-xs font-bold text-slate-900">{doc.templateName ?? "Hồ sơ tập nghề"}</p>
+                      <p className="text-[11px] text-slate-500">Ngày phát hành: {doc.issuedAt ? new Date(doc.issuedAt).toLocaleDateString("vi-VN") : "—"}</p>
+                    </div>
+                    <Badge tone={doc.effectiveStatus === "CONFIRMED" ? "green" : "gray"}>{STATUS_LABEL[doc.effectiveStatus] ?? doc.effectiveStatus}</Badge>
+                  </CardContent>
+                </Card>
+              ))}
+            </>
+          )}
         </div>
       )}
 
-      {step === 3 && activeDoc && (
+      {step === 3 && activeDoc && (() => {
+        // effectiveStatus is a SNAPSHOT taken when the document list last
+        // loaded — informational only, same as the "Còn N ngày" display
+        // below. The server (confirm/route.ts's own isPastDeadline check)
+        // is the actual authority; this only disables the UI action early
+        // so the candidate isn't misled into confirming something the
+        // server would reject with a friendly error anyway. The document
+        // itself STAYS VIEWABLE either way — only the confirm action is
+        // ever blocked by an expired deadline.
+        const isExpired = activeDoc.effectiveStatus === "EXPIRED";
+        return (
         <div className="space-y-3">
           <button onClick={() => setStep(2)} className="text-xs text-slate-500">← Quay lại</button>
           <h2 className="text-sm font-bold text-slate-900">{activeDoc.templateName ?? "Hồ sơ tập nghề"}</h2>
+          {activeDoc.confirmationDeadlineAt && (
+            <p className={`flex items-center gap-1 text-[11px] font-semibold ${isExpired ? "text-red-600" : "text-amber-700"}`}>
+              <Clock className="h-3.5 w-3.5" />
+              Hạn xác nhận: {formatDeadline(activeDoc.confirmationDeadlineAt)}
+              {!isExpired &&
+                (() => {
+                  const remaining = formatRemainingTime(activeDoc.confirmationDeadlineAt, new Date());
+                  return remaining ? ` (${remaining})` : "";
+                })()}
+            </p>
+          )}
           <iframe
             title="Tài liệu"
             src={`/api/candidate-consent/documents/${activeDoc.id}/pdf`}
@@ -205,17 +273,26 @@ export default function CandidateConsentPage() {
           />
           <Card>
             <CardContent className="p-3">
-              <label className="flex items-start gap-2 text-xs">
-                <input type="checkbox" checked={agree} onChange={(e) => setAgree(e.target.checked)} disabled={!viewed} className="mt-0.5" />
-                <span>Tôi xác nhận đã đọc và đồng ý với toàn bộ nội dung của tài liệu này.</span>
-              </label>
-              <Button className="mt-3 w-full" onClick={() => void confirm()} disabled={!agree || confirming}>
-                <ShieldCheck className="mr-1.5 h-4 w-4" /> {confirming ? "Đang gửi..." : "Xác nhận đồng ý"}
-              </Button>
+              {isExpired ? (
+                <p className="rounded-lg bg-red-50 p-2 text-[11px] font-semibold text-red-700">
+                  Hồ sơ đã hết hạn xác nhận. Vui lòng liên hệ bộ phận nhân sự để được cấp lại hồ sơ mới.
+                </p>
+              ) : (
+                <>
+                  <label className="flex items-start gap-2 text-xs">
+                    <input type="checkbox" checked={agree} onChange={(e) => setAgree(e.target.checked)} disabled={!viewed} className="mt-0.5" />
+                    <span>Tôi xác nhận đã đọc và đồng ý với toàn bộ nội dung của tài liệu này.</span>
+                  </label>
+                  <Button className="mt-3 w-full" onClick={() => void confirm()} disabled={!agree || confirming}>
+                    <ShieldCheck className="mr-1.5 h-4 w-4" /> {confirming ? "Đang gửi..." : "Xác nhận đồng ý"}
+                  </Button>
+                </>
+              )}
             </CardContent>
           </Card>
         </div>
-      )}
+        );
+      })()}
 
       {step === 4 && (
         <Card>
