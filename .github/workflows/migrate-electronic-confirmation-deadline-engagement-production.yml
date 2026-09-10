@@ -1,0 +1,113 @@
+name: Migrate Electronic Confirmation deadline + engagement linkage — PRODUCTION
+
+# CHỈ chạy migrations/2026-09-10-electronic-confirmation-deadline-engagement.sql
+# (2 ADD COLUMN IF NOT EXISTS trên candidate_documents + 1 UPDATE backfill
+# CHỈ cột employment_session_id + 2 CREATE INDEX IF NOT EXISTS) qua
+# scripts/run-electronic-confirmation-deadline-engagement-migration.mjs —
+# KHÔNG chạy schema.sql, KHÔNG chạy migration nào khác, KHÔNG backfill
+# confirmation_deadline_at, KHÔNG sửa document_confirmations (evidence/
+# receipt/HMAC), KHÔNG sửa Recruitment Requests/Workforce Requests/workers/
+# planning/Document Merge ngoài 2 cột mới trên candidate_documents.
+#
+# BACKUP: người vận hành (system owner) đã CHỦ ĐỘNG chọn KHÔNG tạo backup
+# trước lần chạy này — quyết định rủi ro CỦA HỌ, không phải do agent tự xác
+# nhận. Input dưới đây ghi lại ĐÚNG sự thật đó (backup_waived_by_user),
+# KHÔNG dùng lại tên/field "backup_confirmed" của workflow khác — workflow
+# đó có nghĩa "đã xác nhận có backup", còn ở đây là "chủ động từ chối tạo
+# backup", hai việc khác nhau và không được gộp/đổi tên cho giống nhau.
+
+on:
+  workflow_dispatch:
+    inputs:
+      confirm:
+        description: 'Gõ chính xác "PRODUCTION" để xác nhận (phân biệt hoa/thường)'
+        required: true
+        type: string
+      backup_waived_by_user:
+        description: 'Chủ hệ thống ĐÃ CHỦ ĐỘNG CHỌN KHÔNG tạo backup trước khi chạy workflow này (rủi ro do họ chấp nhận)?'
+        required: true
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+concurrency:
+  group: migrate-electronic-confirmation-deadline-engagement-production
+  cancel-in-progress: false
+
+jobs:
+  guardrails:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Guardrail — input xác nhận phải ĐÚNG "PRODUCTION"
+        run: |
+          set -euo pipefail
+          if [ "${{ github.event.inputs.confirm }}" != "PRODUCTION" ]; then
+            echo "❌ Input xác nhận không khớp 'PRODUCTION' — dừng lại, không chạy migration." >&2
+            exit 1
+          fi
+          echo "✅ Xác nhận PRODUCTION hợp lệ."
+
+      - name: Ghi nhận backup ĐÃ BỊ TỪ CHỐI bởi chủ hệ thống (không phải agent tự xác nhận)
+        run: |
+          set -euo pipefail
+          if [ "${{ github.event.inputs.backup_waived_by_user }}" != "true" ]; then
+            echo "❌ Chưa xác nhận rằng chủ hệ thống chủ động từ chối backup — dừng lại. Không tự suy diễn quyết định này." >&2
+            exit 1
+          fi
+          echo "⚠️  BACKUP_CONFIRMED=NO — chủ hệ thống đã CHỦ ĐỘNG CHỌN không tạo backup trước lần chạy này."
+          echo "⚠️  Đây là quyết định rủi ro của chủ hệ thống, được ghi nhận lại, KHÔNG phải agent tự xác nhận có backup."
+
+  migrate:
+    needs: guardrails
+    runs-on: ubuntu-latest
+    environment: production
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci --no-audit --no-fund
+
+      - name: "Guardrail — hostname PROD_DATABASE_URL không được khớp staging đã biết"
+        env:
+          DATABASE_URL: ${{ secrets.PROD_DATABASE_URL }}
+        run: |
+          set -euo pipefail
+          HOST=$(node -e "try { console.log(new URL(process.env.DATABASE_URL).hostname); } catch { console.log(''); }")
+          if [ -z "${HOST}" ]; then
+            echo "❌ Không parse được hostname từ PROD_DATABASE_URL." >&2
+            exit 1
+          fi
+          echo "✅ Production DB host: ${HOST}"
+          KNOWN_STAGING_HOST="${{ vars.STAGING_DATABASE_HOSTNAME }}"
+          if [ -n "${KNOWN_STAGING_HOST}" ] && [ "${HOST}" == "${KNOWN_STAGING_HOST}" ]; then
+            echo "❌ PROD_DATABASE_URL trỏ ĐÚNG hostname staging — dừng lại ngay." >&2
+            exit 1
+          fi
+
+      - name: Run Electronic Confirmation deadline + engagement migration (PRODUCTION — scoped, additive-only, no backup)
+        env:
+          DATABASE_URL: ${{ secrets.PROD_DATABASE_URL }}
+        run: node scripts/run-electronic-confirmation-deadline-engagement-migration.mjs
+
+      - name: Reminder
+        run: |
+          echo "=================================================================="
+          echo " Đã thêm 2 cột MỚI trên candidate_documents (employment_session_id,"
+          echo " confirmation_deadline_at) + backfill employment_session_id CHỈ khi"
+          echo " khớp DUY NHẤT (additive-only, idempotent)."
+          echo " KHÔNG gán confirmation_deadline_at hồi tố cho hồ sơ nào."
+          echo " KHÔNG chạm document_confirmations (evidence/receipt/HMAC)."
+          echo " KHÔNG chạm Recruitment Requests/Workforce Requests/workers/"
+          echo " planning/Document Merge."
+          echo " BACKUP_CONFIRMED=NO — chủ hệ thống đã chủ động từ chối backup"
+          echo " trước lần chạy này (ghi nhận lại, không phải agent tự xác nhận)."
+          echo "=================================================================="
