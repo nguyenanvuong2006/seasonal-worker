@@ -53,6 +53,8 @@ export type EngagementMovement = {
   fromDeptName: string | null;
   toDeptId: string | null;
   toDeptName: string | null;
+  /** Khi yêu cầu được tạo (Manager/hệ thống) — "ngày yêu cầu", KHÔNG phải ngày HR duyệt. */
+  requestedAt: string;
   effectiveDate: string;
   status: string;
   reason: string | null;
@@ -97,7 +99,7 @@ export type Worker360Profile = {
 };
 
 function toMovement(
-  m: { id: string; movementType: string; fromDeptId: string | null; toDeptId: string | null; effectiveDate: string; status: string; reason: string | null; confirmedBy: string | null; confirmedAt: Date | null; lifecycleAppliedAt: Date | null },
+  m: { id: string; movementType: string; fromDeptId: string | null; toDeptId: string | null; effectiveDate: string; status: string; reason: string | null; confirmedBy: string | null; confirmedAt: Date | null; lifecycleAppliedAt: Date | null; createdAt: Date },
   deptNameById: Map<string, string>,
 ): EngagementMovement {
   return {
@@ -107,6 +109,7 @@ function toMovement(
     fromDeptName: m.fromDeptId ? (deptNameById.get(m.fromDeptId) ?? null) : null,
     toDeptId: m.toDeptId,
     toDeptName: m.toDeptId ? (deptNameById.get(m.toDeptId) ?? null) : null,
+    requestedAt: m.createdAt.toISOString(),
     effectiveDate: m.effectiveDate,
     status: m.status,
     reason: m.reason,
@@ -186,6 +189,7 @@ export async function getWorker360Profile(workerId: string, scope: string[] | nu
       confirmedBy: workforceMovements.confirmedBy,
       confirmedAt: workforceMovements.confirmedAt,
       lifecycleAppliedAt: workforceMovements.lifecycleAppliedAt,
+      createdAt: workforceMovements.createdAt,
     })
     .from(workforceMovements)
     .where(eq(workforceMovements.workerId, workerId))

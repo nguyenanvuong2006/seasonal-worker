@@ -33,7 +33,7 @@ type Fixtures = {
   sessions: { id: string; regDate: string; status: string; startingDate: string | null; endDate: string | null; endReason: string | null; endedBy: string | null; startDateSource: string | null; dailyApplicationId: string | null; note: string | null; deptId: string | null }[];
   departments: { id: string; deptName: string; groupName: string | null; section: string | null }[];
   dailyApplicationsItCode: { id: string; itCode: string | null }[];
-  movements: { id: string; movementType: string; fromDeptId: string | null; toDeptId: string | null; effectiveDate: string; status: string; reason: string | null; confirmedBy: string | null; confirmedAt: Date | null; lifecycleAppliedAt: Date | null; employmentSessionId: string | null }[];
+  movements: { id: string; movementType: string; fromDeptId: string | null; toDeptId: string | null; effectiveDate: string; status: string; reason: string | null; confirmedBy: string | null; confirmedAt: Date | null; lifecycleAppliedAt: Date | null; employmentSessionId: string | null; createdAt: Date }[];
   confirmationHistory: { documentId: string; applicationId: string; employmentSessionId: string | null; engagementStartingDate: string | null; templateVersion: number | null; templateName: string | null; documentKind: string | null; status: string; effectiveStatus: string; issuedAt: string | null; confirmationDeadlineAt: string | null; viewedAt: string | null; confirmedAt: string | null; receiptId: string | null; supersedesDocumentId: string | null }[];
   legacyDocs: { id: string; applicationId: string; templateVersion: number | null; documentKind: string | null; status: string; issuedAt: Date | null; confirmationDeadlineAt: Date | null; viewedAt: Date | null; supersedesDocumentId: string | null; cccd: string }[];
   legacyConfirmations: { candidateDocumentId: string; confirmedAtServer: Date; receiptId: string }[];
@@ -115,7 +115,7 @@ function baseFixtures(): Fixtures {
       { id: "app-2", itCode: "IT002" },
     ],
     movements: [
-      { id: "m1", movementType: "transfer", fromDeptId: "d1", toDeptId: "d2", effectiveDate: "2026-06-01", status: "TRANSFER_COMPLETED", reason: null, confirmedBy: "hr1", confirmedAt: new Date("2026-05-30"), lifecycleAppliedAt: new Date("2026-06-01"), employmentSessionId: "sess-1" },
+      { id: "m1", movementType: "transfer", fromDeptId: "d1", toDeptId: "d2", effectiveDate: "2026-06-01", status: "TRANSFER_COMPLETED", reason: null, confirmedBy: "hr1", confirmedAt: new Date("2026-05-30"), lifecycleAppliedAt: new Date("2026-06-01"), employmentSessionId: "sess-1", createdAt: new Date("2026-05-25") },
     ],
     confirmationHistory: [
       { documentId: "doc-1", applicationId: "app-1", employmentSessionId: "sess-1", engagementStartingDate: "2026-01-01", templateVersion: 1, templateName: "Mau A", documentKind: "GENERIC", status: "CONFIRMED", effectiveStatus: "CONFIRMED", issuedAt: "2026-01-02T00:00:00Z", confirmationDeadlineAt: "2026-01-05T00:00:00Z", viewedAt: "2026-01-02T01:00:00Z", confirmedAt: "2026-01-02T02:00:00Z", receiptId: "receipt-1", supersedesDocumentId: null },
@@ -180,6 +180,20 @@ test("movement FULL visibility: a manager scoped to BOTH d1 and d2 sees the tran
   assert.equal(sess1.movements[0].fromDeptName, "Dept A");
 });
 
+test("WORKER 360 HISTORY (Phase 6, historical workforce lifecycle reconciliation mission) — a movement reports the ORIGINAL request date (createdAt) distinct from the HR approval date (confirmedAt) and the lifecycle-applied date, never fabricated/omitted", async () => {
+  const mod = loadService(baseFixtures());
+  const profile = (await mod.getWorker360Profile("w1", null)) as { engagements: { session: { id: string }; movements: { requestedAt: string; confirmedAt: string | null; lifecycleAppliedAt: string | null }[] }[] };
+  const sess1 = profile.engagements.find((e) => e.session.id === "sess-1")!;
+  const movement = sess1.movements[0];
+  assert.equal(movement.requestedAt, new Date("2026-05-25").toISOString());
+  assert.equal(movement.confirmedAt, new Date("2026-05-30").toISOString());
+  assert.equal(movement.lifecycleAppliedAt, new Date("2026-06-01").toISOString());
+  assert.ok(
+    movement.requestedAt < movement.confirmedAt! && movement.confirmedAt! < movement.lifecycleAppliedAt!,
+    "the three dates must be independently distinguishable: request -> approval -> lifecycle-applied",
+  );
+});
+
 test("documents attach to the CORRECT engagement (never merged across engagements) — returning-worker invariant", async () => {
   const mod = loadService(baseFixtures());
   const profile = (await mod.getWorker360Profile("w1", null)) as { engagements: { session: { id: string }; electronicDocuments: { documentId: string }[] }[] };
@@ -233,7 +247,7 @@ test("legacy document confirmation evidence (receipt/confirmedAt) is surfaced wh
 
 test("unlinked movement (no employmentSessionId) is surfaced separately, never guessed onto an engagement", async () => {
   const fx = baseFixtures();
-  fx.movements.push({ id: "m-legacy", movementType: "resignation", fromDeptId: "d2", toDeptId: null, effectiveDate: "2019-01-01", status: "INACTIVE", reason: null, confirmedBy: null, confirmedAt: null, lifecycleAppliedAt: new Date("2019-01-01"), employmentSessionId: null });
+  fx.movements.push({ id: "m-legacy", movementType: "resignation", fromDeptId: "d2", toDeptId: null, effectiveDate: "2019-01-01", status: "INACTIVE", reason: null, confirmedBy: null, confirmedAt: null, lifecycleAppliedAt: new Date("2019-01-01"), employmentSessionId: null, createdAt: new Date("2018-12-20") });
   const mod = loadService(fx);
   const profile = (await mod.getWorker360Profile("w1", null)) as { unlinkedMovements: { id: string }[]; engagements: { movements: { id: string }[] }[] };
   assert.deepEqual(Array.from(profile.unlinkedMovements, (m) => m.id), ["m-legacy"]);

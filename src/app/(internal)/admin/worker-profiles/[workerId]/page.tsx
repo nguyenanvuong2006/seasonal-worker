@@ -43,6 +43,7 @@ type EngagementMovement = {
   fromDeptName: string | null;
   toDeptId: string | null;
   toDeptName: string | null;
+  requestedAt: string;
   effectiveDate: string;
   status: string;
   reason: string | null;
@@ -173,10 +174,12 @@ function EngagementCard({ engagement, index, filter }: { engagement: Engagement;
                   <LogOut className="h-3.5 w-3.5" /> NGHỈ VIỆC
                 </p>
                 <div className="mt-1 flex flex-wrap gap-x-4 gap-y-0.5 text-fg-secondary">
+                  <span>Ngày yêu cầu: {new Date(m.requestedAt).toLocaleDateString("vi-VN")}</span>
                   <span>Ngày hiệu lực: {m.effectiveDate}</span>
                   <span>Trạng thái: {m.lifecycleAppliedAt ? "ĐÃ HIỆU LỰC" : m.status}</span>
                   {m.confirmedBy && <span>HR duyệt: {m.confirmedBy}</span>}
                   {m.confirmedAt && <span>Ngày duyệt: {new Date(m.confirmedAt).toLocaleDateString("vi-VN")}</span>}
+                  {m.lifecycleAppliedAt && <span>Ngày áp dụng: {new Date(m.lifecycleAppliedAt).toLocaleDateString("vi-VN")}</span>}
                   {m.reason && <span>Lý do: {m.reason}</span>}
                 </div>
               </div>
@@ -194,8 +197,10 @@ function EngagementCard({ engagement, index, filter }: { engagement: Engagement;
                   {m.fromDeptName ?? "(ngoài phạm vi)"} → {m.toDeptName ?? "—"}
                 </p>
                 <div className="mt-1 flex flex-wrap gap-x-4 gap-y-0.5 text-fg-secondary">
+                  <span>Ngày yêu cầu: {new Date(m.requestedAt).toLocaleDateString("vi-VN")}</span>
                   <span>Trạng thái: {m.lifecycleAppliedAt ? "ĐÃ HIỆU LỰC" : m.status}</span>
                   {m.confirmedAt && <span>Ngày duyệt: {new Date(m.confirmedAt).toLocaleDateString("vi-VN")}</span>}
+                  {m.lifecycleAppliedAt && <span>Ngày áp dụng: {new Date(m.lifecycleAppliedAt).toLocaleDateString("vi-VN")}</span>}
                 </div>
               </div>
             ))}
