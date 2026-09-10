@@ -12,13 +12,11 @@ import {
   Input,
   KpiCard,
   Modal,
-  StatusBadge,
   cn,
   toast,
 } from "@/components/ui";
 import {
   ArrowLeftRight,
-  Calendar,
   Download,
   FileSpreadsheet,
   Loader2,
@@ -28,29 +26,22 @@ import {
   UserMinus,
   Users,
 } from "lucide-react";
-import { formatDate, todayStr } from "@/lib/helpers";
+import { formatDate } from "@/lib/helpers";
 
-type AppRow = {
-  id: string;
-  regDate: string;
-  cccd: string;
+type RosterRow = {
+  workerId: string;
   fullName: string;
+  cccd: string | null;
   gender: string | null;
-  phone: string;
-  dwCode: string | null;
+  phone: string | null;
   deptId: string | null;
   deptName: string | null;
   groupName: string | null;
-  vnName: string | null;
-  location: string | null;
-  division: string | null;
   section: string | null;
-  supervisor: string | null;
-  supervisorPhone: string | null;
-  status: string;
   startingDate: string | null;
-  dwMatch: string;
-  workerId?: string | null;
+  lifecycleState: "ACTIVE" | "RESIGNED" | "TRANSFERRED";
+  upcoming: { type: "resignation" | "transfer"; effectiveDate: string; toDeptName: string | null } | null;
+  effectiveDate: string | null;
 };
 
 type Dept = {
@@ -64,14 +55,50 @@ type Dept = {
   dailyQuota?: number;
 };
 
+// CANONICAL FILTER TAXONOMY (Worker Lifecycle Consistency audit, 2026-09-10) — "Bộ phận của
+// tôi" previously defaulted to TODAY-ONLY (a registration-history table, daily_applications),
+// which is why an approved, already-past-effective-date resignation still showed as present:
+// the underlying data source was never updated by resignation/transfer approval at all. The
+// default is now "ACTIVE" (Đang làm việc) sourced from the SAME canonical employment_sessions
+// predicate get_current_headcount/countActiveDepartmentWorkforce already use — never a
+// competing "current" definition. See /api/employment/current-workforce + lib/workforce-roster.ts.
+const FILTERS: { value: string; label: string }[] = [
+  { value: "ACTIVE", label: "Đang làm việc" },
+  { value: "UPCOMING_RESIGNATION", label: "Sắp nghỉ" },
+  { value: "RESIGNED", label: "Đã nghỉ" },
+  { value: "UPCOMING_TRANSFER", label: "Sắp thuyên chuyển" },
+  { value: "TRANSFERRED", label: "Đã thuyên chuyển" },
+  { value: "ALL", label: "Tất cả" },
+];
+
+function lifecycleBadge(r: RosterRow) {
+  if (r.lifecycleState === "RESIGNED") {
+    return <Badge tone="gray" dot>Đã nghỉ — Hiệu lực {formatDate(r.effectiveDate)}</Badge>;
+  }
+  if (r.lifecycleState === "TRANSFERRED") {
+    return <Badge tone="blue" dot>Đã thuyên chuyển — Hiệu lực {formatDate(r.effectiveDate)}</Badge>;
+  }
+  if (r.upcoming?.type === "resignation") {
+    return <Badge tone="amber" dot>Sắp nghỉ: {formatDate(r.upcoming.effectiveDate)}</Badge>;
+  }
+  if (r.upcoming?.type === "transfer") {
+    return (
+      <Badge tone="blue" dot>
+        Sắp chuyển → {r.upcoming.toDeptName ?? "—"}: {formatDate(r.upcoming.effectiveDate)}
+      </Badge>
+    );
+  }
+  return <Badge tone="green" dot>Đang làm việc</Badge>;
+}
+
 export default function MyDepartmentPage() {
-  const [rows, setRows] = useState<AppRow[]>([]);
+  const [rows, setRows] = useState<RosterRow[]>([]);
   const [depts, setDepts] = useState<Dept[]>([]);
   const [loading, setLoading] = useState(true);
+  const [summary, setSummary] = useState<{ active: number; resigned: number } | null>(null);
 
-  // Date filters (defaults to today)
-  const [from, setFrom] = useState(() => todayStr());
-  const [to, setTo] = useState(() => todayStr());
+  // Filter — default = "Đang làm việc" (đang có hiệu lực), KHÔNG phải hôm nay.
+  const [filter, setFilter] = useState("ACTIVE");
 
   // Search & hierarchy filters — DEPENDENT chain (dept -> group), scoped
   const [search, setSearch] = useState("");
@@ -83,52 +110,71 @@ export default function MyDepartmentPage() {
 
   // Bulk Resignation modal
   const [resignationModalOpen, setResignationModalOpen] = useState(false);
-  const [resignationTargetRows, setResignationTargetRows] = useState<AppRow[]>([]);
+  const [resignationTargetRows, setResignationTargetRows] = useState<RosterRow[]>([]);
   const [resignationReasons, setResignationReasons] = useState<Record<string, string>>({});
-  const [effectiveDate, setEffectiveDate] = useState(() => todayStr());
+  const [effectiveDate, setEffectiveDate] = useState(() => new Date().toISOString().slice(0, 10));
   const [resignationNote, setResignationNote] = useState("");
   const [submittingResignation, setSubmittingResignation] = useState(false);
 
   // Bulk Transfer modal
   const [transferModalOpen, setTransferModalOpen] = useState(false);
-  const [transferTargetRows, setTransferTargetRows] = useState<AppRow[]>([]);
+  const [transferTargetRows, setTransferTargetRows] = useState<RosterRow[]>([]);
   const [transferReasons, setTransferReasons] = useState<Record<string, string>>({});
   const [transferToDeptId, setTransferToDeptId] = useState("");
-  const [transferDate, setTransferDate] = useState(() => todayStr());
+  const [transferDate, setTransferDate] = useState(() => new Date().toISOString().slice(0, 10));
   const [transferNote, setTransferNote] = useState("");
   const [submittingTransfer, setSubmittingTransfer] = useState(false);
 
-  // Load departments and scoped registrations
+  // Load departments + the currently selected filter's roster (Data Scope applied server-side)
   const loadData = useCallback(async () => {
     setLoading(true);
     try {
-      const [regRes, deptRes] = await Promise.all([
-        // API tự áp Data Scope thật của tài khoản đang đăng nhập (server-side, không tin client)
-        fetch(`/api/registrations?from=${from}&to=${to}`),
+      const [rosterRes, deptRes] = await Promise.all([
+        fetch(`/api/employment/current-workforce?filter=${filter}`),
         fetch("/api/departments?scope=self"),
       ]);
 
-      if (!regRes.ok || !deptRes.ok) {
+      if (!rosterRes.ok || !deptRes.ok) {
         toast({ title: "Không thể tải dữ liệu", variant: "destructive" });
         setLoading(false);
         return;
       }
 
-      const regData = await regRes.json();
+      const rosterData = await rosterRes.json();
       const deptData = await deptRes.json();
 
-      setRows(regData.rows ?? []);
+      setRows(rosterData.rows ?? []);
       setDepts(deptData.rows ?? []);
     } catch (e) {
       toast({ title: "Lỗi kết nối", variant: "destructive" });
     } finally {
       setLoading(false);
     }
-  }, [from, to]);
+  }, [filter]);
+
+  // KPI summary — độc lập với filter đang chọn ở bảng chính, để 2 thẻ "Đang làm việc"/"Đã nghỉ
+  // việc" luôn phản ánh đúng tổng thể, không phụ thuộc người dùng đang xem tab nào.
+  const loadSummary = useCallback(async () => {
+    try {
+      const [activeRes, resignedRes] = await Promise.all([
+        fetch(`/api/employment/current-workforce?filter=ACTIVE`),
+        fetch(`/api/employment/current-workforce?filter=RESIGNED`),
+      ]);
+      const activeData = activeRes.ok ? await activeRes.json() : { rows: [] };
+      const resignedData = resignedRes.ok ? await resignedRes.json() : { rows: [] };
+      setSummary({ active: (activeData.rows ?? []).length, resigned: (resignedData.rows ?? []).length });
+    } catch {
+      /* KPI cards are supplementary — a failed summary fetch doesn't block the main table */
+    }
+  }, []);
 
   useEffect(() => {
     void loadData();
   }, [loadData]);
+
+  useEffect(() => {
+    void loadSummary();
+  }, [loadSummary]);
 
   // Bộ phận được phân quyền = chính danh sách /api/departments?scope=self
   const scopedDeptIds = useMemo(() => new Set(depts.map((d) => d.id)), [depts]);
@@ -158,10 +204,10 @@ export default function MyDepartmentPage() {
     setFilterGroup("ALL");
   };
 
-  // Filtered rows — scope + filter bộ phận/nhóm đã chọn
+  // Filtered rows — scope + filter bộ phận/nhóm đã chọn (lưới an toàn phía client; server đã
+  // tự áp Data Scope thật, đây chỉ là tinh chỉnh hiển thị trong tập đã được cấp quyền).
   const filteredRows = useMemo(() => {
     return rows.filter((r) => {
-      // Chỉ giữ người thuộc bộ phận được phân quyền (lưới an toàn phía client)
       if (r.deptId && !scopedDeptIds.has(r.deptId)) return false;
       if (filterDeptId !== "ALL" && r.deptId !== filterDeptId) return false;
       if (filterGroup !== "ALL" && (r.groupName || "") !== filterGroup) return false;
@@ -181,6 +227,10 @@ export default function MyDepartmentPage() {
     });
   }, [rows, scopedDeptIds, filterDeptId, filterGroup, search]);
 
+  // Chỉ người ĐANG LÀM VIỆC mới báo nghỉ/thuyên chuyển được — dòng lịch sử (Đã nghỉ/Đã thuyên
+  // chuyển, chỉ xuất hiện ở filter ALL/RESIGNED/TRANSFERRED) không chọn được.
+  const selectableRows = useMemo(() => filteredRows.filter((r) => r.lifecycleState === "ACTIVE"), [filteredRows]);
+
   // Toggle row selection
   const toggleRow = (id: string) => {
     setSelectedIds((prev) => {
@@ -191,48 +241,41 @@ export default function MyDepartmentPage() {
     });
   };
 
-  // Select all visible
+  const isAllVisibleSelected = selectableRows.length > 0 && selectableRows.every((r) => selectedIds.has(r.workerId));
   const selectAllVisible = () => {
     setSelectedIds((prev) => {
       const next = new Set(prev);
-      filteredRows.forEach((r) => next.add(r.id));
+      selectableRows.forEach((r) => next.add(r.workerId));
       return next;
     });
   };
-
-  // Deselect all
-  const deselectAll = () => {
-    setSelectedIds(new Set());
-  };
-
-  const isAllVisibleSelected =
-    filteredRows.length > 0 && filteredRows.every((r) => selectedIds.has(r.id));
+  const deselectAll = () => setSelectedIds(new Set());
 
   // Mở modal Báo nghỉ việc (1 người hoặc nhiều người được tick)
-  const openResignation = (rows: AppRow[]) => {
+  const openResignation = (rows: RosterRow[]) => {
     if (rows.length === 0) return;
     setResignationTargetRows(rows);
-    // Lý do mặc định có thể sửa riêng từng người ngay trong bảng thông tin
     setResignationReasons(
-      Object.fromEntries(rows.map((r) => [r.id, "Nghỉ Tập nghề theo nguyện vọng cá nhân"])),
+      Object.fromEntries(rows.map((r) => [r.workerId, "Nghỉ Tập nghề theo nguyện vọng cá nhân"])),
     );
-    setEffectiveDate(todayStr());
+    setEffectiveDate(new Date().toISOString().slice(0, 10));
     setResignationNote("");
     setResignationModalOpen(true);
   };
 
   // Mở modal Báo thuyên chuyển (1 người hoặc nhiều người được tick)
-  const openTransfer = (rows: AppRow[]) => {
+  const openTransfer = (rows: RosterRow[]) => {
     if (rows.length === 0) return;
     setTransferTargetRows(rows);
-    setTransferReasons(Object.fromEntries(rows.map((r) => [r.id, ""])));
+    setTransferReasons(Object.fromEntries(rows.map((r) => [r.workerId, ""])));
     setTransferToDeptId("");
-    setTransferDate(todayStr());
+    setTransferDate(new Date().toISOString().slice(0, 10));
     setTransferNote("");
     setTransferModalOpen(true);
   };
 
-  // Submit Resignation (single or bulk)
+  // Submit Resignation (single or bulk) — workerId đã có sẵn từ roster (nguồn canonical
+  // employment_sessions), không cần tra CCCD như trước.
   const submitResignation = async () => {
     if (resignationTargetRows.length === 0) return;
     setSubmittingResignation(true);
@@ -241,29 +284,14 @@ export default function MyDepartmentPage() {
 
     for (const r of resignationTargetRows) {
       try {
-        // Find workerId from worker profile if not directly present
-        let workerId = r.workerId;
-        if (!workerId) {
-          const profileRes = await fetch(`/api/worker-profiles/${r.cccd}`);
-          if (profileRes.ok) {
-            const pData = await profileRes.json();
-            workerId = pData.profile?.id;
-          }
-        }
-
-        if (!workerId) {
-          failCount++;
-          continue;
-        }
-
         const res = await fetch("/api/workforce-movements", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({
             movementType: "resignation",
-            workerId,
+            workerId: r.workerId,
             effectiveDate,
-            reason: resignationReasons[r.id]?.trim() || "Nghỉ Tập nghề",
+            reason: resignationReasons[r.workerId]?.trim() || "Nghỉ Tập nghề",
             note: resignationNote || null,
           }),
         });
@@ -279,17 +307,13 @@ export default function MyDepartmentPage() {
     setResignationModalOpen(false);
 
     if (successCount > 0) {
-      toast({
-        title: `Đã tạo ${successCount} yêu cầu nghỉ Tập nghề thành công (chờ HR duyệt)`,
-      });
+      toast({ title: `Đã tạo ${successCount} yêu cầu nghỉ Tập nghề thành công (chờ HR duyệt)` });
       deselectAll();
       await loadData();
+      await loadSummary();
     }
     if (failCount > 0) {
-      toast({
-        title: `Có ${failCount} người không thể tạo yêu cầu nghỉ (chưa có hồ sơ Tập nghề)`,
-        variant: "destructive",
-      });
+      toast({ title: `Có ${failCount} người không thể tạo yêu cầu nghỉ`, variant: "destructive" });
     }
   };
 
@@ -306,29 +330,15 @@ export default function MyDepartmentPage() {
 
     for (const r of transferTargetRows) {
       try {
-        let workerId = r.workerId;
-        if (!workerId) {
-          const profileRes = await fetch(`/api/worker-profiles/${r.cccd}`);
-          if (profileRes.ok) {
-            const pData = await profileRes.json();
-            workerId = pData.profile?.id;
-          }
-        }
-
-        if (!workerId) {
-          failCount++;
-          continue;
-        }
-
         const res = await fetch("/api/workforce-movements", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({
             movementType: "transfer",
-            workerId,
+            workerId: r.workerId,
             toDeptId: transferToDeptId,
             effectiveDate: transferDate,
-            reason: transferReasons[r.id]?.trim() || null,
+            reason: transferReasons[r.workerId]?.trim() || null,
             note: transferNote || null,
           }),
         });
@@ -344,24 +354,20 @@ export default function MyDepartmentPage() {
     setTransferModalOpen(false);
 
     if (successCount > 0) {
-      toast({
-        title: `Đã tạo ${successCount} yêu cầu thuyên chuyển thành công (chờ HR duyệt)`,
-      });
+      toast({ title: `Đã tạo ${successCount} yêu cầu thuyên chuyển thành công (chờ HR duyệt)` });
       deselectAll();
       await loadData();
+      await loadSummary();
     }
     if (failCount > 0) {
-      toast({
-        title: `Có ${failCount} người không thể tạo yêu cầu thuyên chuyển (chưa có hồ sơ Tập nghề)`,
-        variant: "destructive",
-      });
+      toast({ title: `Có ${failCount} người không thể tạo yêu cầu thuyên chuyển`, variant: "destructive" });
     }
   };
 
   // Export selected or all visible to CSV/Excel
   const exportData = () => {
     const targetRows = selectedIds.size > 0
-      ? filteredRows.filter((r) => selectedIds.has(r.id))
+      ? filteredRows.filter((r) => selectedIds.has(r.workerId))
       : filteredRows;
 
     if (targetRows.length === 0) {
@@ -369,27 +375,19 @@ export default function MyDepartmentPage() {
       return;
     }
 
-    const headers = [
-      "STT",
-      "Code",
-      "Ngày",
-      "Họ và tên",
-      "SĐT",
-      "Giới tính",
-      "Department",
-      "Section",
-      "Group",
-      "Ngày bắt đầu",
-      "Trạng thái",
-    ];
+    const headers = ["STT", "Họ và tên", "SĐT", "Giới tính", "Department", "Section", "Group", "Ngày bắt đầu", "Trạng thái"];
+
+    const statusLabel = (r: RosterRow) =>
+      r.lifecycleState === "RESIGNED" ? `Đã nghỉ (hiệu lực ${r.effectiveDate ?? ""})`
+      : r.lifecycleState === "TRANSFERRED" ? `Đã thuyên chuyển (hiệu lực ${r.effectiveDate ?? ""})`
+      : r.upcoming ? `${r.upcoming.type === "resignation" ? "Sắp nghỉ" : "Sắp chuyển"} (${r.upcoming.effectiveDate})`
+      : "Đang làm việc";
 
     const csvRows = [
       headers.join(","),
       ...targetRows.map((r, i) =>
         [
           i + 1,
-          `"${(r.dwCode || "").replace(/"/g, '""')}"`,
-          r.regDate,
           `"${(r.fullName || "").replace(/"/g, '""')}"`,
           `"${r.phone || ""}"`,
           r.gender || "",
@@ -397,25 +395,23 @@ export default function MyDepartmentPage() {
           `"${(r.section || "").replace(/"/g, '""')}"`,
           `"${(r.groupName || "").replace(/"/g, '""')}"`,
           r.startingDate || "",
-          r.status || "",
+          `"${statusLabel(r)}"`,
         ].join(","),
       ),
     ];
 
-    const blob = new Blob(["\uFEFF" + csvRows.join("\n")], { type: "text/csv;charset=utf-8;" });
+    const blob = new Blob(["﻿" + csvRows.join("\n")], { type: "text/csv;charset=utf-8;" });
     const url = URL.createObjectURL(blob);
     const a = document.createElement("a");
     a.href = url;
-    a.download = `Danh_sach_Tap_nghe_${from}_den_${to}.csv`;
+    a.download = `Danh_sach_Tap_nghe_${filter}.csv`;
     a.click();
     URL.revokeObjectURL(url);
     toast({ title: `Đã xuất ${targetRows.length} dòng dữ liệu` });
   };
 
-  // KPIs
-  const activeCount = filteredRows.filter((r) => r.status === "APPROVED").length;
-  const inactiveCount = filteredRows.filter((r) => r.status === "INACTIVE").length;
   const totalQuota = depts.reduce((acc, d) => acc + (d.dailyQuota || 0), 0);
+  const activeCount = summary?.active ?? 0;
 
   return (
     <div className="space-y-5 pb-20">
@@ -433,27 +429,6 @@ export default function MyDepartmentPage() {
           </div>
 
           <div className="flex flex-wrap items-end gap-2">
-            <div>
-              <p className="mb-1 text-[11px] font-semibold text-fg-muted">Từ ngày</p>
-              <input
-                type="date"
-                value={from}
-                onChange={(e) => setFrom(e.target.value)}
-                className="h-9 rounded-[8px] border border-border bg-surface px-2.5 text-xs font-medium text-fg outline-none focus:border-primary"
-              />
-            </div>
-            <div>
-              <p className="mb-1 text-[11px] font-semibold text-fg-muted">Đến ngày</p>
-              <input
-                type="date"
-                value={to}
-                onChange={(e) => setTo(e.target.value)}
-                className="h-9 rounded-[8px] border border-border bg-surface px-2.5 text-xs font-medium text-fg outline-none focus:border-primary"
-              />
-            </div>
-            <Button variant="primary" size="sm" onClick={loadData} className="h-9">
-              Xem
-            </Button>
             <Button variant="outline" size="sm" onClick={exportData} className="h-9 gap-1.5">
               <Download className="h-4 w-4" /> Xuất Excel / CSV
             </Button>
@@ -465,9 +440,9 @@ export default function MyDepartmentPage() {
       <div className="grid grid-cols-2 gap-3 lg:grid-cols-4">
         <KpiCard
           icon={<Users className="h-4 w-4" />}
-          label="Đang tập nghề"
+          label="Đang làm việc"
           value={activeCount}
-          context={`${filteredRows.length} người trong khoảng ngày`}
+          context="Toàn bộ hiện hành — không phải chỉ hôm nay"
           tone="primary"
         />
         <KpiCard
@@ -476,12 +451,7 @@ export default function MyDepartmentPage() {
           value={totalQuota > 0 ? totalQuota : "—"}
           tone="warning"
         />
-        <KpiCard
-          icon={<Calendar className="h-4 w-4" />}
-          label="Đã nghỉ việc"
-          value={inactiveCount}
-          tone="info"
-        />
+        <KpiCard icon={<UserMinus className="h-4 w-4" />} label="Đã nghỉ việc" value={summary?.resigned ?? 0} tone="info" />
         <KpiCard
           icon={<Percent className="h-4 w-4" />}
           label="Tỷ lệ đáp ứng nhu cầu"
@@ -490,11 +460,32 @@ export default function MyDepartmentPage() {
         />
       </div>
 
+      {/* Filter chips — mặc định "Đang làm việc" (toàn bộ hiện hành), KHÔNG phải "Hôm nay". */}
+      <div className="flex flex-wrap gap-2">
+        {FILTERS.map((f) => (
+          <button
+            key={f.value}
+            type="button"
+            onClick={() => {
+              setFilter(f.value);
+              deselectAll();
+            }}
+            className={cn(
+              "rounded-full border px-3.5 py-1.5 text-xs font-semibold transition-colors",
+              filter === f.value
+                ? "border-primary bg-primary text-white"
+                : "border-border bg-surface text-fg-secondary hover:border-primary/50 hover:text-fg",
+            )}
+          >
+            {f.label}
+          </button>
+        ))}
+      </div>
+
       {/* Hierarchy Filter Toolbar — chỉ hiển thị bộ phận/nhóm được phân quyền */}
       <Card className="p-4">
         <div className="flex flex-wrap items-center justify-between gap-3">
           <div className="flex flex-wrap items-center gap-2 flex-1">
-            {/* Search Input */}
             <div className="relative min-w-[200px] flex-1 max-w-xs">
               <Search className="absolute left-2.5 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-fg-muted" />
               <input
@@ -506,7 +497,6 @@ export default function MyDepartmentPage() {
               />
             </div>
 
-            {/* Department filter — chỉ bộ phận được phân quyền */}
             <select
               value={filterDeptId}
               onChange={(e) => changeDept(e.target.value)}
@@ -523,7 +513,6 @@ export default function MyDepartmentPage() {
               })}
             </select>
 
-            {/* Group filter — dependent vào bộ phận đã chọn */}
             {groupsForSelectedDept.length > 0 && (
               <select
                 value={filterGroup}
@@ -540,12 +529,9 @@ export default function MyDepartmentPage() {
             )}
           </div>
 
-          {/* Quick selection summary */}
           <div className="flex items-center gap-2 text-xs text-fg-muted">
             <span>Hiển thị: <b>{filteredRows.length}</b> người</span>
-            {selectedIds.size > 0 && (
-              <span className="font-semibold text-primary">· Đã chọn {selectedIds.size} người</span>
-            )}
+            {selectedIds.size > 0 && <span className="font-semibold text-primary">· Đã chọn {selectedIds.size} người</span>}
           </div>
         </div>
       </Card>
@@ -553,17 +539,17 @@ export default function MyDepartmentPage() {
       {/* Main Table */}
       <Card className="overflow-hidden p-0">
         <CardHeader
-          title={`Danh sách Tập nghề (${formatDate(from)}${from !== to ? " → " + formatDate(to) : ""})`}
+          title={`Danh sách Tập nghề — ${FILTERS.find((f) => f.value === filter)?.label ?? filter}`}
           right={
-            <div className="flex items-center gap-2">
+            selectableRows.length > 0 ? (
               <button
                 type="button"
                 onClick={isAllVisibleSelected ? deselectAll : selectAllVisible}
                 className="text-xs font-semibold text-primary hover:underline"
               >
-                {isAllVisibleSelected ? "Bỏ chọn tất cả" : `Chọn tất cả (${filteredRows.length})`}
+                {isAllVisibleSelected ? "Bỏ chọn tất cả" : `Chọn tất cả (${selectableRows.length})`}
               </button>
-            </div>
+            ) : undefined
           }
         />
         <CardContent className="p-0">
@@ -576,7 +562,7 @@ export default function MyDepartmentPage() {
             <EmptyState
               icon={<Users className="h-5 w-5" aria-hidden />}
               title="Không có người tập nghề nào"
-              description="Không có người tập nghề nào được xếp cho bộ phận được phân quyền trong khoảng thời gian đã chọn."
+              description="Không có người tập nghề nào khớp bộ lọc hiện tại trong phạm vi được phân quyền."
             />
           ) : (
             <div className="overflow-x-auto">
@@ -584,15 +570,16 @@ export default function MyDepartmentPage() {
                 <thead className="bg-primary text-white">
                   <tr>
                     <th className="w-10 px-3 py-2.5 text-center">
-                      <input
-                        type="checkbox"
-                        checked={isAllVisibleSelected}
-                        onChange={isAllVisibleSelected ? deselectAll : selectAllVisible}
-                        className="h-4 w-4 rounded accent-primary cursor-pointer"
-                      />
+                      {selectableRows.length > 0 && (
+                        <input
+                          type="checkbox"
+                          checked={isAllVisibleSelected}
+                          onChange={isAllVisibleSelected ? deselectAll : selectAllVisible}
+                          className="h-4 w-4 rounded accent-primary cursor-pointer"
+                        />
+                      )}
                     </th>
                     <th className="w-12 px-3 py-2.5 text-center text-[10.5px] uppercase">#</th>
-                    <th className="px-3 py-2.5 text-left text-[10.5px] uppercase">Code</th>
                     <th className="px-3 py-2.5 text-left text-[10.5px] uppercase">Họ và tên</th>
                     <th className="px-3 py-2.5 text-center text-[10.5px] uppercase">Giới tính</th>
                     <th className="px-3 py-2.5 text-left text-[10.5px] uppercase">Department</th>
@@ -604,44 +591,39 @@ export default function MyDepartmentPage() {
                 </thead>
                 <tbody className="divide-y divide-border">
                   {filteredRows.map((r, i) => {
-                    const isSelected = selectedIds.has(r.id);
+                    const isSelectable = r.lifecycleState === "ACTIVE";
+                    const isSelected = selectedIds.has(r.workerId);
                     return (
                       <tr
-                        key={r.id}
-                        onClick={() => toggleRow(r.id)}
+                        key={`${r.workerId}-${r.lifecycleState}-${r.effectiveDate ?? "current"}`}
+                        onClick={() => isSelectable && toggleRow(r.workerId)}
                         className={cn(
-                          "transition-colors hover:bg-surface-hover cursor-pointer",
+                          "transition-colors hover:bg-surface-hover",
+                          isSelectable && "cursor-pointer",
                           isSelected && "bg-primary-tint/50 font-medium",
                         )}
                       >
                         <td className="px-3 py-2.5 text-center">
-                          <input
-                            type="checkbox"
-                            checked={isSelected}
-                            onChange={() => toggleRow(r.id)}
-                            onClick={(e) => e.stopPropagation()}
-                            className="h-4 w-4 rounded accent-primary cursor-pointer"
-                          />
+                          {isSelectable && (
+                            <input
+                              type="checkbox"
+                              checked={isSelected}
+                              onChange={() => toggleRow(r.workerId)}
+                              onClick={(e) => e.stopPropagation()}
+                              className="h-4 w-4 rounded accent-primary cursor-pointer"
+                            />
+                          )}
                         </td>
                         <td className="px-3 py-2.5 text-center text-xs text-fg-muted">{i + 1}</td>
-                        <td className="px-3 py-2.5 font-mono text-xs font-semibold text-fg-secondary">
-                          {r.dwCode || "—"}
-                        </td>
                         <td className="px-3 py-2.5 font-bold text-fg">{r.fullName}</td>
                         <td className="px-3 py-2.5 text-center">
-                          <Badge tone={r.gender === "Nữ" ? "purple" : "blue"}>
-                            {r.gender ?? "—"}
-                          </Badge>
+                          <Badge tone={r.gender === "Nữ" ? "purple" : "blue"}>{r.gender ?? "—"}</Badge>
                         </td>
                         <td className="px-3 py-2.5 text-fg font-semibold">{r.deptName || "—"}</td>
                         <td className="px-3 py-2.5 text-xs text-fg-secondary">{r.section || "—"}</td>
                         <td className="px-3 py-2.5 text-xs text-fg-secondary">{r.groupName || "—"}</td>
-                        <td className="px-3 py-2.5 text-xs text-fg-secondary">
-                          {formatDate(r.startingDate || r.regDate)}
-                        </td>
-                        <td className="px-3 py-2.5 text-center">
-                          <StatusBadge status={r.status} />
-                        </td>
+                        <td className="px-3 py-2.5 text-xs text-fg-secondary">{formatDate(r.startingDate)}</td>
+                        <td className="px-3 py-2.5 text-center">{lifecycleBadge(r)}</td>
                       </tr>
                     );
                   })}
@@ -662,7 +644,7 @@ export default function MyDepartmentPage() {
           <Button
             variant="danger"
             size="sm"
-            onClick={() => openResignation(filteredRows.filter((r) => selectedIds.has(r.id)))}
+            onClick={() => openResignation(filteredRows.filter((r) => selectedIds.has(r.workerId)))}
             className="gap-1.5 text-xs font-semibold bg-danger hover:bg-danger-hover text-white"
           >
             <UserMinus className="h-3.5 w-3.5" /> Báo nghỉ việc ({selectedIds.size})
@@ -670,7 +652,7 @@ export default function MyDepartmentPage() {
           <Button
             variant="primary"
             size="sm"
-            onClick={() => openTransfer(filteredRows.filter((r) => selectedIds.has(r.id)))}
+            onClick={() => openTransfer(filteredRows.filter((r) => selectedIds.has(r.workerId)))}
             className="gap-1.5 text-xs font-semibold bg-accent hover:bg-accent-hover text-white"
           >
             <ArrowLeftRight className="h-3.5 w-3.5" /> Báo thuyên chuyển ({selectedIds.size})
@@ -683,11 +665,7 @@ export default function MyDepartmentPage() {
           >
             <FileSpreadsheet className="h-3.5 w-3.5" /> Xuất ({selectedIds.size})
           </Button>
-          <button
-            type="button"
-            onClick={deselectAll}
-            className="text-xs text-white/70 hover:text-white underline ml-1"
-          >
+          <button type="button" onClick={deselectAll} className="text-xs text-white/70 hover:text-white underline ml-1">
             Bỏ chọn
           </button>
         </div>
@@ -705,10 +683,9 @@ export default function MyDepartmentPage() {
       >
         <div className="space-y-4">
           <p className="text-xs text-fg-muted">
-            Yêu cầu báo nghỉ sẽ được gửi tới Phòng Nhân sự (HR Recruiter) để duyệt và cập nhật chỉ số nghỉ việc vào Kế hoạch Tập nghề.
+            Yêu cầu báo nghỉ sẽ được gửi tới Phòng Nhân sự (HR Recruiter) để duyệt. Người vẫn hiển thị &quot;Đang làm việc&quot; (với nhãn &quot;Sắp nghỉ&quot;) cho tới đúng ngày hiệu lực.
           </p>
 
-          {/* Bảng thông tin gọn của tất cả người được chọn — nhập Lý do nghỉ việc cho từng người */}
           <div className="max-h-52 overflow-auto rounded-[8px] border border-border">
             <table className="w-full text-xs">
               <thead className="sticky top-0 bg-primary text-white">
@@ -718,29 +695,23 @@ export default function MyDepartmentPage() {
                   <th className="px-2 py-1.5 text-left text-[10px] uppercase">Department</th>
                   <th className="px-2 py-1.5 text-left text-[10px] uppercase">Section</th>
                   <th className="px-2 py-1.5 text-left text-[10px] uppercase">Group</th>
-                  <th className="px-2 py-1.5 text-left text-[10px] uppercase">Ngày bắt đầu</th>
-                  <th className="px-2 py-1.5 text-left text-[10px] uppercase">Trạng thái</th>
                   <th className="min-w-[180px] px-2 py-1.5 text-left text-[10px] uppercase">Lý do nghỉ việc</th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-border">
                 {resignationTargetRows.map((r) => (
-                  <tr key={r.id} className="bg-surface">
+                  <tr key={r.workerId} className="bg-surface">
                     <td className="px-2 py-1.5 font-semibold text-fg">{r.fullName}</td>
                     <td className="px-2 py-1.5 text-fg-secondary">{r.gender ?? "—"}</td>
                     <td className="px-2 py-1.5 text-fg-secondary">{r.deptName || "—"}</td>
                     <td className="px-2 py-1.5 text-fg-secondary">{r.section || "—"}</td>
                     <td className="px-2 py-1.5 text-fg-secondary">{r.groupName || "—"}</td>
-                    <td className="px-2 py-1.5 text-fg-secondary">{formatDate(r.startingDate || r.regDate)}</td>
-                    <td className="px-2 py-1.5"><StatusBadge status={r.status} /></td>
                     <td className="px-2 py-1.5">
                       <input
                         type="text"
                         placeholder="Nhập lý do..."
-                        value={resignationReasons[r.id] ?? ""}
-                        onChange={(e) =>
-                          setResignationReasons((prev) => ({ ...prev, [r.id]: e.target.value }))
-                        }
+                        value={resignationReasons[r.workerId] ?? ""}
+                        onChange={(e) => setResignationReasons((prev) => ({ ...prev, [r.workerId]: e.target.value }))}
                         className="h-7 w-full min-w-[170px] rounded-[6px] border border-border bg-surface px-2 text-xs text-fg outline-none focus:border-primary"
                       />
                     </td>
@@ -751,28 +722,14 @@ export default function MyDepartmentPage() {
           </div>
 
           <FormField label="Ngày có hiệu lực (Effective Date)" required>
-            <Input
-              type="date"
-              value={effectiveDate}
-              onChange={(e) => setEffectiveDate(e.target.value)}
-            />
+            <Input type="date" value={effectiveDate} onChange={(e) => setEffectiveDate(e.target.value)} />
           </FormField>
 
           <FormField label="Ghi chú thêm">
-            <Input
-              placeholder="Ghi chú bàn giao hoặc thông tin khác..."
-              value={resignationNote}
-              onChange={(e) => setResignationNote(e.target.value)}
-            />
+            <Input placeholder="Ghi chú bàn giao hoặc thông tin khác..." value={resignationNote} onChange={(e) => setResignationNote(e.target.value)} />
           </FormField>
 
-          <Button
-            variant="danger"
-            size="lg"
-            className="w-full"
-            loading={submittingResignation}
-            onClick={submitResignation}
-          >
+          <Button variant="danger" size="lg" className="w-full" loading={submittingResignation} onClick={submitResignation}>
             Xác nhận gửi yêu cầu báo nghỉ ({resignationTargetRows.length})
           </Button>
         </div>
@@ -790,10 +747,9 @@ export default function MyDepartmentPage() {
       >
         <div className="space-y-4">
           <p className="text-xs text-fg-muted">
-            Yêu cầu thuyên chuyển sẽ được gửi tới Phòng Nhân sự (HR Recruiter) để duyệt. Bộ phận mới có thể là bất kỳ bộ phận nào trong hệ thống (không giới hạn theo phân quyền của bạn).
+            Yêu cầu thuyên chuyển sẽ được gửi tới Phòng Nhân sự (HR Recruiter) để duyệt. Bộ phận hiện tại giữ nguyên cho tới đúng ngày hiệu lực.
           </p>
 
-          {/* Bảng thông tin gọn của tất cả người được chọn — nhập Lý do thuyên chuyển cho từng người */}
           <div className="max-h-52 overflow-auto rounded-[8px] border border-border">
             <table className="w-full text-xs">
               <thead className="sticky top-0 bg-primary text-white">
@@ -803,29 +759,23 @@ export default function MyDepartmentPage() {
                   <th className="px-2 py-1.5 text-left text-[10px] uppercase">Department</th>
                   <th className="px-2 py-1.5 text-left text-[10px] uppercase">Section</th>
                   <th className="px-2 py-1.5 text-left text-[10px] uppercase">Group</th>
-                  <th className="px-2 py-1.5 text-left text-[10px] uppercase">Ngày bắt đầu</th>
-                  <th className="px-2 py-1.5 text-left text-[10px] uppercase">Trạng thái</th>
                   <th className="min-w-[180px] px-2 py-1.5 text-left text-[10px] uppercase">Lý do thuyên chuyển</th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-border">
                 {transferTargetRows.map((r) => (
-                  <tr key={r.id} className="bg-surface">
+                  <tr key={r.workerId} className="bg-surface">
                     <td className="px-2 py-1.5 font-semibold text-fg">{r.fullName}</td>
                     <td className="px-2 py-1.5 text-fg-secondary">{r.gender ?? "—"}</td>
                     <td className="px-2 py-1.5 text-fg-secondary">{r.deptName || "—"}</td>
                     <td className="px-2 py-1.5 text-fg-secondary">{r.section || "—"}</td>
                     <td className="px-2 py-1.5 text-fg-secondary">{r.groupName || "—"}</td>
-                    <td className="px-2 py-1.5 text-fg-secondary">{formatDate(r.startingDate || r.regDate)}</td>
-                    <td className="px-2 py-1.5"><StatusBadge status={r.status} /></td>
                     <td className="px-2 py-1.5">
                       <input
                         type="text"
                         placeholder="Nhập lý do..."
-                        value={transferReasons[r.id] ?? ""}
-                        onChange={(e) =>
-                          setTransferReasons((prev) => ({ ...prev, [r.id]: e.target.value }))
-                        }
+                        value={transferReasons[r.workerId] ?? ""}
+                        onChange={(e) => setTransferReasons((prev) => ({ ...prev, [r.workerId]: e.target.value }))}
                         className="h-7 w-full min-w-[170px] rounded-[6px] border border-border bg-surface px-2 text-xs text-fg outline-none focus:border-primary"
                       />
                     </td>
@@ -843,28 +793,14 @@ export default function MyDepartmentPage() {
           </FormField>
 
           <FormField label="Ngày thuyên chuyển" required>
-            <Input
-              type="date"
-              value={transferDate}
-              onChange={(e) => setTransferDate(e.target.value)}
-            />
+            <Input type="date" value={transferDate} onChange={(e) => setTransferDate(e.target.value)} />
           </FormField>
 
           <FormField label="Ghi chú thêm">
-            <Input
-              placeholder="Ghi chú bàn giao hoặc thông tin khác..."
-              value={transferNote}
-              onChange={(e) => setTransferNote(e.target.value)}
-            />
+            <Input placeholder="Ghi chú bàn giao hoặc thông tin khác..." value={transferNote} onChange={(e) => setTransferNote(e.target.value)} />
           </FormField>
 
-          <Button
-            variant="primary"
-            size="lg"
-            className="w-full"
-            loading={submittingTransfer}
-            onClick={submitTransfer}
-          >
+          <Button variant="primary" size="lg" className="w-full" loading={submittingTransfer} onClick={submitTransfer}>
             Xác nhận gửi yêu cầu thuyên chuyển ({transferTargetRows.length})
           </Button>
         </div>
