@@ -288,3 +288,47 @@ test("REJECT — never touches employment_sessions regardless of effective date"
   assert.equal(store.sessions.get("s1")!.status, "APPROVED");
   assert.equal(store.allocCalls.length, 0);
 });
+
+/**
+ * PRODUCTION HARDENING (2026-09-10, defense-in-depth) — this incident's root cause
+ * (worker-360-profile.ts, "Lỗi tải hồ sơ") was a blind db.select() (no column list) on
+ * workforce_movements: it selects EVERY column schema.ts declares, so if Production's real
+ * table is ever missing one (schema/DB drift), the WHOLE query throws — not just the missing
+ * field. applyMovementAction()/applyEffectiveWorkforceMovements() and the finalize*Effect()
+ * helpers they call read workforce_movements/employment_sessions the same way; this guard
+ * proves every select() reached during a real exercised code path passes an explicit column
+ * projection, never a blind select().
+ */
+function assertNoBlindSelects(calls: QueryCall[]): void {
+  for (const call of calls) {
+    if (call.root !== "select") continue;
+    if (call.table !== "workforce_movements" && call.table !== "employment_sessions") continue;
+    const selectOp = call.ops[0];
+    const firstArg = selectOp?.args[0];
+    assert.ok(
+      firstArg !== undefined && typeof firstArg === "object" && firstArg !== null,
+      `blind db.select() (no column projection) on ${call.table} — selects every column schema.ts declares, the exact pattern that caused the "Lỗi tải hồ sơ" incident`,
+    );
+  }
+}
+
+test("GUARD — APPROVE_RESIGNATION (immediate effect) never issues a blind select() on workforce_movements/employment_sessions", async () => {
+  const store = makeStore(baseResignation({ effectiveDate: "2026-09-01" }), activeSession());
+  const mod = await loadWith(store);
+  await mod.applyMovementAction(ACTOR, "m1", "APPROVE_RESIGNATION");
+  assertNoBlindSelects(store.db.calls);
+});
+
+test("GUARD — CONFIRM_ARRIVED (immediate effect) never issues a blind select() on workforce_movements/employment_sessions", async () => {
+  const store = makeStore(baseTransfer({ effectiveDate: "2026-09-01" }), activeSession());
+  const mod = await loadWith(store);
+  await mod.applyMovementAction(ACTOR, "m1", "CONFIRM_ARRIVED");
+  assertNoBlindSelects(store.db.calls);
+});
+
+test("GUARD — applyEffectiveWorkforceMovements() never issues a blind select() on workforce_movements/employment_sessions", async () => {
+  const store = makeStore(baseResignation({ status: "INACTIVE", effectiveDate: "2026-09-01", confirmedBy: "hr1" }), activeSession());
+  const mod = await loadWith(store);
+  await mod.applyEffectiveWorkforceMovements();
+  assertNoBlindSelects(store.db.calls);
+});
