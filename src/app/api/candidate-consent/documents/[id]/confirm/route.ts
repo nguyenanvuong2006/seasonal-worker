@@ -26,7 +26,7 @@ import { NextResponse } from "next/server";
 import { eq } from "drizzle-orm";
 import { db } from "@/db";
 import { auditLogs, candidateDocuments, documentConfirmations } from "@/db/schema";
-import { canConfirm, type CandidateDocumentStatus } from "@/lib/candidate-consent/lifecycle";
+import { canConfirm, isPastDeadline, type CandidateDocumentStatus } from "@/lib/candidate-consent/lifecycle";
 import { resolveAccessSession, sessionCanAccess } from "@/lib/candidate-consent/session-store";
 import { computeEvidenceHashes, EVIDENCE_SCHEMA_VERSION, generateReceiptId, sha256Hex } from "@/lib/candidate-consent/evidence";
 import { resolveDocumentEvidenceSecret, DocumentEvidenceSecretMissingError } from "@/lib/candidate-consent/evidence-secret";
@@ -104,6 +104,18 @@ export async function POST(request: Request, { params }: { params: Promise<{ id:
   }
 
   const now = new Date();
+  // Deadline enforcement is SERVER-authoritative and independent of
+  // canConfirm's status-only gate — a VIEWED document past its frozen
+  // confirmation_deadline_at is still structurally "VIEWED" in the DB, but
+  // must be rejected here. The document itself stays viewable/unchanged;
+  // only the confirm action is blocked (see effectiveStatus() -> "EXPIRED"
+  // for how every READ path surfaces this same instant as an expired state).
+  if (isPastDeadline(doc.confirmationDeadlineAt, now)) {
+    return NextResponse.json(
+      { error: "Hồ sơ đã hết hạn xác nhận. Vui lòng liên hệ bộ phận nhân sự để được cấp lại hồ sơ mới.", code: "CONFIRMATION_EXPIRED" },
+      { status: 409 },
+    );
+  }
   const receiptId = generateReceiptId();
   const consentTextHash = sha256Hex(CONSENT_TEXT);
   const ip = trustedClientIp(request);

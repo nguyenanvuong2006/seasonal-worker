@@ -98,6 +98,32 @@ export function canSupersede(oldDocumentApplicationId: string, newDocumentApplic
   return oldDocumentApplicationId === newDocumentApplicationId;
 }
 
+/**
+ * CONFIRMATION DEADLINE (2026-09-10 mission) — EXPIRED is deliberately a
+ * DERIVED, computed-at-read-time status, never a value written to the DB
+ * (avoids "fragile cron-dependent status mutation" per the mission's own
+ * wording — a scheduled job is not required for correctness here, only the
+ * confirm route's own fresh deadline check, which is enforced independently
+ * of this display-only helper). A document is effectively EXPIRED exactly
+ * when it is still awaiting a candidate action (ISSUED/VIEWED — CONFIRMED/
+ * REVOKED/SUPERSEDED/FAILED are already terminal and unaffected by a
+ * deadline) AND its frozen confirmation_deadline_at has passed. A NULL
+ * deadline (legacy documents issued before this feature existed) never
+ * expires.
+ */
+export function isPastDeadline(deadlineAt: Date | null, now: Date): boolean {
+  return deadlineAt !== null && now.getTime() > deadlineAt.getTime();
+}
+
+export function effectiveStatus(
+  status: CandidateDocumentStatus,
+  deadlineAt: Date | null,
+  now: Date,
+): CandidateDocumentStatus | "EXPIRED" {
+  if ((status === "ISSUED" || status === "VIEWED") && isPastDeadline(deadlineAt, now)) return "EXPIRED";
+  return status;
+}
+
 export interface AccessSessionScope {
   revokedAtMs: number | null;
   expiresAtMs: number;

@@ -5,6 +5,7 @@ import { departments, employmentSessions, workerProfiles } from "@/db/schema";
 import { getUserScope, requirePermission, writeAudit } from "@/lib/auth";
 import { normalizePersonName } from "@/lib/person-name";
 import { CCCD_ERROR_MESSAGE, isValidCccd, normalizeCccd } from "@/lib/validators";
+import { getElectronicConfirmationHistory } from "@/lib/candidate-consent/confirmation-queries";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -57,7 +58,23 @@ export async function GET(_req: Request, ctx: { params: Promise<{ cccd: string }
   const scope = await getUserScope(guard.session);
   const result = await scopedProfileAndSessions(cccd, scope);
   if (!result) return NextResponse.json({ error: "Không tìm thấy hồ sơ trong phạm vi dữ liệu được cấp." }, { status: 404 });
-  return NextResponse.json({ profile: { ...result.profile, fullName: normalizePersonName(result.profile.fullName) }, sessions: result.sessions });
+
+  // ELECTRONIC CONFIRMATION HISTORY (2026-09-10 mission) — "Lịch sử hồ sơ xác
+  // nhận điện tử". getElectronicConfirmationHistory() returns EVERY engagement
+  // for this worker across ALL departments; re-scope here to exactly the
+  // SAME sessions already returned above (`result.sessions`, already Data-
+  // Scope-filtered by scopedProfileAndSessions) — a confirmation-history
+  // entry must never leak an engagement in a department outside the caller's
+  // own scope, even though the underlying document/engagement itself exists.
+  const scopedSessionIds = new Set(result.sessions.map((s) => s.id));
+  const fullConfirmationHistory = await getElectronicConfirmationHistory(result.profile.id);
+  const confirmationHistory = fullConfirmationHistory.filter((h) => h.employmentSessionId !== null && scopedSessionIds.has(h.employmentSessionId));
+
+  return NextResponse.json({
+    profile: { ...result.profile, fullName: normalizePersonName(result.profile.fullName) },
+    sessions: result.sessions,
+    confirmationHistory,
+  });
 }
 
 /** Cập nhật thông tin Biometric (#16) cho 1 hồ sơ điện tử. */

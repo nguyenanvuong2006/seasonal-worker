@@ -151,7 +151,9 @@ test("clicking 'Phát hành đã chọn (N)' sends exactly the selected ids to P
 
     const issueCall = ui.calls.find((c) => c.url.endsWith("/issue-ready") && c.method === "POST");
     assert.ok(issueCall, "must POST to the existing issue-ready endpoint — no new endpoint reimplemented");
-    assert.deepEqual(issueCall!.body, { ids: ["ready-1"] });
+    // Body also carries the (default 3-day) confirmation-deadline policy
+    // alongside `ids` — see confirmation-deadline.ts's DEFAULT_CONFIRMATION_WINDOW_DAYS.
+    assert.deepEqual(issueCall!.body, { ids: ["ready-1"], deadlineDays: 3 });
 
     // After refresh, ready-1 is ISSUED and no longer selectable/selected.
     assert.doesNotMatch(ui.text(), /Đã chọn/, "selection must clear after a successful bulk issue");

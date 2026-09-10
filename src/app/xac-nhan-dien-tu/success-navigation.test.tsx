@@ -23,10 +23,19 @@ const ISSUED_DOC = {
   regDate: "2026-09-01",
   issuedAt: "2026-09-09T08:05:14.000Z",
   status: "ISSUED",
+  effectiveStatus: "ISSUED",
+  actionable: true,
+  confirmationDeadlineAt: "2026-09-12T08:05:14.000Z",
   receipt: null,
 };
 
-const CONFIRMED_DOC = { ...ISSUED_DOC, status: "CONFIRMED", receipt: { receiptId: "SIG-ABC123", confirmedAtServer: "2026-09-09T10:20:44.892Z" } };
+const CONFIRMED_DOC = {
+  ...ISSUED_DOC,
+  status: "CONFIRMED",
+  effectiveStatus: "CONFIRMED",
+  actionable: false,
+  receipt: { receiptId: "SIG-ABC123", confirmedAtServer: "2026-09-09T10:20:44.892Z" },
+};
 
 /**
  * Renders the real page.tsx. @/components/ui is loaded FOR REAL (through
@@ -64,6 +73,7 @@ async function renderPage(env: RenderEnv, opts: { documentsQueue: Array<{ status
   const uiModule = loadComponent(new URL("../../components/ui.tsx", import.meta.url));
   const brandLogoStub = { BrandLogo: () => null };
   const validatorsModule = loadComponent(new URL("../../lib/validators.ts", import.meta.url));
+  const confirmationDeadlineModule = loadComponent(new URL("../../lib/candidate-consent/confirmation-deadline.ts", import.meta.url));
 
   const React = (await import("react")).default;
   const { act } = await import("react");
@@ -74,6 +84,7 @@ async function renderPage(env: RenderEnv, opts: { documentsQueue: Array<{ status
       "@/components/ui": uiModule,
       "@/components/brand-logo": brandLogoStub,
       "@/lib/validators": validatorsModule,
+      "@/lib/candidate-consent/confirmation-deadline": confirmationDeadlineModule,
     },
   });
   const CandidateConsentPage = mod.default as () => import("react").ReactElement;

@@ -106,6 +106,29 @@ function loadRoute(initialCandidates: CandidateState[]) {
               auditWrites.push({ action, details });
             },
           };
+        case "@/lib/candidate-consent/confirmation-deadline": {
+          const DEFAULT_CONFIRMATION_WINDOW_DAYS = 3;
+          const MS_PER_DAY = 24 * 60 * 60 * 1000;
+          function resolveConfirmationDeadline(policy: { kind: string; days?: number; at?: Date }, issuedAt: Date) {
+            if (policy.kind === "DAYS") {
+              const days = policy.days as number;
+              if (!Number.isInteger(days) || days < 1 || days > 365) {
+                return { ok: false, error: "Số ngày không hợp lệ (phải từ 1 đến 365)." };
+              }
+              return { ok: true, deadlineAt: new Date(issuedAt.getTime() + days * MS_PER_DAY) };
+            }
+            const at = policy.at as Date;
+            if (Number.isNaN(at.getTime())) return { ok: false, error: "Ngày giờ hết hạn không hợp lệ." };
+            if (at.getTime() <= issuedAt.getTime()) return { ok: false, error: "Hạn xác nhận phải sau thời điểm phát hành." };
+            return { ok: true, deadlineAt: at };
+          }
+          function parseDeadlinePolicyFromBody(body: { deadlineDays?: unknown; deadlineAt?: unknown }) {
+            if (typeof body.deadlineAt === "string" && body.deadlineAt.trim().length > 0) return { kind: "ABSOLUTE", at: new Date(body.deadlineAt) };
+            if (typeof body.deadlineDays === "number") return { kind: "DAYS", days: body.deadlineDays };
+            return { kind: "DAYS", days: DEFAULT_CONFIRMATION_WINDOW_DAYS };
+          }
+          return { parseDeadlinePolicyFromBody, resolveConfirmationDeadline };
+        }
         default:
           throw new Error(`Unexpected require("${id}") — route không được phụ thuộc module này.`);
       }

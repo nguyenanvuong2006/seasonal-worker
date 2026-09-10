@@ -7,6 +7,8 @@ import {
   canRevoke,
   canSupersede,
   canView,
+  effectiveStatus,
+  isPastDeadline,
   isTerminal,
   nextStatusOnView,
   sessionCanAccessApplication,
@@ -190,4 +192,50 @@ test("canView: READY is explicitly NOT viewable — a finalized-but-unissued doc
 
 test("canConfirm: READY cannot be confirmed (it isn't even viewable yet, let alone server-proven VIEWED)", () => {
   assert.equal(canConfirm("READY"), false);
+});
+
+/* ============================================================ *
+ * CONFIRMATION DEADLINE (2026-09-10 mission) — EXPIRED is a DERIVED status,
+ * never persisted; effectiveStatus() is the single source of truth every
+ * read path (admin panel, candidate list, AI tools) must use instead of
+ * inventing its own "is this expired" check.
+ * ============================================================ */
+
+test("isPastDeadline: null deadline never expires", () => {
+  assert.equal(isPastDeadline(null, new Date("2099-01-01")), false);
+});
+
+test("isPastDeadline: strictly after the deadline is past; exactly at the deadline is NOT yet past", () => {
+  const deadline = new Date("2026-09-13T10:00:00.000Z");
+  assert.equal(isPastDeadline(deadline, new Date("2026-09-13T10:00:00.001Z")), true);
+  assert.equal(isPastDeadline(deadline, deadline), false);
+  assert.equal(isPastDeadline(deadline, new Date("2026-09-13T09:59:59.999Z")), false);
+});
+
+test("effectiveStatus: ISSUED/VIEWED past deadline -> EXPIRED", () => {
+  const deadline = new Date("2026-09-13T10:00:00.000Z");
+  const past = new Date("2026-09-14T00:00:00.000Z");
+  assert.equal(effectiveStatus("ISSUED", deadline, past), "EXPIRED");
+  assert.equal(effectiveStatus("VIEWED", deadline, past), "EXPIRED");
+});
+
+test("effectiveStatus: ISSUED/VIEWED before deadline -> unchanged", () => {
+  const deadline = new Date("2026-09-13T10:00:00.000Z");
+  const before = new Date("2026-09-12T00:00:00.000Z");
+  assert.equal(effectiveStatus("ISSUED", deadline, before), "ISSUED");
+  assert.equal(effectiveStatus("VIEWED", deadline, before), "VIEWED");
+});
+
+test("effectiveStatus: terminal statuses are NEVER overridden to EXPIRED even past the deadline", () => {
+  const deadline = new Date("2026-09-13T10:00:00.000Z");
+  const past = new Date("2099-01-01T00:00:00.000Z");
+  for (const status of ["CONFIRMED", "REVOKED", "SUPERSEDED", "FAILED", "GENERATING", "READY"] as CandidateDocumentStatus[]) {
+    assert.equal(effectiveStatus(status, deadline, past), status, `${status} must never be overridden`);
+  }
+});
+
+test("effectiveStatus: null deadline never derives EXPIRED (legacy documents grandfathered)", () => {
+  const farFuture = new Date("2099-01-01T00:00:00.000Z");
+  assert.equal(effectiveStatus("ISSUED", null, farFuture), "ISSUED");
+  assert.equal(effectiveStatus("VIEWED", null, farFuture), "VIEWED");
 });

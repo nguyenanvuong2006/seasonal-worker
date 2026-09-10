@@ -106,6 +106,9 @@ export async function POST(request: Request, { params }: { params: Promise<{ id:
       mergeJobRecordId: newRecord.id,
       templateId: newRecord.templateId ?? oldDoc.templateId,
       status: "GENERATING",
+      // Same applicationId as oldDoc (asserted below) => same engagement — carry the link
+      // forward directly rather than re-resolving it (it cannot have changed).
+      employmentSessionId: oldDoc.employmentSessionId,
       supersedesDocumentId: id,
       createdAt: now,
       updatedAt: now,

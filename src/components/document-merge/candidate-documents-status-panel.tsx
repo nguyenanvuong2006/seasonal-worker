@@ -17,7 +17,8 @@
  */
 
 import { useCallback, useEffect, useRef, useState } from "react";
-import { Download, Eye, FileCheck2, Printer, RefreshCw, RotateCcw, Send, ShieldCheck, XCircle } from "lucide-react";
+import { Download, Eye, FileCheck2, Printer, RefreshCw, RotateCcw, Send, ShieldCheck, Timer, XCircle } from "lucide-react";
+import { CONFIRMATION_DEADLINE_DAY_PRESETS, DEFAULT_CONFIRMATION_WINDOW_DAYS, formatDeadline, formatRemainingTime } from "@/lib/candidate-consent/confirmation-deadline";
 
 const STATUS_LABEL: Record<string, string> = {
   GENERATING: "ĐANG TẠO",
@@ -49,21 +50,76 @@ const REVOCABLE = new Set(["READY", "ISSUED", "VIEWED"]);
 // candidate-facing route which requires ISSUED+ (see the pdf route's own
 // docblock for why the gate deliberately differs).
 const HAS_PDF_STATUSES = new Set(["READY", "ISSUED", "VIEWED", "CONFIRMED", "REVOKED", "SUPERSEDED", "EXPIRED"]);
+// A confirmation deadline is only ever enforced/extendable while the
+// PERSISTED status is still ISSUED/VIEWED (the same two statuses
+// effectiveStatus() derives EXPIRED from) — matches extend-deadline/route.ts's
+// own EXTENDABLE_STATUSES exactly.
+const EXTENDABLE = new Set(["ISSUED", "VIEWED"]);
 const FINALIZE_POLL_MS = 4000;
 
 type CandidateDocumentRow = {
   id: string;
   applicationId: string;
   status: string;
+  effectiveStatus: string;
   applicantFullName: string | null;
   templateName: string | null;
   issuedAt: string | null;
   viewedAt: string | null;
+  confirmationDeadlineAt: string | null;
+  engagementStartingDate: string | null;
   errorMessage: string | null;
   confirmation: { confirmedAtServer: string; receiptId: string } | null;
 };
 
-type Summary = { total: number; generating: number; ready: number; issued: number; viewed: number; confirmed: number; failed: number };
+type Summary = { total: number; generating: number; ready: number; issued: number; viewed: number; confirmed: number; failed: number; expired: number };
+
+/** "3 ngày" | "5 ngày" | ... | "Tuỳ chỉnh" — compact preset selector shared by single/batch issue AND Gia hạn, so every issuance in one admin session uses ONE deliberately-chosen policy instead of re-typing it per row. */
+function useDeadlinePolicy() {
+  const [days, setDays] = useState<number>(DEFAULT_CONFIRMATION_WINDOW_DAYS);
+  const [customAt, setCustomAt] = useState<string>("");
+  const [useCustom, setUseCustom] = useState(false);
+
+  const body = useCustom && customAt ? { deadlineAt: new Date(customAt).toISOString() } : { deadlineDays: days };
+  const label = useCustom && customAt ? `đến ${new Date(customAt).toLocaleString("vi-VN")}` : `${days} ngày`;
+
+  const picker = (
+    <div className="flex items-center gap-1.5 text-[11px]">
+      <Timer className="h-3.5 w-3.5 text-slate-400" />
+      <select
+        aria-label="Hạn xác nhận"
+        value={useCustom ? "custom" : String(days)}
+        onChange={(e) => {
+          if (e.target.value === "custom") {
+            setUseCustom(true);
+          } else {
+            setUseCustom(false);
+            setDays(Number(e.target.value));
+          }
+        }}
+        className="rounded-lg border border-slate-200 px-1.5 py-0.5 text-[11px] font-semibold text-slate-600"
+      >
+        {CONFIRMATION_DEADLINE_DAY_PRESETS.map((d) => (
+          <option key={d} value={d}>
+            {d} ngày
+          </option>
+        ))}
+        <option value="custom">Tuỳ chỉnh...</option>
+      </select>
+      {useCustom && (
+        <input
+          type="datetime-local"
+          aria-label="Hạn xác nhận tuỳ chỉnh"
+          value={customAt}
+          onChange={(e) => setCustomAt(e.target.value)}
+          className="rounded-lg border border-slate-200 px-1.5 py-0.5 text-[11px]"
+        />
+      )}
+    </div>
+  );
+
+  return { body, label, picker };
+}
 
 export function CandidateDocumentsStatusPanel() {
   const [documents, setDocuments] = useState<CandidateDocumentRow[]>([]);
@@ -75,7 +131,9 @@ export function CandidateDocumentsStatusPanel() {
   const [batchIssuing, setBatchIssuing] = useState(false);
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
   const [bulkIssuing, setBulkIssuing] = useState(false);
+  const [extendingId, setExtendingId] = useState<string | null>(null);
   const finalizingRef = useRef(false);
+  const deadlinePolicy = useDeadlinePolicy();
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -130,7 +188,11 @@ export function CandidateDocumentsStatusPanel() {
   const issueOne = async (id: string) => {
     setIssuingId(id);
     try {
-      const res = await fetch(`/api/document-merge/candidate-documents/${id}/issue`, { method: "POST" });
+      const res = await fetch(`/api/document-merge/candidate-documents/${id}/issue`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(deadlinePolicy.body),
+      });
       if (!res.ok) {
         const data = await res.json().catch(() => ({}));
         alert(data.error || "Không phát hành được.");
@@ -144,13 +206,13 @@ export function CandidateDocumentsStatusPanel() {
 
   const issueAllReady = async () => {
     if (!summary || summary.ready === 0) return;
-    if (!confirm(`Phát hành ${summary.ready} hồ sơ đang SẴN SÀNG cho ứng viên?`)) return;
+    if (!confirm(`Phát hành ${summary.ready} hồ sơ đang SẴN SÀNG cho ứng viên? Hạn xác nhận: ${deadlinePolicy.label}.`)) return;
     setBatchIssuing(true);
     try {
       const res = await fetch("/api/document-merge/candidate-documents/issue-ready", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: "{}",
+        body: JSON.stringify(deadlinePolicy.body),
       });
       if (!res.ok) {
         const data = await res.json().catch(() => ({}));
@@ -160,6 +222,26 @@ export function CandidateDocumentsStatusPanel() {
       await load();
     } finally {
       setBatchIssuing(false);
+    }
+  };
+
+  const extendDeadline = async (id: string) => {
+    if (!confirm(`Gia hạn hồ sơ này thêm thời gian? Hạn mới: ${deadlinePolicy.label}.`)) return;
+    setExtendingId(id);
+    try {
+      const res = await fetch(`/api/document-merge/candidate-documents/${id}/extend-deadline`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(deadlinePolicy.body),
+      });
+      if (!res.ok) {
+        const data = await res.json().catch(() => ({}));
+        alert(data.error || "Không gia hạn được.");
+        return;
+      }
+      await load();
+    } finally {
+      setExtendingId(null);
     }
   };
 
@@ -187,13 +269,13 @@ export function CandidateDocumentsStatusPanel() {
   const issueSelected = async () => {
     if (selectedIds.size === 0) return;
     const ids = [...selectedIds];
-    if (!confirm(`Phát hành ${ids.length} hồ sơ đã chọn cho ứng viên?`)) return;
+    if (!confirm(`Phát hành ${ids.length} hồ sơ đã chọn cho ứng viên? Hạn xác nhận: ${deadlinePolicy.label}.`)) return;
     setBulkIssuing(true);
     try {
       const res = await fetch("/api/document-merge/candidate-documents/issue-ready", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ ids }),
+        body: JSON.stringify({ ids, ...deadlinePolicy.body }),
       });
       if (!res.ok) {
         const data = await res.json().catch(() => ({}));
@@ -252,7 +334,8 @@ export function CandidateDocumentsStatusPanel() {
         <h3 className="flex items-center gap-1.5 text-sm font-bold text-slate-900">
           <ShieldCheck className="h-4 w-4 text-indigo-700" /> Hồ sơ xác nhận điện tử
         </h3>
-        <div className="flex items-center gap-2">
+        <div className="flex flex-wrap items-center gap-2">
+          {deadlinePolicy.picker}
           {selectedIds.size > 0 && (
             <button
               type="button"
@@ -291,6 +374,7 @@ export function CandidateDocumentsStatusPanel() {
           <span className="rounded-full bg-blue-100 px-2 py-0.5 text-blue-700">Đã phát hành {summary.issued}</span>
           <span className="rounded-full bg-amber-100 px-2 py-0.5 text-amber-700">Đã xem {summary.viewed}</span>
           <span className="rounded-full bg-emerald-100 px-2 py-0.5 text-emerald-700">Đã xác nhận {summary.confirmed}</span>
+          {summary.expired > 0 && <span className="rounded-full bg-slate-200 px-2 py-0.5 text-slate-700">Hết hạn chưa xác nhận {summary.expired}</span>}
           {summary.failed > 0 && <span className="rounded-full bg-red-100 px-2 py-0.5 text-red-700">Lỗi {summary.failed}</span>}
         </div>
       )}
@@ -313,12 +397,23 @@ export function CandidateDocumentsStatusPanel() {
               <th className="py-1.5 pr-2 font-semibold">Ứng viên</th>
               <th className="py-1.5 pr-2 font-semibold">Mẫu</th>
               <th className="py-1.5 pr-2 font-semibold">Trạng thái</th>
+              <th className="py-1.5 pr-2 font-semibold">Ngày bắt đầu</th>
+              <th className="py-1.5 pr-2 font-semibold">Hạn xác nhận</th>
               <th className="py-1.5 pr-2 font-semibold">Xác nhận</th>
               <th className="py-1.5 font-semibold"></th>
             </tr>
           </thead>
           <tbody>
-            {documents.map((doc) => (
+            {documents.map((doc) => {
+              // Effective status (server-derived EXPIRED) drives the badge —
+              // the raw persisted `status` (still ISSUED/VIEWED) is what
+              // action availability (Gia hạn/Thu hồi/Tạo lại) is keyed off,
+              // exactly matching effectiveStatus()'s own contract: a
+              // document can be "EXPIRED" for display while its underlying
+              // lifecycle status hasn't actually transitioned.
+              const displayStatus = doc.effectiveStatus ?? doc.status;
+              const isExpiredDisplay = displayStatus === "EXPIRED";
+              return (
               <tr key={doc.id} className="border-t border-slate-100">
                 <td className="py-1.5 pr-2">
                   {doc.status === "READY" && (
@@ -333,14 +428,38 @@ export function CandidateDocumentsStatusPanel() {
                 <td className="py-1.5 pr-2 text-slate-800">{doc.applicantFullName ?? "—"}</td>
                 <td className="py-1.5 pr-2 text-slate-500">{doc.templateName ?? "—"}</td>
                 <td className="py-1.5 pr-2">
-                  <span className={`rounded-full px-2 py-0.5 text-[10px] font-bold ${STATUS_COLOR[doc.status] ?? "bg-slate-100 text-slate-600"}`}>
-                    {STATUS_LABEL[doc.status] ?? doc.status}
+                  <span className={`rounded-full px-2 py-0.5 text-[10px] font-bold ${STATUS_COLOR[displayStatus] ?? "bg-slate-100 text-slate-600"}`}>
+                    {STATUS_LABEL[displayStatus] ?? displayStatus}
                   </span>
                   {doc.status === "FAILED" && doc.errorMessage && <p className="mt-0.5 text-[10px] text-red-600">{doc.errorMessage}</p>}
+                </td>
+                <td className="py-1.5 pr-2 text-slate-500">{doc.engagementStartingDate ?? "—"}</td>
+                <td className="py-1.5 pr-2 text-slate-500">
+                  {doc.confirmationDeadlineAt ? (
+                    <>
+                      {formatDeadline(doc.confirmationDeadlineAt)}
+                      {!isExpiredDisplay && EXTENDABLE.has(doc.status) && (
+                        <span className="ml-1 text-slate-400">({formatRemainingTime(doc.confirmationDeadlineAt, new Date()) ?? "—"})</span>
+                      )}
+                    </>
+                  ) : (
+                    "—"
+                  )}
                 </td>
                 <td className="py-1.5 pr-2 text-slate-500">{doc.confirmation ? doc.confirmation.receiptId : "—"}</td>
                 <td className="py-1.5 text-right">
                   <div className="flex justify-end gap-1">
+                    {EXTENDABLE.has(doc.status) && (
+                      <button
+                        type="button"
+                        onClick={() => void extendDeadline(doc.id)}
+                        disabled={extendingId === doc.id}
+                        title="Gia hạn"
+                        className="inline-flex items-center gap-1 rounded-lg border border-amber-200 px-2 py-0.5 text-[10px] font-semibold text-amber-700 hover:bg-amber-50 disabled:opacity-50"
+                      >
+                        <Timer className="h-3 w-3" /> Gia hạn
+                      </button>
+                    )}
                     {HAS_PDF_STATUSES.has(doc.status) && (
                       <>
                         <a
@@ -435,7 +554,8 @@ export function CandidateDocumentsStatusPanel() {
                   </div>
                 </td>
               </tr>
-            ))}
+              );
+            })}
           </tbody>
         </table>
       </div>
