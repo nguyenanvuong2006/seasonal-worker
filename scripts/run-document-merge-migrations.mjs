@@ -49,6 +49,7 @@ import pg from "pg";
 import { readFileSync } from "node:fs";
 import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
+import { recordAlreadyExecutedMigration } from "./lib/migration-ledger.mjs";
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), "..");
 const DATABASE_URL = process.env.DATABASE_URL;
@@ -229,6 +230,28 @@ const counts = await client.query(`
 `);
 console.log("\n=== COUNTS ===");
 console.log(JSON.stringify(counts.rows[0]));
+
+// Record EACH of the 15 migrations into the shared schema_migrations
+// ledger — ONLY after the whole sequence above + table-existence
+// verification has already passed. Never re-executes any migration SQL; a
+// ledger hiccup on any single file must never retroactively fail this
+// otherwise-successful, already-verified run (try/catch per file, not one
+// try/catch for the whole loop, so one failure doesn't block recording the
+// rest).
+for (const filename of DOCUMENT_MERGE_MIGRATIONS) {
+  try {
+    const result = await recordAlreadyExecutedMigration(client, {
+      migrationId: filename,
+      sqlFilePath: join(ROOT, "migrations", filename),
+      executionMethod: "DOCUMENT_MERGE_SCOPED_RUNNER",
+      appCommitSha: process.env.GITHUB_SHA ?? null,
+      appliedBy: process.env.APPLIED_BY ?? process.env.GITHUB_ACTOR ?? null,
+    });
+    console.log(`  ✅ Ledger: ${result.status} — ${filename}`);
+  } catch (error) {
+    console.error(`  ⚠️  Ghi ledger thất bại cho ${filename} (KHÔNG ảnh hưởng kết quả migration đã verify ở trên): ${error.message}`);
+  }
+}
 
 console.log("\n✅ Document Merge migrations OK. Engine vẫn GOOGLE_DOCS cho tới khi được kích hoạt thủ công.");
 await client.end();

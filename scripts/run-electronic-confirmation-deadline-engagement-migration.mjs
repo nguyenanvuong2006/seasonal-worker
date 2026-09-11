@@ -40,6 +40,7 @@ import { readFileSync } from "node:fs";
 import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 import { createHash } from "node:crypto";
+import { recordAlreadyExecutedMigration } from "./lib/migration-ledger.mjs";
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), "..");
 const DATABASE_URL = process.env.DATABASE_URL;
@@ -237,9 +238,6 @@ for (const row of returningWorkerRows.rows) {
 }
 console.log("  (Đây là bằng chứng đọc-only rằng mô hình 1-engagement-1-document hoạt động đúng trên dữ liệu thật — KHÔNG sửa/tạo gì.)");
 
-await client.end();
-
-console.log("\n=== KẾT QUẢ ===");
 const allOk =
   missingColumns.length === 0 &&
   missingIndexes.length === 0 &&
@@ -250,6 +248,29 @@ const allOk =
   noRetroactiveDeadlines &&
   linksAreDeterministic &&
   noMissedDeterministicLinks;
+
+// Record into the shared schema_migrations ledger — ONLY after this
+// script's own verification above has already passed. Never re-executes
+// the migration SQL; a ledger hiccup here must never retroactively fail an
+// otherwise-successful, already-verified migration run.
+if (allOk) {
+  try {
+    const result = await recordAlreadyExecutedMigration(client, {
+      migrationId: MIGRATION_FILE,
+      sqlFilePath: join(ROOT, "migrations", MIGRATION_FILE),
+      executionMethod: "ELECTRONIC_CONFIRMATION_SCOPED_RUNNER",
+      appCommitSha: process.env.GITHUB_SHA ?? null,
+      appliedBy: process.env.APPLIED_BY ?? process.env.GITHUB_ACTOR ?? null,
+    });
+    console.log(`\n✅ Ledger: ${result.status} — migration_id=${result.migrationId}`);
+  } catch (error) {
+    console.error(`⚠️  Ghi ledger thất bại (KHÔNG ảnh hưởng kết quả migration đã verify ở trên): ${error.message}`);
+  }
+}
+
+await client.end();
+
+console.log("\n=== KẾT QUẢ ===");
 if (missingColumns.length > 0) console.error(`❌ Thiếu cột: ${missingColumns.join(", ")}`);
 if (missingIndexes.length > 0) console.error(`❌ Thiếu index: ${missingIndexes.join(", ")}`);
 if (businessRowsChanged) console.error("❌ Row count của một bảng nghiệp vụ đã thay đổi — DỪNG LẠI, điều tra ngay.");
