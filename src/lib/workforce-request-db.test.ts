@@ -103,10 +103,15 @@ function respondFor(fixture: ReturnType<typeof buildFixture>) {
     if (call.table === "request_allocations") {
       const movementType = eqValue(call, "workforce_movements.movementType");
       if (movementType === "resignation") {
-        // fetchQuitRows: JOIN request_allocations (mọi status) + workforce_movements resignation/INACTIVE.
+        // fetchQuitRows: JOIN request_allocations (mọi status) + workforce_movements
+        // resignation/INACTIVE/lifecycleAppliedAt IS NOT NULL (follow-up correctness fix —
+        // cùng invariant với Transfer-Out: status=INACTIVE được ghi ngay khi HR approve,
+        // có thể SỚM HƠN effectiveDate thật).
         return fixture.allocations
           .map((a) => {
-            const mv = fixture.movements.find((m) => m.workerId === a.workerId && m.movementType === "resignation" && m.status === "INACTIVE");
+            const mv = fixture.movements.find(
+              (m) => m.workerId === a.workerId && m.movementType === "resignation" && m.status === "INACTIVE" && m.lifecycleAppliedAt,
+            );
             if (!mv) return null;
             return {
               requestId: a.requestId,
@@ -302,6 +307,76 @@ test("Scenario B: SAU KHI lifecycle áp dụng (lifecycleAppliedAt được set,
   // w2 (base fixture) + w4 (giờ đã lifecycle-applied) = 2.
   assert.equal(kpi.totalTransferOut, 2, "lifecycleAppliedAt được set -> Transfer-Out phải tính CẢ w2 (base) và w4");
   assert.equal(kpi.totalCurrent, 0, "allocation RQ09 của w4 đã ENDED -> KHÔNG còn tính Current trên RQ09 (employment vẫn ACTIVE ở dept mới, không thuộc phạm vi KPI của RQ09 nữa)");
+});
+
+/* ----------------------- Follow-up correctness fix (post-Phase 2B report): Resignation TƯƠNG LAI (lifecycleAppliedAt=null) KHÔNG được tính Quit, worker vẫn Current — mirror của Scenario B cho Transfer ----------------------- */
+
+function buildFixtureWithFutureResignation() {
+  const fixture = buildFixture();
+  // w5 (Nữ): allocation RQ09 VẪN ACTIVE (chưa bị end) — HR đã APPROVE_RESIGNATION
+  // (status=INACTIVE) nhưng lifecycleAppliedAt CHƯA được set (applyEffectiveWorkforceMovements
+  // chưa chạy tới effectiveDate) — đúng invariant workforce-movements.ts: employment_session/
+  // request_allocation chỉ đổi khi lifecycle THỰC SỰ áp dụng, không phải tại thời điểm HR xác
+  // nhận (xem finalizeResignationEffect() chỉ được gọi khi effectiveDate <= hôm nay hoặc từ
+  // applyEffectiveWorkforceMovements()).
+  fixture.allocations.push({
+    id: "a-w5", requestId: RQ09, workerId: "w5", employmentSessionId: "s-w5",
+    status: "ACTIVE", startedAt: new Date("2026-09-01"), endedAt: null,
+  });
+  fixture.sessions["s-w5"] = { id: "s-w5", status: "APPROVED", endDate: null, startingDate: "2026-09-01" };
+  fixture.workers.w5 = { id: "w5", gender: "Nữ", deletedAt: null };
+  fixture.movements.push({
+    id: "m-resign-w5", workerId: "w5", movementType: "resignation", status: "INACTIVE",
+    effectiveDate: "2026-09-30", lifecycleAppliedAt: null,
+  });
+  return fixture;
+}
+
+test("Follow-up: resignation APPROVED nhưng lifecycle CHƯA áp dụng (lifecycleAppliedAt=null) -> Quit=0, worker VẪN tính Current trên RQ09, Balance KHÔNG đổi sớm", async () => {
+  const fixture = buildFixtureWithFutureResignation();
+  const db = createFakeDb({ respond: respondFor(fixture) });
+  const mod = load(db) as {
+    batchComputeRequestKpis: (rows: RequestRow[], asOf: string) => Promise<Map<string, Record<string, number>>>;
+  };
+
+  const kpis = await mod.batchComputeRequestKpis([RQ09_ROW], TODAY);
+  const kpi = kpis.get(RQ09)!;
+
+  // Base fixture đã có sẵn w1 (Quit=1, lifecycleAppliedAt đã set) — w5 (lifecycleAppliedAt=null)
+  // KHÔNG được cộng thêm vào con số này dù status đã INACTIVE (quyết định HR đã ghi).
+  assert.equal(kpi.totalQuit, 1, "lifecycleAppliedAt=null -> w5 KHÔNG được tính Quit dù status đã INACTIVE (chỉ w1 của base fixture được tính)");
+  assert.equal(kpi.totalCurrent, 1, "w5 vẫn ACTIVE trên RQ09 (allocation chưa bị END) -> vẫn tính Current");
+  // femaleRq=1 (RQ09_ROW); w5 (Nữ) vẫn tính Current -> femaleCurrent=1 -> Balance = max(0,1-1) = 0.
+  // KHÔNG được trôi sớm thành thiếu người chỉ vì HR đã approve resignation nhưng chưa hiệu lực.
+  assert.equal(kpi.femaleCurrent, 1, "w5 (Nữ) vẫn ACTIVE -> vẫn tính femaleCurrent");
+  assert.equal(kpi.femaleBalance, 0, "Balance KHÔNG được coi w5 đã rời đi sớm — vẫn max(0, 1-1)=0");
+});
+
+test("Follow-up: SAU KHI lifecycle áp dụng (lifecycleAppliedAt được set, allocation ENDED) -> Quit=1, worker KHÔNG còn tính Current, Balance chỉ phản ánh Target-Current (không cộng Quit lần 2)", async () => {
+  const fixture = buildFixtureWithFutureResignation();
+  // Mô phỏng applyEffectiveWorkforceMovements() đã chạy tới effectiveDate: allocation
+  // RQ09 của w5 bị END (append-only, KHÔNG update tại chỗ) và lifecycleAppliedAt được set.
+  fixture.allocations = fixture.allocations.map((a) =>
+    a.id === "a-w5" ? { ...a, status: "ENDED" as const, endedAt: new Date("2026-09-30") } : a,
+  );
+  fixture.movements = fixture.movements.map((m) =>
+    m.id === "m-resign-w5" ? { ...m, lifecycleAppliedAt: new Date("2026-09-30") } : m,
+  );
+  const db = createFakeDb({ respond: respondFor(fixture) });
+  const mod = load(db) as {
+    batchComputeRequestKpis: (rows: RequestRow[], asOf: string) => Promise<Map<string, Record<string, number>>>;
+  };
+
+  const kpis = await mod.batchComputeRequestKpis([RQ09_ROW], TODAY);
+  const kpi = kpis.get(RQ09)!;
+
+  // w1 (base fixture) + w5 (giờ đã lifecycle-applied) = 2.
+  assert.equal(kpi.totalQuit, 2, "lifecycleAppliedAt được set -> Quit phải tính CẢ w1 (base) và w5");
+  assert.equal(kpi.totalCurrent, 0, "allocation RQ09 của w5 đã ENDED -> Current giảm đúng 1 (từ 1 xuống 0)");
+  // femaleRq=1; femaleCurrent giờ =0 (w5 đã ENDED) -> Balance = max(0, 1-0) = 1, KHÔNG PHẢI 2
+  // (một công thức sai sẽ cộng thêm Quit=1 lần thứ hai: 1 (target-current) + 1 (quit) = 2).
+  assert.equal(kpi.femaleCurrent, 0, "w5 (Nữ) không còn ACTIVE trên RQ09 -> femaleCurrent giảm về 0");
+  assert.equal(kpi.femaleBalance, 1, "Balance = max(0, Target-Current) = 1, KHÔNG cộng thêm Quit lần hai thành 2");
 });
 
 test("Quit/TransferOut không đổi bởi asOf muộn hơn effectiveDate (bị chặn bởi window.end=expectedDate, không phải bởi asOf)", async () => {

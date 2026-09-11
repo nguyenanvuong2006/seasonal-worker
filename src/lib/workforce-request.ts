@@ -43,8 +43,10 @@ type Executor = typeof db | Parameters<Parameters<typeof db.transaction>[0]>[0];
    số tổng hợp thủ công (mục 9):
      - Current Workforce = ACTIVE Employment Session + ACTIVE
        request allocation.
-     - Quit            = RESIGNATION INACTIVE trong khoảng thời
-       gian request, của worker TỪNG có allocation vào request.
+     - Quit            = RESIGNATION có hiệu lực THỰC SỰ (status=INACTIVE
+       VÀ lifecycleAppliedAt IS NOT NULL — cùng invariant Transfer-Out,
+       xem fetchQuitRows()) trong khoảng thời gian request, của worker
+       TỪNG có allocation vào request.
      - Recruited       = pipeline Daily Application + Workflow
        (stage kết thúc "Đã nhận việc" — APPROVED).
      - Balance         = max(0, Request - Current + Quit) — công
@@ -190,6 +192,13 @@ async function fetchQuitRows(ex: Executor, requestIds: string[]): Promise<QuitRo
         eq(workforceMovements.workerId, requestAllocations.workerId),
         eq(workforceMovements.movementType, "resignation"),
         eq(workforceMovements.status, "INACTIVE"),
+        // Follow-up correctness fix (post-Phase 2B report): status="INACTIVE" is
+        // written immediately at HR approval time (applyMovementAction), which can
+        // be BEFORE the resignation's effectiveDate — lifecycleAppliedAt is the ONLY
+        // field that reflects the workforce effect having actually happened (same
+        // invariant fetchTransferOutRows already uses). Without this gate, an
+        // HR-approved-but-not-yet-effective resignation was counted as Quit too early.
+        isNotNull(workforceMovements.lifecycleAppliedAt),
       ),
     )
     .where(inArray(requestAllocations.requestId, requestIds));
