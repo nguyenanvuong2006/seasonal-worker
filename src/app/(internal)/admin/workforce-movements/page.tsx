@@ -175,10 +175,16 @@ export default function WorkforceMovementsPage() {
   }, [load]);
 
   useEffect(() => {
+    // final-project-hardening — trước đây KHÔNG có .ok check và KHÔNG có .catch(): một lỗi
+    // non-2xx/mạng ở đây trở thành unhandled rejection, không ai biết. Đây chỉ là dữ liệu bổ
+    // trợ (nhãn/màu trạng thái) — stageLabel()/stageTone() đã có fallback về key thô/gray khi
+    // stages rỗng, nên degrade âm thầm (log lỗi, không toast) là đúng mức, không cần chặn UI.
     Promise.all([
-      fetch("/api/workflow-stages?entityType=resignation").then((r) => r.json()),
-      fetch("/api/workflow-stages?entityType=transfer").then((r) => r.json()),
-    ]).then(([res, trans]) => setStages([...(res.rows ?? []), ...(trans.rows ?? [])]));
+      fetch("/api/workflow-stages?entityType=resignation").then((r) => (r.ok ? r.json() : { rows: [] })),
+      fetch("/api/workflow-stages?entityType=transfer").then((r) => (r.ok ? r.json() : { rows: [] })),
+    ])
+      .then(([res, trans]) => setStages([...(res.rows ?? []), ...(trans.rows ?? [])]))
+      .catch((err) => console.error("[workforce-movements] load workflow stages failed", err));
   }, []);
 
   const stageLabel = (key: string) => stages.find((s) => s.stageKey === key)?.label ?? key;

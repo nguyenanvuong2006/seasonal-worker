@@ -163,8 +163,12 @@ export async function POST(req: Request) {
       return { error: "Bộ phận đích trùng bộ phận hiện tại — không phải thuyên chuyển.", status: 400 } as const;
     }
 
+    // final-project-hardening — 404, không phải 403: repo-wide convention là không tiết lộ
+    // sự tồn tại của tài nguyên ngoài Data Scope (worker có active session ở bộ phận khác
+    // hay không) qua một status code riêng biệt với case "không có session nào" (cũng 400
+    // đổi thành thông điệp trung tính ở trên) — 403 trước đây tạo existence oracle nhẹ.
     if (scope && !scope.includes(actualFromDeptId ?? "")) {
-      return { error: "Lao động này không thuộc bộ phận bạn quản lý.", status: 403 } as const;
+      return { error: "Không tìm thấy lao động trong Data Scope được cấp.", status: 404 } as const;
     }
 
     // Idempotent — session này đã có 1 yêu cầu PENDING_HR (resignation hoặc transfer) rồi thì

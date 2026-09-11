@@ -33,6 +33,20 @@ npm run build
 
 Không phát hành nếu bất kỳ lệnh nào thất bại. Không dùng `--force`, không bỏ qua lỗi TypeScript hoặc lint.
 
+### Xác định migration có cần chạy hay không (trước khi bắt đầu)
+
+**final-project-hardening (2026-09) — bổ sung sau khi audit governance phát hiện repo không có bảng ledger `schema_migrations` nào**, nên không có cách tự động trả lời "migration X đã chạy trên Production chưa" từ chính database. Trước khi merge/deploy bất kỳ thay đổi nào động tới `src/db/schema.ts`:
+
+1. Diff schema code (`src/db/schema.ts`) với file migration mới nhất trong `migrations/` — mọi cột/bảng/index mới trong code PHẢI có migration tương ứng đã được review, không suy luận "chắc đã có sẵn".
+2. Chạy read-only:
+
+   ```bash
+   DATABASE_URL=postgres://... node scripts/production-health-check.mjs
+   ```
+
+   Script này SELECT-only, không ghi gì, và trả PASS/WARN/FAIL cho từng cột/bảng/index migration gần đây yêu cầu — dùng nó để biết Production đang thiếu migration nào TRƯỚC khi deploy code phụ thuộc vào cột đó, không đợi tới khi người dùng gặp lỗi.
+3. Nếu FAIL ở bất kỳ mục nào và nghi ngờ dữ liệu bẩn (trùng khoá, vi phạm ràng buộc), chạy thêm `scripts/audit-employment-data.mjs` (read-only) trước khi áp migration có unique index mới.
+
 ### Sao lưu bắt buộc
 
 Trước mỗi migration:
@@ -47,6 +61,8 @@ Trước mỗi migration:
 3. Ghi lại Git SHA đang chạy và thời điểm snapshot để có thể ghép đúng phiên bản ứng dụng với dữ liệu.
 
 Không đưa dump, `.env`, token hoặc dữ liệu cá nhân vào Git.
+
+**Lưu ý về waiver/self-attestation:** các workflow `workflow_dispatch` migration mới hơn (xem registry ở mục 4) nhận input `backup_confirmed` — đây là một checkbox/tham số **người vận hành tự khai báo**, KHÔNG được workflow tự xác minh là snapshot thật sự tồn tại. Luôn tạo snapshot thật theo bước 1 ở trên TRƯỚC khi tick `backup_confirmed=true`, không tick cho có.
 
 ## 3. Biến môi trường
 
@@ -116,6 +132,41 @@ ALTER TABLE worker_profiles VALIDATE CONSTRAINT worker_profiles_cccd_exact_12_ch
 ```
 
 Migration đã được thiết kế idempotent, nhưng vẫn phải dừng và điều tra nếu `psql` báo lỗi. Không sửa tay schema Production để “chạy tiếp”.
+
+### Cơ chế áp dụng migration — registry (final-project-hardening)
+
+Repo có **nhiều cơ chế khác nhau** để áp migration lên Production — không có một workflow duy nhất chạy "tất cả". Đọc bảng này trước khi giả định một migration "chắc đã chạy" vì thấy `migrate-production.yml` từng chạy:
+
+| Cơ chế | Phạm vi | Khi dùng |
+|---|---|---|
+| `psql`/Neon SQL Editor thủ công (mục 4 phía trên) | Bất kỳ file `migrations/*.sql` nào KHÔNG nằm trong danh sách cố định của một workflow bên dưới | Mặc định cho migration mới — trừ khi migration đó thuộc một trong các nhóm dưới |
+| `.github/workflows/migrate-staging.yml` → `scripts/run-migrations.mjs` | **Staging only** — chạy `schema.sql` + TOÀN BỘ `migrations/*.sql` theo thứ tự | Bootstrap/reset database staging, không phải Production |
+| `.github/workflows/migrate-production.yml` → `scripts/run-document-merge-migrations.mjs` | **CHỈ** danh sách migration Document Merge cố định trong `DOCUMENT_MERGE_MIGRATIONS` (script này) | Migration liên quan template/merge job/PDF overlay — không tự động cover migration ngoài danh sách này dù tên workflow là "production" |
+| `.github/workflows/migrate-ai-action-proposals-production.yml` | Riêng bảng `ai_action_proposals` | |
+| `.github/workflows/migrate-ai-copilot-conversations-production.yml` | Riêng bảng `ai_conversations`/`ai_conversation_messages` | |
+| `.github/workflows/migrate-electronic-confirmation-deadline-engagement-production.yml` | Riêng cột deadline/engagement trên `candidate_documents` | |
+| `.github/workflows/migrate-recruitment-snapshot-columns-production.yml` | Riêng hotfix cột snapshot `recruitment_requests` | |
+| `.github/workflows/migrate-workforce-movement-effective-lifecycle-production.yml` | Riêng cột `workforce_movements.lifecycle_applied_at` + backfill | |
+
+Khi thêm một migration mới KHÔNG thuộc Document Merge và không đủ lớn để có workflow riêng: chạy thủ công theo mục 4, và cân nhắc viết một workflow scoped riêng (theo mẫu 5 workflow trên) nếu migration cần backfill/idempotency-check phức tạp hơn một lệnh `psql` đơn thuần.
+
+### Xác minh migration đã chạy đúng cách (idempotency)
+
+Không có bảng ledger, nên xác minh bằng truy vấn trực tiếp thay vì tin vào "workflow chạy xong không lỗi":
+
+```sql
+-- Cột mới có tồn tại?
+SELECT column_name FROM information_schema.columns
+WHERE table_name = '<tên bảng>' AND column_name = '<tên cột>';
+
+-- Bảng mới có tồn tại?
+SELECT to_regclass('public.<tên bảng>');
+
+-- Index/constraint mới có tồn tại?
+SELECT indexname FROM pg_indexes WHERE tablename = '<tên bảng>' AND indexname = '<tên index>';
+```
+
+`scripts/production-health-check.mjs` đã đóng gói sẵn các truy vấn tương tự cho những migration gần đây — ưu tiên chạy script đó trước khi tự viết truy vấn ad-hoc.
 
 ## 5. Trình tự phát hành
 
@@ -220,6 +271,20 @@ Không coi rollback ứng dụng là rollback dữ liệu. Hai thao tác có ph�
 - Kiểm tra `DATABASE_URL`, SSL, trạng thái Neon và giới hạn connection.
 - Không in toàn bộ connection string ra log.
 - Thử kết nối bằng `psql "$DATABASE_URL"` từ môi trường quản trị được phép.
+
+### Schema drift — code đã deploy nhưng migration chưa chạy (final-project-hardening)
+
+Triệu chứng: route trả HTTP 500, log server có `column "..." does not exist` hoặc lỗi Postgres tương tự (`42703`), thường ngay sau một lần deploy. Đây là loại sự cố đã xảy ra thật ít nhất 2 lần trong lịch sử dự án (Recruitment Requests snapshot columns, `workforce_movements.lifecycle_applied_at`) — cả hai đều do migration được review/merge vào `main` nhưng KHÔNG được áp thủ công lên Production trước khi code phụ thuộc cột đó được deploy.
+
+1. Chạy ngay (read-only, an toàn ngay cả khi đang sự cố):
+
+   ```bash
+   DATABASE_URL=postgres://... node scripts/production-health-check.mjs
+   ```
+
+2. Đối chiếu FAIL/WARN với migration tương ứng trong `migrations/`, xác định migration nào chưa chạy bằng registry ở mục 4.
+3. Áp migration còn thiếu theo đúng quy trình mục 4 (backup trước, `ON_ERROR_STOP=1`, kiểm tra sau khi chạy) — KHÔNG rollback code như một cách "sửa nhanh" nếu migration là fix đúng hướng; rollback code chỉ hợp lý khi migration tự nó rủi ro/cần review thêm.
+4. Sau khi migration chạy xong, chạy lại `production-health-check.mjs` để xác nhận PASS trước khi coi sự cố đã đóng.
 
 ### Đăng nhập thất bại sau deploy đầu tiên
 
