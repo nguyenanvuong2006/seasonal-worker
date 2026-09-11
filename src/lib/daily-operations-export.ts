@@ -1,5 +1,5 @@
 import "server-only";
-import ExcelJS from "exceljs";
+import { addStyledSheet, createStyledWorkbook, workbookToBuffer, type StyledSheetColumn } from "./excel-workbook-style";
 
 /**
  * DAILY OPERATIONS — shared Excel export builder ("Vận hành trong ngày":
@@ -10,16 +10,14 @@ import ExcelJS from "exceljs";
  * module never queries the database itself, it only renders rows already
  * fetched through the SAME canonical, authorized query the on-screen list
  * uses — see each route's own doc comment for its canonical service).
+ *
+ * The actual per-sheet styling (title/header/alternating rows) now lives in
+ * the domain-agnostic excel-workbook-style.ts (Phase 2B mục 6 — reused by
+ * the canonical Request Detail export, which needs MULTIPLE sheets). This
+ * module's own public API/behavior is unchanged for its 3 existing callers.
  */
 
-const GREEN = "FF115830";
-const LIGHT = "FFEFF6F0";
-
-export type ExportColumn<T> = {
-  header: string;
-  width: number;
-  value: (row: T, index: number) => string | number;
-};
+export type ExportColumn<T> = StyledSheetColumn<T>;
 
 export async function buildDailyOperationsWorkbook<T>(opts: {
   sheetName: string;
@@ -27,43 +25,9 @@ export async function buildDailyOperationsWorkbook<T>(opts: {
   columns: ExportColumn<T>[];
   rows: T[];
 }): Promise<Buffer> {
-  const { sheetName, title, columns, rows } = opts;
-  const wb = new ExcelJS.Workbook();
-  wb.creator = "Dalat Hasfarm Seasonal HR";
-  wb.created = new Date();
-  const ws = wb.addWorksheet(sheetName, { pageSetup: { orientation: "landscape", fitToPage: true, fitToWidth: 1 } });
-
-  ws.mergeCells(1, 1, 1, columns.length);
-  ws.getCell(1, 1).value = title;
-  ws.getCell(1, 1).font = { bold: true, size: 14, color: { argb: GREEN } };
-
-  const headerRow = ws.getRow(3);
-  columns.forEach((col, i) => {
-    const cell = headerRow.getCell(i + 1);
-    cell.value = col.header;
-    cell.font = { bold: true, color: { argb: "FFFFFFFF" } };
-    cell.fill = { type: "pattern", pattern: "solid", fgColor: { argb: GREEN } };
-    cell.alignment = { horizontal: "center", vertical: "middle" };
-  });
-  headerRow.commit();
-
-  rows.forEach((row, idx) => {
-    const excelRow = ws.getRow(idx + 4);
-    excelRow.values = columns.map((col) => col.value(row, idx));
-    if (idx % 2 === 1) {
-      for (let c = 1; c <= columns.length; c++) {
-        excelRow.getCell(c).fill = { type: "pattern", pattern: "solid", fgColor: { argb: LIGHT } };
-      }
-    }
-    excelRow.commit();
-  });
-
-  ws.columns = columns.map((col) => ({ width: col.width }));
-  ws.views = [{ state: "frozen", ySplit: 3 }];
-  ws.autoFilter = { from: { row: 3, column: 1 }, to: { row: 3, column: columns.length } };
-
-  const buffer = await wb.xlsx.writeBuffer();
-  return Buffer.from(buffer as ArrayBuffer);
+  const wb = createStyledWorkbook();
+  addStyledSheet(wb, opts);
+  return workbookToBuffer(wb);
 }
 
 export function exportFilenameHeaders(baseName: string, date: string): Record<string, string> {

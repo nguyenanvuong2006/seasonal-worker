@@ -61,6 +61,13 @@ function loadRoute(opts: {
       stripSystemOwnedFields: (body: Record<string, unknown>) => ({ safe: body, rejected: [] }),
     },
     "@/lib/recruitment-request-provisioning": { provisionRecruitmentRequest: async () => {} },
+    "@/lib/workforce-request": {
+      batchComputeRequestKpis: async () => new Map(),
+    },
+    "@/lib/workforce-request-kpi": {
+      resolveDefaultAsOf: (_r: unknown, today: string) => today,
+    },
+    "@/lib/helpers": { todayStr: () => "2026-09-10" },
   };
 
   const moduleObj = { exports: {} as Record<string, unknown> };
@@ -76,6 +83,7 @@ function loadRoute(opts: {
     URL,
     console,
     JSON,
+    Map,
   });
   vm.runInContext(js, context);
 
@@ -93,7 +101,11 @@ test("200 + rows/total on success", async () => {
   });
   const res = await GET(getWith());
   assert.equal(res.status, 200);
-  assert.deepEqual(res.body.rows, [{ id: "r1" }]);
+  // JSON round-trip: rows được dựng bằng object spread BÊN TRONG vm sandbox (realm
+  // khác với test file) — assert.deepEqual so sánh cross-realm object sẽ báo "same
+  // structure but not reference-equal"; JSON.stringify/parse chuẩn hoá về plain object
+  // cùng realm với test, không đổi ý nghĩa so sánh.
+  assert.deepEqual(JSON.parse(JSON.stringify(res.body.rows)), [{ id: "r1", kpi: null }]);
   assert.equal(res.body.total, 1);
 });
 

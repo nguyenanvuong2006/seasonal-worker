@@ -14,7 +14,9 @@ import {
   stripSystemOwnedFields,
 } from "@/lib/planning-recruitment-core";
 import { provisionRecruitmentRequest } from "@/lib/recruitment-request-provisioning";
-import { computeRecruitmentKpis } from "@/lib/recruitment-kpi";
+import { batchComputeRequestKpis } from "@/lib/workforce-request";
+import { resolveDefaultAsOf } from "@/lib/workforce-request-kpi";
+import { todayStr } from "@/lib/helpers";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -76,10 +78,13 @@ export async function GET(_req: Request, ctx: { params: Promise<{ id: string }> 
   // Phân bổ đang mở của yêu cầu này — cần cho panel chuyển phân bổ.
   const allocations = await listOpenAllocationsForRequest(id);
 
-  // Recruitment Balance (snapshot + quit) vs Realtime Gap (current now) —
-  // đối chiếu (mục 5 + K). KHÔNG âm thầm ghi đè khi lệch nhau; trả về đủ chi
-  // tiết snapshot/quit/current để Admin/Recruiter audit.
-  const kpi = await computeRecruitmentKpis(id);
+  // CANONICAL KPI (Phase 2B mục 4.2) — allocation-aware, ĐÚNG 1 engine dùng
+  // chung với /admin/workforce-requests (batchComputeRequestKpis), KHÔNG dùng
+  // công thức department-window thứ hai của recruitment-kpi.ts cho UI chính
+  // nữa. Request EXPIRED/COMPLETED/CANCELLED đóng băng tại resolveDefaultAsOf.
+  const today = todayStr();
+  const kpis = await batchComputeRequestKpis([row], resolveDefaultAsOf(row, today));
+  const kpi = kpis.get(id) ?? null;
 
   // RBAC role-rename audit fix — this hint must match the PATCH/DELETE handlers'
   // real gate below (requirePermission([...], "planning.edit")). A hardcoded

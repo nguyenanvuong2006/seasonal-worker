@@ -119,6 +119,7 @@ async function handlePlanningList(req: Request, requestId: string, t0: number) {
           totalRequest: recruitmentRequests.totalRequest,
           requestedDate: recruitmentRequests.requestedDate,
           expectedDate: recruitmentRequests.expectedDate,
+          endDate: recruitmentRequests.endDate,
           createdAt: recruitmentRequests.createdAt,
         })
         .from(recruitmentRequests)

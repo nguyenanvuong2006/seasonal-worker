@@ -1,12 +1,20 @@
 import { NextResponse } from "next/server";
 import { getUserScope, hasPermission, requirePermission, writeAudit } from "@/lib/auth";
 import { scopeAllowsDepartment } from "@/lib/data-scope";
+import { getRecruitmentRequest } from "@/lib/recruitment-request";
 import { getRequestDetail, linkRequestToPlanningPeriod } from "@/lib/workforce-request";
+import { resolveDefaultAsOf } from "@/lib/workforce-request-kpi";
+import { todayStr } from "@/lib/helpers";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
-/** Chi tiết Workforce Request + drill-down + history + comments (mục 10). */
+/**
+ * Chi tiết Workforce Request + drill-down + history + comments (mục 10).
+ * Dùng CHUNG getRequestDetail()/resolveDefaultAsOf() với canonical
+ * /api/recruitment-requests/:id/detail (Phase 2B mục 4.4) — KHÔNG duy trì
+ * KPI implementation riêng cho trang legacy/compatibility này.
+ */
 export async function GET(req: Request, ctx: { params: Promise<{ id: string }> }) {
   const guard = await requirePermission(
     ["ADMIN", "HR_RECRUITER", "DEPT_MANAGER", "HR_DIRECTOR"],
@@ -15,14 +23,21 @@ export async function GET(req: Request, ctx: { params: Promise<{ id: string }> }
   if (!guard.ok) return NextResponse.json({ error: guard.error }, { status: guard.status });
 
   const { id } = await ctx.params;
-  const detail = await getRequestDetail(id);
-  if (!detail) return NextResponse.json({ error: "Không tìm thấy Workforce Request." }, { status: 404 });
+  const url = new URL(req.url);
+  const asOfParam = url.searchParams.get("asOf");
+
+  const row = await getRecruitmentRequest(id);
+  if (!row) return NextResponse.json({ error: "Không tìm thấy Workforce Request." }, { status: 404 });
 
   // Data Scope (mục 11): chỉ thấy request thuộc phạm vi được cấp.
   const scope = await getUserScope(guard.session);
-  if (!scopeAllowsDepartment(scope, detail.request.departmentId)) {
+  if (!scopeAllowsDepartment(scope, row.departmentId)) {
     return NextResponse.json({ error: "Không tìm thấy Workforce Request." }, { status: 404 });
   }
+
+  const asOf = asOfParam || resolveDefaultAsOf(row, todayStr());
+  const detail = await getRequestDetail(id, asOf);
+  if (!detail) return NextResponse.json({ error: "Không tìm thấy Workforce Request." }, { status: 404 });
 
   const can = {
     allocate: await hasPermission(guard.session.role, "workforce_request.allocate"),

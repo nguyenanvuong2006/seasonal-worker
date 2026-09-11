@@ -37,6 +37,7 @@ const schemaStub = {
   requestAllocationHistory: makeTable("request_allocation_history"),
   workerProfiles: makeTable("worker_profiles"),
   workforceMovements: makeTable("workforce_movements"),
+  dailyApplications: makeTable("daily_applications"),
 };
 
 const helpersStub = {
@@ -84,6 +85,7 @@ function load(db: FakeDb) {
       "@/lib/recruitment-request-utils": utils,
       "@/lib/recruitment-request-columns": columns,
       "@/lib/recruitment-request-provisioning": provisioning,
+      "@/lib/workforce-request": { RECRUITED_STAGE: "APPROVED" },
       "@/lib/data-scope": {
         scopeAllowsDepartment: (scope: string[] | null, deptId: string | null | undefined) =>
           scope === null || Boolean(deptId && scope.includes(deptId)),
@@ -546,7 +548,7 @@ test("Excel KHÔNG ghi đè KPI hệ thống: Balance và Total Request luôn đ
     },
   ];
 
-  await (mod.importRecruitmentRequests as (r: unknown[], by: string) => Promise<ImportResult[]>)(rows, "recruiter-1");
+  const results = await (mod.importRecruitmentRequests as (r: unknown[], by: string) => Promise<ImportResult[]>)(rows, "recruiter-1");
 
   const ins = db.writesTo("recruitment_requests").find((c) => c.root === "insert") as QueryCall;
   const v = argOf(ins, "values") as Record<string, number>;
@@ -560,6 +562,17 @@ test("Excel KHÔNG ghi đè KPI hệ thống: Balance và Total Request luôn đ
   assert.equal(v.totalBalance, 15);
   assert.notEqual(v.totalBalance, 666);
   assert.notEqual(v.recruitedVsExpected, 555);
+  // Phase 2B mục 5 — maleRecruited/femaleRecruited/maleQuit/femaleQuit (SYSTEM) hoàn toàn
+  // KHÔNG có mặt trong payload INSERT (undefined -> DB default 0), dù Excel có "4"/"1"/"1"/"0".
+  assert.equal(v.maleRecruited, undefined, "maleRecruited không được ghi từ Excel");
+  assert.equal(v.femaleRecruited, undefined, "femaleRecruited không được ghi từ Excel");
+  assert.equal(v.maleQuit, undefined, "maleQuit không được ghi từ Excel");
+  assert.equal(v.femaleQuit, undefined, "femaleQuit không được ghi từ Excel");
+  // recruitedVsExpected request MỚI luôn = 0 (chưa thể có daily_applications nào liên kết).
+  assert.equal(v.recruitedVsExpected, 0);
+  // Báo cáo minh bạch — KHÔNG âm thầm bỏ qua (mục 10).
+  assert.match(results[0].message ?? "", /Male Recruited/);
+  assert.match(results[0].message ?? "", /Female Quit/);
 });
 
 test("import ghi department_id để Data Scope hoạt động, đồng thời giữ 6 trường ngày tách biệt", async () => {

@@ -24,6 +24,8 @@ const schemaStub = {
   departments: makeTable("departments"),
   documentConfirmations: makeTable("document_confirmations"),
   employmentSessions: makeTable("employment_sessions"),
+  recruitmentRequests: makeTable("recruitment_requests"),
+  requestAllocations: makeTable("request_allocations"),
   workerProfiles: makeTable("worker_profiles"),
   workforceMovements: makeTable("workforce_movements"),
 };
@@ -37,6 +39,8 @@ type Fixtures = {
   confirmationHistory: { documentId: string; applicationId: string; employmentSessionId: string | null; engagementStartingDate: string | null; templateVersion: number | null; templateName: string | null; documentKind: string | null; status: string; effectiveStatus: string; issuedAt: string | null; confirmationDeadlineAt: string | null; viewedAt: string | null; confirmedAt: string | null; receiptId: string | null; supersedesDocumentId: string | null }[];
   legacyDocs: { id: string; applicationId: string; templateVersion: number | null; documentKind: string | null; status: string; issuedAt: Date | null; confirmationDeadlineAt: Date | null; viewedAt: Date | null; supersedesDocumentId: string | null; cccd: string }[];
   legacyConfirmations: { candidateDocumentId: string; confirmedAtServer: Date; receiptId: string }[];
+  requestAllocations: { id: string; employmentSessionId: string; requestId: string; status: string; startedAt: Date; endedAt: Date | null; endReason: string | null }[];
+  recruitmentRequests: { id: string; requestCode: string; status: string }[];
 };
 
 function loadService(fx: Fixtures) {
@@ -75,6 +79,14 @@ function loadService(fx: Fixtures) {
       if (call.table === "document_confirmations" && call.root === "select") {
         const ids = inArrayValues(call, "document_confirmations.candidateDocumentId");
         return ids ? fx.legacyConfirmations.filter((c) => ids.includes(c.candidateDocumentId)) : [];
+      }
+      if (call.table === "request_allocations" && call.root === "select") {
+        const ids = inArrayValues(call, "request_allocations.employmentSessionId");
+        return ids ? fx.requestAllocations.filter((a) => ids.includes(a.employmentSessionId)) : [];
+      }
+      if (call.table === "recruitment_requests" && call.root === "select") {
+        const ids = inArrayValues(call, "recruitment_requests.id");
+        return ids ? fx.recruitmentRequests.filter((r) => ids.includes(r.id)) : [];
       }
       return undefined;
     },
@@ -123,6 +135,14 @@ function baseFixtures(): Fixtures {
     ],
     legacyDocs: [],
     legacyConfirmations: [],
+    requestAllocations: [
+      { id: "alloc-1", employmentSessionId: "sess-1", requestId: "rq-1", status: "ENDED", startedAt: new Date("2026-01-01"), endedAt: new Date("2026-06-01"), endReason: "TRANSFER" },
+      { id: "alloc-2", employmentSessionId: "sess-2", requestId: "rq-2", status: "ACTIVE", startedAt: new Date("2026-07-01"), endedAt: null, endReason: null },
+    ],
+    recruitmentRequests: [
+      { id: "rq-1", requestCode: "RQ-001", status: "COMPLETED" },
+      { id: "rq-2", requestCode: "RQ-002", status: "PENDING" },
+    ],
   };
 }
 
@@ -253,6 +273,41 @@ test("unlinked movement (no employmentSessionId) is surfaced separately, never g
   assert.deepEqual(Array.from(profile.unlinkedMovements, (m) => m.id), ["m-legacy"]);
   for (const e of profile.engagements) {
     assert.ok(!e.movements.some((m) => m.id === "m-legacy"));
+  }
+});
+
+test("Phase 2B mục 5: requestAllocations gắn đúng vào engagement (session) sở hữu, kèm requestCode/requestStatus tra cứu từ recruitment_requests", async () => {
+  const mod = loadService(baseFixtures());
+  const profile = (await mod.getWorker360Profile("w1", null)) as {
+    engagements: { session: { id: string }; requestAllocations: { id: string; requestId: string; requestCode: string | null; requestStatus: string | null; status: string; endedAt: string | null }[] }[];
+  };
+  const sess1 = profile.engagements.find((e) => e.session.id === "sess-1")!;
+  const sess2 = profile.engagements.find((e) => e.session.id === "sess-2")!;
+
+  assert.equal(sess1.requestAllocations.length, 1);
+  assert.equal(sess1.requestAllocations[0].requestId, "rq-1");
+  assert.equal(sess1.requestAllocations[0].requestCode, "RQ-001");
+  assert.equal(sess1.requestAllocations[0].requestStatus, "COMPLETED");
+  assert.equal(sess1.requestAllocations[0].status, "ENDED");
+  assert.ok(sess1.requestAllocations[0].endedAt, "allocation đã kết thúc (transfer) phải có endedAt");
+
+  assert.equal(sess2.requestAllocations.length, 1);
+  assert.equal(sess2.requestAllocations[0].requestId, "rq-2");
+  assert.equal(sess2.requestAllocations[0].requestCode, "RQ-002");
+  assert.equal(sess2.requestAllocations[0].status, "ACTIVE");
+  assert.equal(sess2.requestAllocations[0].endedAt, null);
+});
+
+test("requestAllocations rỗng khi session không có allocation nào (không lỗi, không undefined)", async () => {
+  const fx = baseFixtures();
+  fx.requestAllocations = [];
+  const mod = loadService(fx);
+  const profile = (await mod.getWorker360Profile("w1", null)) as { engagements: { requestAllocations: unknown[] }[] };
+  for (const e of profile.engagements) {
+    // e.requestAllocations được dựng trong VM sandbox (realm khác test file) —
+    // deepEqual cross-realm với mảng rỗng báo "same structure but not reference-equal",
+    // JSON round-trip chuẩn hoá về plain array cùng realm (đã dùng ở list-execution.test.ts).
+    assert.deepEqual(JSON.parse(JSON.stringify(e.requestAllocations)), []);
   }
 });
 

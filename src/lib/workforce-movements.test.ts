@@ -61,6 +61,7 @@ function makeStore(movement: Movement, session: Session) {
   const sessions = new Map<string, Session>([[session.id, { ...session }]]);
   const writes: { table: string; id: string; patch: Record<string, unknown> }[] = [];
   const allocCalls: unknown[] = [];
+  const transferAllocCalls: unknown[] = [];
   const autoAllocateCalls: unknown[] = [];
 
   const respond = (call: QueryCall): unknown => {
@@ -106,7 +107,7 @@ function makeStore(movement: Movement, session: Session) {
   };
 
   const db = createFakeDb({ respond });
-  return { db, movements, sessions, writes, allocCalls, autoAllocateCalls };
+  return { db, movements, sessions, writes, allocCalls, transferAllocCalls, autoAllocateCalls };
 }
 
 async function loadWith(store: ReturnType<typeof makeStore>) {
@@ -125,6 +126,10 @@ async function loadWith(store: ReturnType<typeof makeStore>) {
       "@/lib/workforce-request": {
         endActiveRequestAllocationsForWorker: async (...args: unknown[]) => {
           store.allocCalls.push(args);
+          return { affectedRequestIds: [] };
+        },
+        endActiveRequestAllocationsForTransfer: async (...args: unknown[]) => {
+          store.transferAllocCalls.push(args);
           return { affectedRequestIds: [] };
         },
       },
@@ -252,6 +257,11 @@ test("TRANSFER — approved with effectiveDate in the PAST -> department moved i
   assert.equal(store.sessions.get("s1")!.deptId, "d2");
   assert.equal(store.sessions.get("s1")!.status, "APPROVED", "transfer must never end the session");
   assert.equal(store.autoAllocateCalls.length, 1);
+  // Phase 2B mục 3.4 / Acceptance #4-#5: transfer có hiệu lực NGAY -> Transfer-Out
+  // (request allocation cleanup) chạy đúng 1 lần, KHÔNG dùng đường resignation, và
+  // transfer không bao giờ thất bại dù chưa có request đích nào (thuần "end" allocation).
+  assert.equal(store.transferAllocCalls.length, 1, "Transfer-Out request allocation cleanup must run when transfer takes effect");
+  assert.equal(store.allocCalls.length, 0, "resignation allocation cleanup path must NOT run for a transfer");
 });
 
 test("TRANSFER — approved with a FUTURE effectiveDate -> department stays OLD until effective ('Sắp chuyển')", async () => {
@@ -262,6 +272,10 @@ test("TRANSFER — approved with a FUTURE effectiveDate -> department stays OLD 
   assert.equal(movement.lifecycleAppliedAt, null);
   assert.equal(store.sessions.get("s1")!.deptId, "d1", "must still show the OLD department until effectiveDate arrives");
   assert.equal(store.autoAllocateCalls.length, 0);
+  // Acceptance #4: transfer CONFIRMED nhưng CHƯA effective (tương lai) -> KHÔNG được kết
+  // thúc request allocation, KHÔNG được tính Transfer-Out — chỉ khi lifecycle thực sự áp
+  // dụng (applyEffectiveWorkforceMovements tới ngày) mới END allocation.
+  assert.equal(store.transferAllocCalls.length, 0, "future-dated transfer must not end request allocation yet");
 });
 
 test("applyEffectiveWorkforceMovements — applies a due transfer exactly once (idempotent repeat)", async () => {
@@ -274,10 +288,12 @@ test("applyEffectiveWorkforceMovements — applies a due transfer exactly once (
   assert.equal(first.transfersApplied, 1);
   assert.equal(store.sessions.get("s1")!.deptId, "d2");
   assert.equal(store.autoAllocateCalls.length, 1);
+  assert.equal(store.transferAllocCalls.length, 1, "deferred transfer becoming effective must end request allocation exactly once");
 
   const second = await mod.applyEffectiveWorkforceMovements(TODAY);
   assert.equal(second.transfersApplied, 0);
   assert.equal(store.autoAllocateCalls.length, 1, "must not re-run autoAllocateInternship a second time");
+  assert.equal(store.transferAllocCalls.length, 1, "must not re-run Transfer-Out cleanup a second time (idempotent)");
 });
 
 test("REJECT — never touches employment_sessions regardless of effective date", async () => {

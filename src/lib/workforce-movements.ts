@@ -4,7 +4,7 @@ import { db } from "@/db";
 import { dailyApplications, employmentSessions, workforceMovements } from "@/db/schema";
 import { queueNotification } from "@/lib/notifications";
 import { autoAllocateInternship } from "@/lib/planning";
-import { endActiveRequestAllocationsForWorker } from "@/lib/workforce-request";
+import { endActiveRequestAllocationsForWorker, endActiveRequestAllocationsForTransfer } from "@/lib/workforce-request";
 import { recomputeStoredRecruitmentBalance } from "@/lib/recruitment-kpi";
 import { todayStr } from "@/lib/helpers";
 import type { Session } from "@/lib/auth";
@@ -182,6 +182,22 @@ async function finalizeTransferEffect(tx: Executor, movement: MovementForFinaliz
       .set({ deptId: movement.toDeptId })
       .where(eq(dailyApplications.id, currentSession.dailyApplicationId));
   }
+
+  // WORKFORCE REQUEST LINKAGE — Transfer-Out tự động (approved design mục 3 + Phase
+  // 2B mục 3.4): thuyên chuyển có hiệu lực → kết thúc mọi ACTIVE request allocation
+  // của worker ở request CŨ (ghi history action=END, KPI Transfer-out của request cũ
+  // tự tính từ workforce_movements). KHÔNG tự allocate vào request nào ở department
+  // mới — đó luôn là hành động thủ công của Recruiter/Admin, KHÔNG được đoán theo
+  // department. KHÔNG dùng endActiveRequestAllocationsForWorker() (hàm đó còn đóng cả
+  // Planning allocation — nghiệp vụ riêng của Resignation, không áp dụng cho Transfer;
+  // Planning của Transfer đã có lifecycle riêng ngay bên dưới qua autoAllocateInternship()).
+  await endActiveRequestAllocationsForTransfer(
+    movement.workerId,
+    actorUsername,
+    `Thuyên chuyển có hiệu lực (movement ${movement.id})`,
+    tx,
+  );
+
   // Tự động phân bổ lại vào Kế hoạch Tập nghề của bộ phận đích khi Transfer có hiệu lực.
   await autoAllocateInternship(currentSession.id, movement.toDeptId, movement.effectiveDate, actorUsername, tx);
 }

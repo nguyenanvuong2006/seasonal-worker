@@ -12,6 +12,9 @@ import {
   stripSystemOwnedFields,
 } from "@/lib/planning-recruitment-core";
 import { provisionRecruitmentRequest } from "@/lib/recruitment-request-provisioning";
+import { batchComputeRequestKpis } from "@/lib/workforce-request";
+import { resolveDefaultAsOf } from "@/lib/workforce-request-kpi";
+import { todayStr } from "@/lib/helpers";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -53,7 +56,19 @@ export async function GET(req: Request) {
     const offset = Math.max(0, Number(url.searchParams.get("offset")) || 0);
 
     const { rows, total } = await listRecruitmentRequests(filter, limit, offset);
-    return NextResponse.json({ rows, total });
+
+    // CANONICAL KPI (Phase 2B mục 4.1) — mỗi request được đính kèm KPI live/allocation-aware
+    // từ ĐÚNG 1 engine dùng chung với /admin/workforce-requests (batchComputeRequestKpis).
+    // Request đang mở dùng today; EXPIRED/COMPLETED/CANCELLED đóng băng tại resolveDefaultAsOf
+    // (approved design mục 4) — không để KPI hiển thị trôi theo Current Workforce hôm nay.
+    // Cột KPI tĩnh cũ trên `row` (maleRecruited/maleQuit/...) VẪN giữ nguyên trong payload để
+    // không phá vỡ consumer khác đang đọc trực tiếp — UI mới chỉ đọc `.kpi.*`.
+    const today = todayStr();
+    const rowsById = new Map(rows.map((r) => [r.id, r]));
+    const kpis = await batchComputeRequestKpis(rows, (r) => resolveDefaultAsOf(rowsById.get(r.id)!, today));
+    const rowsWithKpi = rows.map((r) => ({ ...r, kpi: kpis.get(r.id) ?? null }));
+
+    return NextResponse.json({ rows: rowsWithKpi, total });
   } catch (error) {
     console.error("[recruitment-requests] GET failed", error);
     return NextResponse.json(
