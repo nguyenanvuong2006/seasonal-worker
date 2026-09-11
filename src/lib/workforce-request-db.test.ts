@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { createFakeDb, drizzleStub, makeTable, condsOf, eqValue, type FakeDb, type QueryCall } from "./test-support/fake-drizzle.ts";
+import { createFakeDb, drizzleStub, makeTable, condsOf, eqValue, argOf, inArrayValues, type FakeDb, type QueryCall } from "./test-support/fake-drizzle.ts";
 import { loadModule, serverOnlyStub } from "./test-support/load-module.ts";
 
 /* ============================================================
@@ -248,6 +248,189 @@ test("Scenario C: gọi LẠI sau khi w3 cũng rời RQ09 (RQ10 tiếp nhận) �
 
   const live = await mod.batchComputeRequestKpis([RQ09_ROW], TODAY);
   assert.equal(live.get(RQ09)!.totalCurrent, 0, "asOf=today (LIVE) đúng là 0 vì w3 đã rời RQ09 — CHỨNG MINH khác biệt: route PHẢI dùng asOf=endDate cho request EXPIRED/COMPLETED, không được để mặc định 'today' làm trôi lịch sử");
+});
+
+/* ============================================================
+   PRE-MERGE REVIEW (PR #204) — Scenario C QUA reallocateDws() THẬT,
+   không phải mô phỏng tay bằng fixture tĩnh.
+   ------------------------------------------------------------
+   Trước đây "Scenario C: gọi LẠI sau khi w3 cũng rời RQ09" mô phỏng việc
+   w3 rời RQ09 bằng cách set sẵn `endedAt` trong fixture tĩnh — chứng minh
+   ĐÚNG cơ chế đóng băng lịch sử (resolveDefaultAsOf/requestWindow chỉ đọc
+   recruitment_requests, không đọc request_allocations), nhưng KHÔNG chứng
+   minh reallocateDws() THẬT tạo ra đúng hiệu ứng dữ liệu đó.
+
+   Test dưới đây gọi reallocateDws() THẬT (nạp từ planning-reallocation.ts,
+   dùng chung `db` giả và dùng chung workforce-request.ts THẬT — không stub
+   syncRequestAllocationOnPlanningMove/batchComputeRequestKpis) để chuyển w3
+   từ RQ09 (đã đóng 2026-09-30) sang RQ10, SAU khi đóng (today=2026-10-05),
+   rồi đọc lại batchComputeRequestKpis(RQ09, asOf=2026-09-30) — canonical KPI
+   THẬT, không phải hàm thuần resolveDefaultAsOf() đơn lẻ — và khẳng định w3
+   vẫn còn trong lịch sử RQ09 tại đúng asOf đóng băng.
+   ============================================================ */
+const RQ10 = "rq10";
+
+/**
+ * buildFixture() dùng chung ở trên đã có sẵn w3 với `status: "ENDED",
+ * endedAt: 2026-10-01` (mô phỏng TĨNH cho 2 test Scenario C phía trên).
+ * Test composed dưới đây cần w3 THỰC SỰ ACTIVE (endedAt=null) tại thời điểm
+ * bắt đầu — nếu tái dùng buildFixture() nguyên bản, reallocateDws() sẽ "đóng"
+ * một allocation ĐÃ ĐÓNG SẴN, khiến assertion LIVE pass giả (đã tự kiểm chứng
+ * bằng cách cố tình phá nhánh UPDATE và thấy test vẫn pass — sai, đã sửa).
+ */
+function buildFixtureForRealloc() {
+  const fixture = buildFixture();
+  const w3 = fixture.allocations.find((a) => a.id === "a-w3")!;
+  w3.status = "ACTIVE";
+  w3.endedAt = null;
+  return fixture;
+}
+
+type PlanningAllocRow = {
+  id: string;
+  employmentSessionId: string;
+  planningPeriodId: string;
+  recruitmentRequestId: string | null;
+  allocationEndDate: string | null;
+  allocationStartDate: string | null;
+  workerId: string;
+  gender: string | null;
+};
+
+function reallocateDwsRespond(fixture: ReturnType<typeof buildFixture>, planningAllocs: PlanningAllocRow[]) {
+  const baseRespond = respondFor(fixture);
+  let reqSelectSeq = 0;
+
+  return (call: QueryCall): unknown => {
+    if (call.table === "recruitment_requests" && call.root === "select") {
+      const id = eqValue(call, "recruitment_requests.id");
+      reqSelectSeq += 1;
+      if (id === RQ09) return [{ id: RQ09, requestCode: "RQ09", status: "EXPIRED", endDate: "2026-09-30", departmentId: "d1", planningPeriodId: null, maleRq: RQ09_ROW.maleRq, femaleRq: RQ09_ROW.femaleRq, totalRequest: RQ09_ROW.totalRequest, deletedAt: null }];
+      if (id === RQ10) return [{ id: RQ10, requestCode: "RQ10", status: "PENDING", endDate: null, departmentId: "d1", planningPeriodId: null, maleRq: 5, femaleRq: 5, totalRequest: 10, deletedAt: null }];
+      // reallocateDws() không truyền id trong 2 lệnh select đầu (fromReq/toReq
+      // dùng and(eq(id,...), isNull(deletedAt))) — dispatch theo thứ tự gọi khi
+      // eqValue không tìm thấy trực tiếp (do and() lồng nhau qua drizzleStub).
+      if (reqSelectSeq === 1) return [{ id: RQ09, requestCode: "RQ09", status: "EXPIRED", endDate: "2026-09-30", departmentId: "d1", planningPeriodId: null, maleRq: RQ09_ROW.maleRq, femaleRq: RQ09_ROW.femaleRq, totalRequest: RQ09_ROW.totalRequest, deletedAt: null }];
+      return [{ id: RQ10, requestCode: "RQ10", status: "PENDING", endDate: null, departmentId: "d1", planningPeriodId: null, maleRq: 5, femaleRq: 5, totalRequest: 10, deletedAt: null }];
+    }
+    if (call.table === "planning_allocations") {
+      if (call.root === "select") {
+        const ids = inArrayValues(call, "planning_allocations.id");
+        if (ids) return planningAllocs.filter((a) => ids.includes(a.id));
+        return planningAllocs;
+      }
+      if (call.root === "update") return { rowCount: 1 };
+      if (call.root === "insert") return [{ id: "new-planning-alloc-1" }];
+    }
+    if (call.table === "planning_tasks") return call.root === "select" ? [{ remaining: 0 }] : { rowCount: 0 };
+    if (call.table === "employment_sessions" && call.root === "select") {
+      const sessId = eqValue(call, "employment_sessions.id");
+      const workerId = Object.entries(fixture.sessions).find(([sid]) => sid === sessId)?.[0];
+      if (workerId) return [{ workerId: "w3" }]; // fixture này chỉ cần w3
+      return [];
+    }
+    if (call.table === "request_allocations") {
+      if (call.root === "update") {
+        // syncRequestAllocationOnPlanningMove() ĐÓNG allocation cũ của worker.
+        const id = eqValue(call, "request_allocations.id");
+        const row = fixture.allocations.find((a) => a.id === id);
+        if (row) {
+          row.status = "ENDED";
+          row.endedAt = new Date(argOf(call, "set") ? "2026-10-05" : "2026-10-05");
+        }
+        return { rowCount: 1 };
+      }
+      if (call.root === "insert") {
+        // syncRequestAllocationOnPlanningMove() TẠO allocation mới tại RQ10.
+        fixture.allocations.push({
+          id: `a-w3-rq10`,
+          requestId: RQ10,
+          workerId: "w3",
+          employmentSessionId: "s-w3",
+          status: "ACTIVE",
+          startedAt: new Date("2026-10-05"),
+          endedAt: null,
+        });
+        return [{ id: "new-request-alloc-1" }];
+      }
+      // Mọi SELECT (quit/transfer/live/historical/capacity-preflight) — dùng
+      // lại respondFor() THẬT (đã có test riêng, không viết lại logic).
+      return baseRespond(call);
+    }
+    return baseRespond(call);
+  };
+}
+
+function loadReallocateDws(db: FakeDb) {
+  const kpi = loadModule(new URL("./workforce-request-kpi.ts", import.meta.url), { stubs: {} });
+  const realWorkforceRequest = load(db);
+  const core = loadModule(new URL("./planning-recruitment-core.ts", import.meta.url), {
+    stubs: {
+      "./recruitment-request-columns.ts": loadModule(new URL("./recruitment-request-columns.ts", import.meta.url), { stubs: {} }),
+    },
+  });
+  return loadModule(new URL("./planning-reallocation.ts", import.meta.url), {
+    stubs: {
+      "server-only": serverOnlyStub,
+      "drizzle-orm": drizzleStub,
+      "@/db": { db },
+      "@/db/schema": {
+        ...schemaStub,
+        planningAllocations: makeTable("planning_allocations"),
+        planningTasks: makeTable("planning_tasks"),
+      },
+      "@/lib/helpers": { todayStr: () => "2026-10-05", isMale: (g: string | null) => g === "Nam", isFemale: (g: string | null) => g === "Nữ" },
+      "@/lib/data-scope": { scopeAllowsDepartment: () => true },
+      "@/lib/planning-recruitment-core": core,
+      "@/lib/workforce-request-kpi": kpi,
+      // KHÔNG stub — dùng CHÍNH workforce-request.ts thật đã nạp cho phần
+      // batchComputeRequestKpis/getRequestDetail bên trên, để syncRequestAllocationOnPlanningMove()
+      // chạy logic canonical thật, cùng chia sẻ `db` giả với phần đọc lịch sử.
+      "@/lib/workforce-request": realWorkforceRequest,
+    },
+  });
+}
+
+test("PRE-MERGE C — reallocateDws() THẬT sau khi RQ09 đóng: lịch sử RQ09 tại asOf đóng băng KHÔNG đổi", async () => {
+  const fixture = buildFixtureForRealloc(); // w3 THỰC SỰ ACTIVE (endedAt=null) tại thời điểm bắt đầu
+  const planningAllocs: PlanningAllocRow[] = [
+    { id: "palloc-w3", employmentSessionId: "s-w3", planningPeriodId: "period-old", recruitmentRequestId: RQ09, allocationEndDate: null, allocationStartDate: "2026-09-01", workerId: "w3", gender: "Nam" },
+  ];
+  const db = createFakeDb({ respond: reallocateDwsRespond(fixture, planningAllocs) });
+
+  const reallocMod = loadReallocateDws(db);
+  const result = (await (reallocMod.reallocateDws as (i: unknown) => Promise<{ ok: boolean; moved?: number; error?: string }>)({
+    fromRequestId: RQ09,
+    toRequestId: RQ10,
+    allocationIds: ["palloc-w3"],
+    actor: "recruiter-1",
+    scope: null,
+    today: "2026-10-05",
+  }));
+
+  assert.equal(result.ok, true, `reallocateDws() phải thành công (lỗi nếu có: ${result.error})`);
+  assert.equal(result.moved, 1);
+
+  // ĐỌC LẠI canonical KPI THẬT (batchComputeRequestKpis — không phải resolveDefaultAsOf() đơn lẻ)
+  // cho RQ09 tại asOf ĐÓNG BĂNG của chính nó (2026-09-30) — SAU KHI đã thực sự chuyển w3 đi.
+  const detailMod = load(db) as {
+    batchComputeRequestKpis: (rows: RequestRow[], asOf: string) => Promise<Map<string, Record<string, number>>>;
+  };
+  const historicalAfterRealloc = await detailMod.batchComputeRequestKpis([RQ09_ROW], "2026-09-30");
+  assert.equal(
+    historicalAfterRealloc.get(RQ09)!.totalCurrent,
+    1,
+    "w3 VẪN phải xuất hiện là Current trong lịch sử RQ09 tại asOf=2026-09-30 — reallocateDws() (chạy SAU đó, 2026-10-05) không được làm trôi/xoá snapshot lịch sử",
+  );
+  assert.equal(historicalAfterRealloc.get(RQ09)!.totalQuit, 1, "Quit (w1) không đổi");
+  assert.equal(historicalAfterRealloc.get(RQ09)!.totalTransferOut, 1, "TransferOut (w2) không đổi");
+
+  // Đối chứng: đọc LIVE (today=2026-10-05, SAU khi chuyển) phải thấy w3 đã RỜI RQ09.
+  // detailMod dùng chung load() với todayStr() = TODAY ("2026-10-15") — phải hỏi
+  // đúng asOf=TODAY để batchComputeRequestKpis() đi vào nhánh LIVE (status=ACTIVE
+  // thuần, không phải historical với so sánh endedAt theo asOf).
+  const liveAfterRealloc = await detailMod.batchComputeRequestKpis([RQ09_ROW], TODAY);
+  assert.equal(liveAfterRealloc.get(RQ09)!.totalCurrent, 0, `LIVE (today=${TODAY}) đúng là 0 — w3 đã thật sự rời RQ09 theo request_allocations mới`);
 });
 
 /* ----------------------- Scenario B (mission mục 10.B): Transfer TƯƠNG LAI (lifecycleAppliedAt=null) KHÔNG được tính Transfer-Out, worker vẫn Current ----------------------- */

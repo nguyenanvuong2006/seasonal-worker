@@ -325,6 +325,30 @@ export async function reallocateDws(input: ReallocateInput): Promise<ReallocateR
       }
     }
 
+    // Pre-merge review finding: DB chỉ chặn trùng theo (employmentSessionId,
+    // planningPeriodId) — WHERE allocation_end_date IS NULL (planning_alloc_active_uq),
+    // KHÔNG chặn 1 worker có 2 phân bổ ĐANG MỞ đồng thời ở 2 kỳ kế hoạch khác nhau
+    // cùng trỏ về fromReq. Nếu allocationIds chứa 2 dòng trùng workerId, batch
+    // preflight (planBatchAllocation, đếm theo state.allocations.length) sẽ đếm
+    // "worker đó" hai lần tại thời điểm xét dòng thứ 2 (trước khi fold khử trùng ở
+    // dòng cuối) — có thể gây REJECT giả (an toàn) hoặc, nếu capacity đủ dư để cả
+    // hai lần fold đều ALLOCATE, khiến vòng ghi thật (dùng lại đúng workerId đó cho
+    // request_allocations) ở dòng thứ 2 thấy NOOP trong khi preflight dự đoán
+    // ALLOCATE cho workerId đó (Map perWorker key theo workerId nên bị ghi đè) —
+    // trigger nhầm internal-consistency throw. Không bao giờ overallocate/mất dữ
+    // liệu (transaction rollback), nhưng là lỗi/crash không cần thiết cho một input
+    // hợp lệ-nhưng-hiếm. Chặn tường minh, an toàn hơn silently dedupe (dedupe ngầm
+    // sẽ bỏ sót 1 phân bổ planning đang mở mà không báo cho Recruiter biết).
+    const workerIdCounts = new Map<string, number>();
+    for (const a of allocations) workerIdCounts.set(a.workerId, (workerIdCounts.get(a.workerId) ?? 0) + 1);
+    if ([...workerIdCounts.values()].some((n) => n > 1)) {
+      return {
+        ok: false as const,
+        status: 409,
+        error: "Có lao động được chọn nhiều hơn một phân bổ đang mở trong cùng một lần chuyển. Vui lòng chỉ chọn một phân bổ cho mỗi lao động.",
+      };
+    }
+
     /* ============================================================
        CAPACITY PREFLIGHT (Phase 3B — F1): TẤT CẢ-HOẶC-KHÔNG-GÌ.
        ------------------------------------------------------------

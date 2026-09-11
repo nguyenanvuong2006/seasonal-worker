@@ -1011,6 +1011,33 @@ test("phân bổ không thuộc yêu cầu nguồn bị từ chối cả lô", a
   assert.equal(db.writes.length, 0);
 });
 
+test("Pre-merge review: 2 phân bổ ĐANG MỞ trùng workerId (2 kỳ kế hoạch khác nhau, cùng fromReq) bị từ chối tường minh, KHÔNG throw internal-consistency, ZERO writes", async () => {
+  // DB chỉ chặn trùng theo (employmentSessionId, planningPeriodId) — một worker
+  // VẪN có thể có 2 phân bổ đang mở đồng thời ở 2 kỳ kế hoạch khác nhau cùng trỏ
+  // về fromReq (planning_alloc_active_uq không chặn trường hợp này).
+  const allocations = [
+    { id: "alloc-dup-1", employmentSessionId: "sess-A1", planningPeriodId: "period-old", recruitmentRequestId: "req-old", allocationEndDate: null, allocationStartDate: "2026-06-01", workerId: "w-dup", workerName: "DW Dup", workerCccd: "079000000X", gender: "Nam", deptId: "dept-A" },
+    { id: "alloc-dup-2", employmentSessionId: "sess-A2", planningPeriodId: "period-old-2", recruitmentRequestId: "req-old", allocationEndDate: null, allocationStartDate: "2026-06-01", workerId: "w-dup", workerName: "DW Dup", workerCccd: "079000000X", gender: "Nam", deptId: "dept-A" },
+  ];
+  const { db, mod } = reallocSetup({ allocations });
+
+  const res = (await (mod.reallocateDws as (i: unknown) => Promise<ReallocResult>)({
+    fromRequestId: "req-old",
+    toRequestId: "req-new",
+    allocationIds: ["alloc-dup-1", "alloc-dup-2"],
+    actor: "recruiter-1",
+    scope: null,
+    today: "2026-08-16",
+  })) as ReallocResult;
+
+  assert.equal(res.ok, false, "phải bị từ chối tường minh, không được cố xử lý");
+  if (!res.ok) {
+    assert.equal(res.status, 409);
+    assert.match(res.error, /nhiều hơn một phân bổ/);
+  }
+  assert.equal(db.writes.length, 0, "bị từ chối ở bước validate đầu vào -> ZERO writes, không chạm capacity preflight/ghi gì");
+});
+
 /* ------------------------------------------------------------
    4. TRUY VẤN THEO DATA SCOPE
    ------------------------------------------------------------ */
