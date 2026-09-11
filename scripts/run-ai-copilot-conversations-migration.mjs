@@ -23,6 +23,7 @@ import pg from "pg";
 import { readFileSync } from "node:fs";
 import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
+import { recordAlreadyExecutedMigration } from "./lib/migration-ledger.mjs";
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), "..");
 const DATABASE_URL = process.env.DATABASE_URL;
@@ -197,13 +198,33 @@ for (const t of BUSINESS_TABLES) {
   console.log(`  ${same ? "✅" : "❌"} ${t}: trước=${b === null ? "(không tồn tại)" : b} sau=${a === null ? "(không tồn tại)" : a}`);
 }
 
-await client.end();
-
-console.log("\n=== KẾT QUẢ ===");
 const allMissingColumns = Object.values(missingColumnsByTable).flat();
 const allMissingIndexes = Object.values(missingIndexesByTable).flat();
 const allMissingChecks = Object.values(missingCheckByTable).flat();
 const allOk = structureOk && allMissingColumns.length === 0 && allMissingIndexes.length === 0 && allMissingChecks.length === 0 && fksOk && !businessRowsChanged;
+
+// Record into the shared schema_migrations ledger — ONLY after this
+// script's own verification above has already passed. Never re-executes
+// the migration SQL; a ledger hiccup here must never retroactively fail an
+// otherwise-successful, already-verified migration run.
+if (allOk) {
+  try {
+    const result = await recordAlreadyExecutedMigration(client, {
+      migrationId: MIGRATION_FILE,
+      sqlFilePath: join(ROOT, "migrations", MIGRATION_FILE),
+      executionMethod: "AI_COPILOT_CONVERSATIONS_SCOPED_RUNNER",
+      appCommitSha: process.env.GITHUB_SHA ?? null,
+      appliedBy: process.env.APPLIED_BY ?? process.env.GITHUB_ACTOR ?? null,
+    });
+    console.log(`\n✅ Ledger: ${result.status} — migration_id=${result.migrationId}`);
+  } catch (error) {
+    console.error(`⚠️  Ghi ledger thất bại (KHÔNG ảnh hưởng kết quả migration đã verify ở trên): ${error.message}`);
+  }
+}
+
+await client.end();
+
+console.log("\n=== KẾT QUẢ ===");
 if (allMissingColumns.length > 0) console.error(`❌ Thiếu cột: ${allMissingColumns.join(", ")}`);
 if (allMissingIndexes.length > 0) console.error(`❌ Thiếu index: ${allMissingIndexes.join(", ")}`);
 if (allMissingChecks.length > 0) console.error(`❌ Thiếu CHECK constraint: ${allMissingChecks.join(", ")}`);

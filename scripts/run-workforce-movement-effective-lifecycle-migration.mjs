@@ -46,6 +46,7 @@ import { readFileSync } from "node:fs";
 import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 import { createHash } from "node:crypto";
+import { recordAlreadyExecutedMigration } from "./lib/migration-ledger.mjs";
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), "..");
 const DATABASE_URL = process.env.DATABASE_URL;
@@ -241,10 +242,30 @@ if (futureApprovedResignationsBefore > 0 || futureApprovedTransfersBefore > 0) {
   );
 }
 
+const allOk = columnExists && columnType === "timestamp with time zone" && columnNullable === "YES" && missingIndexes.length === 0 && jobExists && jobActive === true && !otherTablesChanged && movementRowCountSame && nonLifecycleChecksumSame && pendingMovementsChanged === 0 && backfillCountsMatch && migrationIdempotent;
+
+// Record into the shared schema_migrations ledger — ONLY after this
+// script's own extensive verification above has already passed. Never
+// re-executes the migration SQL; a ledger hiccup here must never
+// retroactively fail an otherwise-successful, already-verified migration run.
+if (allOk) {
+  try {
+    const result = await recordAlreadyExecutedMigration(client, {
+      migrationId: MIGRATION_FILE,
+      sqlFilePath: join(ROOT, "migrations", MIGRATION_FILE),
+      executionMethod: "WORKFORCE_LIFECYCLE_SCOPED_RUNNER",
+      appCommitSha: process.env.GITHUB_SHA ?? null,
+      appliedBy: process.env.APPLIED_BY ?? process.env.GITHUB_ACTOR ?? null,
+    });
+    console.log(`\n✅ Ledger: ${result.status} — migration_id=${result.migrationId}`);
+  } catch (error) {
+    console.error(`⚠️  Ghi ledger thất bại (KHÔNG ảnh hưởng kết quả migration đã verify ở trên): ${error.message}`);
+  }
+}
+
 await client.end();
 
 console.log("\n=== KẾT QUẢ ===");
-const allOk = columnExists && columnType === "timestamp with time zone" && columnNullable === "YES" && missingIndexes.length === 0 && jobExists && jobActive === true && !otherTablesChanged && movementRowCountSame && nonLifecycleChecksumSame && pendingMovementsChanged === 0 && backfillCountsMatch && migrationIdempotent;
 if (!columnExists) console.error("❌ Cột lifecycle_applied_at chưa tồn tại — DỪNG LẠI, điều tra ngay.");
 if (missingIndexes.length > 0) console.error(`❌ Thiếu index: ${missingIndexes.join(", ")}`);
 if (!jobExists || jobActive !== true) console.error("❌ scheduled_jobs row chưa đúng — DỪNG LẠI, điều tra ngay.");

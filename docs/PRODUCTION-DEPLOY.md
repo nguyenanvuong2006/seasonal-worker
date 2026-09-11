@@ -62,7 +62,7 @@ Trước mỗi migration:
 
 Không đưa dump, `.env`, token hoặc dữ liệu cá nhân vào Git.
 
-**Lưu ý về waiver/self-attestation:** các workflow `workflow_dispatch` migration mới hơn (xem registry ở mục 4) nhận input `backup_confirmed` — đây là một checkbox/tham số **người vận hành tự khai báo**, KHÔNG được workflow tự xác minh là snapshot thật sự tồn tại. Luôn tạo snapshot thật theo bước 1 ở trên TRƯỚC khi tick `backup_confirmed=true`, không tick cho có.
+**Lưu ý về waiver/self-attestation:** các workflow `workflow_dispatch` migration mới hơn (xem registry ở mục 4) nhận input `backup_confirmed` — đây là một checkbox/tham số **người vận hành tự khai báo**, KHÔNG được workflow tự xác minh là snapshot thật sự tồn tại. Luôn tạo snapshot thật theo bước 1 ở trên TRƯỚC khi tick `backup_confirmed=true`, không tick cho có. `.github/workflows/migrate-single-production.yml` (canonical) log rõ ràng `BACKUP_DECISION=CONFIRMED_BY_OPERATOR` hoặc `BACKUP_DECISION=WAIVED_BY_OWNER` vào ledger's `notes`/log output — không bao giờ log "backup verified" hay tương đương, vì script không có cách nào tự xác minh việc đó.
 
 ## 3. Biến môi trường
 
@@ -141,6 +141,7 @@ Repo có **nhiều cơ chế khác nhau** để áp migration lên Production �
 |---|---|---|
 | `psql`/Neon SQL Editor thủ công (mục 4 phía trên) | Bất kỳ file `migrations/*.sql` nào KHÔNG nằm trong danh sách cố định của một workflow bên dưới | Mặc định cho migration mới — trừ khi migration đó thuộc một trong các nhóm dưới |
 | `.github/workflows/migrate-staging.yml` → `scripts/run-migrations.mjs` | **Staging only** — chạy `schema.sql` + TOÀN BỘ `migrations/*.sql` theo thứ tự | Bootstrap/reset database staging, không phải Production |
+| `.github/workflows/migrate-single-production.yml` → `scripts/run-migration.mjs` (**canonical, khuyến nghị cho migration MỚI** — xem mục 4.1) | Đúng MỘT migration, chọn theo `migration_id` tại thời điểm dispatch, validate chặt theo `scripts/migration-manifest.mjs` (từ chối file lạ/path traversal/tombstoned/superseded/productionAllowed=false/transactionSafe=false) | Migration mới không cần logic verify nghiệp vụ phức tạp riêng (không thay thế 6 scoped runner bên dưới) |
 | `.github/workflows/migrate-production.yml` → `scripts/run-document-merge-migrations.mjs` | **CHỈ** danh sách migration Document Merge cố định trong `DOCUMENT_MERGE_MIGRATIONS` (script này) | Migration liên quan template/merge job/PDF overlay — không tự động cover migration ngoài danh sách này dù tên workflow là "production" |
 | `.github/workflows/migrate-ai-action-proposals-production.yml` | Riêng bảng `ai_action_proposals` | |
 | `.github/workflows/migrate-ai-copilot-conversations-production.yml` | Riêng bảng `ai_conversations`/`ai_conversation_messages` | |
@@ -151,8 +152,6 @@ Repo có **nhiều cơ chế khác nhau** để áp migration lên Production �
 Khi thêm một migration mới KHÔNG thuộc Document Merge và không đủ lớn để có workflow riêng: chạy thủ công theo mục 4, và cân nhắc viết một workflow scoped riêng (theo mẫu 5 workflow trên) nếu migration cần backfill/idempotency-check phức tạp hơn một lệnh `psql` đơn thuần.
 
 ### Xác minh migration đã chạy đúng cách (idempotency)
-
-Không có bảng ledger, nên xác minh bằng truy vấn trực tiếp thay vì tin vào "workflow chạy xong không lỗi":
 
 ```sql
 -- Cột mới có tồn tại?
@@ -166,7 +165,67 @@ SELECT to_regclass('public.<tên bảng>');
 SELECT indexname FROM pg_indexes WHERE tablename = '<tên bảng>' AND indexname = '<tên index>';
 ```
 
-`scripts/production-health-check.mjs` đã đóng gói sẵn các truy vấn tương tự cho những migration gần đây — ưu tiên chạy script đó trước khi tự viết truy vấn ad-hoc.
+`scripts/production-health-check.mjs` đã đóng gói sẵn các truy vấn tương tự cho những migration gần đây — ưu tiên chạy script đó trước khi tự viết truy vấn ad-hoc. Kể từ migration-governance-reconciliation, ưu tiên hơn nữa là `scripts/reconcile-schema-migrations.mjs` (mục 4.1 bên dưới) — nó đối chiếu cả file/manifest/ledger/schema evidence cùng lúc, thay vì chỉ kiểm tra 1 migration đơn lẻ.
+
+### 4.1 Migration governance — bảng `schema_migrations` (ledger)
+
+**Vấn đề mà ledger giải quyết**: trước migration-governance-reconciliation, không có cách nào tra cứu "migration X đã thực sự chạy trên Production chưa" ngoài đoán qua sự tồn tại của schema (không đáng tin — một migration/hotfix khác có thể đã tạo ra cùng cột/bảng đó) hoặc dò log thủ công. Điều này từng trực tiếp gây ra sự cố production đã ghi lại ở mục 9 (`workforce_movements.lifecycle_applied_at` được code app dùng nhưng migration tạo cột đó chưa từng chạy — không ai biết cho tới khi route thật báo lỗi).
+
+**Ledger contract** (`migrations/2026-09-12-schema-migrations-ledger.sql`, được đọc trực tiếp từ đĩa mỗi lần bởi `scripts/lib/migration-ledger.mjs`'s `ensureSchemaMigrationsTable()` — không có bản sao SQL nào khác, giải quyết "bootstrap paradox: ledger không thể tự ghi rằng nó đã được tạo trước khi nó tồn tại"):
+
+```sql
+CREATE TABLE IF NOT EXISTS schema_migrations (
+  migration_id     text PRIMARY KEY,   -- tên file migration chính xác, ổn định (không đánh số version)
+  checksum_sha256  text NOT NULL,      -- SHA-256 của byte thô file migration tại thời điểm apply
+  applied_at       timestamptz NOT NULL DEFAULT now(),
+  applied_by       text,
+  execution_method text NOT NULL,      -- vd DOCUMENT_MERGE_SCOPED_RUNNER, CANONICAL_SINGLE_RUNNER, HISTORICAL_RECONCILIATION
+  app_commit_sha   text,
+  notes            text
+);
+```
+
+Bảng này **chỉ phục vụ governance** — không FK tới bảng nghiệp vụ nào, không chứa PII.
+
+**Chính sách checksum — KHÔNG BAO GIỜ sửa một migration đã apply**: `migration_id` = tên file chính xác; `checksum_sha256` = SHA-256 của byte thô (không chuẩn hóa line-ending). Chạy lại cùng `migration_id` với checksum khớp → NOOP an toàn. Cùng `migration_id` với checksum KHÁC → lỗi cứng `MIGRATION_CHECKSUM_MISMATCH`, không tự động ghi đè. Nếu phát hiện một migration lịch sử có nội dung sai: **không sửa file cũ** (file migration đã apply là bất biến) — viết migration MỚI khắc phục, với `migration_id` mới.
+
+**Superseded / tombstoned**: migration bị đánh dấu `supersededBy`/`tombstoned: true` trong `scripts/migration-manifest.mjs` sẽ bị `scripts/lib/migration-runner-validation.mjs` (dùng bởi cả `scripts/run-migration.mjs` và workflow CI guardrail) từ chối chạy lại với lỗi `MIGRATION_NOT_EXECUTABLE` — không phụ thuộc vào việc operator có nhớ hay không. Ví dụ: `2026-08-24-trainee-registration-canonical-cleanup.sql` (gây sự cố xóa dữ liệu 2026-08-24) và `2026-08-23-trainee-registration-canonical-html-draft.sql` (tái tạo document body lỗi thời) đều bị khóa vĩnh viễn theo cách này, không chỉ dựa vào comment trong `run-document-merge-migrations.mjs`.
+
+**Quy trình canonical cho migration MỚI** (Mission B §23):
+
+1. PR khai báo migration cần thiết — file `migrations/<ngày>-<tên>.sql` mới + entry mới trong `scripts/migration-manifest.mjs` (category/idempotent/transactionSafe/appDependency/executionMechanism/productionAllowed).
+2. Migration được review trong PR như code thường.
+3. Trước khi chạy: quyết định backup — `BACKUP_DECISION=CONFIRMED_BY_OPERATOR` hoặc `BACKUP_DECISION=WAIVED_BY_OWNER` (không bao giờ tự suy ra "đã backup" từ một checkbox input — xem §15 dưới).
+4. Chạy migration:
+   - Migration đơn giản, không cần verify nghiệp vụ phức tạp → `.github/workflows/migrate-single-production.yml` (canonical, dùng chung `scripts/run-migration.mjs` → `runMigration()`).
+   - Migration cần verify sâu (row-count diff, checksum cột khác, backfill semantics) → viết workflow/script scoped riêng theo mẫu 6 script hiện có (mục 4 registry phía trên), và **thêm lời gọi `recordAlreadyExecutedMigration()` vào cuối success-path** của script đó để nó cũng ghi vào cùng một ledger (không tạo ledger riêng cho từng subsystem).
+5. Ledger tự động ghi nhận (bước trong `runMigration()`/`recordAlreadyExecutedMigration()` — không phải bước thủ công riêng).
+6. Schema evidence probe: `scripts/production-health-check.mjs` (đã tích hợp `checkRequiredMigrationEvidence()` từ `scripts/lib/required-migrations.mjs`) hoặc `scripts/reconcile-schema-migrations.mjs` để xác nhận cấu trúc thực tế khớp kỳ vọng.
+7. Deploy app (mục 5).
+8. Smoke test sau triển khai (mục 6).
+
+**Đối chiếu read-only** — `scripts/reconcile-schema-migrations.mjs` (chỉ SELECT, an toàn chạy bất cứ lúc nào trên Production):
+
+```bash
+DATABASE_URL=postgres://... node scripts/reconcile-schema-migrations.mjs
+```
+
+Đối chiếu `migrations/*.sql` trên đĩa, `scripts/migration-manifest.mjs`, bảng `schema_migrations` (nếu đã bootstrap) và schema evidence thật (`information_schema`/`pg_indexes`/`pg_constraint`/`pg_proc`) thành một bảng `Migration | Ledger | Schema evidence | Classification | Risk`. Phân loại (`scripts/lib/reconciliation.mjs`):
+
+| Classification | Ý nghĩa |
+|---|---|
+| `APPLIED_CONFIRMED` | Có dòng ledger, checksum khớp file hiện tại |
+| `LEDGER_CHECKSUM_MISMATCH` | Có dòng ledger nhưng checksum KHÁC file hiện tại — file đã bị sửa sau khi apply hoặc `migration_id` bị dùng trùng. **Cần điều tra ngay**, risk luôn `CRITICAL_APP_DEPENDENCY` |
+| `TOMBSTONED` / `SUPERSEDED` | Theo manifest — không được thực thi lại |
+| `SCHEMA_PRESENT_UNLEDGERED` | KHÔNG có dòng ledger, nhưng toàn bộ object cấu trúc (bảng/cột/index/...) migration này tạo ra đã tồn tại. **Không tự động coi là APPLIED** — có thể một migration/hotfix khác đã tạo cùng schema đó |
+| `NOT_APPLIED_CONFIRMED` | KHÔNG có dòng ledger, và KHÔNG object cấu trúc nào tồn tại — bằng chứng mạnh rằng chưa chạy |
+| `UNKNOWN` | KHÔNG đủ bằng chứng theo cả hai hướng (migration thuần data, hoặc bằng chứng cấu trúc chỉ có một phần). Chấp nhận được — mục tiêu là giảm dần UNKNOWN theo thời gian một cách an toàn, không bịa lịch sử |
+
+**Migration lịch sử (trước khi có ledger)**: KHÔNG được tự động gán `APPLIED_CONFIRMED` cho mọi migration cũ chỉ vì file có mặt trên `main`. Chỉ gán khi có bằng chứng đủ mạnh, và luôn ghi `execution_method = HISTORICAL_RECONCILIATION` kèm `notes` nêu rõ nguồn bằng chứng — không bao giờ bịa lịch sử áp dụng.
+
+**Required-migration schema evidence probes** (`scripts/lib/required-migrations.mjs`) — cho 5 migration mà code app hiện tại phụ thuộc cứng (`ai_action_proposals`, `ai_conversations`, cột deadline/engagement Electronic Confirmation, `workforce_movements.lifecycle_applied_at`, cột snapshot `recruitment_requests`): mỗi probe kiểm tra bảng/cột/index/scheduled-job cụ thể, tái sử dụng cùng primitive `scripts/lib/schema-probes.mjs` mà `production-health-check.mjs` và `reconcile-schema-migrations.mjs` đều dùng (không trùng lặp SQL).
+
+**`LEDGER_NOT_BOOTSTRAPPED`**: nếu bảng `schema_migrations` chưa tồn tại trên một database (vd Production trước khi được owner ủy quyền chạy migration bootstrap), mọi tool governance (ledger helper, reconciliation script) đều xử lý trạng thái này một cách tường minh — không throw, không giả định APPLIED. Code app KHÔNG BAO GIỜ tự động chạy migration lúc khởi động (mục 4 phía trên) và không phụ thuộc vào sự tồn tại của `schema_migrations` để hoạt động — nên việc merge code governance này vào `main` AN TOÀN ngay cả khi ledger chưa được bootstrap trên Production.
 
 ## 5. Trình tự phát hành
 

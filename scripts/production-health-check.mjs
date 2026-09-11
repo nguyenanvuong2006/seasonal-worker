@@ -20,6 +20,8 @@
 
 import { config } from "dotenv";
 import pg from "pg";
+import { tableExists as probeTableExists, columnExists as probeColumnExists, indexExists as probeIndexExists } from "./lib/schema-probes.mjs";
+import { REQUIRED_MIGRATIONS, checkRequiredMigrationEvidence } from "./lib/required-migrations.mjs";
 
 config({ path: ".env.local" });
 config();
@@ -141,24 +143,15 @@ const PERMISSION_CHECKS = [
 ];
 
 async function tableExists(name) {
-  const r = await client.query(
-    "SELECT 1 FROM information_schema.tables WHERE table_schema = 'public' AND table_name = $1",
-    [name],
-  );
-  return r.rowCount > 0;
+  return probeTableExists(client, name);
 }
 
 async function columnExists(table, column) {
-  const r = await client.query(
-    "SELECT 1 FROM information_schema.columns WHERE table_schema = 'public' AND table_name = $1 AND column_name = $2",
-    [table, column],
-  );
-  return r.rowCount > 0;
+  return probeColumnExists(client, table, column);
 }
 
 async function indexExists(indexName) {
-  const r = await client.query("SELECT 1 FROM pg_indexes WHERE indexname = $1", [indexName]);
-  return r.rowCount > 0;
+  return probeIndexExists(client, indexName);
 }
 
 async function getUserCount() {
@@ -320,6 +313,29 @@ async function main() {
       record("PASS", "integrity.balance_formula", "Balance khớp công thức mới (PHASE 6)");
   } catch (err) {
     record("WARN", "integrity.balance_formula", "Kiểm tra balance formula", err.message);
+  }
+
+  // 6b) Required-migration schema evidence (Mission B section 17/18) —
+  // closes the previously-confirmed gap where ai_action_proposals,
+  // ai_conversations, Electronic Confirmation deadline/engagement columns,
+  // and workforce_movements.lifecycle_applied_at had no probe here at all.
+  try {
+    const evidence = await checkRequiredMigrationEvidence(client);
+    for (const e of evidence) {
+      if (e.allPresent) {
+        record("PASS", `required_migration.${e.migrationId}`, `Required migration schema present: ${e.description}`);
+      } else {
+        const missing = e.checks.filter((c) => !c.ok).map((c) => c.label).join(", ");
+        record(
+          "FAIL",
+          `required_migration.${e.migrationId}`,
+          `APP_REQUIRES_MIGRATION_BUT_SCHEMA_DOES_NOT_PROVE_IT: ${e.migrationId}`,
+          `Thiếu: ${missing} — app code phụ thuộc vào migration này (${e.description})`,
+        );
+      }
+    }
+  } catch (err) {
+    record("FAIL", "required_migration.check", "Kiểm tra required-migration schema evidence", err.message);
   }
 
   // 7) High-level summary

@@ -19,6 +19,7 @@ import pg from "pg";
 import { readFileSync } from "node:fs";
 import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
+import { recordAlreadyExecutedMigration } from "./lib/migration-ledger.mjs";
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), "..");
 const DATABASE_URL = process.env.DATABASE_URL;
@@ -61,6 +62,25 @@ const missing = EXPECTED_COLUMNS.filter((c) => !present.has(c));
 
 console.log("\n=== COLUMN EXISTENCE (recruitment_requests) ===");
 for (const c of EXPECTED_COLUMNS) console.log(`  ${present.has(c) ? "✅" : "❌"} ${c}`);
+
+// Record into the shared schema_migrations ledger — ONLY after the column
+// verification above has already passed. Never re-executes the migration
+// SQL; a ledger hiccup here must never retroactively fail an otherwise-
+// successful, already-verified migration run.
+if (missing.length === 0) {
+  try {
+    const result = await recordAlreadyExecutedMigration(client, {
+      migrationId: MIGRATION_FILE,
+      sqlFilePath: join(ROOT, "migrations", MIGRATION_FILE),
+      executionMethod: "RECRUITMENT_SNAPSHOT_SCOPED_RUNNER",
+      appCommitSha: process.env.GITHUB_SHA ?? null,
+      appliedBy: process.env.APPLIED_BY ?? process.env.GITHUB_ACTOR ?? null,
+    });
+    console.log(`\n✅ Ledger: ${result.status} — migration_id=${result.migrationId}`);
+  } catch (error) {
+    console.error(`⚠️  Ghi ledger thất bại (KHÔNG ảnh hưởng kết quả migration đã verify ở trên): ${error.message}`);
+  }
+}
 
 await client.end();
 
