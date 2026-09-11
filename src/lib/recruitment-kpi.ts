@@ -2,7 +2,7 @@ import "server-only";
 import { and, eq, isNull, sql } from "drizzle-orm";
 import { db } from "@/db";
 import { employmentSessions, recruitmentRequests, workforceMovements, workerProfiles } from "@/db/schema";
-import { isFemale, isMale, todayStr } from "@/lib/helpers";
+import { isFemale, isMale, todayStr, toVNDateStr } from "@/lib/helpers";
 import {
   computeRecruitmentBalance,
   reconcileRecruitmentKpis,
@@ -62,7 +62,7 @@ export function resolveRequestQuitWindow(request: {
   createdAt: Date;
 }): { start: string; end: string } {
   const start =
-    request.startingDate ?? request.expectedDate ?? request.requestedDate ?? request.createdAt.toISOString().slice(0, 10);
+    request.startingDate ?? request.expectedDate ?? request.requestedDate ?? toVNDateStr(request.createdAt);
   const end = request.endDate ?? todayStr();
   return { start, end };
 }

@@ -1,7 +1,7 @@
 import { NextResponse } from "next/server";
 import { and, eq, inArray, isNull, or } from "drizzle-orm";
 import { db } from "@/db";
-import { recruitmentRequests } from "@/db/schema";
+import { dailyApplications, recruitmentRequests } from "@/db/schema";
 import { getUserScope, hasPermission, requirePermission, writeAudit } from "@/lib/auth";
 import { scopeAllowsDepartment } from "@/lib/data-scope";
 import { getRecruitmentRequest, batchUpdateStatus, softDeleteRecruitmentRequests } from "@/lib/recruitment-request";
@@ -14,9 +14,9 @@ import {
   stripSystemOwnedFields,
 } from "@/lib/planning-recruitment-core";
 import { provisionRecruitmentRequest } from "@/lib/recruitment-request-provisioning";
-import { batchComputeRequestKpis } from "@/lib/workforce-request";
+import { batchComputeRequestKpis, RECRUITED_STAGE } from "@/lib/workforce-request";
 import { resolveDefaultAsOf } from "@/lib/workforce-request-kpi";
-import { todayStr } from "@/lib/helpers";
+import { isFemale, isMale, todayStr } from "@/lib/helpers";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -184,9 +184,26 @@ export async function PATCH(req: Request, ctx: { params: Promise<{ id: string }>
     const femaleRq = num("femaleRq", existing.femaleRq);
     const totalRequest = computeTotalRequest(maleRq, femaleRq);
     patch.totalRequest = totalRequest;
+    // recruitedVsExpected (DERIVED) — final-project-hardening: existing.maleRecruited/
+    // femaleRecruited are NEVER written to a non-zero value anywhere in the codebase
+    // (only initialized to 0 at creation) — computing from them here silently reset
+    // this KPI to 0% on every manual edit through the UI. Compute live from
+    // daily_applications instead, same source the import-update path already uses
+    // (src/lib/recruitment-request.ts, liveRecruitedVsExpected) — never from Excel-
+    // supplied or persisted maleRecruited/femaleRecruited columns.
+    const liveRecruited = await db
+      .select({ gender: dailyApplications.gender })
+      .from(dailyApplications)
+      .where(
+        and(
+          eq(dailyApplications.requestId, id),
+          eq(dailyApplications.status, RECRUITED_STAGE),
+          isNull(dailyApplications.deletedAt),
+        ),
+      );
     patch.recruitedVsExpected = computeRecruitedVsExpected(
-      Number(existing.maleRecruited ?? 0),
-      Number(existing.femaleRecruited ?? 0),
+      liveRecruited.filter((r) => isMale(r.gender)).length,
+      liveRecruited.filter((r) => isFemale(r.gender)).length,
       totalRequest,
     );
     const str = (key: string, fallback: string | null) =>

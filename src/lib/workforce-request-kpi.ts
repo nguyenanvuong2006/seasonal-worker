@@ -654,5 +654,12 @@ export function isHistoricalRequestStatus(status: string): boolean {
 
 export function resolveDefaultAsOf(request: RequestForAsOf, today: string): string {
   if (!isHistoricalRequestStatus(request.status)) return today;
-  return request.endDate ?? request.completedDate ?? request.updatedAt.toISOString().slice(0, 10);
+  // Module THUẦN — không import (xem đầu file); công thức VN-day inline giống hệt
+  // toVNDateStr()/todayStr() ở @/lib/helpers, KHÔNG dùng toISOString().slice(0,10)
+  // trực tiếp (UTC-day sai lệch cho mọi thời điểm 00:00–06:59 giờ VN).
+  const VN_TZ_OFFSET_MINUTES = 7 * 60;
+  const d = request.updatedAt;
+  const vn = new Date(d.getTime() + (VN_TZ_OFFSET_MINUTES + d.getTimezoneOffset()) * 60000);
+  const fallback = `${vn.getFullYear()}-${String(vn.getMonth() + 1).padStart(2, "0")}-${String(vn.getDate()).padStart(2, "0")}`;
+  return request.endDate ?? request.completedDate ?? fallback;
 }

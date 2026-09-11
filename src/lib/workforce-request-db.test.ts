@@ -2,6 +2,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { createFakeDb, drizzleStub, makeTable, condsOf, eqValue, argOf, inArrayValues, type FakeDb, type QueryCall } from "./test-support/fake-drizzle.ts";
 import { loadModule, serverOnlyStub } from "./test-support/load-module.ts";
+import { toVNDateStr } from "./helpers.ts";
 
 /* ============================================================
    KIỂM THỬ TẦNG DB — batchComputeRequestKpis() trên ĐÚNG
@@ -191,6 +192,7 @@ function load(db: FakeDb) {
         todayStr: () => TODAY,
         isMale: (g: string | null) => g === "Nam",
         isFemale: (g: string | null) => g === "Nữ",
+        toVNDateStr,
       },
       "@/lib/person-name": { normalizePersonName: (s: string) => s },
       "@/lib/workforce-request-kpi": kpi,
@@ -379,7 +381,7 @@ function loadReallocateDws(db: FakeDb) {
         planningAllocations: makeTable("planning_allocations"),
         planningTasks: makeTable("planning_tasks"),
       },
-      "@/lib/helpers": { todayStr: () => "2026-10-05", isMale: (g: string | null) => g === "Nam", isFemale: (g: string | null) => g === "Nữ" },
+      "@/lib/helpers": { todayStr: () => "2026-10-05", isMale: (g: string | null) => g === "Nam", isFemale: (g: string | null) => g === "Nữ", toVNDateStr },
       "@/lib/data-scope": { scopeAllowsDepartment: () => true },
       "@/lib/planning-recruitment-core": core,
       "@/lib/workforce-request-kpi": kpi,

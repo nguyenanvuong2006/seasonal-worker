@@ -19,7 +19,7 @@ import {
 } from "@/db/schema";
 import { getUserScope, hasPermission, writeAudit, type Session } from "@/lib/auth";
 import { scopeAllowsDepartment } from "@/lib/data-scope";
-import { isFemale, isMale, todayStr } from "@/lib/helpers";
+import { isFemale, isMale, todayStr, toVNDateStr } from "@/lib/helpers";
 import { normalizePersonName } from "@/lib/person-name";
 import {
   aggregateRequestKpis,
@@ -81,7 +81,7 @@ export function requestWindow(r: {
   endDate: string | null;
   createdAt: Date;
 }): { start: string; end: string | null } {
-  const start = r.requestedDate ?? r.createdAt.toISOString().slice(0, 10);
+  const start = r.requestedDate ?? toVNDateStr(r.createdAt);
   return { start, end: r.endDate ?? null };
 }
 
@@ -238,7 +238,7 @@ function movementInRequestWindow(
   if (row.effectiveDate < window.start) return false;
   if (row.effectiveDate > asOf) return false;
   if (window.end !== null && row.effectiveDate > window.end) return false;
-  if (row.allocatedAt.toISOString().slice(0, 10) > row.effectiveDate) return false;
+  if (toVNDateStr(row.allocatedAt) > row.effectiveDate) return false;
   return true;
 }
 
@@ -426,7 +426,7 @@ export async function batchComputeRequestKpis(
     const transfers = dedupeByMovementId(
       (transferByRequest.get(r.id) ?? []).filter((t) => movementInRequestWindow(t, requestWindow(r), asOfDate)),
     );
-    const pipeline = (pipelineByRequest.get(r.id) ?? []).filter((p) => p.submittedAt.toISOString().slice(0, 10) <= asOfDate);
+    const pipeline = (pipelineByRequest.get(r.id) ?? []).filter((p) => toVNDateStr(p.submittedAt) <= asOfDate);
 
     const maleCurrent = countGender(allocs, isMale);
     const femaleCurrent = countGender(allocs, isFemale);
@@ -617,7 +617,7 @@ export async function listWorkforceRequests(opts: {
 
   return rows.map((r) => {
     const asOfDate = asOfResolver(r.request);
-    const apps = (appByRequest.get(r.request.id) ?? []).filter((p) => p.submittedAt.toISOString().slice(0, 10) <= asOfDate);
+    const apps = (appByRequest.get(r.request.id) ?? []).filter((p) => toVNDateStr(p.submittedAt) <= asOfDate);
     const linked = linkedByRequest.get(r.request.id);
     return {
       ...r.request,
@@ -840,7 +840,7 @@ export async function getRequestDetail(requestId: string, asOf?: string): Promis
     // Destination = phân bổ SỚM NHẤT của worker (ở request KHÁC) bắt đầu SAU khi
     // transfer này có hiệu lực — nếu chưa có, coi như "chưa phân bổ request đích".
     const destination = nextAllocations
-      .filter((a) => a.workerId === t.workerId && a.startedAt.toISOString().slice(0, 10) >= t.effectiveDate)
+      .filter((a) => a.workerId === t.workerId && toVNDateStr(a.startedAt) >= t.effectiveDate)
       .sort((a, b) => a.startedAt.getTime() - b.startedAt.getTime())[0];
     return {
       movementId: t.movementId,

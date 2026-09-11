@@ -13,6 +13,7 @@ import {
   type QueryCall,
 } from "./test-support/fake-drizzle.ts";
 import { loadModule, serverOnlyStub } from "./test-support/load-module.ts";
+import { toVNDateStr } from "./helpers.ts";
 
 /* ============================================================
    KIỂM THỬ TẦNG DB — DANH SÁCH, LỌC, SẮP XẾP, IMPORT
@@ -44,6 +45,7 @@ const helpersStub = {
   todayStr: () => "2026-08-16",
   isMale: (g: string | null) => String(g ?? "").toUpperCase().startsWith("M") || g === "Nam",
   isFemale: (g: string | null) => String(g ?? "").toUpperCase().startsWith("F") || g === "Nữ",
+  toVNDateStr,
 };
 
 function load(db: FakeDb) {

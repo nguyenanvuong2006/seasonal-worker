@@ -52,7 +52,12 @@ const HEADER_ALIASES: Record<string, string[]> = {
   "Rq Status": ["rq_status", "rq status"],
   Month_Rc: ["month_rc", "month rc", "thang rc"],
   "Total Request": ["total_request", "total request"],
-  "Recruited vs Expected": ["recruited_vs_expected", "recruited vs expected"],
+  // "Recruited Applications vs Plan" — tên cột EXPORT hiện tại (final-project-
+  // hardening, tránh nhầm với "Fill Rate %"). Giữ alias cũ để không phá khả năng
+  // import lại các file Excel đã xuất trước đây/hiện tại — giá trị cột này luôn
+  // bị bỏ qua khi import (xem comment ở recruitment-request.ts), chỉ cần NHẬN
+  // DIỆN đúng cột, không cần giữ nguyên tên hiển thị.
+  "Recruited vs Expected": ["recruited_vs_expected", "recruited vs expected", "recruited applications vs plan"],
   Screened: ["screened", "da loc", "đã lọc"],
   Interview: ["interview", "phong van", "phỏng vấn"],
   Recruit: ["recruit", "tuyen", "tuyển"],

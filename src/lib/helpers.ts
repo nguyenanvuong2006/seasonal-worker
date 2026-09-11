@@ -1,13 +1,23 @@
 export const VN_TZ_OFFSET_MINUTES = 7 * 60;
 
-/** Today in Asia/Ho_Chi_Minh as YYYY-MM-DD (server & client safe). */
-export function todayStr(): string {
-  const now = new Date();
-  const vn = new Date(now.getTime() + (VN_TZ_OFFSET_MINUTES + now.getTimezoneOffset()) * 60000);
+/**
+ * Convert an arbitrary instant to its Asia/Ho_Chi_Minh calendar day as
+ * YYYY-MM-DD. Use this (never `date.toISOString().slice(0, 10)`) for any
+ * business-date comparison — a raw UTC-day derivation is wrong for any
+ * instant between 17:00–23:59 UTC (00:00–06:59 ICT), where it reads one
+ * calendar day EARLIER than the true Vietnam business day.
+ */
+export function toVNDateStr(date: Date): string {
+  const vn = new Date(date.getTime() + (VN_TZ_OFFSET_MINUTES + date.getTimezoneOffset()) * 60000);
   const y = vn.getFullYear();
   const m = String(vn.getMonth() + 1).padStart(2, "0");
   const d = String(vn.getDate()).padStart(2, "0");
   return `${y}-${m}-${d}`;
+}
+
+/** Today in Asia/Ho_Chi_Minh as YYYY-MM-DD (server & client safe). */
+export function todayStr(): string {
+  return toVNDateStr(new Date());
 }
 
 export function formatDate(value?: string | null): string {

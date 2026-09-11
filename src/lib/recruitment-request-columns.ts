@@ -96,7 +96,11 @@ export const RECRUITMENT_REQUEST_COLUMNS: ColumnDef[] = [
   { key: "maleBalance", label: "Male Balance", labelVi: "Còn thiếu Nam", group: "balance", type: "number", source: "DERIVED", sortable: true, width: 100 },
   { key: "femaleBalance", label: "Female Balance", labelVi: "Còn thiếu Nữ", group: "balance", type: "number", source: "DERIVED", sortable: true, width: 100 },
   { key: "totalBalance", label: "Total Balance", labelVi: "Tổng còn thiếu", group: "balance", type: "number", source: "DERIVED", sortable: true, width: 110, mobilePriority: 11 },
-  { key: "recruitedVsExpected", label: "Recruited vs Expected", labelVi: "Đã tuyển / Kế hoạch", group: "balance", type: "percent", source: "DERIVED", sortable: true, width: 130 },
+  // final-project-hardening: đổi tên tránh nhầm với fillRatePercent (canonical,
+  // allocated/current workforce) ngay bên dưới — recruitedVsExpected là tỷ lệ
+  // HỒ SƠ đã qua vòng tuyển (daily_applications, RECRUITED_STAGE) so với kế
+  // hoạch, KHÔNG phải số lao động đang thực sự làm việc/được phân bổ.
+  { key: "recruitedVsExpected", label: "Recruited Applications vs Plan", labelVi: "Tỷ lệ hồ sơ tuyển / Kế hoạch", group: "balance", type: "percent", source: "DERIVED", sortable: true, width: 130 },
   { key: "fillRatePercent", label: "Fill Rate %", labelVi: "Tỉ lệ đáp ứng (canonical)", group: "balance", type: "percent", source: "SYSTEM", width: 130 },
 
   // --- Dates (Yêu cầu #6 — SÁU trường ngày TÁCH BIỆT) -------------------
