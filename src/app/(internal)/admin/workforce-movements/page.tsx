@@ -72,13 +72,16 @@ const ACTION_TONE_CLASS: Record<string, string> = {
   gray: "bg-surface-hover text-fg-secondary hover:bg-border",
 };
 
-// BULK APPROVAL — eligibility is derived from the SAME lookup the single-row "Duyệt nghỉ
-// việc" button already uses (STATUS_ACTIONS[`${movementType}_${status}`]), never from any
-// display text. A row is bulk-selectable iff it currently exposes the canonical
-// APPROVE_RESIGNATION action — i.e. movementType="resignation" AND status="PENDING_HR" (the
-// only FROM status allowed by ALLOWED_ACTIONS in lib/workforce-movements.ts).
+// BULK APPROVAL — eligibility is derived from the SAME lookup the single-row action buttons
+// already use (STATUS_ACTIONS[`${movementType}_${status}`]), never from any display text. A
+// row is bulk-selectable iff it currently exposes the canonical APPROVE_RESIGNATION action
+// (resignation, status="PENDING_HR") OR the canonical CONFIRM_ARRIVED action (transfer,
+// status="PENDING_HR" or "TRANSFER_RESCHEDULED" — final-project-hardening: bulk transfer
+// arrival confirmation, same pattern as bulk resignation, see bulk-approve-transfer/route.ts).
 function isEligibleForBulkApproval(m: Movement): boolean {
-  return (STATUS_ACTIONS[`${m.movementType}_${m.status}`] ?? []).some((a) => a.action === "APPROVE_RESIGNATION");
+  return (STATUS_ACTIONS[`${m.movementType}_${m.status}`] ?? []).some(
+    (a) => a.action === "APPROVE_RESIGNATION" || a.action === "CONFIRM_ARRIVED",
+  );
 }
 
 type BulkResultItem = { id: string; outcome: "APPROVED" | "ALREADY_APPROVED" | "NO_LONGER_ELIGIBLE" | "OUT_OF_SCOPE" | "FAILED"; reason?: string };
@@ -296,18 +299,58 @@ export default function WorkforceMovementsPage() {
     setBulkResultLabels(new Map(rows.map((m) => [m.id, m.workerName ?? m.workerCccd ?? m.id])));
     setBulkSaving(true);
     try {
-      const res = await fetch("/api/workforce-movements/bulk-approve-resignation", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ requestIds: ids }),
-      });
-      const d = await res.json();
-      if (!res.ok) {
-        toast({ title: d.error ?? "Không duyệt được hàng loạt.", variant: "destructive" });
+      // Một lô có thể trộn cả Nghỉ việc lẫn Thuyên chuyển — mỗi loại có endpoint riêng
+      // (bulk-approve-resignation / bulk-approve-transfer), KHÔNG dùng chung 1 engine.
+      // Tách theo movementType của chính dòng đang chọn (không đoán từ id), gọi endpoint
+      // nào có ids thì gọi, rồi gộp kết quả thành 1 bản tóm tắt duy nhất cho UI.
+      const rowById = new Map(rows.map((m) => [m.id, m]));
+      const resignationIds = ids.filter((id) => rowById.get(id)?.movementType === "resignation");
+      const transferIds = ids.filter((id) => rowById.get(id)?.movementType === "transfer");
+
+      const calls: Promise<{ endpoint: string; res: Response; d: BulkResult | { error?: string } }>[] = [];
+      if (resignationIds.length > 0) {
+        calls.push(
+          fetch("/api/workforce-movements/bulk-approve-resignation", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ requestIds: resignationIds }),
+          }).then(async (res) => ({ endpoint: "resignation", res, d: await res.json() })),
+        );
+      }
+      if (transferIds.length > 0) {
+        calls.push(
+          fetch("/api/workforce-movements/bulk-approve-transfer", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ requestIds: transferIds }),
+          }).then(async (res) => ({ endpoint: "transfer", res, d: await res.json() })),
+        );
+      }
+      const outcomes = await Promise.all(calls);
+      const failedCall = outcomes.find((o) => !o.res.ok);
+      if (failedCall) {
+        toast({ title: (failedCall.d as { error?: string }).error ?? "Không xử lý được hàng loạt.", variant: "destructive" });
         return;
       }
+      const merged = outcomes.reduce<BulkResult>(
+        (acc, o) => {
+          const d = o.d as BulkResult;
+          return {
+            bulkOperationId: acc.bulkOperationId || d.bulkOperationId,
+            requested: acc.requested + d.requested,
+            approved: acc.approved + d.approved,
+            alreadyApproved: acc.alreadyApproved + d.alreadyApproved,
+            outOfScope: acc.outOfScope + d.outOfScope,
+            noLongerEligible: acc.noLongerEligible + d.noLongerEligible,
+            failed: acc.failed + d.failed,
+            results: [...acc.results, ...d.results],
+          };
+        },
+        { bulkOperationId: "", requested: 0, approved: 0, alreadyApproved: 0, outOfScope: 0, noLongerEligible: 0, failed: 0, results: [] },
+      );
+
       setBulkConfirmOpen(false);
-      setBulkResult(d);
+      setBulkResult(merged);
       setBulkResultDetailOpen(false);
       setSelectedIds(new Set());
       await load();
@@ -379,7 +422,7 @@ export default function WorkforceMovementsPage() {
                         className="h-[18px] w-[18px] shrink-0 rounded border-border-strong"
                         checked={selectedIds.has(m.id)}
                         onChange={() => toggleSelected(m.id)}
-                        aria-label={`Chọn duyệt nghỉ việc cho ${m.workerName ?? m.workerCccd ?? m.id}`}
+                        aria-label={`Chọn xử lý hàng loạt cho ${m.workerName ?? m.workerCccd ?? m.id}`}
                       />
                     ) : (
                       <span className="w-[18px] shrink-0" aria-hidden />
@@ -433,25 +476,27 @@ export default function WorkforceMovementsPage() {
               Bỏ chọn
             </Button>
             <Button variant="primary" size="sm" onClick={() => setBulkConfirmOpen(true)} disabled={bulkSaving}>
-              Duyệt nghỉ việc đã chọn ({selectedIds.size})
+              Duyệt đã chọn ({selectedIds.size})
             </Button>
           </div>
         </div>
       )}
 
-      {/* MỘT xác nhận duy nhất cho toàn bộ lô — không hỏi lại từng người. */}
+      {/* MỘT xác nhận duy nhất cho toàn bộ lô — không hỏi lại từng người. Lô có thể trộn
+          Nghỉ việc (Duyệt nghỉ việc) và Thuyên chuyển (Đã nhận việc) — mỗi loại được xử lý
+          qua đúng canonical action của nó (xem runBulkApprove). */}
       <ConfirmDialog
         open={bulkConfirmOpen}
         onClose={() => setBulkConfirmOpen(false)}
         onConfirm={runBulkApprove}
-        title="Xác nhận duyệt nghỉ việc"
+        title="Xác nhận xử lý hàng loạt"
         description={
           <>
-            Bạn sắp duyệt nghỉ việc cho {selectedIds.size} người. Sau khi xác nhận, hệ thống sẽ xử lý từng hồ sơ theo quy trình
-            nghỉ việc hiện tại.
+            Bạn sắp xử lý {selectedIds.size} yêu cầu (Duyệt nghỉ việc và/hoặc Đã nhận việc thuyên chuyển). Sau khi xác nhận, hệ
+            thống sẽ xử lý từng hồ sơ theo đúng quy trình hiện tại của loại yêu cầu đó.
           </>
         }
-        confirmLabel={`Xác nhận duyệt ${selectedIds.size} người`}
+        confirmLabel={`Xác nhận xử lý ${selectedIds.size} yêu cầu`}
         loading={bulkSaving}
       />
 
@@ -462,7 +507,7 @@ export default function WorkforceMovementsPage() {
           setBulkResult(null);
           setBulkResultDetailOpen(false);
         }}
-        title="Duyệt nghỉ việc hoàn tất"
+        title="Xử lý hàng loạt hoàn tất"
         width="max-w-md"
       >
         {bulkResult && (
