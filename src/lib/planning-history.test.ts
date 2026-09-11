@@ -33,6 +33,7 @@ const schemaStub = {
   planningAllocations: makeTable("planning_allocations"),
   planningPeriods: makeTable("planning_periods"),
   planningTargets: makeTable("planning_targets"),
+  recruitmentRequests: makeTable("recruitment_requests"),
   workerProfiles: makeTable("worker_profiles"),
   workforceMovements: makeTable("workforce_movements"),
 };
@@ -339,6 +340,34 @@ test("I — linked Request CÒN CHỖ: Planning + Request mirror đều thành c
   assert.equal(chosen.requestSync.status, "SYNCED");
   assert.equal((chosen.requestSync as { requestId?: string }).requestId, "rq-linked");
   assert.equal(db.writesTo("planning_allocations").filter((c) => c.root === "insert").length, 1);
+});
+
+test("Pre-merge review (deadlock order): khi period đã chọn CÓ liên kết Request, autoAllocateInternship() phải khoá recruitment_requests FOR UPDATE TRƯỚC KHI ghi planning_allocations — cùng thứ tự (Request -> Planning) mà reallocateDws()/allocateWorkersToRequest() dùng, tránh lock-order inversion có thể deadlock", async () => {
+  const db = autoAllocDbLinked([]);
+  const mod = load(db, { mirrorOutcome: { status: "SYNCED", requestId: "rq-linked" } });
+
+  await (mod.autoAllocateInternship as AutoAllocateFn)("sess-1", "dept-A", "2026-06-01", "recruiter1");
+
+  const requestLockCall = db.calls.find(
+    (c) => c.table === "recruitment_requests" && c.root === "select" && c.ops.some((o) => o.fn === "for"),
+  );
+  const firstPlanningWrite = db.calls.find((c) => c.table === "planning_allocations" && (c.root === "update" || c.root === "insert"));
+
+  assert.ok(requestLockCall, "phải có 1 lệnh SELECT ... FOR UPDATE trên recruitment_requests");
+  assert.ok(firstPlanningWrite, "phải có ghi planning_allocations");
+  const lockIndex = db.calls.indexOf(requestLockCall!);
+  const writeIndex = db.calls.indexOf(firstPlanningWrite!);
+  assert.ok(
+    lockIndex < writeIndex,
+    `khoá recruitment_requests (call #${lockIndex}) phải xảy ra TRƯỚC lệnh ghi planning_allocations đầu tiên (call #${writeIndex}) — nếu không, thứ tự khoá bị đảo ngược so với reallocateDws()`,
+  );
+  // LƯU Ý: test này chỉ chứng minh THỨ TỰ THAO TÁC trong một lần gọi (call sequence),
+  // KHÔNG chứng minh race-safety giữa 2 transaction thật chạy song song — harness này
+  // đơn luồng/đồng bộ, không mô phỏng được Postgres lock contention thực sự. Bằng
+  // chứng race-safety nằm ở việc CẢ HAI flow (reallocateDws và autoAllocateInternship)
+  // cùng khoá ĐÚNG MỘT bảng, MỘT cột (recruitment_requests.id), MỘT primitive
+  // (FOR UPDATE) THEO CÙNG THỨ TỰ — xác nhận bằng đọc code trực tiếp, không phải bằng
+  // test đồng thời giả lập.
 });
 
 test("phân bổ tự động: chỉ đếm phân bổ ĐANG MỞ khi tính chỉ tiêu còn trống", async () => {

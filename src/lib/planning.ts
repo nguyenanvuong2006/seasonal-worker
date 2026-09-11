@@ -7,6 +7,7 @@ import {
   planningAllocations,
   planningPeriods,
   planningTargets,
+  recruitmentRequests,
   workerProfiles,
   workforceMovements,
 } from "@/db/schema";
@@ -466,6 +467,7 @@ export async function autoAllocateInternship(
      previous_allocation_id. Nếu người này đã ở đúng kế hoạch đích rồi thì
      không làm gì cả (idempotent). */
   const today = todayStr();
+  const chosenPeriod = candidatePeriods.find((p) => p.id === chosenPeriodId);
   const existing = await executor
     .select({
       id: planningAllocations.id,
@@ -482,6 +484,19 @@ export async function autoAllocateInternship(
 
   if (existing.some((a) => a.planningPeriodId === chosenPeriodId)) {
     return { planningAllocated: true, planningPeriodId: chosenPeriodId, requestSync: { status: "ALREADY_CURRENT" } };
+  }
+
+  // Pre-merge review (deadlock order): reallocateDws()/allocateWorkersToRequest()
+  // đều khoá recruitment_requests TRƯỚC planning_allocations. Nhánh này (sắp ghi
+  // planning_allocations rồi mirror sang request_allocations) phải khoá theo ĐÚNG
+  // cùng thứ tự đó — khoá Request liên kết NGAY BÂY GIỜ, trước khi đóng/tạo
+  // planning_allocations bên dưới — để không tạo lock-order inversion (Planning
+  // trước, Request sau) có thể deadlock với một reallocateDws() đang chạy đồng
+  // thời trên CHÍNH worker này. mirrorPlanningAllocationToRequest() bên dưới vẫn
+  // tự khoá lại — vô hại vì cùng transaction đã giữ sẵn lock đó (Postgres không
+  // tự chặn chính nó).
+  if (chosenPeriod?.requestId) {
+    await executor.select({ id: recruitmentRequests.id }).from(recruitmentRequests).where(eq(recruitmentRequests.id, chosenPeriod.requestId)).for("update");
   }
 
   let previousAllocationId: string | null = null;
@@ -515,8 +530,8 @@ export async function autoAllocateInternship(
   // hai khái niệm khác nhau. planning_allocations ĐÃ ghi ở trên và giữ nguyên dù
   // requestSync dưới đây là REJECTED_FULL/NOT_LINKED — kết quả chỉ được TRẢ VỀ
   // tường minh cho caller quyết định log/audit, KHÔNG throw, KHÔNG tự chọn request
-  // khác, KHÔNG tự override.
-  const chosenPeriod = candidatePeriods.find((p) => p.id === chosenPeriodId);
+  // khác, KHÔNG tự override. (chosenPeriod đã xác định + khoá ở trên, trước khi ghi
+  // planning_allocations — xem comment "Pre-merge review (deadlock order)".)
   let requestSync: AutoAllocateRequestSyncOutcome = { status: "NOT_LINKED" };
   if (chosenPeriod?.requestId && session?.workerId) {
     const mirrored = await mirrorPlanningAllocationToRequest({
