@@ -3,6 +3,7 @@ import { and, asc, count, desc, eq, gte, inArray, isNull, like, lte, ne, or, sql
 import type { AnyPgColumn } from "drizzle-orm/pg-core";
 import { db } from "@/db";
 import {
+  dailyApplications,
   departments,
   recruitmentRequests,
   type RecruitmentRequest,
@@ -10,6 +11,8 @@ import {
 } from "@/db/schema";
 import { SORTABLE_COLUMN_KEYS } from "@/lib/recruitment-request-columns";
 import { scopeAllowsDepartment } from "@/lib/data-scope";
+import { isFemale, isMale } from "@/lib/helpers";
+import { RECRUITED_STAGE } from "@/lib/workforce-request";
 import {
   computeDateDeltas,
   computeRecruitedVsExpected,
@@ -48,6 +51,18 @@ export type ImportRowResult = {
   requestCode: string;
   message: string;
 };
+
+/**
+ * Cột hệ thống (SYSTEM/DERIVED — xem SYSTEM_OWNED_COLUMN_KEYS) mà import KHÔNG
+ * bao giờ ghi đè, dù Excel có giá trị (Phase 2B mục 5). Trả về tên cột Excel
+ * nào có giá trị non-blank đã bị bỏ qua — để báo minh bạch cho người import,
+ * KHÔNG âm thầm nuốt.
+ */
+const IGNORED_SYSTEM_EXCEL_COLUMNS = ["Male Recruited", "Female Recruited", "Male Quit", "Female Quit"] as const;
+
+function detectIgnoredSystemFields(canonical: Record<string, string>): string[] {
+  return IGNORED_SYSTEM_EXCEL_COLUMNS.filter((header) => (canonical[header] ?? "").trim() !== "");
+}
 
 /**
  * Import yêu cầu tuyển dụng từ Excel / Google Sheets.
@@ -109,12 +124,12 @@ export async function importRecruitmentRequests(
       seenInBatch.add(requestCode);
 
       // KPI DERIVED — tính từ dữ liệu nguồn, KHÔNG lấy từ Excel (Yêu cầu #10).
+      // recruitedVsExpected KHÔNG được tính từ "Male/Female Recruited" của Excel nữa
+      // (Phase 2B mục 5 audit — trước đây tự mâu thuẫn: import bỏ qua các cột hệ thống
+      // NHƯNG recruitedVsExpected vẫn âm thầm dùng chính 2 cột đó) — tính lại bên dưới,
+      // riêng theo từng nhánh insert/update, từ daily_applications thật (canonical KPI).
       const totalRequest = computeTotalRequest(toInt(canonical["Male Rq"]), toInt(canonical["Female Rq"]));
-      const recruitedVsExpected = computeRecruitedVsExpected(
-        toInt(canonical["Male Recruited"]),
-        toInt(canonical["Female Recruited"]),
-        totalRequest,
-      );
+      const ignoredSystemFields = detectIgnoredSystemFields(canonical);
       const deltas = computeDateDeltas({
         requestedDate: parseDate(canonical["Requested Date"] ?? ""),
         offeredDate: parseDate(canonical["Offered Date"] ?? ""),
@@ -177,6 +192,26 @@ export async function importRecruitmentRequests(
             const startingDateVal = parseDate(canonical["Starting Date"] ?? "");
             const endDateVal = parseDate(canonical["End Date"] ?? "");
             const statusVal = normalizeStatus(canonical["Status"]) ?? "PENDING";
+            // recruitedVsExpected (DERIVED) — Phase 2B mục 5: tính từ daily_applications
+            // THẬT của request này (nguồn canonical KPI dùng — RECRUITED_STAGE), KHÔNG
+            // từ "Male/Female Recruited" của Excel. maleRecruited/femaleRecruited/
+            // maleQuit/femaleQuit (SYSTEM) KHÔNG còn nằm trong payload UPDATE — giữ
+            // nguyên giá trị hệ thống đã tính, không bị Excel ghi đè (mục 10).
+            const liveRecruited = await tx2
+              .select({ gender: dailyApplications.gender })
+              .from(dailyApplications)
+              .where(
+                and(
+                  eq(dailyApplications.requestId, existing[0].id),
+                  eq(dailyApplications.status, RECRUITED_STAGE),
+                  isNull(dailyApplications.deletedAt),
+                ),
+              );
+            const liveRecruitedVsExpected = computeRecruitedVsExpected(
+              liveRecruited.filter((r) => isMale(r.gender)).length,
+              liveRecruited.filter((r) => isFemale(r.gender)).length,
+              totalRequest,
+            );
             await tx2
               .update(recruitmentRequests)
               .set({
@@ -197,10 +232,6 @@ export async function importRecruitmentRequests(
                 femaleApplication: toInt(canonical["Female Application"]),
                 maleInterviewed: toInt(canonical["Male Interviewed"]),
                 femaleInterviewed: toInt(canonical["Female Interviewed"]),
-                maleRecruited: toInt(canonical["Male Recruited"]),
-                femaleRecruited: toInt(canonical["Female Recruited"]),
-                maleQuit: toInt(canonical["Male Quit"]),
-                femaleQuit: toInt(canonical["Female Quit"]),
                 status: statusVal,
                 requestedDate: requestedDateVal,
                 expectedDate: expectedDateVal,
@@ -218,7 +249,7 @@ export async function importRecruitmentRequests(
                 monthRc: canonical["Month_Rc"] ?? null,
                 // DERIVED — luôn tính lại, KHÔNG lấy giá trị Excel (Yêu cầu #10).
                 totalRequest,
-                recruitedVsExpected,
+                recruitedVsExpected: liveRecruitedVsExpected,
                 screened: toInt(canonical["Screened"]),
                 interview: toInt(canonical["Interview"]),
                 recruit: toInt(canonical["Recruit"]),
@@ -247,7 +278,12 @@ export async function importRecruitmentRequests(
               actor: createdBy,
             });
 
-            return { status: "UPDATED" as const, message: "Đã cập nhật" };
+            return {
+              status: "UPDATED" as const,
+              message: ignoredSystemFields.length > 0
+                ? `Đã cập nhật. Các cột do hệ thống tự tính đã được bỏ qua: ${ignoredSystemFields.join(", ")}.`
+                : "Đã cập nhật",
+            };
           }
           return { status: "SKIPPED" as const, message: "Request Code đã tồn tại" };
         }
@@ -285,10 +321,9 @@ export async function importRecruitmentRequests(
             femaleApplication: toInt(canonical["Female Application"]),
             maleInterviewed: toInt(canonical["Male Interviewed"]),
             femaleInterviewed: toInt(canonical["Female Interviewed"]),
-            maleRecruited: toInt(canonical["Male Recruited"]),
-            femaleRecruited: toInt(canonical["Female Recruited"]),
-            maleQuit: toInt(canonical["Male Quit"]),
-            femaleQuit: toInt(canonical["Female Quit"]),
+            // maleRecruited/femaleRecruited/maleQuit/femaleQuit (SYSTEM) — KHÔNG lấy
+            // từ Excel (Phase 2B mục 5). Request mới luôn bắt đầu từ 0 (mặc định DB) —
+            // đúng nguyên tắc đã áp dụng ở POST /api/recruitment-requests.
             maleBalance: balance.maleBalance,
             femaleBalance: balance.femaleBalance,
             totalBalance: balance.totalBalance,
@@ -309,7 +344,9 @@ export async function importRecruitmentRequests(
             monthRc: canonical["Month_Rc"] ?? null,
             // DERIVED — luôn tính lại, KHÔNG lấy giá trị Excel (Yêu cầu #10).
             totalRequest,
-            recruitedVsExpected,
+            // recruitedVsExpected (DERIVED) — request MỚI không thể có daily_applications
+            // nào liên kết trước khi request.id tồn tại -> luôn 0, KHÔNG lấy từ Excel.
+            recruitedVsExpected: 0,
             screened: toInt(canonical["Screened"]),
             interview: toInt(canonical["Interview"]),
             recruit: toInt(canonical["Recruit"]),
@@ -339,7 +376,12 @@ export async function importRecruitmentRequests(
           actor: createdBy,
         });
 
-        return { status: "INSERTED" as const, message: "Đã thêm mới" };
+        return {
+          status: "INSERTED" as const,
+          message: ignoredSystemFields.length > 0
+            ? `Đã thêm mới. Các cột do hệ thống tự tính đã được bỏ qua: ${ignoredSystemFields.join(", ")}.`
+            : "Đã thêm mới",
+        };
       });
 
       results.push({ rowIndex: i + 1, status: rowResult.status, requestCode, message: rowResult.message });

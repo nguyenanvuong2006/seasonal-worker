@@ -1,5 +1,5 @@
 import "server-only";
-import { and, desc, eq, gte, inArray, isNull, lte, or, sql } from "drizzle-orm";
+import { and, desc, eq, gte, inArray, isNotNull, isNull, lte, ne, or, sql } from "drizzle-orm";
 import { db } from "@/db";
 import {
   dailyApplications,
@@ -96,6 +96,39 @@ function requestScopeCondition(scope: string[] | null) {
 /* ============================================================
    KPI — CURRENT WORKFORCE (mục 3)
    ============================================================ */
+/**
+ * Điều kiện "ACTIVE ngay bây giờ" (Current Workforce sống — mục 3) — dùng chung
+ * cho cả truy vấn đếm (KPI) lẫn truy vấn chi tiết (getRequestDetail) để tránh
+ * 2 nguồn logic khác nhau.
+ */
+function liveAllocationCondition(requestIds: string[]) {
+  return and(
+    inArray(requestAllocations.requestId, requestIds),
+    eq(requestAllocations.status, "ACTIVE"),
+    eq(employmentSessions.status, "APPROVED"),
+    isNull(employmentSessions.endDate),
+    isNull(workerProfiles.deletedAt),
+  );
+}
+
+/**
+ * Điều kiện "ACTIVE tại đúng thời điểm asOf" (Current/Closing Workforce lịch sử —
+ * approved design mục 4/mục III): allocation đã bắt đầu trước/đúng asOf, chưa kết
+ * thúc trước asOf (hoặc chưa kết thúc), employment session cũng còn hiệu lực tại
+ * asOf. Dùng chung cho KPI đếm lẫn chi tiết — RQ đã EXPIRED/COMPLETED/CANCELLED
+ * xem lại KHÔNG bị số realtime hôm nay làm trôi.
+ */
+function historicalAllocationCondition(requestIds: string[], asOf: string) {
+  return and(
+    inArray(requestAllocations.requestId, requestIds),
+    sql`${requestAllocations.startedAt} < (${asOf}::date + interval '1 day')`,
+    or(isNull(requestAllocations.endedAt), sql`${requestAllocations.endedAt} >= ${asOf}::date`)!,
+    or(isNull(employmentSessions.endDate), sql`${employmentSessions.endDate} >= ${asOf}::date`)!,
+    or(isNull(employmentSessions.startingDate), sql`${employmentSessions.startingDate} <= ${asOf}::date`)!,
+    isNull(workerProfiles.deletedAt),
+  );
+}
+
 async function fetchLiveAllocationRows(ex: Executor, requestIds: string[]) {
   return ex
     .select({
@@ -108,15 +141,7 @@ async function fetchLiveAllocationRows(ex: Executor, requestIds: string[]) {
     .from(requestAllocations)
     .innerJoin(employmentSessions, eq(requestAllocations.employmentSessionId, employmentSessions.id))
     .innerJoin(workerProfiles, eq(requestAllocations.workerId, workerProfiles.id))
-    .where(
-      and(
-        inArray(requestAllocations.requestId, requestIds),
-        eq(requestAllocations.status, "ACTIVE"),
-        eq(employmentSessions.status, "APPROVED"),
-        isNull(employmentSessions.endDate),
-        isNull(workerProfiles.deletedAt),
-      ),
-    );
+    .where(liveAllocationCondition(requestIds));
 }
 
 async function fetchHistoricalAllocationRows(ex: Executor, requestIds: string[], asOf: string) {
@@ -131,16 +156,7 @@ async function fetchHistoricalAllocationRows(ex: Executor, requestIds: string[],
     .from(requestAllocations)
     .innerJoin(employmentSessions, eq(requestAllocations.employmentSessionId, employmentSessions.id))
     .innerJoin(workerProfiles, eq(requestAllocations.workerId, workerProfiles.id))
-    .where(
-      and(
-        inArray(requestAllocations.requestId, requestIds),
-        sql`${requestAllocations.startedAt} < (${asOf}::date + interval '1 day')`,
-        or(isNull(requestAllocations.endedAt), sql`${requestAllocations.endedAt} >= ${asOf}::date`)!,
-        or(isNull(employmentSessions.endDate), sql`${employmentSessions.endDate} >= ${asOf}::date`)!,
-        or(isNull(employmentSessions.startingDate), sql`${employmentSessions.startingDate} <= ${asOf}::date`)!,
-        isNull(workerProfiles.deletedAt),
-      ),
-    );
+    .where(historicalAllocationCondition(requestIds, asOf));
 }
 
 /* ============================================================
@@ -179,13 +195,68 @@ async function fetchQuitRows(ex: Executor, requestIds: string[]): Promise<QuitRo
     .where(inArray(requestAllocations.requestId, requestIds));
 }
 
-function quitInWindow(row: QuitRow, window: { start: string; end: string | null }, asOf: string): boolean {
+/**
+ * Dùng chung cho Quit VÀ Transfer-out (Phase 2B mục 3.2): movement chỉ được
+ * tính thuộc về 1 request nếu xảy ra TRONG cửa sổ thời gian của request
+ * ([window.start, window.end ?? asOf]) VÀ SAU khi worker đã được phân bổ
+ * vào request đó (allocatedAt <= effectiveDate) — không tính movement
+ * trước khi có allocation, không tính movement sau asOf (giữ lịch sử bất biến).
+ */
+function movementInRequestWindow(
+  row: { effectiveDate: string; allocatedAt: Date },
+  window: { start: string; end: string | null },
+  asOf: string,
+): boolean {
   if (row.effectiveDate < window.start) return false;
   const cap = window.end ?? asOf;
   if (row.effectiveDate > cap) return false;
-  // Chỉ tính nghỉ việc xảy ra SAU khi worker đã được phân bổ vào request.
   if (row.allocatedAt.toISOString().slice(0, 10) > row.effectiveDate) return false;
   return true;
+}
+
+/* ============================================================
+   KPI — TRANSFER-OUT (Phase 2B mục 3.2, approved design mục 3):
+   worker từng có allocation ở request này, sau đó có 1 TRANSFER đã
+   THỰC SỰ CÓ HIỆU LỰC (lifecycleAppliedAt IS NOT NULL — KHÔNG chỉ dựa
+   vào status='TRANSFER_COMPLETED', vì trạng thái đó được ghi ngay khi
+   HR xác nhận, có thể SỚM HƠN effectiveDate thật — xem comment
+   EFFECTIVE-DATE LIFECYCLE ở workforce-movements.ts).
+   ============================================================ */
+export type TransferOutRow = {
+  requestId: string;
+  movementId: string;
+  workerId: string;
+  gender: string | null;
+  effectiveDate: string;
+  allocatedAt: Date;
+  fromDeptId: string | null;
+  toDeptId: string | null;
+};
+
+async function fetchTransferOutRows(ex: Executor, requestIds: string[]): Promise<TransferOutRow[]> {
+  return ex
+    .select({
+      requestId: requestAllocations.requestId,
+      movementId: workforceMovements.id,
+      workerId: requestAllocations.workerId,
+      gender: workerProfiles.gender,
+      effectiveDate: workforceMovements.effectiveDate,
+      allocatedAt: requestAllocations.startedAt,
+      fromDeptId: workforceMovements.fromDeptId,
+      toDeptId: workforceMovements.toDeptId,
+    })
+    .from(requestAllocations)
+    .innerJoin(workerProfiles, eq(requestAllocations.workerId, workerProfiles.id))
+    .innerJoin(
+      workforceMovements,
+      and(
+        eq(workforceMovements.workerId, requestAllocations.workerId),
+        eq(workforceMovements.movementType, "transfer"),
+        eq(workforceMovements.status, "TRANSFER_COMPLETED"),
+        isNotNull(workforceMovements.lifecycleAppliedAt),
+      ),
+    )
+    .where(inArray(requestAllocations.requestId, requestIds));
 }
 
 /* ============================================================
@@ -262,7 +333,11 @@ export async function batchComputeRequestKpis(
     )).flat(),
   ];
 
-  const [quitRows, pipelineRows] = await Promise.all([fetchQuitRows(executor, ids), fetchPipelineRows(executor, ids)]);
+  const [quitRows, transferRows, pipelineRows] = await Promise.all([
+    fetchQuitRows(executor, ids),
+    fetchTransferOutRows(executor, ids),
+    fetchPipelineRows(executor, ids),
+  ]);
 
   const allocByRequest = new Map<string, typeof allocRows>();
   for (const a of allocRows) {
@@ -276,6 +351,12 @@ export async function batchComputeRequestKpis(
     list.push(q);
     quitByRequest.set(q.requestId, list);
   }
+  const transferByRequest = new Map<string, TransferOutRow[]>();
+  for (const t of transferRows) {
+    const list = transferByRequest.get(t.requestId) ?? [];
+    list.push(t);
+    transferByRequest.set(t.requestId, list);
+  }
   const pipelineByRequest = new Map<string, PipelineRow[]>();
   for (const p of pipelineRows) {
     const list = pipelineByRequest.get(p.requestId) ?? [];
@@ -286,13 +367,18 @@ export async function batchComputeRequestKpis(
   for (const r of requestRows) {
     const asOfDate = asOfMap.get(r.id) ?? today;
     const allocs = allocByRequest.get(r.id) ?? [];
-    const quits = (quitByRequest.get(r.id) ?? []).filter((q) => quitInWindow(q, requestWindow(r), asOfDate));
+    const quits = (quitByRequest.get(r.id) ?? []).filter((q) => movementInRequestWindow(q, requestWindow(r), asOfDate));
+    const transfers = (transferByRequest.get(r.id) ?? []).filter((t) =>
+      movementInRequestWindow(t, requestWindow(r), asOfDate),
+    );
     const pipeline = (pipelineByRequest.get(r.id) ?? []).filter((p) => p.submittedAt.toISOString().slice(0, 10) <= asOfDate);
 
     const maleCurrent = countGender(allocs, isMale);
     const femaleCurrent = countGender(allocs, isFemale);
     const maleQuit = countGender(quits, isMale);
     const femaleQuit = countGender(quits, isFemale);
+    const maleTransferOut = countGender(transfers, isMale);
+    const femaleTransferOut = countGender(transfers, isFemale);
     const recruitedRows = pipeline.filter((p) => p.status === RECRUITED_STAGE);
     const maleRecruited = countGender(recruitedRows, isMale);
     const femaleRecruited = countGender(recruitedRows, isFemale);
@@ -309,6 +395,8 @@ export async function batchComputeRequestKpis(
         femaleRecruited,
         maleQuit,
         femaleQuit,
+        maleTransferOut,
+        femaleTransferOut,
       }),
     );
   }
@@ -490,6 +578,8 @@ export async function listWorkforceRequests(opts: {
           femaleRecruited: 0,
           maleQuit: 0,
           femaleQuit: 0,
+          maleTransferOut: 0,
+          femaleTransferOut: 0,
         }),
       applications: {
         male: countGender(apps, isMale),
@@ -529,6 +619,19 @@ export type RequestDetail = {
     effectiveDate: string;
     reason: string | null;
   }[];
+  transferredWorkers: {
+    movementId: string;
+    workerId: string;
+    workerName: string | null;
+    gender: string | null;
+    effectiveDate: string;
+    fromDeptName: string | null;
+    toDeptName: string | null;
+    /** Request mà worker được allocate SAU khi rời request này — null nếu chưa
+     *  ai chủ động allocate họ vào request nào (approved design mục 3: KHÔNG đoán). */
+    destinationRequestId: string | null;
+    destinationRequestCode: string | null;
+  }[];
   history: {
     id: string;
     action: string;
@@ -554,38 +657,40 @@ export async function getRequestDetail(requestId: string, asOf?: string): Promis
     .where(and(eq(recruitmentRequests.id, requestId), isNull(recruitmentRequests.deletedAt)));
   if (!row) return null;
 
-  const kpis = await batchComputeRequestKpis([row.request], asOf ?? todayStr());
+  const today = todayStr();
+  const asOfResolved = asOf ?? today;
+  const isLive = asOfResolved === today;
+
+  const kpis = await batchComputeRequestKpis([row.request], asOfResolved);
   const kpi = kpis.get(requestId)!;
 
-  const [pipeline, currentWorkers, quitRows, history, overrides, comments, linkedPeriods] = await Promise.all([
+  const currentWorkersColumns = {
+    allocationId: requestAllocations.id,
+    workerId: requestAllocations.workerId,
+    workerName: workerProfiles.fullName,
+    cccd: workerProfiles.cccd,
+    gender: workerProfiles.gender,
+    sessionId: requestAllocations.employmentSessionId,
+    deptName: departments.deptName,
+    allocatedAt: requestAllocations.startedAt,
+    allocatedBy: requestAllocations.allocatedBy,
+  };
+  const currentWorkersQuery = db
+    .select(currentWorkersColumns)
+    .from(requestAllocations)
+    .innerJoin(employmentSessions, eq(requestAllocations.employmentSessionId, employmentSessions.id))
+    .innerJoin(workerProfiles, eq(requestAllocations.workerId, workerProfiles.id))
+    .leftJoin(departments, eq(employmentSessions.deptId, departments.id))
+    .where(
+      isLive ? liveAllocationCondition([requestId]) : historicalAllocationCondition([requestId], asOfResolved),
+    )
+    .orderBy(requestAllocations.startedAt);
+
+  const [pipeline, currentWorkers, quitRows, transferRows, history, overrides, comments, linkedPeriods] = await Promise.all([
     fetchPipelineRows(db, [requestId]),
-    db
-      .select({
-        allocationId: requestAllocations.id,
-        workerId: requestAllocations.workerId,
-        workerName: workerProfiles.fullName,
-        cccd: workerProfiles.cccd,
-        gender: workerProfiles.gender,
-        sessionId: requestAllocations.employmentSessionId,
-        deptName: departments.deptName,
-        allocatedAt: requestAllocations.startedAt,
-        allocatedBy: requestAllocations.allocatedBy,
-      })
-      .from(requestAllocations)
-      .innerJoin(employmentSessions, eq(requestAllocations.employmentSessionId, employmentSessions.id))
-      .innerJoin(workerProfiles, eq(requestAllocations.workerId, workerProfiles.id))
-      .leftJoin(departments, eq(employmentSessions.deptId, departments.id))
-      .where(
-        and(
-          eq(requestAllocations.requestId, requestId),
-          eq(requestAllocations.status, "ACTIVE"),
-          eq(employmentSessions.status, "APPROVED"),
-          isNull(employmentSessions.endDate),
-          isNull(workerProfiles.deletedAt),
-        ),
-      )
-      .orderBy(requestAllocations.startedAt),
+    currentWorkersQuery,
     fetchQuitRows(db, [requestId]),
+    fetchTransferOutRows(db, [requestId]),
     db
       .select({
         id: requestAllocationHistory.id,
@@ -622,11 +727,15 @@ export async function getRequestDetail(requestId: string, asOf?: string): Promis
   ]);
 
   const window = requestWindow(row.request);
-  const resignedRaw = quitRows.filter((q) => quitInWindow(q, window, asOf ?? todayStr()));
+  const resignedRaw = quitRows.filter((q) => movementInRequestWindow(q, window, asOfResolved));
+  const transferredRaw = transferRows.filter((t) => movementInRequestWindow(t, window, asOfResolved));
 
-  const workerIds = [...new Set(resignedRaw.map((r) => r.workerId))];
+  const workerIds = [...new Set([...resignedRaw, ...transferredRaw].map((r) => r.workerId))];
   const movementIds = [...new Set(resignedRaw.map((r) => r.movementId))];
-  const [profiles, movements] = await Promise.all([
+  const deptIds = [
+    ...new Set(transferredRaw.flatMap((t) => [t.fromDeptId, t.toDeptId].filter((d): d is string => !!d))),
+  ];
+  const [profiles, movements, transferDepts, nextAllocations] = await Promise.all([
     workerIds.length > 0
       ? db
           .select({ id: workerProfiles.id, fullName: workerProfiles.fullName })
@@ -639,9 +748,28 @@ export async function getRequestDetail(requestId: string, asOf?: string): Promis
           .from(workforceMovements)
           .where(inArray(workforceMovements.id, movementIds))
       : Promise.resolve([]),
+    deptIds.length > 0
+      ? db.select({ id: departments.id, deptName: departments.deptName }).from(departments).where(inArray(departments.id, deptIds))
+      : Promise.resolve([]),
+    // Destination request (nếu có) — request TIẾP THEO worker được CHỦ ĐỘNG allocate
+    // sau khi rời request này (approved design mục 3: KHÔNG đoán theo department).
+    workerIds.length > 0
+      ? db
+          .select({
+            workerId: requestAllocations.workerId,
+            requestId: requestAllocations.requestId,
+            requestCode: recruitmentRequests.requestCode,
+            startedAt: requestAllocations.startedAt,
+          })
+          .from(requestAllocations)
+          .innerJoin(recruitmentRequests, eq(requestAllocations.requestId, recruitmentRequests.id))
+          .where(and(inArray(requestAllocations.workerId, workerIds), ne(requestAllocations.requestId, requestId)))
+          .orderBy(requestAllocations.startedAt)
+      : Promise.resolve([]),
   ]);
   const nameMap = new Map(profiles.map((p) => [p.id, p.fullName]));
   const reasonMap = new Map(movements.map((m) => [m.id, m.reason]));
+  const deptNameMap = new Map(transferDepts.map((d) => [d.id, d.deptName]));
 
   const resignedWorkers = resignedRaw.map((q) => ({
     movementId: q.movementId,
@@ -651,6 +779,25 @@ export async function getRequestDetail(requestId: string, asOf?: string): Promis
     effectiveDate: q.effectiveDate,
     reason: reasonMap.get(q.movementId) ?? null,
   }));
+
+  const transferredWorkers = transferredRaw.map((t) => {
+    // Destination = phân bổ SỚM NHẤT của worker (ở request KHÁC) bắt đầu SAU khi
+    // transfer này có hiệu lực — nếu chưa có, coi như "chưa phân bổ request đích".
+    const destination = nextAllocations
+      .filter((a) => a.workerId === t.workerId && a.startedAt.toISOString().slice(0, 10) >= t.effectiveDate)
+      .sort((a, b) => a.startedAt.getTime() - b.startedAt.getTime())[0];
+    return {
+      movementId: t.movementId,
+      workerId: t.workerId,
+      workerName: normalizePersonName(nameMap.get(t.workerId) ?? "") || null,
+      gender: t.gender,
+      effectiveDate: t.effectiveDate,
+      fromDeptName: t.fromDeptId ? (deptNameMap.get(t.fromDeptId) ?? null) : null,
+      toDeptName: t.toDeptId ? (deptNameMap.get(t.toDeptId) ?? null) : null,
+      destinationRequestId: destination?.requestId ?? null,
+      destinationRequestCode: destination?.requestCode ?? null,
+    };
+  });
 
   const pipelineStages = new Map<string, PipelineRow[]>();
   for (const p of pipeline) {
@@ -670,6 +817,7 @@ export async function getRequestDetail(requestId: string, asOf?: string): Promis
     })),
     currentWorkers: currentWorkers.map((w) => ({ ...w, workerName: normalizePersonName(w.workerName ?? "") || null })),
     resignedWorkers,
+    transferredWorkers,
     history: history.map((h) => ({ ...h, workerName: normalizePersonName(h.workerName ?? "") || null })),
     overrides,
     comments,
@@ -1018,21 +1166,25 @@ export async function allocateWorkersToRequest(input: {
   return txResult;
 }
 
-/** Kết thúc mọi ACTIVE request allocation của 1 worker (gọi khi nghỉ việc được xác nhận — mục 9).
- *  Đồng thời ĐÓNG (allocation_end_date) các phân bổ planning đang mở của worker — khớp mô hình
- *  vòng đời append-only của Planning (đóng phân bổ ≠ nghỉ việc; ở đây là nghỉ việc THẬT nên
- *  phân bổ phải đóng). */
 export type EndActiveRequestAllocationsResult = {
   ended: number;
   /** Request bị ảnh hưởng (Balance cần recompute — mục I.5). */
   affectedRequestIds: string[];
 };
 
-export async function endActiveRequestAllocationsForWorker(
+/**
+ * PRIMITIVE DÙNG CHUNG (Phase 2B mục 3.3) — kết thúc mọi ACTIVE request
+ * allocation của 1 worker: đóng request_allocations + ghi
+ * request_allocation_history (action=END). CHỈ đụng lớp Request — KHÔNG
+ * có side-effect nào khác (không đụng Planning). Dùng cho CẢ resignation
+ * lẫn transfer, mỗi luồng tự quyết định xử lý Planning riêng theo đúng
+ * nghiệp vụ của luồng đó (xem 2 wrapper bên dưới).
+ */
+async function endActiveRequestAllocations(
   workerId: string,
   endedBy: string,
   reason: string,
-  executor: Executor = db,
+  executor: Executor,
 ): Promise<EndActiveRequestAllocationsResult> {
   const rows = await executor
     .select({
@@ -1066,6 +1218,22 @@ export async function endActiveRequestAllocationsForWorker(
     });
   }
 
+  return { ended: rows.length, affectedRequestIds: [...new Set(rows.map((r) => r.requestId))] };
+}
+
+/** Kết thúc mọi ACTIVE request allocation của 1 worker (gọi khi nghỉ việc được xác nhận — mục 9).
+ *  Đồng thời ĐÓNG (allocation_end_date) các phân bổ planning đang mở của worker — khớp mô hình
+ *  vòng đời append-only của Planning (đóng phân bổ ≠ nghỉ việc; ở đây là nghỉ việc THẬT nên
+ *  phân bổ phải đóng). Hành vi giữ NGUYÊN so với trước refactor Phase 2B — chỉ tách phần lõi
+ *  Request allocation ra `endActiveRequestAllocations()` dùng chung với transfer. */
+export async function endActiveRequestAllocationsForWorker(
+  workerId: string,
+  endedBy: string,
+  reason: string,
+  executor: Executor = db,
+): Promise<EndActiveRequestAllocationsResult> {
+  const result = await endActiveRequestAllocations(workerId, endedBy, reason, executor);
+
   // Đồng bộ phía Planning: đóng phân bổ planning đang mở của worker này.
   const openPlanning = await executor
     .select({ sessionId: planningAllocations.employmentSessionId })
@@ -1084,7 +1252,25 @@ export async function endActiveRequestAllocationsForWorker(
       );
   }
 
-  return { ended: rows.length, affectedRequestIds: [...new Set(rows.map((r) => r.requestId))] };
+  return result;
+}
+
+/**
+ * Kết thúc mọi ACTIVE request allocation của 1 worker khi THUYÊN CHUYỂN có hiệu
+ * lực (approved design mục 3 + Phase 2B mục 3.3). CHỈ đóng lớp Request — KHÔNG
+ * đóng planning allocation (transfer có lifecycle Planning riêng, xử lý bởi
+ * `autoAllocateInternship()` ngay sau lời gọi này trong `finalizeTransferEffect()`
+ * — dùng chung logic đóng như resignation ở đây sẽ tạo side-effect kép ngoài
+ * phạm vi transfer). KHÔNG tự allocate vào request nào khác — đó luôn là hành
+ * động thủ công riêng của user (allocateWorkersToRequest/reallocateDws).
+ */
+export async function endActiveRequestAllocationsForTransfer(
+  workerId: string,
+  endedBy: string,
+  reason: string,
+  executor: Executor = db,
+): Promise<EndActiveRequestAllocationsResult> {
+  return endActiveRequestAllocations(workerId, endedBy, reason, executor);
 }
 
 /* ============================================================
@@ -1527,6 +1713,8 @@ export async function getRequestDashboard(scope: string[] | null, asOf = todaySt
         femaleRecruited: 0,
         maleQuit: 0,
         femaleQuit: 0,
+        maleTransferOut: 0,
+        femaleTransferOut: 0,
       }),
   }));
 

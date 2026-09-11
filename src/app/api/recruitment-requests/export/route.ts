@@ -1,16 +1,27 @@
 import { NextResponse } from "next/server";
-import ExcelJS from "exceljs";
 import { getSession, getUserScope, hasPermission, writeAudit } from "@/lib/auth";
-import { listRecruitmentRequests } from "@/lib/recruitment-request";
+import { addStyledSheet, createStyledWorkbook, workbookToBuffer } from "@/lib/excel-workbook-style";
+import { todayStr } from "@/lib/helpers";
+import { listRecruitmentRequests, type RecruitmentRequest } from "@/lib/recruitment-request";
+import { batchComputeRequestKpis } from "@/lib/workforce-request";
+import { resolveDefaultAsOf, type RequestKpi } from "@/lib/workforce-request-kpi";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
-const GREEN = "FF115830";
-const GOLD = "FFD9A327";
-const LIGHT = "FFEFF6F0";
+type RowWithKpi = RecruitmentRequest & { kpi: RequestKpi };
 
-/** Xuất Excel danh sách yêu cầu tuyển dụng theo bộ lọc hiện tại. */
+/**
+ * Xuất Excel danh sách yêu cầu tuyển dụng theo bộ lọc hiện tại.
+ *
+ * Phase 2B mục 6 — refactor: Recruited/Quit/Transfer Out/Balance đọc từ
+ * `.kpi.*` (batchComputeRequestKpis, ĐÚNG 1 engine dùng chung với
+ * /api/recruitment-requests GET và canonical Request Detail export), KHÔNG
+ * còn đọc trực tiếp cột tĩnh male_recruited/male_quit/... trên row (có thể
+ * lệch với KPI live khi allocation/movement đổi sau khi các cột đó được
+ * ghi). Styling dùng chung addStyledSheet() — không còn ExcelJS hand-rolled
+ * thứ hai riêng cho route này.
+ */
 export async function GET(req: Request) {
   const session = await getSession();
   if (!session) return NextResponse.json({ error: "Chưa đăng nhập." }, { status: 401 });
@@ -37,161 +48,95 @@ export async function GET(req: Request) {
     2000,
   );
 
-  const wb = new ExcelJS.Workbook();
-  wb.creator = "Dalat Hasfarm Seasonal HR";
-  wb.created = new Date();
-  const ws = wb.addWorksheet("Recruitment Requests", {
-    pageSetup: { orientation: "landscape", fitToPage: true, fitToWidth: 1 },
-  });
+  const today = todayStr();
+  const rowsById = new Map(rows.map((r) => [r.id, r]));
+  const kpis = await batchComputeRequestKpis(rows, (r) => resolveDefaultAsOf(rowsById.get(r.id)!, today));
+  const rowsWithKpi: RowWithKpi[] = rows.map((r) => ({ ...r, kpi: kpis.get(r.id)! }));
 
-  const headers = [
-    "Request Code", "Requester", "Position", "Job title", "Location", "Section", "Group",
-    "Division", "Department", "Reason", "Note for reason", "Special Requirements",
-    "Male Rq", "Female Rq", "Male Application", "Female Application",
-    "Male Interviewed", "Female Interviewed", "Male Recruited", "Female Recruited",
-    "Male Quit", "Female Quit", "Male Balance", "Female Balance", "Total Balance",
-    "Status", "Requested Date", "Expected Date", "Offered Date", "Completed Date",
-    "Offered Date vs Requested Date", "Completed Date vs Requested Date",
-    "Month", "Cost", "Remarks", "To", "Rq Status", "Month_Rc",
-    "Total Request", "Recruited vs Expected", "Screened", "Interview", "Recruit",
-    "Month_Report", "Created By", "Created At",
-  ];
+  const buffer = await buildFlatListWorkbook(rowsWithKpi, session);
 
-  const LAST_COL_LETTER = (n: number) => {
-    let s = "";
-    while (n > 0) {
-      const m = (n - 1) % 26;
-      s = String.fromCharCode(65 + m) + s;
-      n = Math.floor((n - 1) / 26);
-    }
-    return s;
-  };
-  const LAST = LAST_COL_LETTER(headers.length + 1);
-
-  ws.mergeCells(`A1:${LAST}1`);
-  const t = ws.getCell("A1");
-  t.value = "🌸 DALAT HASFARM — WORKFORCE RECRUITMENT REQUEST PLANNING";
-  t.font = { name: "Arial", size: 16, bold: true, color: { argb: "FFFFFFFF" } };
-  t.fill = { type: "pattern", pattern: "solid", fgColor: { argb: GREEN } };
-  t.alignment = { vertical: "middle", horizontal: "center" };
-  ws.getRow(1).height = 34;
-
-  ws.mergeCells(`A2:${LAST}2`);
-  const s = ws.getCell("A2");
-  s.value = `DANH SÁCH YÊU CẦU TUYỂN DỤNG — ${new Date().toLocaleDateString("vi-VN")}`;
-  s.font = { name: "Arial", size: 12, bold: true, color: { argb: GREEN } };
-  s.fill = { type: "pattern", pattern: "solid", fgColor: { argb: "FFFAEDCD" } };
-  s.alignment = { vertical: "middle", horizontal: "center" };
-  ws.getRow(2).height = 24;
-
-  ws.mergeCells(`A3:${LAST}3`);
-  const m = ws.getCell("A3");
-  m.value = `Xuất bởi: ${session.fullName} (${session.username}) • ${new Date().toLocaleString("vi-VN", { timeZone: "Asia/Ho_Chi_Minh" })} • Tổng: ${rows.length} yêu cầu`;
-  m.font = { name: "Arial", size: 9, italic: true, color: { argb: "FF6B7F72" } };
-  m.alignment = { horizontal: "center" };
-
-  const hr = ws.addRow(["STT", ...headers]);
-  hr.height = 26;
-  hr.eachCell((cell) => {
-    cell.font = { name: "Arial", size: 10, bold: true, color: { argb: "FFFFFFFF" } };
-    cell.fill = { type: "pattern", pattern: "solid", fgColor: { argb: GREEN } };
-    cell.alignment = { vertical: "middle", horizontal: "center", wrapText: true };
-  });
-  ws.getColumn(1).width = 6;
-  headers.forEach((_, i) => {
-    ws.getColumn(i + 2).width = i < 12 ? 20 : 14;
-  });
-
-  const dateDiff = (a?: string | null, b?: string | null) => {
-    if (!a || !b) return "";
-    const da = new Date(a + "T00:00:00");
-    const db = new Date(b + "T00:00:00");
-    const diff = Math.round((da.getTime() - db.getTime()) / 86400000);
-    return isNaN(diff) ? "" : String(diff);
-  };
-
-  rows.forEach((r, i) => {
-    const rowValues = [
-      i + 1,
-      r.requestCode,
-      r.requester,
-      r.position ?? "",
-      r.jobTitle ?? "",
-      r.location ?? "",
-      r.section ?? "",
-      r.groupName ?? "",
-      r.division ?? "",
-      r.department ?? r.departmentText ?? "",
-      r.reason ?? "",
-      r.noteForReason ?? "",
-      r.specialRequirements ?? "",
-      r.maleRq,
-      r.femaleRq,
-      r.maleApplication,
-      r.femaleApplication,
-      r.maleInterviewed,
-      r.femaleInterviewed,
-      r.maleRecruited,
-      r.femaleRecruited,
-      r.maleQuit,
-      r.femaleQuit,
-      r.maleBalance,
-      r.femaleBalance,
-      r.totalBalance,
-      r.status,
-      r.requestedDate ?? "",
-      r.expectedDate ?? "",
-      r.offeredDate ?? "",
-      r.completedDate ?? "",
-      dateDiff(r.offeredDate, r.requestedDate),
-      dateDiff(r.completedDate, r.requestedDate),
-      r.month ?? "",
-      r.cost ?? 0,
-      r.remarks ?? "",
-      r.to ?? "",
-      r.rqStatus ?? "",
-      r.monthRc ?? "",
-      r.totalRequest,
-      r.recruitedVsExpected,
-      r.screened,
-      r.interview,
-      r.recruit,
-      r.monthReport ?? "",
-      r.createdBy,
-      r.createdAt ? new Date(r.createdAt).toLocaleString("vi-VN", { timeZone: "Asia/Ho_Chi_Minh" }) : "",
-    ];
-    const row = ws.addRow(rowValues);
-    row.height = 20;
-    row.eachCell((cell, col) => {
-      cell.font = { name: "Arial", size: 10 };
-      cell.alignment = {
-        vertical: "middle",
-        horizontal: col === 1 || col === 2 ? "center" : "left",
-      };
-      if (i % 2 === 1) cell.fill = { type: "pattern", pattern: "solid", fgColor: { argb: LIGHT } };
-    });
-  });
-
-  const fr = ws.addRow([]);
-  ws.mergeCells(`A${fr.number + 1}:${LAST}${fr.number + 1}`);
-  const f = ws.getCell(`A${fr.number + 1}`);
-  f.value = "Dalat Hasfarm — EST. 1994 • Tài liệu nội bộ";
-  f.font = { name: "Arial", size: 8, italic: true, color: { argb: "FF9CA3AF" } };
-  f.alignment = { horizontal: "center" };
-
-  ws.views = [{ state: "frozen", ySplit: 4 }];
-  ws.autoFilter = { from: { row: 4, column: 1 }, to: { row: 4, column: headers.length + 1 } };
-
-  const buffer = await wb.xlsx.writeBuffer();
   await writeAudit(session, "EXPORT_RECRUITMENT_REQUESTS", "recruitment_requests", { rows: rows.length });
 
+  const dateStr = new Date().toISOString().slice(0, 10);
   const ascii = "RecruitmentRequests";
-  const utf8 = encodeURIComponent(`DalatHasfarm-RecruitmentRequests-${new Date().toISOString().slice(0, 10)}.xlsx`);
+  const utf8 = encodeURIComponent(`DalatHasfarm-RecruitmentRequests-${dateStr}.xlsx`);
 
-  return new NextResponse(Buffer.from(buffer as ArrayBuffer), {
+  return new NextResponse(new Uint8Array(buffer), {
     headers: {
       "Content-Type": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-      "Content-Disposition": `attachment; filename="${ascii}-${new Date().toISOString().slice(0, 10)}.xlsx"; filename*=UTF-8''${utf8}`,
+      "Content-Disposition": `attachment; filename="${ascii}-${dateStr}.xlsx"; filename*=UTF-8''${utf8}`,
     },
   });
+}
+
+function dateDiff(a?: string | null, b?: string | null): string {
+  if (!a || !b) return "";
+  const da = new Date(a + "T00:00:00");
+  const db = new Date(b + "T00:00:00");
+  const diff = Math.round((da.getTime() - db.getTime()) / 86400000);
+  return isNaN(diff) ? "" : String(diff);
+}
+
+async function buildFlatListWorkbook(rows: RowWithKpi[], session: { fullName: string; username: string }): Promise<Buffer> {
+  const wb = createStyledWorkbook();
+  const col = (header: string, width: number, value: (r: RowWithKpi, i: number) => string | number) => ({ header, width, value });
+
+  addStyledSheet(wb, {
+    sheetName: "Recruitment Requests",
+    title: `DALAT HASFARM — WORKFORCE RECRUITMENT REQUEST PLANNING • Xuất bởi ${session.fullName} (${session.username}) • Tổng: ${rows.length} yêu cầu`,
+    columns: [
+      col("Request Code", 20, (r) => r.requestCode),
+      col("Requester", 18, (r) => r.requester),
+      col("Position", 16, (r) => r.position ?? ""),
+      col("Job title", 18, (r) => r.jobTitle ?? ""),
+      col("Location", 16, (r) => r.location ?? ""),
+      col("Section", 16, (r) => r.section ?? ""),
+      col("Group", 16, (r) => r.groupName ?? ""),
+      col("Division", 16, (r) => r.division ?? ""),
+      col("Department", 16, (r) => r.department ?? r.departmentText ?? ""),
+      col("Reason", 16, (r) => r.reason ?? ""),
+      col("Note for reason", 16, (r) => r.noteForReason ?? ""),
+      col("Special Requirements", 16, (r) => r.specialRequirements ?? ""),
+      col("Male Rq", 10, (r) => r.maleRq),
+      col("Female Rq", 10, (r) => r.femaleRq),
+      col("Male Application", 12, (r) => r.maleApplication),
+      col("Female Application", 12, (r) => r.femaleApplication),
+      col("Male Interviewed", 12, (r) => r.maleInterviewed),
+      col("Female Interviewed", 12, (r) => r.femaleInterviewed),
+      col("Male Recruited", 12, (r) => r.kpi.maleRecruited),
+      col("Female Recruited", 12, (r) => r.kpi.femaleRecruited),
+      col("Male Quit", 10, (r) => r.kpi.maleQuit),
+      col("Female Quit", 10, (r) => r.kpi.femaleQuit),
+      col("Male Transfer Out", 12, (r) => r.kpi.maleTransferOut),
+      col("Female Transfer Out", 12, (r) => r.kpi.femaleTransferOut),
+      col("Male Balance", 10, (r) => r.kpi.maleBalance),
+      col("Female Balance", 10, (r) => r.kpi.femaleBalance),
+      col("Total Balance", 10, (r) => r.kpi.totalBalance),
+      col("Status", 14, (r) => r.status),
+      col("Requested Date", 14, (r) => r.requestedDate ?? ""),
+      col("Expected Date", 14, (r) => r.expectedDate ?? ""),
+      col("Offered Date", 14, (r) => r.offeredDate ?? ""),
+      col("Completed Date", 14, (r) => r.completedDate ?? ""),
+      col("Offered Date vs Requested Date", 14, (r) => dateDiff(r.offeredDate, r.requestedDate)),
+      col("Completed Date vs Requested Date", 14, (r) => dateDiff(r.completedDate, r.requestedDate)),
+      col("Month", 10, (r) => r.month ?? ""),
+      col("Cost", 12, (r) => r.cost ?? 0),
+      col("Remarks", 16, (r) => r.remarks ?? ""),
+      col("To", 14, (r) => r.to ?? ""),
+      col("Rq Status", 14, (r) => r.rqStatus ?? ""),
+      col("Month_Rc", 10, (r) => r.monthRc ?? ""),
+      col("Total Request", 12, (r) => r.totalRequest),
+      col("Recruited vs Expected", 14, (r) => r.recruitedVsExpected),
+      col("Screened", 10, (r) => r.screened),
+      col("Interview", 10, (r) => r.interview),
+      col("Recruit", 10, (r) => r.recruit),
+      col("Month_Report", 12, (r) => r.monthReport ?? ""),
+      col("Created By", 14, (r) => r.createdBy),
+      col("Created At", 18, (r) => (r.createdAt ? new Date(r.createdAt).toLocaleString("vi-VN", { timeZone: "Asia/Ho_Chi_Minh" }) : "")),
+    ],
+    rows,
+    emptyMessage: "(Không có yêu cầu tuyển dụng nào khớp bộ lọc hiện tại)",
+  });
+
+  return workbookToBuffer(wb);
 }

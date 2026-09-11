@@ -39,7 +39,7 @@
 import "server-only";
 import { and, desc, eq, inArray, isNull } from "drizzle-orm";
 import { db } from "@/db";
-import { candidateDocuments, dailyApplications, departments, documentConfirmations, employmentSessions, workerProfiles, workforceMovements } from "@/db/schema";
+import { candidateDocuments, dailyApplications, departments, documentConfirmations, employmentSessions, recruitmentRequests, requestAllocations, workerProfiles, workforceMovements } from "@/db/schema";
 import { getWorkerCurrentState, type WorkerCurrentState } from "./workforce-roster";
 import { getElectronicConfirmationHistory, type ConfirmationHistoryEntry } from "./candidate-consent/confirmation-queries";
 import { effectiveStatus, type CandidateDocumentStatus } from "./candidate-consent/lifecycle";
@@ -63,6 +63,17 @@ export type EngagementMovement = {
   lifecycleAppliedAt: string | null;
 };
 
+export type EngagementRequestAllocation = {
+  id: string;
+  requestId: string;
+  requestCode: string | null;
+  requestStatus: string | null;
+  status: "ACTIVE" | "ENDED";
+  startedAt: string;
+  endedAt: string | null;
+  endReason: string | null;
+};
+
 export type Engagement = {
   session: {
     id: string;
@@ -81,6 +92,8 @@ export type Engagement = {
   isCurrent: boolean;
   movements: EngagementMovement[];
   electronicDocuments: ConfirmationHistoryEntry[];
+  /** request_allocations của session này — gắn với recruitment_requests (RQ) worker từng/đang thuộc, không suy đoán theo phòng ban. */
+  requestAllocations: EngagementRequestAllocation[];
 };
 
 export type Worker360Profile = {
@@ -203,6 +216,31 @@ export async function getWorker360Profile(workerId: string, scope: string[] | nu
     ]),
   ];
 
+  // request_allocations liên kết Worker 360 với Recruitment Request (RQ) — CHỈ theo
+  // employmentSessionId (đã Data-Scope lọc ở trên), không suy đoán theo deptId hiện tại
+  // của request (một RQ có thể đã đổi phòng ban theo thời gian).
+  const allocationRows = sessionIds.length
+    ? await db
+        .select({
+          id: requestAllocations.id,
+          employmentSessionId: requestAllocations.employmentSessionId,
+          requestId: requestAllocations.requestId,
+          status: requestAllocations.status,
+          startedAt: requestAllocations.startedAt,
+          endedAt: requestAllocations.endedAt,
+          endReason: requestAllocations.endReason,
+        })
+        .from(requestAllocations)
+        .where(inArray(requestAllocations.employmentSessionId, sessionIds))
+        .orderBy(desc(requestAllocations.startedAt))
+    : [];
+
+  const requestIds = [...new Set(allocationRows.map((a) => a.requestId))];
+  const requestRows = requestIds.length
+    ? await db.select({ id: recruitmentRequests.id, requestCode: recruitmentRequests.requestCode, status: recruitmentRequests.status }).from(recruitmentRequests).where(inArray(recruitmentRequests.id, requestIds))
+    : [];
+  const requestById = new Map(requestRows.map((r) => [r.id, r]));
+
   const [deptRows, appRows, allConfirmationHistory, legacyDocRows] = await Promise.all([
     deptIds.length ? db.select({ id: departments.id, deptName: departments.deptName, groupName: departments.groupName, section: departments.section }).from(departments).where(inArray(departments.id, deptIds)) : Promise.resolve([]),
     sessionRows.some((s) => s.dailyApplicationId)
@@ -259,6 +297,23 @@ export async function getWorker360Profile(workerId: string, scope: string[] | nu
     // rather than surfaced, since it can't legitimately occur).
   }
 
+  const allocationsBySession = new Map<string, EngagementRequestAllocation[]>();
+  for (const a of allocationRows) {
+    const req = requestById.get(a.requestId);
+    const list = allocationsBySession.get(a.employmentSessionId) ?? [];
+    list.push({
+      id: a.id,
+      requestId: a.requestId,
+      requestCode: req?.requestCode ?? null,
+      requestStatus: req?.status ?? null,
+      status: a.status as "ACTIVE" | "ENDED",
+      startedAt: a.startedAt.toISOString(),
+      endedAt: a.endedAt ? a.endedAt.toISOString() : null,
+      endReason: a.endReason,
+    });
+    allocationsBySession.set(a.employmentSessionId, list);
+  }
+
   const docsBySession = new Map<string, ConfirmationHistoryEntry[]>();
   for (const doc of allConfirmationHistory) {
     if (!doc.employmentSessionId || !sessionIds.includes(doc.employmentSessionId)) continue;
@@ -295,6 +350,7 @@ export async function getWorker360Profile(workerId: string, scope: string[] | nu
       isCurrent: s.status === "APPROVED" && s.endDate === null,
       movements: movementsBySession.get(s.id) ?? [],
       electronicDocuments: docsBySession.get(s.id) ?? [],
+      requestAllocations: allocationsBySession.get(s.id) ?? [],
     };
   });
 

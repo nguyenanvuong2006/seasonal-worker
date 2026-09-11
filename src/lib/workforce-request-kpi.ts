@@ -312,6 +312,10 @@ export type RequestKpiInput = {
   /** Nghỉ việc — RESIGNATION đã xác nhận (INACTIVE) trong khoảng thời gian request. */
   maleQuit: number;
   femaleQuit: number;
+  /** Thuyên chuyển ra khỏi request — TRANSFER đã có hiệu lực (lifecycleAppliedAt IS NOT NULL)
+   *  của worker từng có allocation ở request này, trong khoảng thời gian request. */
+  maleTransferOut: number;
+  femaleTransferOut: number;
 };
 
 export type RequestKpi = GenderCounts & {
@@ -327,6 +331,9 @@ export type RequestKpi = GenderCounts & {
   maleQuit: number;
   femaleQuit: number;
   totalQuit: number;
+  maleTransferOut: number;
+  femaleTransferOut: number;
+  totalTransferOut: number;
   maleBalance: number;
   femaleBalance: number;
   totalBalance: number;
@@ -338,6 +345,7 @@ export function computeRequestKpi(input: RequestKpiInput): RequestKpi {
   const totalCurrent = input.maleCurrent + input.femaleCurrent;
   const totalRecruited = input.maleRecruited + input.femaleRecruited;
   const totalQuit = input.maleQuit + input.femaleQuit;
+  const totalTransferOut = input.maleTransferOut + input.femaleTransferOut;
 
   const balance = computeBalance(input);
 
@@ -369,6 +377,9 @@ export function computeRequestKpi(input: RequestKpiInput): RequestKpi {
     maleQuit: input.maleQuit,
     femaleQuit: input.femaleQuit,
     totalQuit,
+    maleTransferOut: input.maleTransferOut,
+    femaleTransferOut: input.femaleTransferOut,
+    totalTransferOut,
     maleBalance: balance.maleBalance,
     femaleBalance: balance.femaleBalance,
     totalBalance: balance.totalBalance,
@@ -510,6 +521,7 @@ export function aggregateRequestKpis(kpis: RequestKpi[]): {
   currentWorkforce: GenderCounts;
   totalRecruited: GenderCounts;
   totalQuit: GenderCounts;
+  totalTransferOut: GenderCounts;
   needToRecruit: GenderCounts;
 } {
   const acc = {
@@ -517,6 +529,7 @@ export function aggregateRequestKpis(kpis: RequestKpi[]): {
     currentWorkforce: emptyCounts(),
     totalRecruited: emptyCounts(),
     totalQuit: emptyCounts(),
+    totalTransferOut: emptyCounts(),
     needToRecruit: emptyCounts(),
   };
   for (const k of kpis) {
@@ -532,9 +545,47 @@ export function aggregateRequestKpis(kpis: RequestKpi[]): {
     acc.totalQuit.male += k.maleQuit;
     acc.totalQuit.female += k.femaleQuit;
     acc.totalQuit.total += k.totalQuit;
+    acc.totalTransferOut.male += k.maleTransferOut;
+    acc.totalTransferOut.female += k.femaleTransferOut;
+    acc.totalTransferOut.total += k.totalTransferOut;
     acc.needToRecruit.male += k.maleBalance;
     acc.needToRecruit.female += k.femaleBalance;
     acc.needToRecruit.total += k.totalBalance;
   }
   return acc;
+}
+
+/* ============================================================
+   HISTORICAL asOf (approved design mục 4 + Phase 2B mục 2.1)
+   ------------------------------------------------------------
+   Request đang mở (PENDING/PROCESSING hoặc bất kỳ status live nào
+   khác EXPIRED/COMPLETED/CANCELLED) luôn dùng `today` — tham số bắt
+   buộc truyền vào (module này THUẦN, không tự gọi Date.now()/todayStr()
+   để không phụ thuộc I/O không cần thiết).
+
+   Request đã kết thúc (EXPIRED | COMPLETED | CANCELLED) "đóng băng" tại
+   mốc kết thúc, ưu tiên:
+     1. endDate         — mốc nghiệp vụ chính thức.
+     2. completedDate    — dùng khi endDate trống nhưng đã có ngày tuyển đủ.
+     3. updatedAt (ngày) — LEGACY FALLBACK CUỐI CÙNG. Đây là timestamp kỹ
+        thuật (có thể bị 1 edit không liên quan tới lifecycle làm trôi),
+        KHÔNG phải mốc nghiệp vụ chính thức — chỉ dùng khi request không
+        có cả endDate lẫn completedDate.
+   ============================================================ */
+export type RequestForAsOf = {
+  status: string;
+  endDate: string | null;
+  completedDate: string | null;
+  updatedAt: Date;
+};
+
+const HISTORICAL_REQUEST_STATUSES = new Set(["EXPIRED", "COMPLETED", "CANCELLED"]);
+
+export function isHistoricalRequestStatus(status: string): boolean {
+  return HISTORICAL_REQUEST_STATUSES.has(status);
+}
+
+export function resolveDefaultAsOf(request: RequestForAsOf, today: string): string {
+  if (!isHistoricalRequestStatus(request.status)) return today;
+  return request.endDate ?? request.completedDate ?? request.updatedAt.toISOString().slice(0, 10);
 }

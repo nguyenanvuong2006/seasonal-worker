@@ -1,0 +1,317 @@
+import test from "node:test";
+import assert from "node:assert/strict";
+import { createFakeDb, drizzleStub, makeTable, condsOf, eqValue, type FakeDb, type QueryCall } from "./test-support/fake-drizzle.ts";
+import { loadModule, serverOnlyStub } from "./test-support/load-module.ts";
+
+/* ============================================================
+   KIỂM THỬ TẦNG DB — batchComputeRequestKpis() trên ĐÚNG
+   src/lib/workforce-request.ts (Phase 2B mục 3.6 — approved design
+   mục 4: "RQ09 hết hạn -> KPI phải đóng băng tại asOf, không trôi
+   theo Current Workforce realtime của RQ10").
+
+   Scenario C (mission mục 10.C, acceptance #7-#10):
+     RQ09: requestedDate=2026-09-01, expectedDate=endDate=2026-09-30.
+       w1: allocated RQ09 09-01 -> RESIGN hiệu lực 09-25 (Quit).
+       w2: allocated RQ09 09-01 -> TRANSFER (department khác) hiệu lực
+           09-20, lifecycleAppliedAt đã set (Transfer-Out).
+       w3: allocated RQ09 09-01 -> vẫn ACTIVE xuyên suốt 09-30.
+     Sau 09-30 (mô phỏng RQ10 tiếp nhận): w3 CŨNG được end allocation
+     RQ09 (giả lập reallocate sang RQ10 ngày 10-01).
+
+   Assertions bắt buộc:
+     - asOf=2026-09-30 (đúng như route sẽ resolveDefaultAsOf cho RQ09
+       đã EXPIRED): Current=1 (w3), Quit=1 (w1), TransferOut=1 (w2) —
+       kết quả CUỐI KỲ, không đổi dù đã sang tháng 10.
+     - asOf="today" (2026-10-15, LIVE — mô phỏng lỗi CŨ nếu route quên
+       truyền asOf): Current=0 vì w3 đã bị end allocation sau 10-01 —
+       CHỨNG MINH sự khác biệt giữa "đóng băng đúng" và "trôi theo
+       realtime" mà mission yêu cầu phải tránh.
+   ============================================================ */
+
+const requestAllocations = makeTable("request_allocations");
+const employmentSessions = makeTable("employment_sessions");
+const workerProfiles = makeTable("worker_profiles");
+const workforceMovements = makeTable("workforce_movements");
+const dailyApplications = makeTable("daily_applications");
+const recruitmentRequests = makeTable("recruitment_requests");
+const schemaStub = {
+  requestAllocations,
+  employmentSessions,
+  workerProfiles,
+  workforceMovements,
+  dailyApplications,
+  recruitmentRequests,
+};
+
+const TODAY = "2026-10-15";
+const RQ09 = "rq09";
+
+type AllocRow = {
+  id: string;
+  requestId: string;
+  workerId: string;
+  employmentSessionId: string;
+  status: "ACTIVE" | "ENDED";
+  startedAt: Date;
+  endedAt: Date | null;
+};
+type SessionRow = { id: string; status: string; endDate: string | null; startingDate: string | null };
+type WorkerRow = { id: string; gender: string; deletedAt: null };
+type MovementRow = {
+  id: string;
+  workerId: string;
+  movementType: "resignation" | "transfer";
+  status: string;
+  effectiveDate: string;
+  lifecycleAppliedAt: Date | null;
+};
+
+function buildFixture() {
+  const allocations: AllocRow[] = [
+    { id: "a-w1", requestId: RQ09, workerId: "w1", employmentSessionId: "s-w1", status: "ENDED", startedAt: new Date("2026-09-01"), endedAt: new Date("2026-09-25") },
+    { id: "a-w2", requestId: RQ09, workerId: "w2", employmentSessionId: "s-w2", status: "ENDED", startedAt: new Date("2026-09-01"), endedAt: new Date("2026-09-20") },
+    // w3 ban đầu ACTIVE, sau đó (mô phỏng bước "sang RQ10") bị END 10-01 — 2 bản ghi
+    // riêng biệt để phản ánh đúng append-only: KHÔNG update tại chỗ, chỉ có 1 dòng vì
+    // fixture test chỉ cần trạng thái ENDED cuối cùng — asOf=09-30 vẫn thấy ACTIVE vì
+    // endedAt=10-01 >= 09-30.
+    { id: "a-w3", requestId: RQ09, workerId: "w3", employmentSessionId: "s-w3", status: "ENDED", startedAt: new Date("2026-09-01"), endedAt: new Date("2026-10-01") },
+  ];
+  const sessions: Record<string, SessionRow> = {
+    "s-w1": { id: "s-w1", status: "ENDED", endDate: "2026-09-25", startingDate: "2026-09-01" },
+    "s-w2": { id: "s-w2", status: "APPROVED", endDate: null, startingDate: "2026-09-01" }, // transfer KHÔNG end session
+    "s-w3": { id: "s-w3", status: "APPROVED", endDate: null, startingDate: "2026-09-01" },
+  };
+  const workers: Record<string, WorkerRow> = {
+    w1: { id: "w1", gender: "Nam", deletedAt: null },
+    w2: { id: "w2", gender: "Nữ", deletedAt: null },
+    w3: { id: "w3", gender: "Nam", deletedAt: null },
+  };
+  const movements: MovementRow[] = [
+    { id: "m-resign-w1", workerId: "w1", movementType: "resignation", status: "INACTIVE", effectiveDate: "2026-09-25", lifecycleAppliedAt: new Date("2026-09-25") },
+    { id: "m-transfer-w2", workerId: "w2", movementType: "transfer", status: "TRANSFER_COMPLETED", effectiveDate: "2026-09-20", lifecycleAppliedAt: new Date("2026-09-20") },
+  ];
+  const pipeline = [
+    { requestId: RQ09, gender: "Nam", status: "APPROVED", submittedAt: new Date("2026-09-01") },
+    { requestId: RQ09, gender: "Nữ", status: "APPROVED", submittedAt: new Date("2026-09-01") },
+    { requestId: RQ09, gender: "Nam", status: "APPROVED", submittedAt: new Date("2026-09-01") },
+  ];
+  return { allocations, sessions, workers, movements, pipeline };
+}
+
+function respondFor(fixture: ReturnType<typeof buildFixture>) {
+  return (call: QueryCall): unknown => {
+    if (call.table === "request_allocations") {
+      const movementType = eqValue(call, "workforce_movements.movementType");
+      if (movementType === "resignation") {
+        // fetchQuitRows: JOIN request_allocations (mọi status) + workforce_movements resignation/INACTIVE.
+        return fixture.allocations
+          .map((a) => {
+            const mv = fixture.movements.find((m) => m.workerId === a.workerId && m.movementType === "resignation" && m.status === "INACTIVE");
+            if (!mv) return null;
+            return {
+              requestId: a.requestId,
+              movementId: mv.id,
+              workerId: a.workerId,
+              gender: fixture.workers[a.workerId].gender,
+              effectiveDate: mv.effectiveDate,
+              allocatedAt: a.startedAt,
+            };
+          })
+          .filter((r): r is NonNullable<typeof r> => r !== null);
+      }
+      if (movementType === "transfer") {
+        // fetchTransferOutRows: JOIN request_allocations (mọi status) + workforce_movements
+        // transfer/TRANSFER_COMPLETED/lifecycleAppliedAt IS NOT NULL.
+        return fixture.allocations
+          .map((a) => {
+            const mv = fixture.movements.find(
+              (m) => m.workerId === a.workerId && m.movementType === "transfer" && m.status === "TRANSFER_COMPLETED" && m.lifecycleAppliedAt,
+            );
+            if (!mv) return null;
+            return {
+              requestId: a.requestId,
+              movementId: mv.id,
+              workerId: a.workerId,
+              gender: fixture.workers[a.workerId].gender,
+              effectiveDate: mv.effectiveDate,
+              allocatedAt: a.startedAt,
+              fromDeptId: "d1",
+              toDeptId: "d2",
+            };
+          })
+          .filter((r): r is NonNullable<typeof r> => r !== null);
+      }
+      const activeEq = eqValue(call, "request_allocations.status");
+      if (activeEq === "ACTIVE") {
+        // fetchLiveAllocationRows: CHỈ ACTIVE + session APPROVED + endDate NULL (bỏ qua asOf).
+        return fixture.allocations
+          .filter((a) => a.status === "ACTIVE" && fixture.sessions[a.employmentSessionId].status === "APPROVED" && fixture.sessions[a.employmentSessionId].endDate === null)
+          .map((a) => ({ id: a.id, requestId: a.requestId, workerId: a.workerId, sessionId: a.employmentSessionId, gender: fixture.workers[a.workerId].gender }));
+      }
+      // fetchHistoricalAllocationRows: có sql fragment asOf — parse từ điều kiện sql text/values.
+      const sqlConds = condsOf(call).filter((c) => c.op === "sql");
+      const asOfVal = sqlConds
+        .flatMap((c) => (c.op === "sql" ? c.values : []))
+        .find((v): v is string => typeof v === "string" && /^\d{4}-\d{2}-\d{2}$/.test(v));
+      const asOf = asOfVal ?? TODAY;
+      return fixture.allocations
+        .filter((a) => {
+          const sess = fixture.sessions[a.employmentSessionId];
+          const startedOk = a.startedAt.toISOString().slice(0, 10) <= asOf;
+          const allocEndOk = a.endedAt === null || a.endedAt.toISOString().slice(0, 10) >= asOf;
+          const sessEndOk = sess.endDate === null || sess.endDate >= asOf;
+          const sessStartOk = sess.startingDate === null || sess.startingDate <= asOf;
+          return startedOk && allocEndOk && sessEndOk && sessStartOk;
+        })
+        .map((a) => ({ id: a.id, requestId: a.requestId, workerId: a.workerId, sessionId: a.employmentSessionId, gender: fixture.workers[a.workerId].gender }));
+    }
+    if (call.table === "daily_applications") {
+      return fixture.pipeline;
+    }
+    return undefined;
+  };
+}
+
+function load(db: FakeDb) {
+  const kpi = loadModule(new URL("./workforce-request-kpi.ts", import.meta.url), { stubs: {} });
+  return loadModule(new URL("./workforce-request.ts", import.meta.url), {
+    stubs: {
+      "server-only": serverOnlyStub,
+      "drizzle-orm": drizzleStub,
+      "@/db": { db },
+      "@/db/schema": schemaStub,
+      "@/lib/auth": { getUserScope: async () => null, hasPermission: async () => false, writeAudit: async () => undefined },
+      "@/lib/data-scope": { scopeAllowsDepartment: () => true },
+      "@/lib/helpers": {
+        todayStr: () => TODAY,
+        isMale: (g: string | null) => g === "Nam",
+        isFemale: (g: string | null) => g === "Nữ",
+      },
+      "@/lib/person-name": { normalizePersonName: (s: string) => s },
+      "@/lib/workforce-request-kpi": kpi,
+    },
+  });
+}
+
+type RequestRow = {
+  id: string;
+  maleRq: number;
+  femaleRq: number;
+  totalRequest: number;
+  requestedDate: string | null;
+  expectedDate: string | null;
+  createdAt: Date;
+};
+
+const RQ09_ROW: RequestRow = {
+  id: RQ09,
+  maleRq: 2,
+  femaleRq: 1,
+  totalRequest: 3,
+  requestedDate: "2026-09-01",
+  expectedDate: "2026-09-30",
+  createdAt: new Date("2026-09-01"),
+};
+
+test("Scenario C: RQ09 xem lại asOf=2026-09-30 (endDate) -> Current/Quit/TransferOut đúng CUỐI KỲ, bất biến", async () => {
+  const fixture = buildFixture();
+  const db = createFakeDb({ respond: respondFor(fixture) });
+  const mod = load(db) as {
+    batchComputeRequestKpis: (rows: RequestRow[], asOf: string) => Promise<Map<string, Record<string, number>>>;
+  };
+
+  const kpis = await mod.batchComputeRequestKpis([RQ09_ROW], "2026-09-30");
+  const kpi = kpis.get(RQ09)!;
+
+  assert.equal(kpi.totalCurrent, 1, "chỉ w3 còn ACTIVE trên RQ09 tại 09-30 (w1 nghỉ, w2 chuyển đi)");
+  assert.equal(kpi.totalQuit, 1, "w1 nghỉ việc trong cửa sổ request -> Quit=1");
+  assert.equal(kpi.totalTransferOut, 1, "w2 thuyên chuyển có hiệu lực trong cửa sổ request -> TransferOut=1");
+  assert.equal(kpi.totalRecruited, 3, "pipeline daily_applications APPROVED gắn với RQ09");
+});
+
+test("Scenario C: gọi LẠI sau khi w3 cũng rời RQ09 (RQ10 tiếp nhận) — asOf=endDate VẪN cho kết quả CUỐI KỲ y hệt, không trôi theo RQ10", async () => {
+  const fixture = buildFixture(); // w3 đã có endedAt=2026-10-01 sẵn trong fixture (đại diện cho "đã reallocate sang RQ10")
+  const db = createFakeDb({ respond: respondFor(fixture) });
+  const mod = load(db) as {
+    batchComputeRequestKpis: (rows: RequestRow[], asOf: string) => Promise<Map<string, Record<string, number>>>;
+  };
+
+  const historical = await mod.batchComputeRequestKpis([RQ09_ROW], "2026-09-30");
+  assert.equal(historical.get(RQ09)!.totalCurrent, 1, "asOf=endDate PHẢI vẫn thấy w3 (còn allocation tới tận 10-01), bất kể hôm nay là gì");
+
+  const live = await mod.batchComputeRequestKpis([RQ09_ROW], TODAY);
+  assert.equal(live.get(RQ09)!.totalCurrent, 0, "asOf=today (LIVE) đúng là 0 vì w3 đã rời RQ09 — CHỨNG MINH khác biệt: route PHẢI dùng asOf=endDate cho request EXPIRED/COMPLETED, không được để mặc định 'today' làm trôi lịch sử");
+});
+
+/* ----------------------- Scenario B (mission mục 10.B): Transfer TƯƠNG LAI (lifecycleAppliedAt=null) KHÔNG được tính Transfer-Out, worker vẫn Current ----------------------- */
+
+function buildFixtureWithFutureTransfer() {
+  const fixture = buildFixture();
+  // w4: allocation RQ09 VẪN ACTIVE (chưa bị end) — transfer đã CONFIRM_ARRIVED
+  // (status=TRANSFER_COMPLETED) nhưng effectiveDate là NGÀY MAI và
+  // lifecycleAppliedAt CHƯA được set (applyEffectiveWorkforceMovements chưa chạy tới
+  // ngày đó) — đúng invariant workforce-movements.ts: department/allocation chỉ đổi
+  // khi lifecycle THỰC SỰ áp dụng, không phải tại thời điểm HR xác nhận.
+  fixture.allocations.push({
+    id: "a-w4", requestId: RQ09, workerId: "w4", employmentSessionId: "s-w4",
+    status: "ACTIVE", startedAt: new Date("2026-09-01"), endedAt: null,
+  });
+  fixture.sessions["s-w4"] = { id: "s-w4", status: "APPROVED", endDate: null, startingDate: "2026-09-01" };
+  fixture.workers.w4 = { id: "w4", gender: "Nam", deletedAt: null };
+  fixture.movements.push({
+    id: "m-transfer-w4", workerId: "w4", movementType: "transfer", status: "TRANSFER_COMPLETED",
+    effectiveDate: "2026-09-30", lifecycleAppliedAt: null,
+  });
+  return fixture;
+}
+
+test("Scenario B: transfer CONFIRMED nhưng lifecycle CHƯA áp dụng (lifecycleAppliedAt=null) -> Transfer-Out=0, worker VẪN tính Current trên RQ09", async () => {
+  const fixture = buildFixtureWithFutureTransfer();
+  const db = createFakeDb({ respond: respondFor(fixture) });
+  const mod = load(db) as {
+    batchComputeRequestKpis: (rows: RequestRow[], asOf: string) => Promise<Map<string, Record<string, number>>>;
+  };
+
+  const kpis = await mod.batchComputeRequestKpis([RQ09_ROW], TODAY);
+  const kpi = kpis.get(RQ09)!;
+
+  // Base fixture đã có sẵn w2 (Transfer-Out=1, lifecycleAppliedAt đã set) — w4 (lifecycleAppliedAt=null)
+  // KHÔNG được cộng thêm vào con số này dù status cũng đã TRANSFER_COMPLETED.
+  assert.equal(kpi.totalTransferOut, 1, "lifecycleAppliedAt=null -> w4 KHÔNG được tính Transfer-Out dù status đã TRANSFER_COMPLETED (chỉ w2 của base fixture được tính)");
+  assert.equal(kpi.totalCurrent, 1, "w4 vẫn ACTIVE trên RQ09 (allocation chưa bị END) -> vẫn tính Current");
+});
+
+test("Scenario B: SAU KHI lifecycle áp dụng (lifecycleAppliedAt được set, allocation ENDED) -> Transfer-Out=1, worker KHÔNG còn tính Current", async () => {
+  const fixture = buildFixtureWithFutureTransfer();
+  // Mô phỏng applyEffectiveWorkforceMovements() đã chạy tới effectiveDate: allocation
+  // RQ09 của w4 bị END (append-only, KHÔNG update tại chỗ) và lifecycleAppliedAt được set.
+  fixture.allocations = fixture.allocations.map((a) =>
+    a.id === "a-w4" ? { ...a, status: "ENDED" as const, endedAt: new Date("2026-09-30") } : a,
+  );
+  fixture.movements = fixture.movements.map((m) =>
+    m.id === "m-transfer-w4" ? { ...m, lifecycleAppliedAt: new Date("2026-09-30") } : m,
+  );
+  const db = createFakeDb({ respond: respondFor(fixture) });
+  const mod = load(db) as {
+    batchComputeRequestKpis: (rows: RequestRow[], asOf: string) => Promise<Map<string, Record<string, number>>>;
+  };
+
+  const kpis = await mod.batchComputeRequestKpis([RQ09_ROW], TODAY);
+  const kpi = kpis.get(RQ09)!;
+
+  // w2 (base fixture) + w4 (giờ đã lifecycle-applied) = 2.
+  assert.equal(kpi.totalTransferOut, 2, "lifecycleAppliedAt được set -> Transfer-Out phải tính CẢ w2 (base) và w4");
+  assert.equal(kpi.totalCurrent, 0, "allocation RQ09 của w4 đã ENDED -> KHÔNG còn tính Current trên RQ09 (employment vẫn ACTIVE ở dept mới, không thuộc phạm vi KPI của RQ09 nữa)");
+});
+
+test("Quit/TransferOut không đổi bởi asOf muộn hơn effectiveDate (bị chặn bởi window.end=expectedDate, không phải bởi asOf)", async () => {
+  const fixture = buildFixture();
+  const db = createFakeDb({ respond: respondFor(fixture) });
+  const mod = load(db) as {
+    batchComputeRequestKpis: (rows: RequestRow[], asOf: string) => Promise<Map<string, Record<string, number>>>;
+  };
+  const farFuture = await mod.batchComputeRequestKpis([RQ09_ROW], "2027-01-01");
+  const kpi = farFuture.get(RQ09)!;
+  assert.equal(kpi.totalQuit, 1, "Quit vẫn = 1 dù xem ở thời điểm rất xa sau đó — cửa sổ request (expectedDate) đã chốt, không đổi theo asOf");
+  assert.equal(kpi.totalTransferOut, 1, "TransferOut tương tự — bất biến theo cửa sổ request");
+});

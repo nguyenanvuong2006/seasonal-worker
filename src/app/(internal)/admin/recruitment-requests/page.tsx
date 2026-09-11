@@ -16,6 +16,7 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useSearchParams } from "next/navigation";
+import Link from "next/link";
 import {
   Badge,
   Button,
@@ -65,6 +66,25 @@ import {
 /* ============================================================
    TYPES
    ============================================================ */
+type RequestKpi = {
+  maleRecruited: number;
+  femaleRecruited: number;
+  totalRecruited: number;
+  maleQuit: number;
+  femaleQuit: number;
+  totalQuit: number;
+  maleTransferOut: number;
+  femaleTransferOut: number;
+  totalTransferOut: number;
+  maleCurrent: number;
+  femaleCurrent: number;
+  totalCurrent: number;
+  maleBalance: number;
+  femaleBalance: number;
+  totalBalance: number;
+  fillRatePercent: number;
+};
+
 type RecruitmentRequest = {
   id: string;
   requestCode: string;
@@ -72,8 +92,39 @@ type RecruitmentRequest = {
   status: string;
   totalBalance: number;
   expectedDate: string | null;
+  kpi?: RequestKpi | null;
   [key: string]: unknown;
 };
+
+/**
+ * Phase 2C — cột KPI hiển thị trên bảng phải đọc từ `.kpi.*` (canonical
+ * engine batchComputeRequestKpis, ĐÚNG 1 nguồn dùng chung với Request
+ * Detail/Export), KHÔNG đọc cột tĩnh cũ trên row. "Làm phẳng" các trường
+ * đã có tên trùng (maleRecruited/maleQuit/maleBalance/...) để renderCellValue
+ * hiện có (đọc row[col.key]) không cần sửa; đồng thời thêm các trường mới
+ * (Current/Transfer Out/Fill Rate) vốn không tồn tại như cột DB tĩnh.
+ */
+function withCanonicalKpi(r: RecruitmentRequest): RecruitmentRequest {
+  const kpi = r.kpi;
+  if (!kpi) return r;
+  return {
+    ...r,
+    maleRecruited: kpi.maleRecruited,
+    femaleRecruited: kpi.femaleRecruited,
+    maleQuit: kpi.maleQuit,
+    femaleQuit: kpi.femaleQuit,
+    maleBalance: kpi.maleBalance,
+    femaleBalance: kpi.femaleBalance,
+    totalBalance: kpi.totalBalance,
+    maleCurrent: kpi.maleCurrent,
+    femaleCurrent: kpi.femaleCurrent,
+    totalCurrent: kpi.totalCurrent,
+    maleTransferOut: kpi.maleTransferOut,
+    femaleTransferOut: kpi.femaleTransferOut,
+    totalTransferOut: kpi.totalTransferOut,
+    fillRatePercent: kpi.fillRatePercent,
+  };
+}
 
 type Capabilities = {
   canImport: boolean;
@@ -258,9 +309,6 @@ export default function RecruitmentRequestsPage() {
   // --- Chuyển phân bổ (Yêu cầu #7, #8) --------------------------------
   const [reallocFrom, setReallocFrom] = useState<{ id: string; code: string } | null>(null);
 
-  // --- Chi tiết (mobile drawer) ---------------------------------------
-  const [detailRow, setDetailRow] = useState<RecruitmentRequest | null>(null);
-
   const [batchLoading, setBatchLoading] = useState(false);
 
   /* ---------- phát hiện thiết bị ---------- */
@@ -335,7 +383,7 @@ export default function RecruitmentRequestsPage() {
         label: "recruitment-requests.list",
       });
     if (result.ok) {
-      setRows(result.data.rows ?? []);
+      setRows((result.data.rows ?? []).map(withCanonicalKpi));
       setTotal(result.data.total ?? 0);
     } else {
       setRows([]);
@@ -657,9 +705,9 @@ export default function RecruitmentRequestsPage() {
             )}
           >
             {col.key === "requestCode" ? (
-              <button className="text-left hover:text-primary hover:underline" onClick={() => setDetailRow(r)}>
+              <Link href={`/admin/recruitment-requests/${r.id}`} className="text-left hover:text-primary hover:underline">
                 {String(r.requestCode)}
-              </button>
+              </Link>
             ) : (
               renderCellValue(col, r)
             )}
@@ -902,9 +950,9 @@ export default function RecruitmentRequestsPage() {
             /* ---------- MOBILE: danh sách thẻ, chỉ cột ưu tiên (Yêu cầu #12) ---------- */
             <div className="divide-y divide-border">
               {rows.map((r) => (
-                <button
+                <Link
                   key={r.id}
-                  onClick={() => setDetailRow(r)}
+                  href={`/admin/recruitment-requests/${r.id}`}
                   className="flex w-full flex-col gap-1 px-4 py-3 text-left transition-colors hover:bg-surface-hover"
                 >
                   <div className="flex items-center justify-between gap-2">
@@ -921,7 +969,7 @@ export default function RecruitmentRequestsPage() {
                         </span>
                       ))}
                   </div>
-                </button>
+                </Link>
               ))}
             </div>
           ) : (
@@ -1005,45 +1053,6 @@ export default function RecruitmentRequestsPage() {
         onClose={() => setReallocFrom(null)}
         onDone={() => void loadData()}
       />
-
-      {/* Ngăn chi tiết — hiển thị TOÀN BỘ cột được phép xem (Yêu cầu #12) */}
-      <Modal
-        open={detailRow !== null}
-        onClose={() => setDetailRow(null)}
-        title={`Yêu cầu ${detailRow?.requestCode ?? ""}`}
-        description="Chi tiết đầy đủ theo cấu hình cột của vai trò bạn."
-        width="max-w-2xl"
-        footer={
-          <div className="flex w-full justify-between gap-2">
-            {caps.canReallocate && detailRow ? (
-              <Button
-                variant="outline"
-                size="sm"
-                onClick={() => {
-                  setReallocFrom({ id: detailRow.id, code: detailRow.requestCode });
-                  setDetailRow(null);
-                }}
-              >
-                <Shuffle className="h-3.5 w-3.5" /> Chuyển phân bổ DW
-              </Button>
-            ) : <span />}
-            <Button variant="ghost" size="sm" onClick={() => setDetailRow(null)}>Đóng</Button>
-          </div>
-        }
-      >
-        {detailRow && (
-          <dl className="grid grid-cols-1 gap-x-6 gap-y-2 sm:grid-cols-2">
-            {columns
-              .filter((c) => c.visible || device === "mobile")
-              .map((col) => (
-                <div key={col.key} className="flex items-baseline justify-between gap-3 border-b border-border/60 py-1">
-                  <dt className="text-[11.5px] text-fg-muted">{col.labelVi}</dt>
-                  <dd className="text-right text-[12.5px] font-medium text-fg">{renderCellValue(col, detailRow)}</dd>
-                </div>
-              ))}
-          </dl>
-        )}
-      </Modal>
 
       {/* Import Modal — chỉ render khi có quyền (Yêu cầu #11) */}
       {caps.canImport && (

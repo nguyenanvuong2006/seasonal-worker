@@ -82,12 +82,22 @@ export const RECRUITMENT_REQUEST_COLUMNS: ColumnDef[] = [
   { key: "screened", label: "Screened", labelVi: "Đã sàng lọc", group: "funnel", type: "number", source: "SYSTEM", sortable: true, width: 100 },
   { key: "interview", label: "Interview", labelVi: "Phỏng vấn", group: "funnel", type: "number", source: "SYSTEM", sortable: true, width: 100 },
   { key: "recruit", label: "Recruit", labelVi: "Tuyển", group: "funnel", type: "number", source: "SYSTEM", sortable: true, width: 100 },
+  // Phase 2C — canonical live KPI (batchComputeRequestKpis, dùng chung với Request
+  // Detail/Export). KHÔNG có cột DB tương ứng trên recruitment_requests nên KHÔNG
+  // đánh dấu sortable (server chỉ sort theo cột DB thật — xem SORTABLE_DB_COLUMNS).
+  { key: "maleCurrent", label: "Male Current", labelVi: "Nam đang làm (Hiện tại)", group: "funnel", type: "number", source: "SYSTEM", width: 110 },
+  { key: "femaleCurrent", label: "Female Current", labelVi: "Nữ đang làm (Hiện tại)", group: "funnel", type: "number", source: "SYSTEM", width: 110 },
+  { key: "totalCurrent", label: "Total Current", labelVi: "Tổng đang làm (Hiện tại)", group: "funnel", type: "number", source: "SYSTEM", width: 120 },
+  { key: "maleTransferOut", label: "Male Transfer Out", labelVi: "Nam chuyển đi", group: "funnel", type: "number", source: "SYSTEM", width: 110 },
+  { key: "femaleTransferOut", label: "Female Transfer Out", labelVi: "Nữ chuyển đi", group: "funnel", type: "number", source: "SYSTEM", width: 110 },
+  { key: "totalTransferOut", label: "Total Transfer Out", labelVi: "Tổng chuyển đi", group: "funnel", type: "number", source: "SYSTEM", width: 120 },
 
   // --- Balance (công thức, không cho Excel ghi đè) ----------------------
   { key: "maleBalance", label: "Male Balance", labelVi: "Còn thiếu Nam", group: "balance", type: "number", source: "DERIVED", sortable: true, width: 100 },
   { key: "femaleBalance", label: "Female Balance", labelVi: "Còn thiếu Nữ", group: "balance", type: "number", source: "DERIVED", sortable: true, width: 100 },
   { key: "totalBalance", label: "Total Balance", labelVi: "Tổng còn thiếu", group: "balance", type: "number", source: "DERIVED", sortable: true, width: 110, mobilePriority: 11 },
   { key: "recruitedVsExpected", label: "Recruited vs Expected", labelVi: "Đã tuyển / Kế hoạch", group: "balance", type: "percent", source: "DERIVED", sortable: true, width: 130 },
+  { key: "fillRatePercent", label: "Fill Rate %", labelVi: "Tỉ lệ đáp ứng (canonical)", group: "balance", type: "percent", source: "SYSTEM", width: 130 },
 
   // --- Dates (Yêu cầu #6 — SÁU trường ngày TÁCH BIỆT) -------------------
   { key: "requestedDate", label: "Requested Date", labelVi: "Ngày yêu cầu", group: "dates", type: "date", source: "INPUT", sortable: true, width: 120 },

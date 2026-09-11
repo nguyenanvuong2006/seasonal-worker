@@ -15,6 +15,8 @@ import {
   reconcileRecruitmentKpis,
   KPI_RECONCILIATION_OK,
   KPI_RECONCILIATION_MISMATCH,
+  resolveDefaultAsOf,
+  isHistoricalRequestStatus,
   type ActiveAllocationRef,
   type AllocationPlanState,
 } from "./workforce-request-kpi.ts";
@@ -354,6 +356,8 @@ test("A. Request 5M+5F, phân bổ 7M+3F → cho phép + MALE_OVER_TARGET", () =
     femaleRecruited: 0,
     maleQuit: 0,
     femaleQuit: 0,
+    maleTransferOut: 0,
+    femaleTransferOut: 0,
   });
   const codes = kpi.warnings.map((w) => w.code);
   assert.ok(codes.includes("MALE_OVER_TARGET"), "phải có cảnh báo Nam vượt cơ cấu");
@@ -447,6 +451,8 @@ test("E. Worker nghỉ việc → Current giảm 1, Quit tăng 1, Balance tăng 
     femaleRecruited: 0,
     maleQuit: 0,
     femaleQuit: 0,
+    maleTransferOut: 0,
+    femaleTransferOut: 0,
   });
   assert.equal(before.maleBalance, 0);
   assert.ok(before.warnings.map((w) => w.code).includes("FULFILLED"));
@@ -461,6 +467,8 @@ test("E. Worker nghỉ việc → Current giảm 1, Quit tăng 1, Balance tăng 
     femaleRecruited: 0,
     maleQuit: 1, // Quit tăng 1
     femaleQuit: 0,
+    maleTransferOut: 0,
+    femaleTransferOut: 0,
   });
   assert.equal(after.maleCurrent, before.maleCurrent - 1);
   assert.equal(after.maleQuit, before.maleQuit + 1);
@@ -516,12 +524,14 @@ test("aggregateRequestKpis tổng hợp đúng Nam/Nữ/Tổng (PHASE 6: needToR
     maleCurrent: 4, femaleCurrent: 6,
     maleRecruited: 4, femaleRecruited: 6,
     maleQuit: 1, femaleQuit: 0,
+    maleTransferOut: 0, femaleTransferOut: 0,
   });
   const kpiB = computeRequestKpi({
     maleRequest: 3, femaleRequest: 0, totalRequest: 3,
     maleCurrent: 3, femaleCurrent: 0,
     maleRecruited: 3, femaleRecruited: 0,
     maleQuit: 0, femaleQuit: 0,
+    maleTransferOut: 0, femaleTransferOut: 0,
   });
   const agg = aggregateRequestKpis([kpiA, kpiB]);
   assert.deepEqual(agg.totalRequested, { male: 8, female: 5, total: 13 });
@@ -538,18 +548,21 @@ test("fillRatePercent: đáp ứng đủ = 100, vượt = 100 (clamp), không c�
     maleRequest: 5, femaleRequest: 5, totalRequest: 10,
     maleCurrent: 5, femaleCurrent: 5,
     maleRecruited: 0, femaleRecruited: 0, maleQuit: 0, femaleQuit: 0,
+    maleTransferOut: 0, femaleTransferOut: 0,
   });
   assert.equal(full.fillRatePercent, 100);
   const over = computeRequestKpi({
     maleRequest: 5, femaleRequest: 5, totalRequest: 10,
     maleCurrent: 7, femaleCurrent: 5,
     maleRecruited: 0, femaleRecruited: 0, maleQuit: 0, femaleQuit: 0,
+    maleTransferOut: 0, femaleTransferOut: 0,
   });
   assert.equal(over.fillRatePercent, 100);
   const zero = computeRequestKpi({
     maleRequest: 0, femaleRequest: 0, totalRequest: 0,
     maleCurrent: 0, femaleCurrent: 0,
     maleRecruited: 0, femaleRecruited: 0, maleQuit: 0, femaleQuit: 0,
+    maleTransferOut: 0, femaleTransferOut: 0,
   });
   assert.equal(zero.fillRatePercent, 0);
 });
@@ -638,9 +651,98 @@ test("Gender unknown không bị tính nhầm vào Nam hoặc Nữ", () => {
     maleRequest: 5, femaleRequest: 5, totalRequest: 10,
     maleCurrent: 4, femaleCurrent: 4,
     maleRecruited: 0, femaleRecruited: 0, maleQuit: 0, femaleQuit: 0,
+    maleTransferOut: 0, femaleTransferOut: 0,
   });
   assert.equal(kpi.totalCurrent, 8);
   assert.equal(kpi.maleCurrent + kpi.femaleCurrent, 8);
   assert.equal(computeWarnings({ maleRequest: 5, femaleRequest: 5, totalRequest: 10, maleCurrent: 4, femaleCurrent: 4, totalCurrent: 9 })
     .some((w) => w.code === "TOTAL_OVER_TARGET"), false);
+});
+
+/* ----------------------- resolveDefaultAsOf (Phase 2B mục 2.1 + approved design mục 4) ----------------------- */
+
+test("isHistoricalRequestStatus: chỉ EXPIRED/COMPLETED/CANCELLED được coi là historical", () => {
+  assert.equal(isHistoricalRequestStatus("EXPIRED"), true);
+  assert.equal(isHistoricalRequestStatus("COMPLETED"), true);
+  assert.equal(isHistoricalRequestStatus("CANCELLED"), true);
+  assert.equal(isHistoricalRequestStatus("PENDING"), false);
+  assert.equal(isHistoricalRequestStatus("PROCESSING"), false);
+});
+
+test("resolveDefaultAsOf: request PENDING/PROCESSING (live) luôn dùng today, bất kể endDate có hay không", () => {
+  const today = "2026-10-15";
+  assert.equal(
+    resolveDefaultAsOf({ status: "PENDING", endDate: "2026-09-30", completedDate: null, updatedAt: new Date("2026-10-10") }, today),
+    today,
+  );
+  assert.equal(
+    resolveDefaultAsOf({ status: "PROCESSING", endDate: null, completedDate: null, updatedAt: new Date("2026-10-10") }, today),
+    today,
+  );
+});
+
+test("resolveDefaultAsOf: EXPIRED dùng endDate làm mốc đóng băng, KHÔNG dùng today", () => {
+  const today = "2026-10-15";
+  assert.equal(
+    resolveDefaultAsOf({ status: "EXPIRED", endDate: "2026-09-30", completedDate: null, updatedAt: new Date("2026-10-10") }, today),
+    "2026-09-30",
+  );
+});
+
+test("resolveDefaultAsOf: COMPLETED thiếu endDate -> fallback completedDate", () => {
+  const today = "2026-10-15";
+  assert.equal(
+    resolveDefaultAsOf({ status: "COMPLETED", endDate: null, completedDate: "2026-09-28", updatedAt: new Date("2026-10-10") }, today),
+    "2026-09-28",
+  );
+});
+
+test("resolveDefaultAsOf: CANCELLED (Phase 2B mục 2.1 — KHÔNG dùng today cho request đã hủy) — ưu tiên endDate, sau đó completedDate, cuối cùng mới legacy fallback updatedAt", () => {
+  const today = "2026-10-15";
+  // Có endDate -> dùng endDate, không phải today.
+  assert.equal(
+    resolveDefaultAsOf({ status: "CANCELLED", endDate: "2026-09-18", completedDate: null, updatedAt: new Date("2026-10-10") }, today),
+    "2026-09-18",
+  );
+  // Không có endDate/completedDate -> LEGACY FALLBACK updatedAt (không phải today).
+  assert.equal(
+    resolveDefaultAsOf({ status: "CANCELLED", endDate: null, completedDate: null, updatedAt: new Date("2026-09-05T10:00:00Z") }, today),
+    "2026-09-05",
+  );
+});
+
+/* ----------------------- Scenario F (mission mục 10.F): KPI của RQ CANCELLED không tiếp tục trôi theo realtime ----------------------- */
+
+test("Scenario F: RQ CANCELLED -> asOf mặc định đóng băng tại endDate, KHÔNG đổi dù DWS biến động sau đó (chứng minh qua resolveDefaultAsOf, nguồn asOf mà mọi route phải dùng)", () => {
+  const today = "2026-10-15";
+  const cancelledRequest = { status: "CANCELLED", endDate: "2026-09-10", completedDate: null, updatedAt: new Date("2026-10-12") };
+  // Dù "hôm nay" đã là 10-15 và request có thể đã bị edit (updatedAt trôi tới 10-12),
+  // asOf mặc định PHẢI vẫn là ngày hủy (endDate=09-10) — không phải today, không phải updatedAt.
+  const asOf = resolveDefaultAsOf(cancelledRequest, today);
+  assert.equal(asOf, "2026-09-10");
+  assert.notEqual(asOf, today, "CANCELLED không được dùng today làm asOf mặc định");
+});
+
+/* ----------------------- Scenario A (mission mục 10.A): Balance KHÔNG được cộng dồn Quit ----------------------- */
+
+test("Scenario A: Rq=10, Current=9, Recruited=10, Quit=1 -> Balance = 1, KHÔNG PHẢI 2 (Quit không được cộng ngược vào Balance)", () => {
+  const kpi = computeRequestKpi({
+    maleRequest: 10,
+    femaleRequest: 0,
+    totalRequest: 10,
+    maleCurrent: 9,
+    femaleCurrent: 0,
+    maleRecruited: 10,
+    femaleRecruited: 0,
+    maleQuit: 1,
+    femaleQuit: 0,
+    maleTransferOut: 0,
+    femaleTransferOut: 0,
+  });
+  // Bẫy: một công thức SAI hay gặp là "Target - Current + Quit" = 10 - 9 + 1 = 2 (cộng ngược
+  // Quit vào nhu cầu còn thiếu). Công thức ĐÚNG (approved design): Balance = max(0, Target -
+  // Current) = 10 - 9 = 1, hoàn toàn không phụ thuộc Recruited/Quit dù cả hai đều khác 0.
+  assert.equal(kpi.maleBalance, 1);
+  assert.equal(kpi.totalBalance, 1);
+  assert.notEqual(kpi.totalBalance, 2, "Quit không được cộng dồn ngược vào Balance");
 });
