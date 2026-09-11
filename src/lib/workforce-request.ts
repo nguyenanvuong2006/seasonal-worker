@@ -1336,7 +1336,20 @@ export async function endActiveRequestAllocationsForTransfer(
    source of truth. Tôn trọng quy tắc chặn vượt tổng nhu cầu:
    nếu request đã đủ thì KHÔNG mirror (chỉ còn allocation planning
    legacy) — không tự override khi không có người dùng xác nhận.
+
+   Phase 3B (Decision B): kết quả trước đây là boolean, khiến caller
+   (autoAllocateInternship()) không thể phân biệt "request đã đủ chỉ
+   tiêu" với "period không liên kết request" hay "worker đã đúng vị
+   trí từ trước" — ba trạng thái hoàn toàn khác nghĩa nhưng đều trả
+   `false`/im lặng. Đổi sang discriminated result để caller log/audit
+   chính xác mà KHÔNG đổi bất kỳ logic ghi DB nào bên dưới.
    ============================================================ */
+export type MirrorPlanningAllocationOutcome =
+  | { status: "SYNCED"; requestId: string }
+  | { status: "ALREADY_CURRENT"; requestId: string }
+  | { status: "NOT_LINKED" }
+  | { status: "REJECTED_FULL"; requestId: string };
+
 export async function mirrorPlanningAllocationToRequest(input: {
   planningPeriodId: string;
   employmentSessionId: string;
@@ -1344,14 +1357,38 @@ export async function mirrorPlanningAllocationToRequest(input: {
   allocatedBy: string;
   reason?: string;
   executor?: Executor;
-}): Promise<boolean> {
+}): Promise<MirrorPlanningAllocationOutcome> {
   const ex = input.executor ?? db;
   const [period] = await ex
     .select({ requestId: planningPeriods.requestId })
     .from(planningPeriods)
     .where(eq(planningPeriods.id, input.planningPeriodId));
-  if (!period?.requestId) return false;
+  if (!period?.requestId) return { status: "NOT_LINKED" };
 
+  // Pre-merge review finding (TOCTOU): trước đây SELECT này không khoá — hai lệnh
+  // mirror đồng thời (vd. nhiều dòng bulk-import cùng auto-allocate vào 1 request
+  // liên kết, hoặc mirror này chạy song song với reallocateDws()/
+  // allocateWorkersToRequest() trên CÙNG request đích) đều có thể đọc "current"
+  // giống nhau TRƯỚC khi bên kia commit, rồi cả hai cùng ghi → vượt target thật sự
+  // (không chỉ là rủi ro lý thuyết). FOR UPDATE ở đây khoá ĐÚNG bản ghi
+  // recruitment_requests mà reallocateDws()/allocateWorkersToRequest() cũng khoá
+  // (cùng bảng, cùng cột id, cùng FOR UPDATE) — Postgres serialize mọi tổ hợp giữa
+  // 4 entry-point (mirror, reallocateDws, allocateWorkersToRequest, một mirror khác)
+  // nhắm cùng 1 request đích. Khoá này KHÔNG làm mirror thành fatal: REJECTED_FULL
+  // vẫn chỉ là return bình thường, Employment/Planning phía trên không rollback.
+  //
+  // Deadlock: nếu MỘT worker vừa đang được recruiter reallocate thủ công
+  // (reallocateDws khoá planning_allocations của CHÍNH dòng đó trước, rồi khoá
+  // recruitment_requests) VỪA đúng lúc lifecycle transfer/onboarding của CHÍNH
+  // worker đó gọi autoAllocateInternship() (ghi planning_allocations của CHÍNH
+  // dòng đó trước, rồi khoá recruitment_requests ở đây) — thứ tự khoá bị đảo
+  // ngược giữa hai flow, tạo nguy cơ deadlock. Đây là kịch bản rất hẹp (cùng 1
+  // worker, cùng 1 thời điểm, hai lifecycle khác nhau chạy song song) mà Postgres
+  // tự phát hiện và huỷ MỘT bên giao dịch (lỗi 40P01) thay vì treo — không mất
+  // dữ liệu, không âm thầm sai, nhưng CÓ THỂ khiến giao dịch Employment/Transfer
+  // đó thất bại toàn bộ thay vì chỉ mirror bị REJECTED_FULL. Chấp nhận rủi ro hẹp
+  // này thay vì mở rộng phạm vi fix sang retry/backoff (ngoài phạm vi pre-merge
+  // review này) — xem PR description mục "Remaining risks".
   const [request] = await ex
     .select({
       id: recruitmentRequests.id,
@@ -1361,8 +1398,10 @@ export async function mirrorPlanningAllocationToRequest(input: {
       deletedAt: recruitmentRequests.deletedAt,
     })
     .from(recruitmentRequests)
-    .where(eq(recruitmentRequests.id, period.requestId));
-  if (!request || request.deletedAt) return false;
+    .where(eq(recruitmentRequests.id, period.requestId))
+    .for("update");
+  // Request đã bị xoá/không tồn tại: coi như period không còn liên kết hợp lệ.
+  if (!request || request.deletedAt) return { status: "NOT_LINKED" };
 
   // Gắn recruitment_request_id vào dòng planning vừa được auto-allocate tạo (nếu chưa có)
   // — đồng bộ với mô hình vòng đời phân bổ của Planning (migration 2026-08-17).
@@ -1406,13 +1445,16 @@ export async function mirrorPlanningAllocationToRequest(input: {
     { sessionId: input.employmentSessionId, workerId: input.workerId, gender: classifyGender(undefined) },
   );
 
-  if (plan.outcome === "REJECTED" || plan.outcome === "NOOP") {
-    console.warn("[workforce-request] mirror skipped", {
+  if (plan.outcome === "REJECTED") {
+    console.warn("[workforce-request] mirror rejected: request đích đã đủ chỉ tiêu", {
       periodId: input.planningPeriodId,
       requestId: request.id,
-      outcome: plan.outcome,
+      workerId: input.workerId,
     });
-    return false;
+    return { status: "REJECTED_FULL", requestId: request.id };
+  }
+  if (plan.outcome === "NOOP") {
+    return { status: "ALREADY_CURRENT", requestId: request.id };
   }
 
   if (plan.existingForWorker) {
@@ -1450,7 +1492,7 @@ export async function mirrorPlanningAllocationToRequest(input: {
     reason: input.reason ?? "Tự động phân bổ theo Planning (mirror)",
     changedBy: input.allocatedBy,
   });
-  return true;
+  return { status: "SYNCED", requestId: request.id };
 }
 
 /* ============================================================

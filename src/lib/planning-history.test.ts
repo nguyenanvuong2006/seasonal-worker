@@ -33,11 +33,18 @@ const schemaStub = {
   planningAllocations: makeTable("planning_allocations"),
   planningPeriods: makeTable("planning_periods"),
   planningTargets: makeTable("planning_targets"),
+  recruitmentRequests: makeTable("recruitment_requests"),
   workerProfiles: makeTable("worker_profiles"),
   workforceMovements: makeTable("workforce_movements"),
 };
 
-function load(db: FakeDb) {
+type MirrorOutcome =
+  | { status: "SYNCED"; requestId: string }
+  | { status: "ALREADY_CURRENT"; requestId: string }
+  | { status: "NOT_LINKED" }
+  | { status: "REJECTED_FULL"; requestId: string };
+
+function load(db: FakeDb, opts: { mirrorOutcome?: MirrorOutcome; mirrorCalls?: unknown[] } = {}) {
   return loadModule(new URL("./planning.ts", import.meta.url), {
     stubs: {
       "server-only": serverOnlyStub,
@@ -51,10 +58,17 @@ function load(db: FakeDb) {
       },
       "@/lib/person-name": { normalizePersonName: (v: string) => v },
       // WORKFORCE REQUEST LINKAGE — planning.ts mirror sang request_allocations khi
-      // period có request_id. Fixture ở đây không set request_id nên mirror không
-      // chạy; stub no-op để sandbox không cần nạp toàn bộ module DB. Logic thuần
-      // của bộ máy phân bổ đã có test riêng ở workforce-request.test.ts.
-      "@/lib/workforce-request": { mirrorPlanningAllocationToRequest: async () => false },
+      // period có request_id. Mặc định fixture không set request_id nên mirror không
+      // chạy; stub test-controllable (opts.mirrorOutcome) để bộ test H/I (Phase 3B —
+      // Decision B) kiểm chứng autoAllocateInternship() xử lý đúng từng outcome mà
+      // KHÔNG cần nạp toàn bộ module DB thật — logic thuần của mirror (planAllocation())
+      // đã có test riêng ở workforce-request-db.test.ts.
+      "@/lib/workforce-request": {
+        mirrorPlanningAllocationToRequest: async (...args: unknown[]) => {
+          opts.mirrorCalls?.push(args);
+          return opts.mirrorOutcome ?? { status: "NOT_LINKED" };
+        },
+      },
     },
     fallback(spec) {
       throw new Error(`Unexpected require("${spec}")`);
@@ -222,16 +236,23 @@ function autoAllocDb(openAllocations: Record<string, unknown>[]) {
   });
 }
 
+type AutoAllocateOutcome = {
+  planningAllocated: boolean;
+  planningPeriodId: string | null;
+  requestSync: { status: string; requestId?: string };
+};
+type AutoAllocateFn = (a: string, b: string, c?: string | null, d?: string) => Promise<AutoAllocateOutcome>;
+
 test("phân bổ tự động: phân bổ cũ được đóng chứ KHÔNG bị DELETE", async () => {
   const db = autoAllocDb([
     { id: "alloc-old", planningPeriodId: "period-Z", allocationStartDate: "2026-03-01" },
   ]);
   const mod = load(db);
-  const chosen = await (
-    mod.autoAllocateInternship as (a: string, b: string, c?: string | null, d?: string) => Promise<string | null>
-  )("sess-1", "dept-A", "2026-06-01", "recruiter1");
+  const chosen = await (mod.autoAllocateInternship as AutoAllocateFn)("sess-1", "dept-A", "2026-06-01", "recruiter1");
 
-  assert.equal(chosen, "period-A");
+  assert.equal(chosen.planningPeriodId, "period-A");
+  assert.equal(chosen.planningAllocated, true);
+  assert.equal(chosen.requestSync.status, "NOT_LINKED", "fixture không set request_id -> period không liên kết Request");
   assert.equal(allocWrites(db, "delete").length, 0, "TUYỆT ĐỐI không DELETE lịch sử phân bổ");
 
   const [closed] = allocWrites(db, "update");
@@ -251,20 +272,108 @@ test("phân bổ tự động là idempotent: đã ở đúng kế hoạch thì 
     { id: "alloc-current", planningPeriodId: "period-A", allocationStartDate: "2026-03-01" },
   ]);
   const mod = load(db);
-  const chosen = await (
-    mod.autoAllocateInternship as (a: string, b: string, c?: string | null, d?: string) => Promise<string | null>
-  )("sess-1", "dept-A", "2026-06-01", "recruiter1");
+  const chosen = await (mod.autoAllocateInternship as AutoAllocateFn)("sess-1", "dept-A", "2026-06-01", "recruiter1");
 
-  assert.equal(chosen, "period-A");
+  assert.equal(chosen.planningPeriodId, "period-A");
+  assert.equal(chosen.requestSync.status, "ALREADY_CURRENT", "đã ở đúng kế hoạch từ trước -> idempotent, không cần mirror");
   assert.equal(db.writes.length, 0, "chạy lại không được sinh thêm dòng phân bổ trùng");
+});
+
+/** Biến thể của autoAllocDb() với kế hoạch CÓ liên kết Recruitment Request. */
+function autoAllocDbLinked(openAllocations: Record<string, unknown>[]) {
+  let n = 0;
+  return createFakeDb({
+    respond(call) {
+      if (call.root !== "select") return undefined;
+      n += 1;
+      if (n === 1) {
+        return [
+          {
+            id: "period-A",
+            requestId: "rq-linked",
+            startDate: "2026-01-01",
+            endDate: "2026-12-31",
+            requestType: "ORIGINAL",
+            supplementIndex: 0,
+            demandMale: 10,
+            demandFemale: 10,
+            targetCount: 20,
+          },
+        ];
+      }
+      if (n === 2) return [{ workerId: "worker-1", gender: "Nam" }];
+      if (n === 3) return [];
+      return openAllocations;
+    },
+  });
+}
+
+/* ------------------------------------------------------------
+   H/I (Phase 3B — Decision B): autoAllocateInternship() + linked
+   Recruitment Request — mirror outcome phải TƯỜNG MINH, KHÔNG được
+   fail/rollback Employment lifecycle chỉ vì Request đích đã đủ.
+   ------------------------------------------------------------ */
+
+test("H — linked Request ĐÃ ĐỦ chỉ tiêu: Planning allocation vẫn thành công, requestSync=REJECTED_FULL tường minh, KHÔNG throw", async () => {
+  const db = autoAllocDbLinked([]);
+  const mirrorCalls: unknown[] = [];
+  const mod = load(db, { mirrorOutcome: { status: "REJECTED_FULL", requestId: "rq-linked" }, mirrorCalls });
+
+  const chosen = await (mod.autoAllocateInternship as AutoAllocateFn)("sess-1", "dept-A", "2026-06-01", "recruiter1");
+
+  assert.equal(chosen.planningAllocated, true, "Planning allocation KHÔNG được rollback chỉ vì Request đích đã đủ");
+  assert.equal(chosen.planningPeriodId, "period-A");
+  assert.equal(chosen.requestSync.status, "REJECTED_FULL");
+  assert.equal((chosen.requestSync as { requestId?: string }).requestId, "rq-linked");
+  // planning_allocations THẬT SỰ đã được ghi (không phải no-op im lặng).
+  assert.equal(db.writesTo("planning_allocations").filter((c) => c.root === "insert").length, 1);
+  assert.equal(mirrorCalls.length, 1, "mirror phải thực sự được gọi (không bị bỏ qua âm thầm)");
+});
+
+test("I — linked Request CÒN CHỖ: Planning + Request mirror đều thành công, requestSync=SYNCED", async () => {
+  const db = autoAllocDbLinked([]);
+  const mod = load(db, { mirrorOutcome: { status: "SYNCED", requestId: "rq-linked" } });
+
+  const chosen = await (mod.autoAllocateInternship as AutoAllocateFn)("sess-1", "dept-A", "2026-06-01", "recruiter1");
+
+  assert.equal(chosen.planningAllocated, true);
+  assert.equal(chosen.requestSync.status, "SYNCED");
+  assert.equal((chosen.requestSync as { requestId?: string }).requestId, "rq-linked");
+  assert.equal(db.writesTo("planning_allocations").filter((c) => c.root === "insert").length, 1);
+});
+
+test("Pre-merge review (deadlock order): khi period đã chọn CÓ liên kết Request, autoAllocateInternship() phải khoá recruitment_requests FOR UPDATE TRƯỚC KHI ghi planning_allocations — cùng thứ tự (Request -> Planning) mà reallocateDws()/allocateWorkersToRequest() dùng, tránh lock-order inversion có thể deadlock", async () => {
+  const db = autoAllocDbLinked([]);
+  const mod = load(db, { mirrorOutcome: { status: "SYNCED", requestId: "rq-linked" } });
+
+  await (mod.autoAllocateInternship as AutoAllocateFn)("sess-1", "dept-A", "2026-06-01", "recruiter1");
+
+  const requestLockCall = db.calls.find(
+    (c) => c.table === "recruitment_requests" && c.root === "select" && c.ops.some((o) => o.fn === "for"),
+  );
+  const firstPlanningWrite = db.calls.find((c) => c.table === "planning_allocations" && (c.root === "update" || c.root === "insert"));
+
+  assert.ok(requestLockCall, "phải có 1 lệnh SELECT ... FOR UPDATE trên recruitment_requests");
+  assert.ok(firstPlanningWrite, "phải có ghi planning_allocations");
+  const lockIndex = db.calls.indexOf(requestLockCall!);
+  const writeIndex = db.calls.indexOf(firstPlanningWrite!);
+  assert.ok(
+    lockIndex < writeIndex,
+    `khoá recruitment_requests (call #${lockIndex}) phải xảy ra TRƯỚC lệnh ghi planning_allocations đầu tiên (call #${writeIndex}) — nếu không, thứ tự khoá bị đảo ngược so với reallocateDws()`,
+  );
+  // LƯU Ý: test này chỉ chứng minh THỨ TỰ THAO TÁC trong một lần gọi (call sequence),
+  // KHÔNG chứng minh race-safety giữa 2 transaction thật chạy song song — harness này
+  // đơn luồng/đồng bộ, không mô phỏng được Postgres lock contention thực sự. Bằng
+  // chứng race-safety nằm ở việc CẢ HAI flow (reallocateDws và autoAllocateInternship)
+  // cùng khoá ĐÚNG MỘT bảng, MỘT cột (recruitment_requests.id), MỘT primitive
+  // (FOR UPDATE) THEO CÙNG THỨ TỰ — xác nhận bằng đọc code trực tiếp, không phải bằng
+  // test đồng thời giả lập.
 });
 
 test("phân bổ tự động: chỉ đếm phân bổ ĐANG MỞ khi tính chỉ tiêu còn trống", async () => {
   const db = autoAllocDb([]);
   const mod = load(db);
-  await (
-    mod.autoAllocateInternship as (a: string, b: string, c?: string | null, d?: string) => Promise<string | null>
-  )("sess-1", "dept-A", null, "recruiter1");
+  await (mod.autoAllocateInternship as AutoAllocateFn)("sess-1", "dept-A", null, "recruiter1");
 
   // Truy vấn đếm phân bổ (select thứ 3) phải loại dòng lịch sử đã đóng.
   const countQuery = db.calls.filter(

@@ -7,6 +7,7 @@ import {
   planningAllocations,
   planningPeriods,
   planningTargets,
+  recruitmentRequests,
   workerProfiles,
   workforceMovements,
 } from "@/db/schema";
@@ -315,11 +316,39 @@ export async function reviseActivePeriod(
 }
 
 /**
+ * Kết quả của autoAllocateInternship() (Phase 3B — Decision B).
+ *
+ * Planning Period capacity (planning_targets.demandMale/Female/targetCount) và
+ * Recruitment Request capacity (recruitment_requests.maleRq/femaleRq) là HAI
+ * khái niệm khác nhau — xem Phase 3A audit §6. Vì đây là thao tác HỆ THỐNG
+ * kích hoạt (onboarding / chuyển bộ phận), KHÔNG phải Recruitment Request
+ * allocation do người dùng chủ động thực hiện, nó KHÔNG được phép làm rollback
+ * Employment lifecycle chỉ vì Recruitment Request đích đã đủ chỉ tiêu — nhưng
+ * kết quả PHẢI tường minh (không còn im lặng nuốt lỗi như trước) để caller có
+ * thể log/audit/diagnose chính xác việc mirror có xảy ra hay không và vì sao.
+ */
+export type AutoAllocateRequestSyncOutcome =
+  | { status: "NO_ACTIVE_PERIOD" }
+  | { status: "ALREADY_CURRENT" }
+  | { status: "NOT_LINKED" }
+  | { status: "SYNCED"; requestId: string }
+  | { status: "REJECTED_FULL"; requestId: string };
+
+export type AutoAllocateOutcome =
+  | { planningAllocated: false; planningPeriodId: null; requestSync: { status: "NO_ACTIVE_PERIOD" } }
+  | { planningAllocated: true; planningPeriodId: string; requestSync: AutoAllocateRequestSyncOutcome };
+
+/**
  * Tự động phân bổ người tập nghề vào kế hoạch ACTIVE phù hợp khi Recruiter duyệt / xếp việc.
  * Quy tắc ưu tiên khi có nhiều kế hoạch trùng:
  *   1. Ưu tiên kế hoạch GỐC (ORIGINAL, supplementIndex = 0) trước nếu còn chỉ tiêu theo giới tính.
  *   2. Sau đó ưu tiên kế hoạch BỔ SUNG theo thứ tự (Bổ sung 1, Bổ sung 2...).
  *   3. Nếu tất cả đã đủ chỉ tiêu, gán vào kế hoạch active mới nhất.
+ *
+ * Trả về AutoAllocateOutcome thay vì chosenPeriodId đơn thuần (Phase 3B) — các
+ * caller hiện có (workforce-movements.ts, bulk-import, registrations) đều
+ * `await` mà không đọc giá trị trả về nên thay đổi này an toàn (không phá vỡ
+ * runtime nào), nhưng cho phép caller MỚI kiểm tra requestSync khi cần audit.
  */
 export async function autoAllocateInternship(
   employmentSessionId: string,
@@ -327,7 +356,7 @@ export async function autoAllocateInternship(
   startingDate?: string | null,
   allocatedBy = "SYSTEM",
   executor: Executor = db,
-) {
+): Promise<AutoAllocateOutcome> {
   // Tìm các kế hoạch ACTIVE của bộ phận này
   const activePeriods = await executor
     .select({
@@ -355,7 +384,9 @@ export async function autoAllocateInternship(
       planningPeriods.createdAt,
     );
 
-  if (activePeriods.length === 0) return null;
+  if (activePeriods.length === 0) {
+    return { planningAllocated: false, planningPeriodId: null, requestSync: { status: "NO_ACTIVE_PERIOD" } };
+  }
 
   // Lọc theo date range nếu có startingDate
   const matchingDatePeriods = startingDate
@@ -436,6 +467,7 @@ export async function autoAllocateInternship(
      previous_allocation_id. Nếu người này đã ở đúng kế hoạch đích rồi thì
      không làm gì cả (idempotent). */
   const today = todayStr();
+  const chosenPeriod = candidatePeriods.find((p) => p.id === chosenPeriodId);
   const existing = await executor
     .select({
       id: planningAllocations.id,
@@ -450,7 +482,22 @@ export async function autoAllocateInternship(
       ),
     );
 
-  if (existing.some((a) => a.planningPeriodId === chosenPeriodId)) return chosenPeriodId;
+  if (existing.some((a) => a.planningPeriodId === chosenPeriodId)) {
+    return { planningAllocated: true, planningPeriodId: chosenPeriodId, requestSync: { status: "ALREADY_CURRENT" } };
+  }
+
+  // Pre-merge review (deadlock order): reallocateDws()/allocateWorkersToRequest()
+  // đều khoá recruitment_requests TRƯỚC planning_allocations. Nhánh này (sắp ghi
+  // planning_allocations rồi mirror sang request_allocations) phải khoá theo ĐÚNG
+  // cùng thứ tự đó — khoá Request liên kết NGAY BÂY GIỜ, trước khi đóng/tạo
+  // planning_allocations bên dưới — để không tạo lock-order inversion (Planning
+  // trước, Request sau) có thể deadlock với một reallocateDws() đang chạy đồng
+  // thời trên CHÍNH worker này. mirrorPlanningAllocationToRequest() bên dưới vẫn
+  // tự khoá lại — vô hại vì cùng transaction đã giữ sẵn lock đó (Postgres không
+  // tự chặn chính nó).
+  if (chosenPeriod?.requestId) {
+    await executor.select({ id: recruitmentRequests.id }).from(recruitmentRequests).where(eq(recruitmentRequests.id, chosenPeriod.requestId)).for("update");
+  }
 
   let previousAllocationId: string | null = null;
   for (const alloc of existing) {
@@ -476,9 +523,18 @@ export async function autoAllocateInternship(
   // Workforce Request (planning_periods.request_id) → mirror sang request_allocations
   // để Request vẫn là source of truth. Tôn trọng quy tắc chặn vượt tổng nhu cầu
   // (không tự override) — nếu request đã đủ thì giữ nguyên allocation planning legacy.
-  const chosenPeriod = candidatePeriods.find((p) => p.id === chosenPeriodId);
+  //
+  // Phase 3B (Decision B): việc mirror KHÔNG được phép làm rollback Employment/
+  // Transfer lifecycle chỉ vì Recruitment Request đích đã đủ chỉ tiêu — Planning
+  // Period capacity (đã đủ điều kiện ở trên) và Recruitment Request capacity là
+  // hai khái niệm khác nhau. planning_allocations ĐÃ ghi ở trên và giữ nguyên dù
+  // requestSync dưới đây là REJECTED_FULL/NOT_LINKED — kết quả chỉ được TRẢ VỀ
+  // tường minh cho caller quyết định log/audit, KHÔNG throw, KHÔNG tự chọn request
+  // khác, KHÔNG tự override. (chosenPeriod đã xác định + khoá ở trên, trước khi ghi
+  // planning_allocations — xem comment "Pre-merge review (deadlock order)".)
+  let requestSync: AutoAllocateRequestSyncOutcome = { status: "NOT_LINKED" };
   if (chosenPeriod?.requestId && session?.workerId) {
-    await mirrorPlanningAllocationToRequest({
+    const mirrored = await mirrorPlanningAllocationToRequest({
       planningPeriodId: chosenPeriod.id,
       employmentSessionId,
       workerId: session.workerId,
@@ -486,9 +542,17 @@ export async function autoAllocateInternship(
       reason: "Tự động phân bổ khi duyệt hồ sơ / chuyển bộ phận",
       executor,
     });
+    requestSync = mirrored;
+    if (mirrored.status === "REJECTED_FULL") {
+      console.warn("[planning] autoAllocateInternship: Request mirror bị từ chối (đã đủ chỉ tiêu) — Employment/Planning KHÔNG rollback", {
+        employmentSessionId,
+        planningPeriodId: chosenPeriod.id,
+        requestId: mirrored.requestId,
+      });
+    }
   }
 
-  return chosenPeriodId;
+  return { planningAllocated: true, planningPeriodId: chosenPeriodId, requestSync };
 }
 
 /** Danh sách employment_sessions ĐANG LÀM nhưng chưa được phân bổ vào kế hoạch ACTIVE nào. */

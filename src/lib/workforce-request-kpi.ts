@@ -512,6 +512,73 @@ function countBy(allocations: ActiveAllocationRef[], gender: "male" | "female"):
 }
 
 /* ============================================================
+   BATCH ALLOCATION PLANNER (Phase 3B — F1)
+   ------------------------------------------------------------
+   Dùng khi một thao tác phải di chuyển NHIỀU worker vào CÙNG một
+   request trong MỘT quyết định tất-cả-hoặc-không-gì (vd. Planning
+   Reallocation). KHÔNG lặp lại công thức của planAllocation() —
+   gấp (fold) từng target qua planAllocation() trên MỘT snapshot
+   allocations tiến triển tuần tự, không phải N lần đọc "current"
+   độc lập. Đây là điểm khác biệt quan trọng: nếu đích chỉ còn 1
+   chỗ trống và có 2 worker được chọn, hai lần gọi planAllocation()
+   ĐỘC LẬP với cùng một snapshot "current = target - 1" sẽ CÙNG
+   PASS rồi tổng hợp vượt target — planBatchAllocation() tránh lỗi
+   này bằng cách cập nhật snapshot ngay sau mỗi worker ĐƯỢC CHẤP
+   NHẬN, trước khi xét worker tiếp theo, trong một vòng lặp đồng bộ
+   thuần (không I/O) nên không có race giữa các bước của chính nó.
+
+   Race giữa các TRANSACTION khác nhau vẫn phải được chặn ở tầng
+   gọi (khoá request đích bằng SELECT ... FOR UPDATE trước khi đọc
+   allocations rồi gọi hàm này) — xem reallocateDws().
+   ============================================================ */
+
+export type BatchAllocationTarget = AllocationTarget & {
+  /** ACTIVE allocation hiện có của worker này ở BẤT KỲ request nào (null nếu chưa có). */
+  existingForWorker: ActiveAllocationRef | null;
+};
+
+export type BatchAllocationPlanResult =
+  | { outcome: "OK"; perWorker: Map<string, AllocationPlanResult> }
+  | { outcome: "REJECTED"; code: "TOTAL_OVER_TARGET"; message: string; failedWorkerId: string };
+
+export function planBatchAllocation(
+  state: Omit<AllocationPlanState, "existingForWorker">,
+  targets: BatchAllocationTarget[],
+  override?: AllocationOverrideInput,
+): BatchAllocationPlanResult {
+  let allocations = state.allocations;
+  const perWorker = new Map<string, AllocationPlanResult>();
+
+  for (const target of targets) {
+    const result = planAllocation({ ...state, allocations, existingForWorker: target.existingForWorker }, target, override);
+
+    if (result.outcome === "REJECTED") {
+      return { outcome: "REJECTED", code: result.code, message: result.message, failedWorkerId: target.workerId };
+    }
+
+    perWorker.set(target.workerId, result);
+
+    if (result.outcome === "ALLOCATE") {
+      // Cập nhật snapshot NGAY để target tiếp theo trong cùng batch thấy đúng
+      // trạng thái "sau khi worker này được nhận" — đây là điều làm cho việc
+      // gấp (fold) này an toàn thay vì N lần kiểm tra độc lập.
+      const projected: ActiveAllocationRef = {
+        id: `pending:${target.workerId}`,
+        requestId: state.targetRequestId,
+        workerId: target.workerId,
+        sessionId: target.sessionId,
+        gender: target.gender,
+      };
+      allocations = [...allocations.filter((a) => a.workerId !== target.workerId), projected];
+    }
+    // NOOP: worker đã có mặt trong `allocations` tại đúng request đích —
+    // không có gì thay đổi cho vòng lặp kế tiếp.
+  }
+
+  return { outcome: "OK", perWorker };
+}
+
+/* ============================================================
    CÁC HÀM THUẦN HỖ TRỢ KHÁC
    ============================================================ */
 

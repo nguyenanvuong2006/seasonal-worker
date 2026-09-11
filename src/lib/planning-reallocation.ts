@@ -1,5 +1,5 @@
 import "server-only";
-import { and, eq, inArray, isNull, sql } from "drizzle-orm";
+import { and, eq, inArray, isNull, or, sql } from "drizzle-orm";
 import { db } from "@/db";
 import {
   departments,
@@ -7,12 +7,14 @@ import {
   planningAllocations,
   planningTasks,
   recruitmentRequests,
+  requestAllocations,
   workerProfiles,
   workforceMovements,
 } from "@/db/schema";
 import { todayStr, isMale, isFemale } from "@/lib/helpers";
 import { scopeAllowsDepartment } from "@/lib/data-scope";
-import { syncRequestAllocationOnPlanningMove } from "@/lib/workforce-request";
+import { batchComputeRequestKpis, resolveTotalRequestOf, syncRequestAllocationOnPlanningMove } from "@/lib/workforce-request";
+import { classifyGender, planBatchAllocation, type BatchAllocationTarget } from "@/lib/workforce-request-kpi";
 import {
   TASK_PLANNING_REALLOCATION_REQUIRED,
   buildReallocationTaskTitle,
@@ -291,7 +293,9 @@ export async function reallocateDws(input: ReallocateInput): Promise<ReallocateR
       return { ok: false as const, status: 409, error: "Yêu cầu đích cũng đã hết hạn. Hãy chọn yêu cầu còn hiệu lực." };
     }
 
-    // --- Nạp & khoá các phân bổ được chọn ------------------------------
+    // --- Nạp & khoá các phân bổ được chọn (kèm workerId + giới tính cho
+    //     preflight capacity bên dưới — planning_allocations không tự có
+    //     workerId, phải join employment_sessions) -----------------------
     const allocations = await tx
       .select({
         id: planningAllocations.id,
@@ -300,8 +304,12 @@ export async function reallocateDws(input: ReallocateInput): Promise<ReallocateR
         recruitmentRequestId: planningAllocations.recruitmentRequestId,
         allocationEndDate: planningAllocations.allocationEndDate,
         allocationStartDate: planningAllocations.allocationStartDate,
+        workerId: employmentSessions.workerId,
+        gender: workerProfiles.gender,
       })
       .from(planningAllocations)
+      .innerJoin(employmentSessions, eq(planningAllocations.employmentSessionId, employmentSessions.id))
+      .leftJoin(workerProfiles, eq(employmentSessions.workerId, workerProfiles.id))
       .where(inArray(planningAllocations.id, input.allocationIds))
       .for("update");
 
@@ -315,6 +323,103 @@ export async function reallocateDws(input: ReallocateInput): Promise<ReallocateR
       if (a.allocationEndDate !== null) {
         return { ok: false as const, status: 409, error: "Có phân bổ đã được chuyển trước đó." };
       }
+    }
+
+    // Pre-merge review finding: DB chỉ chặn trùng theo (employmentSessionId,
+    // planningPeriodId) — WHERE allocation_end_date IS NULL (planning_alloc_active_uq),
+    // KHÔNG chặn 1 worker có 2 phân bổ ĐANG MỞ đồng thời ở 2 kỳ kế hoạch khác nhau
+    // cùng trỏ về fromReq. Nếu allocationIds chứa 2 dòng trùng workerId, batch
+    // preflight (planBatchAllocation, đếm theo state.allocations.length) sẽ đếm
+    // "worker đó" hai lần tại thời điểm xét dòng thứ 2 (trước khi fold khử trùng ở
+    // dòng cuối) — có thể gây REJECT giả (an toàn) hoặc, nếu capacity đủ dư để cả
+    // hai lần fold đều ALLOCATE, khiến vòng ghi thật (dùng lại đúng workerId đó cho
+    // request_allocations) ở dòng thứ 2 thấy NOOP trong khi preflight dự đoán
+    // ALLOCATE cho workerId đó (Map perWorker key theo workerId nên bị ghi đè) —
+    // trigger nhầm internal-consistency throw. Không bao giờ overallocate/mất dữ
+    // liệu (transaction rollback), nhưng là lỗi/crash không cần thiết cho một input
+    // hợp lệ-nhưng-hiếm. Chặn tường minh, an toàn hơn silently dedupe (dedupe ngầm
+    // sẽ bỏ sót 1 phân bổ planning đang mở mà không báo cho Recruiter biết).
+    const workerIdCounts = new Map<string, number>();
+    for (const a of allocations) workerIdCounts.set(a.workerId, (workerIdCounts.get(a.workerId) ?? 0) + 1);
+    if ([...workerIdCounts.values()].some((n) => n > 1)) {
+      return {
+        ok: false as const,
+        status: 409,
+        error: "Có lao động được chọn nhiều hơn một phân bổ đang mở trong cùng một lần chuyển. Vui lòng chỉ chọn một phân bổ cho mỗi lao động.",
+      };
+    }
+
+    /* ============================================================
+       CAPACITY PREFLIGHT (Phase 3B — F1): TẤT CẢ-HOẶC-KHÔNG-GÌ.
+       ------------------------------------------------------------
+       Phải chạy ở ĐÂY: sau khi khoá toReq bằng SELECT ... FOR UPDATE
+       (phía trên) và sau khi khoá các allocation nguồn, nhưng TRƯỚC
+       bất kỳ ghi planning_allocations/request_allocations nào.
+
+       An toàn race: khoá FOR UPDATE trên bản ghi recruitmentRequests
+       của toReq chặn MỌI transaction khác cũng tuân theo kỷ luật này
+       (allocateWorkersToRequest() dùng chung pattern) ghi
+       request_allocations cho CÙNG request đích cho tới khi transaction
+       này commit/rollback — nên đọc destActiveRows ngay sau khoá, trong
+       CHÍNH transaction, là đủ tin cậy cho quyết định của TOÀN BỘ batch,
+       không chỉ từng worker độc lập (planBatchAllocation() gấp qua từng
+       worker trên một snapshot tiến triển tuần tự — xem workforce-
+       request-kpi.ts để biết vì sao N lần planAllocation() độc lập
+       không đủ an toàn cho 1 batch).
+       ============================================================ */
+    const workerIds = [...new Set(allocations.map((a) => a.workerId))];
+    const destActiveRows = await tx
+      .select({
+        id: requestAllocations.id,
+        requestId: requestAllocations.requestId,
+        workerId: requestAllocations.workerId,
+        sessionId: requestAllocations.employmentSessionId,
+        gender: workerProfiles.gender,
+      })
+      .from(requestAllocations)
+      .leftJoin(workerProfiles, eq(requestAllocations.workerId, workerProfiles.id))
+      .where(
+        and(
+          eq(requestAllocations.status, "ACTIVE"),
+          or(eq(requestAllocations.requestId, toReq.id), inArray(requestAllocations.workerId, workerIds)),
+        ),
+      );
+
+    const existingForWorkerMap = new Map(
+      destActiveRows.map((r) => [
+        r.workerId,
+        { id: r.id, requestId: r.requestId, workerId: r.workerId, sessionId: r.sessionId, gender: classifyGender(r.gender) },
+      ]),
+    );
+    const destAllocationsForPlan = destActiveRows
+      .filter((r) => r.requestId === toReq.id)
+      .map((r) => ({ id: r.id, requestId: r.requestId, workerId: r.workerId, sessionId: r.sessionId, gender: classifyGender(r.gender) }));
+
+    const batchTargets: BatchAllocationTarget[] = allocations.map((a) => ({
+      sessionId: a.employmentSessionId,
+      workerId: a.workerId,
+      gender: classifyGender(a.gender),
+      existingForWorker: existingForWorkerMap.get(a.workerId) ?? null,
+    }));
+
+    const batchPlan = planBatchAllocation(
+      {
+        targetRequestId: toReq.id,
+        totalRequest: resolveTotalRequestOf(toReq),
+        maleRequest: toReq.maleRq,
+        femaleRequest: toReq.femaleRq,
+        allocations: destAllocationsForPlan,
+      },
+      batchTargets,
+    );
+
+    if (batchPlan.outcome === "REJECTED") {
+      // Không ai bị END/INSERT — cả Planning lẫn Request đều chưa bị đụng tới.
+      return {
+        ok: false as const,
+        status: 409,
+        error: "Yêu cầu tuyển dụng đích không còn đủ chỉ tiêu cho số lao động đã chọn.",
+      };
     }
 
     // Kế hoạch đích: ưu tiên planning period của yêu cầu đích, nếu chưa gắn
@@ -351,8 +456,7 @@ export async function reallocateDws(input: ReallocateInput): Promise<ReallocateR
 
       // WORKFORCE REQUEST LINKAGE — đồng bộ sang request_allocations để KPI của
       // Workforce Request vẫn tính đúng từ source (chuyển request, không nghỉ việc).
-      // Tôn trọng block vượt tổng nhu cầu: nếu request đích đã đủ thì bỏ qua (log).
-      await syncRequestAllocationOnPlanningMove({
+      const synced = await syncRequestAllocationOnPlanningMove({
         executor: tx,
         employmentSessionId: a.employmentSessionId,
         fromRequestId: fromReq.id,
@@ -360,6 +464,20 @@ export async function reallocateDws(input: ReallocateInput): Promise<ReallocateR
         actor: input.actor,
         reason: "Tái phân bổ theo luồng Planning (expired request / thuyên chuyển)",
       });
+
+      // Phase 3B — F1, Option 1 (minimal, không refactor sync primitive):
+      // synced=false hợp lệ CHỈ khi preflight đã dự đoán worker này là NOOP
+      // (đã có ACTIVE request_allocations đúng tại toReq từ trước — có thể là
+      // tàn dư của một desync Planning/Request cũ, sync() tự bỏ qua đúng).
+      // Nếu preflight dự đoán ALLOCATE mà sync() vẫn trả false, đó là bất nhất
+      // nội bộ không nên xảy ra (khoá FOR UPDATE trên toReq lẽ ra đã đảm bảo
+      // preflight và sync() thấy CÙNG một trạng thái) — throw để rollback TOÀN
+      // BỘ transaction thay vì commit Planning/Request lệch nhau.
+      if (!synced && batchPlan.perWorker.get(a.workerId)?.outcome !== "NOOP") {
+        throw new Error(
+          `[reallocateDws] internal consistency error: syncRequestAllocationOnPlanningMove rejected sau khi capacity preflight đã PASS (workerId=${a.workerId}, toRequestId=${toReq.id}).`,
+        );
+      }
 
       // BƯỚC 3 — KHÔNG làm gì với employment_sessions / workforce_movements.
       // DW vẫn đang làm việc bình thường. Đây là điểm mấu chốt của Yêu cầu #9.
@@ -484,7 +602,7 @@ export async function listReallocationTargets(
     conditions.push(eq(recruitmentRequests.departmentId, opts.departmentId));
   }
 
-  return db
+  const rows = await db
     .select({
       id: recruitmentRequests.id,
       requestCode: recruitmentRequests.requestCode,
@@ -494,13 +612,41 @@ export async function listReallocationTargets(
       groupName: recruitmentRequests.groupName,
       expectedDate: recruitmentRequests.expectedDate,
       endDate: recruitmentRequests.endDate,
-      totalBalance: recruitmentRequests.totalBalance,
       status: recruitmentRequests.status,
+      // Chỉ dùng để tính batchComputeRequestKpis() bên dưới — KHÔNG trả trực
+      // tiếp cho UI (xem map() cuối hàm).
+      maleRq: recruitmentRequests.maleRq,
+      femaleRq: recruitmentRequests.femaleRq,
+      totalRequest: recruitmentRequests.totalRequest,
+      requestedDate: recruitmentRequests.requestedDate,
+      createdAt: recruitmentRequests.createdAt,
     })
     .from(recruitmentRequests)
     .where(and(...conditions))
     .orderBy(recruitmentRequests.expectedDate)
     .limit(200);
+
+  // Phase 3A audit F2 (khoá bởi Phase 3B decision C): KHÔNG dùng persisted
+  // recruitment_requests.totalBalance (legacy, department-scoped — sai khi 1
+  // department có nhiều request đang mở cùng lúc, xem Phase 3A §3 Case A).
+  // "Còn thiếu X" ở màn Chuyển phân bổ DW phải cùng công thức allocation-scoped
+  // với /api/planning/route.ts và Request Detail: Balance = max(0, Target -
+  // Current allocated). MỘT lần gọi batch cho toàn bộ candidate list — không
+  // N+1, không gọi getRequestDetail()/computeRequestKpi() mỗi request.
+  const kpiByRequestId = await batchComputeRequestKpis(rows, today);
+
+  return rows.map((r) => ({
+    id: r.id,
+    requestCode: r.requestCode,
+    department: r.department,
+    departmentId: r.departmentId,
+    section: r.section,
+    groupName: r.groupName,
+    expectedDate: r.expectedDate,
+    endDate: r.endDate,
+    status: r.status,
+    totalBalance: kpiByRequestId.get(r.id)?.totalBalance ?? 0,
+  }));
 }
 
 /* ============================================================
