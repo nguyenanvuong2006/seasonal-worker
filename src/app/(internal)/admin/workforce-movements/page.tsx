@@ -312,44 +312,52 @@ export default function WorkforceMovementsPage() {
       const rowById = new Map(rows.map((m) => [m.id, m]));
       const resignationIds = ids.filter((id) => rowById.get(id)?.movementType === "resignation");
       const transferIds = ids.filter((id) => rowById.get(id)?.movementType === "transfer");
+      const groups: { url: string; ids: string[] }[] = [];
+      if (resignationIds.length > 0) groups.push({ url: "/api/workforce-movements/bulk-approve-resignation", ids: resignationIds });
+      if (transferIds.length > 0) groups.push({ url: "/api/workforce-movements/bulk-approve-transfer", ids: transferIds });
 
-      const calls: Promise<{ endpoint: string; res: Response; d: BulkResult | { error?: string } }>[] = [];
-      if (resignationIds.length > 0) {
-        calls.push(
-          fetch("/api/workforce-movements/bulk-approve-resignation", {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ requestIds: resignationIds }),
-          }).then(async (res) => ({ endpoint: "resignation", res, d: await res.json() })),
-        );
-      }
-      if (transferIds.length > 0) {
-        calls.push(
-          fetch("/api/workforce-movements/bulk-approve-transfer", {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ requestIds: transferIds }),
-          }).then(async (res) => ({ endpoint: "transfer", res, d: await res.json() })),
-        );
-      }
-      const outcomes = await Promise.all(calls);
-      const failedCall = outcomes.find((o) => !o.res.ok);
-      if (failedCall) {
-        toast({ title: (failedCall.d as { error?: string }).error ?? "Không xử lý được hàng loạt.", variant: "destructive" });
-        return;
-      }
+      // Mỗi nhóm (resignation/transfer) là 1 HTTP request ĐỘC LẬP — nếu 1 nhóm lỗi (mạng/5xx)
+      // trong khi nhóm còn lại đã xử lý THÀNH CÔNG ở server, KHÔNG được coi cả lô là thất bại
+      // và bỏ qua kết quả thật của nhóm kia (trước đây `return` sớm khi bất kỳ nhóm nào lỗi làm
+      // mất luôn việc hiển thị kết quả + refresh danh sách cho nhóm đã approve thật). Xử lý độc
+      // lập: nhóm lỗi -> tổng hợp thành các dòng FAILED trong bản tóm tắt chung, nhóm thành công
+      // -> giữ nguyên kết quả per-id thật từ server. Luôn hiển thị 1 bản tóm tắt + luôn refresh.
+      const outcomes = await Promise.all(
+        groups.map(async (g): Promise<{ ok: true; data: BulkResult } | { ok: false; ids: string[]; error: string }> => {
+          try {
+            const res = await fetch(g.url, {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({ requestIds: g.ids }),
+            });
+            const d = await res.json();
+            if (!res.ok) return { ok: false, ids: g.ids, error: (d as { error?: string }).error ?? "Không xử lý được." };
+            return { ok: true, data: d as BulkResult };
+          } catch {
+            return { ok: false, ids: g.ids, error: "Không kết nối được tới máy chủ." };
+          }
+        }),
+      );
+
       const merged = outcomes.reduce<BulkResult>(
         (acc, o) => {
-          const d = o.d as BulkResult;
+          if (o.ok) {
+            return {
+              bulkOperationId: acc.bulkOperationId || o.data.bulkOperationId,
+              requested: acc.requested + o.data.requested,
+              approved: acc.approved + o.data.approved,
+              alreadyApproved: acc.alreadyApproved + o.data.alreadyApproved,
+              outOfScope: acc.outOfScope + o.data.outOfScope,
+              noLongerEligible: acc.noLongerEligible + o.data.noLongerEligible,
+              failed: acc.failed + o.data.failed,
+              results: [...acc.results, ...o.data.results],
+            };
+          }
           return {
-            bulkOperationId: acc.bulkOperationId || d.bulkOperationId,
-            requested: acc.requested + d.requested,
-            approved: acc.approved + d.approved,
-            alreadyApproved: acc.alreadyApproved + d.alreadyApproved,
-            outOfScope: acc.outOfScope + d.outOfScope,
-            noLongerEligible: acc.noLongerEligible + d.noLongerEligible,
-            failed: acc.failed + d.failed,
-            results: [...acc.results, ...d.results],
+            ...acc,
+            requested: acc.requested + o.ids.length,
+            failed: acc.failed + o.ids.length,
+            results: [...acc.results, ...o.ids.map((id) => ({ id, outcome: "FAILED" as const, reason: o.error }))],
           };
         },
         { bulkOperationId: "", requested: 0, approved: 0, alreadyApproved: 0, outOfScope: 0, noLongerEligible: 0, failed: 0, results: [] },
@@ -360,6 +368,9 @@ export default function WorkforceMovementsPage() {
       setBulkResultDetailOpen(false);
       setSelectedIds(new Set());
       await load();
+      if (outcomes.some((o) => !o.ok)) {
+        toast({ title: "Một phần yêu cầu không xử lý được — xem chi tiết kết quả bên dưới.", variant: "destructive" });
+      }
     } catch {
       toast({ title: "Không kết nối được tới máy chủ — thử lại.", variant: "destructive" });
     } finally {

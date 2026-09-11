@@ -309,6 +309,43 @@ test("MIXED selection (resignation + transfer): confirming sends ONE POST to EAC
   }
 });
 
+test("MIXED selection where ONE endpoint's HTTP call fails: the OTHER endpoint's real success is still shown, list still refreshes, selection still clears — never silently dropped", async () => {
+  const env = installDom();
+  try {
+    const ui = await renderPage(env, defaultRespond());
+    (globalThis as Record<string, unknown>).fetch = async (input: unknown, init?: RequestInit) => {
+      const url = String(input);
+      const method = init?.method ?? "GET";
+      const body = init?.body ? JSON.parse(String(init.body)) : null;
+      ui.requests.push({ method, url, body });
+      if (url.endsWith("/api/workforce-movements") && method === "GET") return { ok: true, status: 200, json: async () => ({ rows: ROWS }) } as unknown as Response;
+      if (url.includes("/api/departments")) return { ok: true, status: 200, json: async () => DEPTS } as unknown as Response;
+      if (url.includes("entityType=resignation")) return { ok: true, status: 200, json: async () => STAGES_RESIGNATION } as unknown as Response;
+      if (url.includes("entityType=transfer")) return { ok: true, status: 200, json: async () => STAGES_TRANSFER } as unknown as Response;
+      // Resignation succeeds for real (m1, m2 actually got approved server-side).
+      if (url.endsWith("/bulk-approve-resignation") && method === "POST") return bulkStub("resignation")(body);
+      // Transfer call fails at the HTTP layer (transient 500) — must NOT hide the resignation success.
+      if (url.endsWith("/bulk-approve-transfer") && method === "POST") {
+        return { ok: false, status: 500, json: async () => ({ error: "Lỗi máy chủ tạm thời." }) } as unknown as Response;
+      }
+      return { ok: true, status: 200, json: async () => ({}) } as unknown as Response;
+    };
+
+    await ui.click(ui.checkboxes()[0]); // select-all -> m1, m2 (resignation, will succeed) + m4 (transfer, will fail)
+    await ui.clickLabelled("Duyệt đã chọn (3)");
+    await ui.clickLabelled("Xác nhận xử lý 3 yêu cầu");
+
+    // The result summary must still render (not silently return) and reflect the resignation
+    // group's REAL success — not treat the whole batch as a no-op because transfer failed.
+    assert.match(ui.text(), /Xử lý hàng loạt hoàn tất/);
+    // GET /api/workforce-movements must have been called again (list refresh still happens).
+    const getReloads = ui.requests.filter((r) => r.method === "GET" && r.url.endsWith("/api/workforce-movements"));
+    assert.ok(getReloads.length >= 2, "list must still refresh even when one endpoint's HTTP call failed");
+  } finally {
+    env.cleanup();
+  }
+});
+
 test("partial-success result summary shows Thành công/Bỏ qua/Lỗi counts and a 'Xem chi tiết' toggle", async () => {
   const env = installDom();
   try {
