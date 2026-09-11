@@ -7,37 +7,52 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { MergeStageTimer, fetchWithTimeout } from "./merge-timing.ts";
 
+/**
+ * Deterministic fake clock injected into MergeStageTimer instead of the real
+ * wall clock. `Date.now()`-based timing around a `setTimeout(..., 5)` was
+ * flaky under system load / clock-resolution rounding — a "5ms" timer can
+ * legitimately be observed as <5ms elapsed depending on scheduler jitter.
+ * Advancing a fake counter synchronously inside `measure()`'s callback makes
+ * the recorded duration exact and independent of real time entirely, while
+ * still exercising the same measure()/summary() logic under test.
+ */
+function makeFakeClock(startAt = 1_000) {
+  let now = startAt;
+  return { now: () => now, advance: (ms: number) => { now += ms; } };
+}
+
 test("MergeStageTimer aggregates stage durations into the report buckets (PII-free)", async () => {
-  const timer = new MergeStageTimer("job-x");
+  const clock = makeFakeClock();
+  const timer = new MergeStageTimer("job-x", clock.now);
   await timer.measure("DATA_LOAD", async () => {
-    await new Promise((r) => setTimeout(r, 5));
+    clock.advance(5);
   });
   await timer.measure("GOOGLE_API", async () => {
-    await new Promise((r) => setTimeout(r, 5));
+    clock.advance(5);
   });
   await timer.measure("DRIVE_PDF", async () => {
-    await new Promise((r) => setTimeout(r, 5));
+    clock.advance(5);
   });
 
   const s = timer.summary();
-  assert.equal(typeof s.DATA_LOAD_MS, "number");
-  assert.ok((s.DATA_LOAD_MS ?? 0) >= 5);
+  assert.equal(s.DATA_LOAD_MS, 5);
   // DRIVE_PDF rolls into the GOOGLE_API_MS one-number bucket.
-  assert.ok((s.GOOGLE_API_MS ?? 0) >= 10);
-  assert.equal(typeof s.TOTAL_MS, "number");
+  assert.equal(s.GOOGLE_API_MS, 10);
+  assert.equal(s.TOTAL_MS, 15);
 });
 
 test("MergeStageTimer.measure records timing even when the stage throws", async () => {
-  const timer = new MergeStageTimer("job-y");
+  const clock = makeFakeClock();
+  const timer = new MergeStageTimer("job-y", clock.now);
   await assert.rejects(
     timer.measure("DOCUMENT_RENDER", async () => {
-      await new Promise((r) => setTimeout(r, 5));
+      clock.advance(5);
       throw new Error("boom");
     }),
     /boom/,
   );
   const s = timer.summary();
-  assert.ok((s.RENDER_MS ?? 0) >= 5, "stage duration recorded despite failure");
+  assert.equal(s.RENDER_MS, 5, "stage duration recorded despite failure");
 });
 
 test("fetchWithTimeout aborts a hung request and throws a visible timeout error", async () => {

@@ -126,7 +126,7 @@ async function buildFlatListWorkbook(rows: RowWithKpi[], session: { fullName: st
       col("Rq Status", 14, (r) => r.rqStatus ?? ""),
       col("Month_Rc", 10, (r) => r.monthRc ?? ""),
       col("Total Request", 12, (r) => r.totalRequest),
-      col("Recruited vs Expected", 14, (r) => r.recruitedVsExpected),
+      col("Recruited Applications vs Plan", 14, (r) => r.recruitedVsExpected),
       col("Screened", 10, (r) => r.screened),
       col("Interview", 10, (r) => r.interview),
       col("Recruit", 10, (r) => r.recruit),

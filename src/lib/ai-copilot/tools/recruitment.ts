@@ -3,6 +3,8 @@ import { getUserScope } from "@/lib/auth";
 import { todayStr } from "@/lib/helpers";
 import { computeRecruitmentKpis } from "@/lib/recruitment-kpi";
 import { getRecruitmentRequest, getRecruitmentStats, listRecruitmentRequests } from "@/lib/recruitment-request";
+import { batchComputeRequestKpis } from "@/lib/workforce-request";
+import { resolveDefaultAsOf } from "@/lib/workforce-request-kpi";
 import type { ToolContext, ToolDefinition, ToolResult } from "../types.ts";
 import { ToolExecutionError } from "../types.ts";
 import { capLimit } from "../scope-helpers.ts";
@@ -12,6 +14,19 @@ import { capLimit } from "../scope-helpers.ts";
  * getRecruitmentStats (src/lib/recruitment-request.ts) and the canonical
  * Recruitment Balance formula computeRecruitmentKpis (src/lib/recruitment-kpi.ts)
  * — never reimplemented, per the audit's explicit "FORBIDDEN to reimplement" note.
+ *
+ * final-project-hardening: get_recruitment_requests' maleBalance/femaleBalance/
+ * totalBalance previously came straight off the persisted, department-scoped
+ * legacy columns (recruitmentRequests.maleBalance/...) — the exact same stale
+ * source the canonical UI list route (/api/recruitment-requests) stopped
+ * reading from in Phase 2B in favor of batchComputeRequestKpis(), the
+ * allocation-aware, per-request engine. Wired the same call here so the AI
+ * Copilot never answers "còn thiếu bao nhiêu" with a number the operational
+ * UI itself no longer trusts. get_recruitment_stats/get_recruitment_request_kpi
+ * are untouched: the former is a shared department-scoped aggregate also used
+ * by the legacy /admin/workforce-requests dashboard (canonicalizing it is a
+ * separate, larger change); the latter explicitly advertises the distinct
+ * "Realtime Gap" reconciliation metric (computeRecruitmentKpis), not fill rate.
  */
 
 const MAX_ROWS = 20;
@@ -69,20 +84,28 @@ const get_recruitment_requests: ToolDefinition<ListArgs, ListResult> = {
     // ever narrow WITHIN what listRecruitmentRequests already scoped, never widen it.
     const filtered = args.departmentId ? rows.filter((r) => r.departmentId === args.departmentId) : rows;
     const page = filtered.slice(0, limit);
-    const dtos: RecruitmentRequestDto[] = page.map((r) => ({
-      id: r.id,
-      requestCode: r.requestCode,
-      department: r.department,
-      position: r.position,
-      status: r.status,
-      requestedDate: r.requestedDate,
-      expectedDate: r.expectedDate,
-      maleRq: r.maleRq,
-      femaleRq: r.femaleRq,
-      maleBalance: r.maleBalance,
-      femaleBalance: r.femaleBalance,
-      totalBalance: r.totalBalance,
-    }));
+    // CANONICAL KPI (same engine/asOf rule as /api/recruitment-requests GET) — never the
+    // persisted legacy maleBalance/femaleBalance/totalBalance columns, which are stale.
+    const today = todayStr();
+    const rowsById = new Map(page.map((r) => [r.id, r]));
+    const kpis = await batchComputeRequestKpis(page, (r) => resolveDefaultAsOf(rowsById.get(r.id)!, today));
+    const dtos: RecruitmentRequestDto[] = page.map((r) => {
+      const kpi = kpis.get(r.id) ?? null;
+      return {
+        id: r.id,
+        requestCode: r.requestCode,
+        department: r.department,
+        position: r.position,
+        status: r.status,
+        requestedDate: r.requestedDate,
+        expectedDate: r.expectedDate,
+        maleRq: r.maleRq,
+        femaleRq: r.femaleRq,
+        maleBalance: kpi?.maleBalance ?? 0,
+        femaleBalance: kpi?.femaleBalance ?? 0,
+        totalBalance: kpi?.totalBalance ?? 0,
+      };
+    });
     return {
       data: { requests: dtos },
       source: { domains: ["recruitment"], asOf: todayStr() },

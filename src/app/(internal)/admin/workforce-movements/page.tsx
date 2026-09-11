@@ -72,13 +72,16 @@ const ACTION_TONE_CLASS: Record<string, string> = {
   gray: "bg-surface-hover text-fg-secondary hover:bg-border",
 };
 
-// BULK APPROVAL — eligibility is derived from the SAME lookup the single-row "Duyệt nghỉ
-// việc" button already uses (STATUS_ACTIONS[`${movementType}_${status}`]), never from any
-// display text. A row is bulk-selectable iff it currently exposes the canonical
-// APPROVE_RESIGNATION action — i.e. movementType="resignation" AND status="PENDING_HR" (the
-// only FROM status allowed by ALLOWED_ACTIONS in lib/workforce-movements.ts).
+// BULK APPROVAL — eligibility is derived from the SAME lookup the single-row action buttons
+// already use (STATUS_ACTIONS[`${movementType}_${status}`]), never from any display text. A
+// row is bulk-selectable iff it currently exposes the canonical APPROVE_RESIGNATION action
+// (resignation, status="PENDING_HR") OR the canonical CONFIRM_ARRIVED action (transfer,
+// status="PENDING_HR" or "TRANSFER_RESCHEDULED" — final-project-hardening: bulk transfer
+// arrival confirmation, same pattern as bulk resignation, see bulk-approve-transfer/route.ts).
 function isEligibleForBulkApproval(m: Movement): boolean {
-  return (STATUS_ACTIONS[`${m.movementType}_${m.status}`] ?? []).some((a) => a.action === "APPROVE_RESIGNATION");
+  return (STATUS_ACTIONS[`${m.movementType}_${m.status}`] ?? []).some(
+    (a) => a.action === "APPROVE_RESIGNATION" || a.action === "CONFIRM_ARRIVED",
+  );
 }
 
 type BulkResultItem = { id: string; outcome: "APPROVED" | "ALREADY_APPROVED" | "NO_LONGER_ELIGIBLE" | "OUT_OF_SCOPE" | "FAILED"; reason?: string };
@@ -172,10 +175,16 @@ export default function WorkforceMovementsPage() {
   }, [load]);
 
   useEffect(() => {
+    // final-project-hardening — trước đây KHÔNG có .ok check và KHÔNG có .catch(): một lỗi
+    // non-2xx/mạng ở đây trở thành unhandled rejection, không ai biết. Đây chỉ là dữ liệu bổ
+    // trợ (nhãn/màu trạng thái) — stageLabel()/stageTone() đã có fallback về key thô/gray khi
+    // stages rỗng, nên degrade âm thầm (log lỗi, không toast) là đúng mức, không cần chặn UI.
     Promise.all([
-      fetch("/api/workflow-stages?entityType=resignation").then((r) => r.json()),
-      fetch("/api/workflow-stages?entityType=transfer").then((r) => r.json()),
-    ]).then(([res, trans]) => setStages([...(res.rows ?? []), ...(trans.rows ?? [])]));
+      fetch("/api/workflow-stages?entityType=resignation").then((r) => (r.ok ? r.json() : { rows: [] })),
+      fetch("/api/workflow-stages?entityType=transfer").then((r) => (r.ok ? r.json() : { rows: [] })),
+    ])
+      .then(([res, trans]) => setStages([...(res.rows ?? []), ...(trans.rows ?? [])]))
+      .catch((err) => console.error("[workforce-movements] load workflow stages failed", err));
   }, []);
 
   const stageLabel = (key: string) => stages.find((s) => s.stageKey === key)?.label ?? key;
@@ -296,21 +305,72 @@ export default function WorkforceMovementsPage() {
     setBulkResultLabels(new Map(rows.map((m) => [m.id, m.workerName ?? m.workerCccd ?? m.id])));
     setBulkSaving(true);
     try {
-      const res = await fetch("/api/workforce-movements/bulk-approve-resignation", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ requestIds: ids }),
-      });
-      const d = await res.json();
-      if (!res.ok) {
-        toast({ title: d.error ?? "Không duyệt được hàng loạt.", variant: "destructive" });
-        return;
-      }
+      // Một lô có thể trộn cả Nghỉ việc lẫn Thuyên chuyển — mỗi loại có endpoint riêng
+      // (bulk-approve-resignation / bulk-approve-transfer), KHÔNG dùng chung 1 engine.
+      // Tách theo movementType của chính dòng đang chọn (không đoán từ id), gọi endpoint
+      // nào có ids thì gọi, rồi gộp kết quả thành 1 bản tóm tắt duy nhất cho UI.
+      const rowById = new Map(rows.map((m) => [m.id, m]));
+      const resignationIds = ids.filter((id) => rowById.get(id)?.movementType === "resignation");
+      const transferIds = ids.filter((id) => rowById.get(id)?.movementType === "transfer");
+      const groups: { url: string; ids: string[] }[] = [];
+      if (resignationIds.length > 0) groups.push({ url: "/api/workforce-movements/bulk-approve-resignation", ids: resignationIds });
+      if (transferIds.length > 0) groups.push({ url: "/api/workforce-movements/bulk-approve-transfer", ids: transferIds });
+
+      // Mỗi nhóm (resignation/transfer) là 1 HTTP request ĐỘC LẬP — nếu 1 nhóm lỗi (mạng/5xx)
+      // trong khi nhóm còn lại đã xử lý THÀNH CÔNG ở server, KHÔNG được coi cả lô là thất bại
+      // và bỏ qua kết quả thật của nhóm kia (trước đây `return` sớm khi bất kỳ nhóm nào lỗi làm
+      // mất luôn việc hiển thị kết quả + refresh danh sách cho nhóm đã approve thật). Xử lý độc
+      // lập: nhóm lỗi -> tổng hợp thành các dòng FAILED trong bản tóm tắt chung, nhóm thành công
+      // -> giữ nguyên kết quả per-id thật từ server. Luôn hiển thị 1 bản tóm tắt + luôn refresh.
+      const outcomes = await Promise.all(
+        groups.map(async (g): Promise<{ ok: true; data: BulkResult } | { ok: false; ids: string[]; error: string }> => {
+          try {
+            const res = await fetch(g.url, {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({ requestIds: g.ids }),
+            });
+            const d = await res.json();
+            if (!res.ok) return { ok: false, ids: g.ids, error: (d as { error?: string }).error ?? "Không xử lý được." };
+            return { ok: true, data: d as BulkResult };
+          } catch {
+            return { ok: false, ids: g.ids, error: "Không kết nối được tới máy chủ." };
+          }
+        }),
+      );
+
+      const merged = outcomes.reduce<BulkResult>(
+        (acc, o) => {
+          if (o.ok) {
+            return {
+              bulkOperationId: acc.bulkOperationId || o.data.bulkOperationId,
+              requested: acc.requested + o.data.requested,
+              approved: acc.approved + o.data.approved,
+              alreadyApproved: acc.alreadyApproved + o.data.alreadyApproved,
+              outOfScope: acc.outOfScope + o.data.outOfScope,
+              noLongerEligible: acc.noLongerEligible + o.data.noLongerEligible,
+              failed: acc.failed + o.data.failed,
+              results: [...acc.results, ...o.data.results],
+            };
+          }
+          return {
+            ...acc,
+            requested: acc.requested + o.ids.length,
+            failed: acc.failed + o.ids.length,
+            results: [...acc.results, ...o.ids.map((id) => ({ id, outcome: "FAILED" as const, reason: o.error }))],
+          };
+        },
+        { bulkOperationId: "", requested: 0, approved: 0, alreadyApproved: 0, outOfScope: 0, noLongerEligible: 0, failed: 0, results: [] },
+      );
+
       setBulkConfirmOpen(false);
-      setBulkResult(d);
+      setBulkResult(merged);
       setBulkResultDetailOpen(false);
       setSelectedIds(new Set());
       await load();
+      if (outcomes.some((o) => !o.ok)) {
+        toast({ title: "Một phần yêu cầu không xử lý được — xem chi tiết kết quả bên dưới.", variant: "destructive" });
+      }
     } catch {
       toast({ title: "Không kết nối được tới máy chủ — thử lại.", variant: "destructive" });
     } finally {
@@ -379,7 +439,7 @@ export default function WorkforceMovementsPage() {
                         className="h-[18px] w-[18px] shrink-0 rounded border-border-strong"
                         checked={selectedIds.has(m.id)}
                         onChange={() => toggleSelected(m.id)}
-                        aria-label={`Chọn duyệt nghỉ việc cho ${m.workerName ?? m.workerCccd ?? m.id}`}
+                        aria-label={`Chọn xử lý hàng loạt cho ${m.workerName ?? m.workerCccd ?? m.id}`}
                       />
                     ) : (
                       <span className="w-[18px] shrink-0" aria-hidden />
@@ -433,25 +493,27 @@ export default function WorkforceMovementsPage() {
               Bỏ chọn
             </Button>
             <Button variant="primary" size="sm" onClick={() => setBulkConfirmOpen(true)} disabled={bulkSaving}>
-              Duyệt nghỉ việc đã chọn ({selectedIds.size})
+              Duyệt đã chọn ({selectedIds.size})
             </Button>
           </div>
         </div>
       )}
 
-      {/* MỘT xác nhận duy nhất cho toàn bộ lô — không hỏi lại từng người. */}
+      {/* MỘT xác nhận duy nhất cho toàn bộ lô — không hỏi lại từng người. Lô có thể trộn
+          Nghỉ việc (Duyệt nghỉ việc) và Thuyên chuyển (Đã nhận việc) — mỗi loại được xử lý
+          qua đúng canonical action của nó (xem runBulkApprove). */}
       <ConfirmDialog
         open={bulkConfirmOpen}
         onClose={() => setBulkConfirmOpen(false)}
         onConfirm={runBulkApprove}
-        title="Xác nhận duyệt nghỉ việc"
+        title="Xác nhận xử lý hàng loạt"
         description={
           <>
-            Bạn sắp duyệt nghỉ việc cho {selectedIds.size} người. Sau khi xác nhận, hệ thống sẽ xử lý từng hồ sơ theo quy trình
-            nghỉ việc hiện tại.
+            Bạn sắp xử lý {selectedIds.size} yêu cầu (Duyệt nghỉ việc và/hoặc Đã nhận việc thuyên chuyển). Sau khi xác nhận, hệ
+            thống sẽ xử lý từng hồ sơ theo đúng quy trình hiện tại của loại yêu cầu đó.
           </>
         }
-        confirmLabel={`Xác nhận duyệt ${selectedIds.size} người`}
+        confirmLabel={`Xác nhận xử lý ${selectedIds.size} yêu cầu`}
         loading={bulkSaving}
       />
 
@@ -462,7 +524,7 @@ export default function WorkforceMovementsPage() {
           setBulkResult(null);
           setBulkResultDetailOpen(false);
         }}
-        title="Duyệt nghỉ việc hoàn tất"
+        title="Xử lý hàng loạt hoàn tất"
         width="max-w-md"
       >
         {bulkResult && (
