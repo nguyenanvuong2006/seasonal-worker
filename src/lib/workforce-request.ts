@@ -60,14 +60,29 @@ export function isSessionActiveNow(s: { status: string | null; endDate: string |
   return isActiveEmploymentSession(s.status, s.endDate);
 }
 
-/** Khoảng thời gian của 1 request (mục 3): [requestedDate|createdAt, expectedDate|null]. */
+/**
+ * MOVEMENT ATTRIBUTION WINDOW (follow-up correctness fix — post-PR#203 report):
+ * [requestedDate|createdAt, endDate|null] — decides which Quit/Transfer-Out movements
+ * belong to this request's HISTORY. This is deliberately NOT the same concept as
+ * `expectedDate` ("Ngày cần nhân lực" — the staffing-need-by deadline used for sort/
+ * planning/display; see recruitment-request-columns.ts and planning-recruitment-core.ts).
+ * `expectedDate` is a TARGET, not a closing boundary — a movement that happens after
+ * the staffing deadline but before the request actually closes is still this request's
+ * history. `endDate` ("Ngày kết thúc yêu cầu") is the request's real closing date, the
+ * SAME field resolveDefaultAsOf() already freezes historical KPI snapshots on, and the
+ * same field the legacy resolveRequestQuitWindow() (recruitment-kpi.ts) already uses as
+ * its window end. When endDate is null (request still open), movementInRequestWindow()
+ * below caps purely by `asOf` instead — never invents a synthetic closing date here;
+ * for historical (EXPIRED/COMPLETED/CANCELLED) requests missing endDate,
+ * resolveDefaultAsOf() is what supplies that fallback asOf, not this function.
+ */
 export function requestWindow(r: {
   requestedDate: string | null;
-  expectedDate: string | null;
+  endDate: string | null;
   createdAt: Date;
 }): { start: string; end: string | null } {
   const start = r.requestedDate ?? r.createdAt.toISOString().slice(0, 10);
-  return { start, end: r.expectedDate ?? null };
+  return { start, end: r.endDate ?? null };
 }
 
 export function resolveTotalRequestOf(r: Pick<RecruitmentRequest, "maleRq" | "femaleRq" | "totalRequest">): number {
@@ -205,11 +220,15 @@ async function fetchQuitRows(ex: Executor, requestIds: string[]): Promise<QuitRo
 }
 
 /**
- * Dùng chung cho Quit VÀ Transfer-out (Phase 2B mục 3.2): movement chỉ được
- * tính thuộc về 1 request nếu xảy ra TRONG cửa sổ thời gian của request
- * ([window.start, window.end ?? asOf]) VÀ SAU khi worker đã được phân bổ
- * vào request đó (allocatedAt <= effectiveDate) — không tính movement
- * trước khi có allocation, không tính movement sau asOf (giữ lịch sử bất biến).
+ * Dùng chung cho Quit VÀ Transfer-out (Phase 2B mục 3.2, hardened by the follow-up
+ * correctness fix above): movement chỉ được tính thuộc về 1 request nếu xảy ra TRONG
+ * cửa sổ thời gian của request VÀ SAU khi worker đã được phân bổ vào request đó
+ * (allocatedAt <= effectiveDate). Upper bound LUÔN là min(window.end, asOf) — asOf
+ * là chặn cứng bắt buộc (không tính movement sau thời điểm đang quan sát, giữ lịch sử
+ * bất biến kể cả khi asOf được override sớm hơn endDate), và window.end (nếu có) siết
+ * chặt thêm khi request đã thực sự đóng trước asOf. window.end KHÔNG BAO GIỜ là
+ * expectedDate (xem requestWindow()) — chỉ requestedDate/createdAt (start) và endDate
+ * (end) mới quyết định biên độ lịch sử này.
  */
 function movementInRequestWindow(
   row: { effectiveDate: string; allocatedAt: Date },
@@ -217,8 +236,8 @@ function movementInRequestWindow(
   asOf: string,
 ): boolean {
   if (row.effectiveDate < window.start) return false;
-  const cap = window.end ?? asOf;
-  if (row.effectiveDate > cap) return false;
+  if (row.effectiveDate > asOf) return false;
+  if (window.end !== null && row.effectiveDate > window.end) return false;
   if (row.allocatedAt.toISOString().slice(0, 10) > row.effectiveDate) return false;
   return true;
 }
@@ -305,7 +324,7 @@ function countGender(rows: { gender: string | null }[], pred: (g: string | null)
    ============================================================ */
 export type RequestRow = Pick<
   RecruitmentRequest,
-  "id" | "maleRq" | "femaleRq" | "totalRequest" | "requestedDate" | "expectedDate" | "createdAt"
+  "id" | "maleRq" | "femaleRq" | "totalRequest" | "requestedDate" | "expectedDate" | "endDate" | "createdAt"
 >;
 
 export type AsOfResolver = (r: RequestRow) => string;
@@ -476,6 +495,7 @@ export async function recomputeRequestKpiCache(): Promise<number> {
       totalRequest: recruitmentRequests.totalRequest,
       requestedDate: recruitmentRequests.requestedDate,
       expectedDate: recruitmentRequests.expectedDate,
+      endDate: recruitmentRequests.endDate,
       createdAt: recruitmentRequests.createdAt,
     })
     .from(recruitmentRequests)
@@ -1675,6 +1695,7 @@ export async function getRequestDashboard(scope: string[] | null, asOf = todaySt
       section: recruitmentRequests.section,
       groupName: recruitmentRequests.groupName,
       expectedDate: recruitmentRequests.expectedDate,
+      endDate: recruitmentRequests.endDate,
       status: recruitmentRequests.status,
       maleRq: recruitmentRequests.maleRq,
       femaleRq: recruitmentRequests.femaleRq,

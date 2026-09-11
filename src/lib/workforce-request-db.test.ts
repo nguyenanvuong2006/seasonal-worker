@@ -205,6 +205,7 @@ type RequestRow = {
   totalRequest: number;
   requestedDate: string | null;
   expectedDate: string | null;
+  endDate: string | null;
   createdAt: Date;
 };
 
@@ -215,6 +216,7 @@ const RQ09_ROW: RequestRow = {
   totalRequest: 3,
   requestedDate: "2026-09-01",
   expectedDate: "2026-09-30",
+  endDate: "2026-09-30",
   createdAt: new Date("2026-09-01"),
 };
 
@@ -379,7 +381,7 @@ test("Follow-up: SAU KHI lifecycle áp dụng (lifecycleAppliedAt được set, 
   assert.equal(kpi.femaleBalance, 1, "Balance = max(0, Target-Current) = 1, KHÔNG cộng thêm Quit lần hai thành 2");
 });
 
-test("Quit/TransferOut không đổi bởi asOf muộn hơn effectiveDate (bị chặn bởi window.end=expectedDate, không phải bởi asOf)", async () => {
+test("Quit/TransferOut không đổi bởi asOf muộn hơn effectiveDate (bị chặn bởi window.end=endDate, không phải bởi asOf)", async () => {
   const fixture = buildFixture();
   const db = createFakeDb({ respond: respondFor(fixture) });
   const mod = load(db) as {
@@ -387,6 +389,137 @@ test("Quit/TransferOut không đổi bởi asOf muộn hơn effectiveDate (bị 
   };
   const farFuture = await mod.batchComputeRequestKpis([RQ09_ROW], "2027-01-01");
   const kpi = farFuture.get(RQ09)!;
-  assert.equal(kpi.totalQuit, 1, "Quit vẫn = 1 dù xem ở thời điểm rất xa sau đó — cửa sổ request (expectedDate) đã chốt, không đổi theo asOf");
+  assert.equal(kpi.totalQuit, 1, "Quit vẫn = 1 dù xem ở thời điểm rất xa sau đó — cửa sổ request (endDate) đã chốt, không đổi theo asOf");
   assert.equal(kpi.totalTransferOut, 1, "TransferOut tương tự — bất biến theo cửa sổ request");
+});
+
+/* ============================================================
+   Follow-up correctness fix #2 (post-PR#203 report): requestWindow() phải dùng
+   endDate (ngày kết thúc yêu cầu thực sự) làm biên trên cho movement attribution,
+   KHÔNG dùng expectedDate (ngày CẦN nhân lực — chỉ là deadline/target hiển thị,
+   sort, cảnh báo, KHÔNG phải lifecycle end). 4 case bắt buộc theo yêu cầu review.
+   ============================================================ */
+
+const RQW = "rqw";
+
+function buildWindowFixture() {
+  const allocations: AllocRow[] = [
+    { id: "a-wq1", requestId: RQW, workerId: "wq1", employmentSessionId: "s-wq1", status: "ACTIVE", startedAt: new Date("2026-09-01"), endedAt: null },
+    { id: "a-wq2", requestId: RQW, workerId: "wq2", employmentSessionId: "s-wq2", status: "ACTIVE", startedAt: new Date("2026-09-01"), endedAt: null },
+    { id: "a-wq3", requestId: RQW, workerId: "wq3", employmentSessionId: "s-wq3", status: "ACTIVE", startedAt: new Date("2026-09-01"), endedAt: null },
+  ];
+  const sessions: Record<string, SessionRow> = {
+    "s-wq1": { id: "s-wq1", status: "APPROVED", endDate: null, startingDate: "2026-09-01" },
+    "s-wq2": { id: "s-wq2", status: "APPROVED", endDate: null, startingDate: "2026-09-01" },
+    "s-wq3": { id: "s-wq3", status: "APPROVED", endDate: null, startingDate: "2026-09-01" },
+  };
+  const workers: Record<string, WorkerRow> = {
+    wq1: { id: "wq1", gender: "Nam", deletedAt: null },
+    wq2: { id: "wq2", gender: "Nữ", deletedAt: null },
+    wq3: { id: "wq3", gender: "Nam", deletedAt: null },
+  };
+  // wq1: resign hiệu lực 09-20 (SAU expectedDate=09-10, TRƯỚC endDate=09-30).
+  // wq2: transfer hiệu lực 09-22 (cũng nằm giữa expectedDate và endDate).
+  // wq3: resign hiệu lực 10-01 (SAU endDate=09-30) — dùng cho case W2.
+  const movements: MovementRow[] = [
+    { id: "m-resign-wq1", workerId: "wq1", movementType: "resignation", status: "INACTIVE", effectiveDate: "2026-09-20", lifecycleAppliedAt: new Date("2026-09-20") },
+    { id: "m-transfer-wq2", workerId: "wq2", movementType: "transfer", status: "TRANSFER_COMPLETED", effectiveDate: "2026-09-22", lifecycleAppliedAt: new Date("2026-09-22") },
+    { id: "m-resign-wq3", workerId: "wq3", movementType: "resignation", status: "INACTIVE", effectiveDate: "2026-10-01", lifecycleAppliedAt: new Date("2026-10-01") },
+  ];
+  const pipeline: { requestId: string; gender: string; status: string; submittedAt: Date }[] = [];
+  return { allocations, sessions, workers, movements, pipeline };
+}
+
+test("W1: expectedDate (09-10) TRƯỚC endDate (09-30) — Quit hiệu lực 09-20 và Transfer-Out hiệu lực 09-22 (SAU expectedDate, TRƯỚC endDate) VẪN được tính, KHÔNG bị loại chỉ vì đã qua expectedDate", async () => {
+  const fixture = buildWindowFixture();
+  const db = createFakeDb({ respond: respondFor(fixture) });
+  const mod = load(db) as {
+    batchComputeRequestKpis: (rows: RequestRow[], asOf: string) => Promise<Map<string, Record<string, number>>>;
+  };
+  const rqwRow: RequestRow = {
+    id: RQW, maleRq: 2, femaleRq: 1, totalRequest: 3,
+    requestedDate: "2026-09-01", expectedDate: "2026-09-10", endDate: "2026-09-30",
+    createdAt: new Date("2026-09-01"),
+  };
+
+  const kpis = await mod.batchComputeRequestKpis([rqwRow], "2026-10-15");
+  const kpi = kpis.get(RQW)!;
+
+  assert.equal(kpi.totalQuit, 1, "wq1 resign 09-20 (sau expectedDate=09-10) VẪN thuộc lịch sử request — expectedDate KHÔNG phải hard upper bound");
+  assert.equal(kpi.totalTransferOut, 1, "wq2 transfer 09-22 (sau expectedDate=09-10) VẪN thuộc lịch sử request — cùng lý do");
+});
+
+test("W2: movement hiệu lực SAU endDate (10-01 > 09-30) KHÔNG được tính vào request này", async () => {
+  const fixture = buildWindowFixture();
+  const db = createFakeDb({ respond: respondFor(fixture) });
+  const mod = load(db) as {
+    batchComputeRequestKpis: (rows: RequestRow[], asOf: string) => Promise<Map<string, Record<string, number>>>;
+  };
+  const rqwRow: RequestRow = {
+    id: RQW, maleRq: 2, femaleRq: 1, totalRequest: 3,
+    requestedDate: "2026-09-01", expectedDate: "2026-09-10", endDate: "2026-09-30",
+    createdAt: new Date("2026-09-01"),
+  };
+
+  const kpis = await mod.batchComputeRequestKpis([rqwRow], "2026-10-15");
+  const kpi = kpis.get(RQW)!;
+
+  // wq3 (resign 10-01) không được tính — chỉ wq1 (Quit) và wq2 (TransferOut) thuộc window.
+  assert.equal(kpi.totalQuit, 1, "chỉ wq1 (09-20, trong window) được tính — wq3 (10-01, sau endDate) bị loại");
+  assert.equal(kpi.totalTransferOut, 1, "wq2 (09-22, trong window) được tính bình thường");
+});
+
+test("W3: request ĐANG MỞ (endDate=null) đã qua expectedDate — movement hiệu lực SAU expectedDate nhưng <= asOf VẪN được attribution, chứng minh expectedDate không phải lifecycle end", async () => {
+  const fixture = buildWindowFixture();
+  const db = createFakeDb({ respond: respondFor(fixture) });
+  const mod = load(db) as {
+    batchComputeRequestKpis: (rows: RequestRow[], asOf: string) => Promise<Map<string, Record<string, number>>>;
+  };
+  // Request vẫn MỞ: chưa có endDate. expectedDate=09-10 đã qua (asOf=TODAY=10-15).
+  const openRow: RequestRow = {
+    id: RQW, maleRq: 2, femaleRq: 1, totalRequest: 3,
+    requestedDate: "2026-09-01", expectedDate: "2026-09-10", endDate: null,
+    createdAt: new Date("2026-09-01"),
+  };
+
+  const kpis = await mod.batchComputeRequestKpis([openRow], TODAY);
+  const kpi = kpis.get(RQW)!;
+
+  // Cả 3 movement (kể cả wq3 hiệu lực 10-01) đều <= asOf=TODAY(10-15) và request
+  // chưa đóng (endDate=null) -> KHÔNG có upper bound nào khác ngoài asOf.
+  assert.equal(kpi.totalQuit, 2, "wq1 (09-20) VÀ wq3 (10-01) đều được tính — request còn mở, chỉ bị chặn bởi asOf, không bởi expectedDate");
+  assert.equal(kpi.totalTransferOut, 1, "wq2 (09-22) được tính bình thường");
+});
+
+test("W4: historical request THIẾU endDate — asOf do resolveDefaultAsOf() cung cấp (mô phỏng ở đây bằng giá trị asOf truyền vào) mới là biên đóng, requestWindow() KHÔNG tự mở vô hạn", async () => {
+  const fixture = buildWindowFixture();
+  // Thêm 1 worker mới với movement hiệu lực SAU asOf lịch sử đã resolve (mô phỏng dữ
+  // liệu phát sinh sau khi request đã "đóng" theo asOf lịch sử — không được rò vào).
+  fixture.allocations.push({ id: "a-wq4", requestId: RQW, workerId: "wq4", employmentSessionId: "s-wq4", status: "ACTIVE", startedAt: new Date("2026-09-01"), endedAt: null });
+  fixture.sessions["s-wq4"] = { id: "s-wq4", status: "APPROVED", endDate: null, startingDate: "2026-09-01" };
+  fixture.workers.wq4 = { id: "wq4", gender: "Nữ", deletedAt: null };
+  fixture.movements.push({ id: "m-resign-wq4", workerId: "wq4", movementType: "resignation", status: "INACTIVE", effectiveDate: "2026-09-25", lifecycleAppliedAt: new Date("2026-09-25") });
+
+  const db = createFakeDb({ respond: respondFor(fixture) });
+  const mod = load(db) as {
+    batchComputeRequestKpis: (rows: RequestRow[], asOf: string) => Promise<Map<string, Record<string, number>>>;
+  };
+  // Legacy row: endDate=null (chưa từng được ghi). resolveDefaultAsOf() (không gọi trực
+  // tiếp ở đây — đã có test riêng ở workforce-request.test.ts) đã resolve fallback closing
+  // = "2026-09-20" (ví dụ completedDate/updatedAt fallback) — route truyền asOf này vào
+  // batchComputeRequestKpis(), KHÔNG phải today.
+  const legacyRow: RequestRow = {
+    id: RQW, maleRq: 2, femaleRq: 2, totalRequest: 4,
+    requestedDate: "2026-09-01", expectedDate: "2026-09-10", endDate: null,
+    createdAt: new Date("2026-09-01"),
+  };
+  const resolvedAsOf = "2026-09-20";
+
+  const kpis = await mod.batchComputeRequestKpis([legacyRow], resolvedAsOf);
+  const kpi = kpis.get(RQW)!;
+
+  // wq1 (09-20, đúng bằng resolved asOf) -> tính. wq4 (09-25, SAU resolved asOf) -> KHÔNG
+  // tính, dù endDate=null — requestWindow() không được tự mở cửa sổ vượt qua asOf lịch sử
+  // đã chốt chỉ vì thiếu endDate.
+  assert.equal(kpi.totalQuit, 1, "chỉ wq1 (<= resolved asOf) được tính; wq4 (sau resolved asOf) bị loại dù endDate=null");
 });
