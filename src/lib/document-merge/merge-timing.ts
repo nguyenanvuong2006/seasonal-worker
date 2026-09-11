@@ -36,20 +36,24 @@ export interface MergeStageTiming {
 
 export class MergeStageTimer {
   private readonly marks: Partial<Record<MergeStage, number>> = {};
-  private readonly startedAt = Date.now();
+  private readonly startedAt: number;
   private readonly jobId: string;
+  private readonly now: () => number;
 
-  constructor(jobId: string) {
+  /** `now` defaults to the real wall clock; tests inject a deterministic fake to avoid timing flake. */
+  constructor(jobId: string, now: () => number = Date.now) {
     this.jobId = jobId;
+    this.now = now;
+    this.startedAt = now();
   }
 
   /** Run `fn` and record how long it took for `stage`. */
   async measure<T>(stage: MergeStage, fn: () => Promise<T>): Promise<T> {
-    const t0 = Date.now();
+    const t0 = this.now();
     try {
       return await fn();
     } finally {
-      this.marks[stage] = (this.marks[stage] ?? 0) + (Date.now() - t0);
+      this.marks[stage] = (this.marks[stage] ?? 0) + (this.now() - t0);
     }
   }
 
@@ -72,7 +76,7 @@ export class MergeStageTimer {
       RENDER_MS: this.marks.DOCUMENT_RENDER ?? 0,
       GOOGLE_API_MS: googleApi,
       OUTPUT_SAVE_MS: this.marks.OUTPUT_SAVE ?? 0,
-      TOTAL_MS: Date.now() - this.startedAt,
+      TOTAL_MS: this.now() - this.startedAt,
     };
   }
 

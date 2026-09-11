@@ -18,9 +18,10 @@ import assert from "node:assert/strict";
 import { createFakeDb, drizzleStub, makeTable, eqValue, type FakeDb, type QueryCall } from "../test-support/fake-drizzle.ts";
 import { loadModule, serverOnlyStub } from "../test-support/load-module.ts";
 import * as draftPreviewModule from "./draft-preview.ts";
+import type { ResolvedPreview } from "./preview-render.ts";
 
 type PreviewRenderModule = {
-  resolveTemplateVersionPreview: (input: Record<string, unknown>) => Promise<Record<string, unknown>>;
+  resolveTemplateVersionPreview: (input: Record<string, unknown>) => Promise<ResolvedPreview>;
   PreviewResolutionError: new (code: string, message: string, status: number, action?: string, templateId?: string | null) => Error & {
     code: string;
     status: number;
