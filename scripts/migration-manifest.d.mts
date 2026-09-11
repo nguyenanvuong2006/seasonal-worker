@@ -47,5 +47,3 @@ export const MIGRATION_MANIFEST: MigrationManifestEntry[];
 export function getManifestEntry(filename: string): MigrationManifestEntry | null;
 
 export function listManifestFilenames(): string[];
-
-export function isExecutable(filename: string): boolean;

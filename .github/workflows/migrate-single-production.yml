@@ -58,9 +58,11 @@ jobs:
         uses: actions/checkout@v4
 
       - name: Guardrail — input xác nhận phải ĐÚNG "PRODUCTION"
+        env:
+          CONFIRM: ${{ github.event.inputs.confirm }}
         run: |
           set -euo pipefail
-          if [ "${{ github.event.inputs.confirm }}" != "PRODUCTION" ]; then
+          if [ "$CONFIRM" != "PRODUCTION" ]; then
             echo "❌ Input xác nhận không khớp 'PRODUCTION' — dừng lại, không chạy migration." >&2
             exit 1
           fi

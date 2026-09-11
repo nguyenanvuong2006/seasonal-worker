@@ -1199,9 +1199,3 @@ export function getManifestEntry(filename) {
 export function listManifestFilenames() {
   return MIGRATION_MANIFEST.map((entry) => entry.filename);
 }
-
-export function isExecutable(filename) {
-  const entry = getManifestEntry(filename);
-  if (!entry) return false;
-  return !entry.tombstoned && entry.productionAllowed;
-}
