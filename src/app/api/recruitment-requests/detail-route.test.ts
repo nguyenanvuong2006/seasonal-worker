@@ -107,6 +107,12 @@ test("request PENDING (đang mở) -> asOf mặc định = today", async () => {
   assert.equal(res.status, 200);
   assert.equal(detailCalls[0].asOf, "2026-10-15");
   assert.equal(res.body.asOf, "2026-10-15");
+  // Final pre-merge review finding (BLOCKER, fixed pre-merge): isLive must be computed
+  // server-side (asOf === todayStr(), Vietnam-local) and handed to the client as data —
+  // the client must NEVER derive "today" itself via `new Date()` (browser UTC calendar
+  // day), which drifts from Vietnam-local for ~7 hours every day (00:00–06:59 ICT) and
+  // would wrongly show a live/open request as "Cuối kỳ (Closing Workforce)".
+  assert.equal(res.body.isLive, true, "request đang mở, asOf=today -> isLive=true");
 });
 
 test("request EXPIRED -> asOf mặc định = endDate (đóng băng), KHÔNG dùng today", async () => {
@@ -120,6 +126,7 @@ test("request EXPIRED -> asOf mặc định = endDate (đóng băng), KHÔNG dù
   assert.equal(res.status, 200);
   assert.equal(detailCalls[0].asOf, "2026-09-30");
   assert.notEqual(detailCalls[0].asOf, "2026-10-15", "request đã hết hạn không được dùng today làm asOf mặc định");
+  assert.equal(res.body.isLive, false, "request đã đóng băng, asOf != today -> isLive=false, KHÔNG được suy ra sai bởi client tự tính today()");
 });
 
 test("?asOf= query string override đúng mặc định", async () => {

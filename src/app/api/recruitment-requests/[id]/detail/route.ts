@@ -41,9 +41,19 @@ export async function GET(req: Request, ctx: { params: Promise<{ id: string }> }
     return NextResponse.json({ error: "Không tìm thấy yêu cầu trong Data Scope được cấp." }, { status: 404 });
   }
 
-  const asOf = asOfParam || resolveDefaultAsOf(row, todayStr());
+  const today = todayStr();
+  const asOf = asOfParam || resolveDefaultAsOf(row, today);
   const detail = await getRequestDetail(id, asOf);
   if (!detail) return NextResponse.json({ error: "Không tìm thấy yêu cầu tuyển dụng." }, { status: 404 });
 
-  return NextResponse.json({ ...detail, asOf });
+  // Final pre-merge review finding (BLOCKER, fixed pre-merge): the client previously
+  // computed "today" itself via `new Date().toISOString().slice(0, 10)` to decide
+  // isLive — that's the BROWSER's UTC calendar day, not Vietnam-local. Between
+  // 00:00–06:59 ICT every day, todayStr() (server, Vietnam-local) has already rolled
+  // to the new day while the client's UTC date string is still yesterday's — a live/
+  // open request would then wrongly render as "Cuối kỳ (Closing Workforce)" with a
+  // stale frozen-date badge. isLive is now computed HERE (server, same clock/timezone
+  // todayStr() itself uses) and handed to the client as data — zero client-side date
+  // math, zero timezone drift.
+  return NextResponse.json({ ...detail, asOf, isLive: asOf === today });
 }

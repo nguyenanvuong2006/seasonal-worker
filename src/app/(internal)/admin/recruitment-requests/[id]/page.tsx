@@ -11,7 +11,7 @@
    theo resolveDefaultAsOf cho request đã EXPIRED/COMPLETED/CANCELLED).
    ============================================================ */
 
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { useParams, useRouter } from "next/navigation";
 import Link from "next/link";
 import {
@@ -110,6 +110,10 @@ type RequestDetail = {
   resignedWorkers: ResignedWorkerRow[];
   transferredWorkers: TransferredWorkerRow[];
   asOf: string;
+  /** Server-computed (asOf === todayStr(), Vietnam-local) — never derive this on the
+   *  client via `new Date()`, which reads the browser's UTC calendar day and drifts
+   *  from Vietnam-local for ~7 hours every day (00:00–06:59 ICT). */
+  isLive: boolean;
 };
 
 type TabKey = "recruited" | "current" | "resigned" | "transferred";
@@ -126,10 +130,6 @@ function formatDate(d?: string | null) {
   const [y, m, day] = String(d).split("-");
   if (!day) return String(d);
   return `${day}/${m}/${y}`;
-}
-
-function todayISO() {
-  return new Date().toISOString().slice(0, 10);
 }
 
 export default function RecruitmentRequestDetailPage() {
@@ -162,7 +162,7 @@ export default function RecruitmentRequestDetailPage() {
     void load();
   }, [load]);
 
-  const isLive = useMemo(() => detail?.asOf === todayISO(), [detail]);
+  const isLive = detail?.isLive ?? true;
   const currentLabel = isLive ? "Hiện tại" : "Cuối kỳ (Closing Workforce)";
 
   if (loading) {

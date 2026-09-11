@@ -523,3 +523,61 @@ test("W4: historical request THIẾU endDate — asOf do resolveDefaultAsOf() cu
   // đã chốt chỉ vì thiếu endDate.
   assert.equal(kpi.totalQuit, 1, "chỉ wq1 (<= resolved asOf) được tính; wq4 (sau resolved asOf) bị loại dù endDate=null");
 });
+
+/* ============================================================
+   Final pre-merge review finding (BLOCKER, fixed pre-merge): a worker
+   allocated to the SAME request MORE THAN ONCE over time (append-only
+   ALLOCATE -> END -> REALLOCATE -> END, e.g. via "Chuyển phân bổ DW" out
+   and later back into the same RQ) must have their resignation/transfer
+   counted EXACTLY ONCE for that request — not once per allocation row
+   that happens to join with the movement.
+   ============================================================ */
+
+test("Duplicate-count fix: worker allocated TWICE to the same request (re-allocated in after leaving) — a single resignation must count Quit=1, not 2", async () => {
+  const fixture = buildFixture();
+  // w7: first stint 09-01..09-10 (ended — e.g. reallocated OUT via Chuyển phân bổ DW),
+  // second stint 09-12..09-25 (reallocated back IN). ONE resignation, effective 09-20,
+  // lifecycleAppliedAt set — both allocation rows independently satisfy
+  // allocatedAt <= effectiveDate, so the raw JOIN produces 2 rows for this ONE movement.
+  fixture.allocations.push(
+    { id: "a-w7a", requestId: RQ09, workerId: "w7", employmentSessionId: "s-w7", status: "ENDED", startedAt: new Date("2026-09-01"), endedAt: new Date("2026-09-10") },
+    { id: "a-w7b", requestId: RQ09, workerId: "w7", employmentSessionId: "s-w7", status: "ENDED", startedAt: new Date("2026-09-12"), endedAt: new Date("2026-09-25") },
+  );
+  fixture.sessions["s-w7"] = { id: "s-w7", status: "ENDED", endDate: "2026-09-25", startingDate: "2026-09-01" };
+  fixture.workers.w7 = { id: "w7", gender: "Nam", deletedAt: null };
+  fixture.movements.push({ id: "m-resign-w7", workerId: "w7", movementType: "resignation", status: "INACTIVE", effectiveDate: "2026-09-20", lifecycleAppliedAt: new Date("2026-09-20") });
+
+  const db = createFakeDb({ respond: respondFor(fixture) });
+  const mod = load(db) as {
+    batchComputeRequestKpis: (rows: RequestRow[], asOf: string) => Promise<Map<string, Record<string, number>>>;
+  };
+
+  const kpis = await mod.batchComputeRequestKpis([RQ09_ROW], "2026-09-30");
+  const kpi = kpis.get(RQ09)!;
+
+  // Base fixture already contributes w1 (Quit=1). w7's ONE resignation must add exactly 1,
+  // not 2 — even though 2 of w7's own allocation rows both qualify for the window check.
+  assert.equal(kpi.totalQuit, 2, "w1 (base) + w7 (1 resignation, not 2) = 2 — the same movement joined via 2 allocation rows must not be double-counted");
+});
+
+test("Duplicate-count fix: worker allocated TWICE to the same request — a single transfer must count Transfer-Out=1, not 2, and getRequestDetail() must not list the worker twice", async () => {
+  const fixture = buildFixture();
+  fixture.allocations.push(
+    { id: "a-w8a", requestId: RQ09, workerId: "w8", employmentSessionId: "s-w8", status: "ENDED", startedAt: new Date("2026-09-01"), endedAt: new Date("2026-09-08") },
+    { id: "a-w8b", requestId: RQ09, workerId: "w8", employmentSessionId: "s-w8", status: "ENDED", startedAt: new Date("2026-09-10"), endedAt: new Date("2026-09-18") },
+  );
+  fixture.sessions["s-w8"] = { id: "s-w8", status: "APPROVED", endDate: null, startingDate: "2026-09-01" };
+  fixture.workers.w8 = { id: "w8", gender: "Nữ", deletedAt: null };
+  fixture.movements.push({ id: "m-transfer-w8", workerId: "w8", movementType: "transfer", status: "TRANSFER_COMPLETED", effectiveDate: "2026-09-15", lifecycleAppliedAt: new Date("2026-09-15") });
+
+  const db = createFakeDb({ respond: respondFor(fixture) });
+  const mod = load(db) as {
+    batchComputeRequestKpis: (rows: RequestRow[], asOf: string) => Promise<Map<string, Record<string, number>>>;
+  };
+
+  const kpis = await mod.batchComputeRequestKpis([RQ09_ROW], "2026-09-30");
+  const kpi = kpis.get(RQ09)!;
+
+  // Base fixture already contributes w2 (TransferOut=1). w8's ONE transfer must add exactly 1.
+  assert.equal(kpi.totalTransferOut, 2, "w2 (base) + w8 (1 transfer, not 2) = 2 — same movement joined via 2 allocation rows must not be double-counted");
+});

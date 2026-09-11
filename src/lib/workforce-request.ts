@@ -242,6 +242,31 @@ function movementInRequestWindow(
   return true;
 }
 
+/**
+ * Final pre-merge review finding (BLOCKER, fixed pre-merge): fetchQuitRows()/
+ * fetchTransferOutRows() JOIN request_allocations (EVERY historical row, any status)
+ * to workforce_movements ON workerId alone — a worker who was allocated to the SAME
+ * request more than once over time (ALLOCATE -> END -> REALLOCATE -> END, a legitimate
+ * append-only sequence, e.g. via "Chuyển phân bổ DW" out and later back) produces ONE
+ * JOIN ROW PER (allocation row × matching movement row), i.e. the SAME movement
+ * duplicated once per qualifying allocation row. Without this dedup, one real
+ * resignation/transfer event could be counted 2+ times into Quit/Transfer-Out KPI and
+ * listed 2+ times in getRequestDetail()'s resignedWorkers/transferredWorkers (and thus
+ * the Request Detail UI + Excel export). A movement belongs to a request AT MOST ONCE
+ * regardless of how many of the worker's own allocation rows happen to satisfy the
+ * window/allocatedAt check — so after windowing, collapse to one row per movementId.
+ */
+function dedupeByMovementId<T extends { movementId: string }>(rows: T[]): T[] {
+  const seen = new Set<string>();
+  const out: T[] = [];
+  for (const r of rows) {
+    if (seen.has(r.movementId)) continue;
+    seen.add(r.movementId);
+    out.push(r);
+  }
+  return out;
+}
+
 /* ============================================================
    KPI — TRANSFER-OUT (Phase 2B mục 3.2, approved design mục 3):
    worker từng có allocation ở request này, sau đó có 1 TRANSFER đã
@@ -395,9 +420,11 @@ export async function batchComputeRequestKpis(
   for (const r of requestRows) {
     const asOfDate = asOfMap.get(r.id) ?? today;
     const allocs = allocByRequest.get(r.id) ?? [];
-    const quits = (quitByRequest.get(r.id) ?? []).filter((q) => movementInRequestWindow(q, requestWindow(r), asOfDate));
-    const transfers = (transferByRequest.get(r.id) ?? []).filter((t) =>
-      movementInRequestWindow(t, requestWindow(r), asOfDate),
+    const quits = dedupeByMovementId(
+      (quitByRequest.get(r.id) ?? []).filter((q) => movementInRequestWindow(q, requestWindow(r), asOfDate)),
+    );
+    const transfers = dedupeByMovementId(
+      (transferByRequest.get(r.id) ?? []).filter((t) => movementInRequestWindow(t, requestWindow(r), asOfDate)),
     );
     const pipeline = (pipelineByRequest.get(r.id) ?? []).filter((p) => p.submittedAt.toISOString().slice(0, 10) <= asOfDate);
 
@@ -756,8 +783,8 @@ export async function getRequestDetail(requestId: string, asOf?: string): Promis
   ]);
 
   const window = requestWindow(row.request);
-  const resignedRaw = quitRows.filter((q) => movementInRequestWindow(q, window, asOfResolved));
-  const transferredRaw = transferRows.filter((t) => movementInRequestWindow(t, window, asOfResolved));
+  const resignedRaw = dedupeByMovementId(quitRows.filter((q) => movementInRequestWindow(q, window, asOfResolved)));
+  const transferredRaw = dedupeByMovementId(transferRows.filter((t) => movementInRequestWindow(t, window, asOfResolved)));
 
   const workerIds = [...new Set([...resignedRaw, ...transferredRaw].map((r) => r.workerId))];
   const movementIds = [...new Set(resignedRaw.map((r) => r.movementId))];
