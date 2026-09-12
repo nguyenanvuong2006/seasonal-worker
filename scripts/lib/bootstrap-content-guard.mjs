@@ -12,6 +12,23 @@
  * separation of validation logic from the DB-touching CLI.
  */
 
+/**
+ * Strips SQL comments before pattern matching. Postgres treats both a
+ * C-style block comment and a double-hyphen line comment as whitespace, so
+ * a forbidden keyword split by an EMPTY block comment (e.g. "DROP" then an
+ * empty block comment then "TABLE users") still executes as "DROP TABLE
+ * users" even though the raw text no longer has the two keywords adjacent
+ * — comments must be removed BEFORE the forbidden/required checks run, not
+ * just whitespace-tolerated within them. Dollar-quoted strings ($$...$$)
+ * are not unwrapped here since this bootstrap file's contract never needs
+ * them; nothing in FORBIDDEN/REQUIRED patterns depends on distinguishing a
+ * comment-like sequence inside a string literal for this specific, narrow
+ * governance-only file.
+ */
+function stripSqlComments(sqlText) {
+  return sqlText.replace(/\/\*[\s\S]*?\*\//g, " ").replace(/--[^\n]*/g, " ");
+}
+
 const FORBIDDEN_SQL_PATTERNS = [
   /\bDROP\s+TABLE\b/i,
   /\bDELETE\s+FROM\b/i,
@@ -32,13 +49,14 @@ const REQUIRED_SQL_PATTERNS = [/CREATE TABLE IF NOT EXISTS schema_migrations\b/i
  * found (a matched forbidden pattern, or a missing required one).
  */
 export function checkBootstrapContentAllowed(sqlText) {
+  const normalized = stripSqlComments(sqlText);
   for (const pattern of FORBIDDEN_SQL_PATTERNS) {
-    if (pattern.test(sqlText)) {
+    if (pattern.test(normalized)) {
       return { ok: false, reason: `chứa pattern KHÔNG được phép cho bootstrap (${pattern})` };
     }
   }
   for (const pattern of REQUIRED_SQL_PATTERNS) {
-    if (!pattern.test(sqlText)) {
+    if (!pattern.test(normalized)) {
       return { ok: false, reason: `KHÔNG khớp cấu trúc bootstrap kỳ vọng (thiếu: ${pattern})` };
     }
   }

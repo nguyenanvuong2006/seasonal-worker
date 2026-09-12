@@ -46,6 +46,22 @@ for (const [label, sql] of FORBIDDEN_EXAMPLES) {
   });
 }
 
+const COMMENT_BYPASS_EXAMPLES: [string, string][] = [
+  ["DROP/**/TABLE (empty block comment splitting the keywords)", `${VALID_SQL}\nDROP/**/TABLE users;`],
+  ["UPDATE/**/... SET (empty block comment)", `${VALID_SQL}\nUPDATE/**/users SET is_active=false;`],
+  ["DELETE/**/FROM (empty block comment)", `${VALID_SQL}\nDELETE/**/FROM users;`],
+  ["DROP  -- comment\\n  TABLE (line comment splitting the keywords across a newline)", `${VALID_SQL}\nDROP  -- sneaky\n  TABLE users;`],
+  ["multi-line block comment splitting INSERT INTO", `${VALID_SQL}\nINSERT/*\nmulti\nline\n*/INTO users (id) VALUES (1);`],
+];
+
+for (const [label, sql] of COMMENT_BYPASS_EXAMPLES) {
+  test(`checkBootstrapContentAllowed: rejects comment-obfuscated forbidden statement — ${label}`, () => {
+    const result = checkBootstrapContentAllowed(sql);
+    assert.equal(result.ok, false, `expected comment-obfuscated statement to still be rejected: ${label}`);
+    assert.ok(result.reason, "must name a reason");
+  });
+}
+
 test("checkBootstrapContentAllowed: ALTER TABLE on schema_migrations itself is allowed (the one exempted table)", () => {
   const sql = `${VALID_SQL}\nALTER TABLE schema_migrations ADD COLUMN extra text;`;
   assert.deepEqual(checkBootstrapContentAllowed(sql), { ok: true, reason: null });
