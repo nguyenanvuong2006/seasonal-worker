@@ -1,5 +1,5 @@
 import { NextResponse } from "next/server";
-import { getUserScope, requirePermission, writeAudit } from "@/lib/auth";
+import { getUserScope, requireAnyPermission, writeAudit } from "@/lib/auth";
 import { scopeAllowsDepartment } from "@/lib/data-scope";
 import { sanitizeFilenameSegment } from "@/lib/document-merge/filename";
 import { addStyledSheet, createStyledWorkbook, workbookToBuffer, type StyledSheetColumn } from "@/lib/excel-workbook-style";
@@ -28,7 +28,12 @@ export const dynamic = "force-dynamic";
  * Daily Operations, không phải implementation ExcelJS thứ hai).
  */
 export async function GET(req: Request, ctx: { params: Promise<{ id: string }> }) {
-  const guard = await requirePermission(["ADMIN", "HR_DIRECTOR", "HR_RECRUITER", "DEPT_MANAGER"], "planning.view");
+  // C1 (Mission C) — accepts EITHER canonical view permission (see
+  // ../route.ts's GET list handler for the full rationale).
+  const guard = await requireAnyPermission(["ADMIN", "HR_DIRECTOR", "HR_RECRUITER", "DEPT_MANAGER"], [
+    "planning.view",
+    "workforce_request.view",
+  ]);
   if (!guard.ok) return NextResponse.json({ error: guard.error }, { status: guard.status });
 
   const { id } = await ctx.params;

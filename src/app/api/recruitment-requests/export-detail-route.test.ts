@@ -77,6 +77,7 @@ function loadRoute(opts: {
       },
       "@/lib/auth": {
         requirePermission: async (roles: string[], key: string) => (opts.guardFor ? opts.guardFor(roles, key) : ADMIN_GUARD),
+        requireAnyPermission: async (roles: string[], keys: string[]) => (opts.guardFor ? opts.guardFor(roles, keys.join("|")) : ADMIN_GUARD),
         getUserScope: async () => opts.scope,
         writeAudit: async (_s: unknown, action: string, _t: string, details: Record<string, unknown>) => {
           audits.push({ action, details });

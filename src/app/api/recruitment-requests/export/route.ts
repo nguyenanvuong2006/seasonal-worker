@@ -25,7 +25,10 @@ type RowWithKpi = RecruitmentRequest & { kpi: RequestKpi };
 export async function GET(req: Request) {
   const session = await getSession();
   if (!session) return NextResponse.json({ error: "Chưa đăng nhập." }, { status: 401 });
-  if (!(await hasPermission(session.role, "planning.view"))) {
+  // C1 (Mission C) — accepts EITHER canonical view permission (see
+  // ../route.ts's GET list handler for the full rationale).
+  const canView = (await hasPermission(session.role, "planning.view")) || (await hasPermission(session.role, "workforce_request.view"));
+  if (!canView) {
     return NextResponse.json({ error: "Tài khoản của bạn không có quyền xem Planning." }, { status: 403 });
   }
 
