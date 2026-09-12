@@ -196,6 +196,10 @@ function load(db: FakeDb) {
       },
       "@/lib/person-name": { normalizePersonName: (s: string) => s },
       "@/lib/workforce-request-kpi": kpi,
+      // C3 (Mission C) — getRecruitmentManagementDashboard() imports this;
+      // not exercised by this file's own batchComputeRequestKpis()-focused
+      // tests (see recruitment-management-dashboard.test.ts for those).
+      "@/lib/workforce-roster": { getDepartmentWorkforceRoster: async () => [] },
     },
   });
 }

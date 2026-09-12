@@ -21,15 +21,19 @@ import { getUserScope, hasPermission, writeAudit, type Session } from "@/lib/aut
 import { scopeAllowsDepartment } from "@/lib/data-scope";
 import { isFemale, isMale, todayStr, toVNDateStr } from "@/lib/helpers";
 import { normalizePersonName } from "@/lib/person-name";
+import { getDepartmentWorkforceRoster } from "@/lib/workforce-roster";
 import {
+  addGender,
   aggregateRequestKpis,
   classifyGender,
   computeRequestKpi,
   computeWarnings,
+  emptyCounts,
   isActiveEmploymentSession,
   planAllocation,
   resolveTotalRequest,
   type ActiveAllocationRef,
+  type GenderCounts,
   type RequestKpi,
   type WarningDetail,
 } from "@/lib/workforce-request-kpi";
@@ -1828,5 +1832,166 @@ export async function getRequestDashboard(scope: string[] | null, asOf = todaySt
     source,
     computedAt,
     asOfDate: asOf,
+  };
+}
+
+/* ============================================================
+   MANAGEMENT DASHBOARD (Mission C — Product Consolidation, C3)
+   ------------------------------------------------------------
+   ONE composed service answering the management questions: Current DWS by
+   gender (Employment — getDepartmentWorkforceRoster), live Recruitment
+   Demand, Current Attributed (Request Allocations ∩ Employment — canonical
+   kpi.totalCurrent), Gap (canonical kpi.totalBalance), Recruited/Quit/
+   Transfer-Out, Fill Rate — with department-level and request-level
+   drill-down. Everything is computed HERE, server-side; the UI/route layer
+   must not compute or re-derive any of these numbers.
+
+   STRICT LIVE/HISTORICAL SEPARATION (double-counting safeguard): only
+   requests with status PENDING/PROCESSING ("live"/still open) are ever
+   summed into demand/attributed/gap/recruited/quit/transferOut — a request
+   is filtered to `liveRows` exactly ONCE, and every aggregate below (summary
+   AND every department row) reduces that SAME single filtered array, never
+   a second independently-filtered list. Closed requests (EXPIRED/COMPLETED/
+   CANCELLED) never contribute to these totals; their own canonical KPI still
+   exists for historical drill-down elsewhere (Request Detail/Excel export),
+   just never mixed into this dashboard's live gap.
+   ============================================================ */
+export type RecruitmentManagementDashboard = {
+  asOfDate: string;
+  summary: {
+    /** Current DWS — Employment source of truth (ACTIVE employment_sessions), NOT request-attributed. */
+    currentDws: GenderCounts;
+    /** Live Recruitment Demand — sum of target (maleRq/femaleRq) over open (PENDING/PROCESSING) requests only. */
+    demand: GenderCounts;
+    /** Current Attributed — canonical kpi.totalCurrent (Request Allocations ∩ Employment), open requests only. */
+    attributed: GenderCounts;
+    /** Gap — canonical kpi.totalBalance = max(0, demand − attributed), open requests only. */
+    gap: GenderCounts;
+    recruited: GenderCounts;
+    quit: GenderCounts;
+    transferOut: GenderCounts;
+    fillRatePercent: number;
+  };
+  departments: {
+    departmentId: string;
+    departmentName: string | null;
+    currentDws: GenderCounts;
+    demand: GenderCounts;
+    attributed: GenderCounts;
+    gap: GenderCounts;
+    recruited: GenderCounts;
+    quit: GenderCounts;
+    transferOut: GenderCounts;
+    fillRatePercent: number;
+    /** Số Recruitment Request đang mở (PENDING/PROCESSING) trong phòng ban này. */
+    liveRequestCount: number;
+  }[];
+  /** Request-level drill-down — LIVE requests only (see strict separation above). */
+  liveRequests: {
+    id: string;
+    requestCode: string;
+    departmentId: string | null;
+    departmentName: string | null;
+    expectedDate: string | null;
+    status: string;
+    kpi: RequestKpi;
+  }[];
+};
+
+function fillRatePercentOf(attributedTotal: number, demandTotal: number): number {
+  return demandTotal > 0 ? Math.min(100, Math.round((attributedTotal / demandTotal) * 100)) : 0;
+}
+
+/**
+ * MAX_KPI_CANDIDATES-equivalent bound for this dashboard's request fetch —
+ * mirrors listRecruitmentRequests()'s own bounded-candidate precedent
+ * (Mission C — C2). No stored dashboard cache table; bounded query count
+ * (roster fetch + one listWorkforceRequests() call, itself a handful of
+ * set-based queries — never per-department or per-request queries).
+ */
+const DASHBOARD_MAX_CANDIDATES = 2000;
+
+export async function getRecruitmentManagementDashboard(
+  scope: string[] | null,
+  asOf: string = todayStr(),
+): Promise<RecruitmentManagementDashboard> {
+  const [roster, allRequestRows] = await Promise.all([
+    getDepartmentWorkforceRoster(scope, "ACTIVE"),
+    listWorkforceRequests({ scope, asOf, limit: DASHBOARD_MAX_CANDIDATES }),
+  ]);
+
+  // STRICT SEPARATION — see docblock above. Filtered exactly once; every
+  // aggregate below reduces this SAME array.
+  const liveRows = allRequestRows.filter((r) => r.status === "PENDING" || r.status === "PROCESSING");
+
+  const NONE_KEY = "__none__";
+  const currentDwsByDept = new Map<string, GenderCounts>();
+  const deptNameById = new Map<string, string | null>();
+  for (const w of roster) {
+    const key = w.deptId ?? NONE_KEY;
+    const counts = currentDwsByDept.get(key) ?? emptyCounts();
+    currentDwsByDept.set(key, addGender(counts, classifyGender(w.gender)));
+    if (w.deptId) deptNameById.set(w.deptId, w.deptName);
+  }
+
+  const liveByDept = new Map<string, typeof liveRows>();
+  for (const r of liveRows) {
+    const key = r.departmentId ?? NONE_KEY;
+    const list = liveByDept.get(key) ?? [];
+    list.push(r);
+    liveByDept.set(key, list);
+    if (r.departmentId) deptNameById.set(r.departmentId, r.deptName ?? r.department);
+  }
+
+  const deptIds = new Set<string>([...currentDwsByDept.keys(), ...liveByDept.keys()].filter((k) => k !== NONE_KEY));
+
+  const departments = [...deptIds]
+    .map((departmentId) => {
+      const requests = liveByDept.get(departmentId) ?? [];
+      const agg = aggregateRequestKpis(requests.map((r) => r.kpi));
+      return {
+        departmentId,
+        departmentName: deptNameById.get(departmentId) ?? null,
+        currentDws: currentDwsByDept.get(departmentId) ?? emptyCounts(),
+        demand: agg.totalRequested,
+        attributed: agg.currentWorkforce,
+        gap: agg.needToRecruit,
+        recruited: agg.totalRecruited,
+        quit: agg.totalQuit,
+        transferOut: agg.totalTransferOut,
+        fillRatePercent: fillRatePercentOf(agg.currentWorkforce.total, agg.totalRequested.total),
+        liveRequestCount: requests.length,
+      };
+    })
+    .sort((a, b) => b.gap.total - a.gap.total);
+
+  const overallCurrentDws = [...currentDwsByDept.values()].reduce(
+    (acc, c) => ({ male: acc.male + c.male, female: acc.female + c.female, total: acc.total + c.total }),
+    emptyCounts(),
+  );
+  const overallAgg = aggregateRequestKpis(liveRows.map((r) => r.kpi));
+
+  return {
+    asOfDate: asOf,
+    summary: {
+      currentDws: overallCurrentDws,
+      demand: overallAgg.totalRequested,
+      attributed: overallAgg.currentWorkforce,
+      gap: overallAgg.needToRecruit,
+      recruited: overallAgg.totalRecruited,
+      quit: overallAgg.totalQuit,
+      transferOut: overallAgg.totalTransferOut,
+      fillRatePercent: fillRatePercentOf(overallAgg.currentWorkforce.total, overallAgg.totalRequested.total),
+    },
+    departments,
+    liveRequests: liveRows.map((r) => ({
+      id: r.id,
+      requestCode: r.requestCode,
+      departmentId: r.departmentId,
+      departmentName: r.deptName ?? r.department,
+      expectedDate: r.expectedDate,
+      status: r.status,
+      kpi: r.kpi,
+    })),
   };
 }

@@ -35,6 +35,7 @@ import {
 import { fetchJsonWithTimeout, type ApiResult } from "@/lib/api-client";
 import { ColumnChooser } from "@/components/planning/column-chooser";
 import { ReallocationPanel } from "@/components/planning/reallocation-panel";
+import { ManagementDashboardPanel } from "@/components/recruitment/management-dashboard-panel";
 import {
   bucketLabel,
   expectedDateBucket,
@@ -258,6 +259,11 @@ function todayISO() {
    ============================================================ */
 export default function RecruitmentRequestsPage() {
   const searchParams = useSearchParams();
+
+  // C3 (Mission C — Product Consolidation) — ONE canonical Recruitment
+  // Requests surface hosts BOTH the list and its management dashboard as
+  // tabs, instead of a separate dashboard route/page.
+  const [viewMode, setViewMode] = useState<"list" | "dashboard">("list");
 
   const [rows, setRows] = useState<RecruitmentRequest[]>([]);
   const [total, setTotal] = useState(0);
@@ -741,6 +747,31 @@ export default function RecruitmentRequestsPage() {
         }
       />
 
+      {/* C3 (Mission C) — chuyển đổi Danh sách / Dashboard quản lý trên CÙNG 1 trang. */}
+      <div className="flex gap-1 rounded-[10px] border border-border bg-surface-raised p-1">
+        {(
+          [
+            { key: "list", label: "Danh sách" },
+            { key: "dashboard", label: "Dashboard quản lý" },
+          ] as const
+        ).map((t) => (
+          <button
+            key={t.key}
+            onClick={() => setViewMode(t.key)}
+            className={cn(
+              "flex-1 rounded-[8px] px-3 py-2 text-[12.5px] font-semibold transition-colors",
+              viewMode === t.key ? "bg-primary text-white" : "text-fg-secondary hover:bg-surface-hover",
+            )}
+          >
+            {t.label}
+          </button>
+        ))}
+      </div>
+
+      {viewMode === "dashboard" && <ManagementDashboardPanel />}
+
+      {viewMode === "list" && (
+        <>
       {/* Thông báo vai trò chỉ đọc (Yêu cầu #3) */}
       {!columnsLoading && !caps.canEdit && (
         <div className="flex items-start gap-2 rounded-[12px] border border-border bg-surface-raised px-4 py-3">
@@ -1032,6 +1063,8 @@ export default function RecruitmentRequestsPage() {
           )}
         </CardContent>
       </Card>
+        </>
+      )}
 
       {/* Column Chooser */}
       <ColumnChooser
