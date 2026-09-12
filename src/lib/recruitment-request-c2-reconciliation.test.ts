@@ -205,3 +205,36 @@ test("C2 RECONCILIATION — getRecruitmentStats().totalBalance sums the CANONICA
   assert.equal(staleSum, 4, "sanity: the stale column's own sum is 4 — the wrong number this fix corrects");
   assert.notEqual(stats.totalBalance, staleSum, "canonical and stale sums must genuinely disagree for this fixture (proves the test isn't vacuous)");
 });
+
+test("C2 RECONCILIATION — getRecruitmentStats().totalMaleRq/totalFemaleRq come from an EXACT SQL SUM, not the bounded MAX_KPI_CANDIDATES fetch (independent review fix)", async () => {
+  // A distinct fixture proves the exact-sum query is genuinely a SEPARATE
+  // code path from the bounded candidates fetch, not accidentally reading
+  // the same array: exactSums returns a SINGLE aggregate row unrelated to
+  // ROWS' own maleRq/femaleRq, and candidates still returns ROWS unchanged
+  // (so Recruited/Balance — which DO require canonical KPI — are unaffected).
+  const db = createFakeDb({
+    respond: (call) => {
+      if (call.root === "select" && call.table === "recruitment_requests" && call.ops.some((o) => o.fn === "groupBy")) {
+        return [{ status: "PENDING", count: 2 }];
+      }
+      // The exact-sum query has neither groupBy NOR orderBy/limit — the
+      // candidates query (bounded, MAX_KPI_CANDIDATES) has orderBy+limit.
+      if (call.root === "select" && call.table === "recruitment_requests" && !call.ops.some((o) => o.fn === "orderBy" || o.fn === "limit")) {
+        return [{ maleRq: 999, femaleRq: 111 }];
+      }
+      return ROWS;
+    },
+  });
+  const mod = load(db);
+
+  const stats = (await (mod.getRecruitmentStats as (s?: string[] | null) => Promise<{ totalMaleRq: number; totalFemaleRq: number; totalBalance: number }>)()) as {
+    totalMaleRq: number;
+    totalFemaleRq: number;
+    totalBalance: number;
+  };
+
+  assert.equal(stats.totalMaleRq, 999, "totalMaleRq must come from the exact SUM query result, not summed from the bounded candidates array");
+  assert.equal(stats.totalFemaleRq, 111, "totalFemaleRq must come from the exact SUM query result, not summed from the bounded candidates array");
+  // Recruited/Balance still come from the canonical engine over `candidates` (ROWS) — unaffected by the exact-sum split.
+  assert.equal(stats.totalBalance, 2, "canonical Balance sum must still be RQ09(0) + RQ10(2) = 2, unaffected by the exact-sum fix");
+});

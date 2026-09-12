@@ -140,10 +140,15 @@ test("getRecruitmentManagementDashboard: CLOSED request (COMPLETED) never contri
     scope: string[] | null,
     asOf?: string,
   ) => Promise<{
+    currentDwsAsOfDate: string;
     summary: { demand: { total: number }; gap: { total: number } };
     departments: { departmentId: string; demand: { total: number }; gap: { total: number }; currentDws: { total: number }; liveRequestCount: number }[];
     liveRequests: { requestCode: string }[];
-  }>)(null);
+  }>)(null, "2026-08-01");
+
+  // Independent review fix: currentDwsAsOfDate is ALWAYS today (todayStr()),
+  // never the `asOf` passed in — currentDws itself has no historical snapshot.
+  assert.equal(dashboard.currentDwsAsOfDate, TODAY, "currentDwsAsOfDate must be today, independent of the asOf argument passed in");
 
   // Summary must equal RQ-LIVE alone (5), never RQ-LIVE + RQ-CLOSED (105).
   assert.equal(dashboard.summary.demand.total, 5, "closed request's target (100) must not leak into live demand");

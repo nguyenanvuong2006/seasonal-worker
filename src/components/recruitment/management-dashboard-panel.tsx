@@ -59,6 +59,8 @@ type LiveRequestRow = {
 
 type DashboardData = {
   asOfDate: string;
+  /** ALWAYS today — Current DWS (Employment roster) has no historical snapshot; never moves with the asOf picker below. */
+  currentDwsAsOfDate: string;
   summary: {
     currentDws: GenderCounts;
     demand: GenderCounts;
@@ -129,11 +131,14 @@ export function ManagementDashboardPanel() {
     <div className="space-y-5">
       <div className="flex flex-wrap items-end justify-between gap-3">
         <p className="text-[11.5px] text-fg-muted">
-          Dữ liệu tính tới <b>{fmtDate(data.asOfDate)}</b> — chỉ gồm Yêu cầu tuyển dụng đang mở (PENDING/PROCESSING); yêu cầu đã đóng không được cộng vào các tổng bên dưới.
+          Số liệu Yêu cầu tuyển dụng (Nhu cầu/Đã phân bổ/Còn thiếu/Đã tuyển/Nghỉ/Chuyển đi) tính tới <b>{fmtDate(data.asOfDate)}</b> —
+          chỉ gồm yêu cầu đang mở (PENDING/PROCESSING), yêu cầu đã đóng không được cộng vào các tổng bên dưới.
+          <br />
+          Current DWS (Employment) luôn là số liệu <b>hôm nay ({fmtDate(data.currentDwsAsOfDate)})</b>, không đổi theo ngày xem lại bên dưới.
         </p>
         <div className="flex items-end gap-2">
           <label className="flex flex-col gap-1 text-[11px] font-semibold text-fg-muted">
-            Xem lại tại ngày
+            Xem lại tại ngày (Yêu cầu tuyển dụng)
             <Input type="date" className="h-9 w-[150px]" value={asOfDate} onChange={(e) => setAsOfDate(e.target.value)} />
           </label>
           <Button variant="outline" onClick={() => void load()} className="h-9">
@@ -145,7 +150,7 @@ export function ManagementDashboardPanel() {
       <div className="grid grid-cols-2 gap-3 md:grid-cols-4 lg:grid-cols-7">
         <KpiCard
           icon={<UsersRound className="h-4 w-4" />}
-          label="Current DWS (Employment)"
+          label="Current DWS (Employment, hôm nay)"
           value={summary.currentDws.total}
           context={<GenderLegend male={summary.currentDws.male} female={summary.currentDws.female} />}
           tone="success"

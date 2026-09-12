@@ -278,10 +278,16 @@ const get_workforce_gap_rankings: ToolDefinition<RankingArgs, { rankings: Rankin
  * listWorkforceRequests()'s canonical, allocation-aware `.kpi.totalBalance`
  * — the SAME engine/aggregation pattern as the sibling get_workforce_gap_rankings
  * tool just above, bounded by the same MAX_KPI_CANDIDATES-equivalent limit.
+ *
+ * Independent review finding (Mission C): restricted to LIVE requests
+ * (PENDING/PROCESSING) — same strict live/historical separation C3's
+ * management dashboard applies. A CLOSED request's balance is a snapshot of
+ * a moment that has already passed and must never keep padding a
+ * department's "who's most short-staffed right now" ranking indefinitely.
  */
 const get_recruitment_gap_rankings: ToolDefinition<RankingArgs, { rankings: RankingRow[]; asOfDate: string }> = {
   name: "get_recruitment_gap_rankings",
-  description: "Xếp hạng các bộ phận theo khoảng trống Yêu cầu tuyển dụng (canonical Balance = max(0, Target − Current), allocation-aware), từ thiếu nhiều nhất đến ít nhất.",
+  description: "Xếp hạng các bộ phận theo khoảng trống Yêu cầu tuyển dụng ĐANG MỞ (canonical Balance = max(0, Target − Current), allocation-aware), từ thiếu nhiều nhất đến ít nhất.",
   parameters: {
     type: "object",
     properties: { limit: { type: "number", description: "Số bộ phận top cần xem (mặc định 10, tối đa 15)." } },
@@ -296,8 +302,9 @@ const get_recruitment_gap_rankings: ToolDefinition<RankingArgs, { rankings: Rank
     const asOfDate = todayStr();
     if (scope !== null && scope.length === 0) return { data: { rankings: [], asOfDate }, source: { domains: ["recruitment"], asOf: asOfDate } };
     const rows = await listWorkforceRequests({ scope, asOf: asOfDate, limit: 2000 });
+    const liveRows = rows.filter((r) => r.status === "PENDING" || r.status === "PROCESSING");
     const byDept = new Map<string, RankingRow>();
-    for (const r of rows) {
+    for (const r of liveRows) {
       const key = r.departmentId ?? "__none__";
       const existing = byDept.get(key) ?? { departmentId: key, departmentName: r.deptName ?? r.department, requested: 0, current: 0, gap: 0 };
       existing.requested += r.kpi.totalRequest;

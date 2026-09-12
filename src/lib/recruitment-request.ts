@@ -579,6 +579,15 @@ export async function listRecruitmentRequests(
     .where(where)
     .orderBy(desc(recruitmentRequests.createdAt))
     .limit(MAX_KPI_CANDIDATES);
+  if (candidates.length === MAX_KPI_CANDIDATES) {
+    // Independent review finding: beyond this bound, `total` and sort order
+    // are only exact within the newest MAX_KPI_CANDIDATES rows — accepted,
+    // bounded architecture (Mission C — no stored KPI cache table), but must
+    // be visible in Production if it's ever actually hit, never silent.
+    console.warn(
+      `[listRecruitmentRequests] candidate fetch hit MAX_KPI_CANDIDATES (${MAX_KPI_CANDIDATES}) — UNFILLED/FILLED filter, default sort, and total count are an approximation over the newest ${MAX_KPI_CANDIDATES} requests, not exact.`,
+    );
+  }
 
   const today = todayStr();
   const candidatesById = new Map(candidates.map((r) => [r.id, r]));
@@ -736,12 +745,16 @@ export type RecruitmentStats = {
  * C2 (Mission C) — Recruited/Balance are now derived from the CANONICAL
  * allocation-aware engine (batchComputeRequestKpis), never the stale
  * persisted maleRecruited/femaleRecruited/maleBalance/femaleBalance/
- * totalBalance columns. maleRq/femaleRq stay a plain SQL SUM — they are
- * user-entered targets, not derived/stale. Status counts stay an exact
- * SQL COUNT(*) (not bounded by MAX_KPI_CANDIDATES). Recruited/Balance sums
- * are bounded by the same MAX_KPI_CANDIDATES cap as listRecruitmentRequests'
- * canonical path (no stored KPI cache table; Production row counts for this
- * table are modest — see Mission C audit).
+ * totalBalance columns. maleRq/femaleRq stay an EXACT SQL SUM over every
+ * matching row (independent review finding: these are user-entered targets,
+ * not derived/stale, so they must never be truncated by the candidate
+ * bound below) — same for status counts (exact SQL COUNT(*)). Only
+ * Recruited/Balance — which require the canonical per-request KPI engine —
+ * are bounded by MAX_KPI_CANDIDATES (no stored KPI cache table; Production
+ * row counts for this table are modest — see Mission C audit). If that
+ * bound is ever actually hit, Recruited/Balance become an approximation
+ * over the newest MAX_KPI_CANDIDATES rows rather than a silent wrong exact
+ * number — logged so it's visible in Production, never swallowed.
  */
 export async function getRecruitmentStats(scope?: string[] | null): Promise<RecruitmentStats> {
   const conditions: any[] = [isNull(recruitmentRequests.deletedAt)];
@@ -758,7 +771,7 @@ export async function getRecruitmentStats(scope?: string[] | null): Promise<Recr
 
   const where = conditions.length > 1 ? and(...conditions) : conditions[0];
 
-  const [statusCounts, candidates] = await Promise.all([
+  const [statusCounts, exactSums, candidates] = await Promise.all([
     db
       .select({
         status: recruitmentRequests.status,
@@ -768,6 +781,13 @@ export async function getRecruitmentStats(scope?: string[] | null): Promise<Recr
       .where(where)
       .groupBy(recruitmentRequests.status),
     db
+      .select({
+        maleRq: sql<number>`COALESCE(SUM(${recruitmentRequests.maleRq}), 0)`,
+        femaleRq: sql<number>`COALESCE(SUM(${recruitmentRequests.femaleRq}), 0)`,
+      })
+      .from(recruitmentRequests)
+      .where(where),
+    db
       .select()
       .from(recruitmentRequests)
       .where(where)
@@ -776,21 +796,23 @@ export async function getRecruitmentStats(scope?: string[] | null): Promise<Recr
   ]);
 
   const statusMap = new Map(statusCounts.map((r) => [r.status, r.count]));
+  const totalRequests = statusCounts.reduce((acc, r) => acc + r.count, 0);
+  if (totalRequests > MAX_KPI_CANDIDATES) {
+    console.warn(
+      `[getRecruitmentStats] totalRequests (${totalRequests}) exceeds MAX_KPI_CANDIDATES (${MAX_KPI_CANDIDATES}) — Recruited/Balance sums are an approximation over the newest ${MAX_KPI_CANDIDATES} requests, not exact.`,
+    );
+  }
 
   const today = todayStr();
   const candidatesById = new Map(candidates.map((r) => [r.id, r]));
   const kpiByRequestId = await batchComputeRequestKpis(candidates, (r) => resolveDefaultAsOf(candidatesById.get(r.id)!, today));
 
-  let totalMaleRq = 0;
-  let totalFemaleRq = 0;
   let totalMaleRecruited = 0;
   let totalFemaleRecruited = 0;
   let totalMaleBalance = 0;
   let totalFemaleBalance = 0;
   let totalBalance = 0;
   for (const r of candidates) {
-    totalMaleRq += r.maleRq;
-    totalFemaleRq += r.femaleRq;
     const kpi = kpiByRequestId.get(r.id);
     if (!kpi) continue;
     totalMaleRecruited += kpi.maleRecruited;
@@ -801,13 +823,13 @@ export async function getRecruitmentStats(scope?: string[] | null): Promise<Recr
   }
 
   return {
-    totalRequests: statusCounts.reduce((acc, r) => acc + r.count, 0),
+    totalRequests,
     pending: statusMap.get("PENDING") ?? 0,
     processing: statusMap.get("PROCESSING") ?? 0,
     completed: statusMap.get("COMPLETED") ?? 0,
     cancelled: statusMap.get("CANCELLED") ?? 0,
-    totalMaleRq,
-    totalFemaleRq,
+    totalMaleRq: exactSums[0]?.maleRq ?? 0,
+    totalFemaleRq: exactSums[0]?.femaleRq ?? 0,
     totalMaleRecruited,
     totalFemaleRecruited,
     totalMaleBalance,

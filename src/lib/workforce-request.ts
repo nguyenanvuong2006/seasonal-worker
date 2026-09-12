@@ -1855,11 +1855,27 @@ export async function getRequestDashboard(scope: string[] | null, asOf = todaySt
    CANCELLED) never contribute to these totals; their own canonical KPI still
    exists for historical drill-down elsewhere (Request Detail/Excel export),
    just never mixed into this dashboard's live gap.
+
+   ASOF SCOPE (independent review finding): `asOf` only reaches the request-
+   side figures (demand/attributed/gap/recruited/quit/transferOut, via
+   listWorkforceRequests). currentDws comes from getDepartmentWorkforceRoster(),
+   which has NO asOf parameter — it is ALWAYS today's live Employment
+   headcount, by design of that shared, canonical service (also used by "Bộ
+   phận của tôi"); extending it to support historical snapshots is out of
+   this mission's scope. The route/UI must label currentDws as "hôm nay"
+   regardless of the selected asOf, never imply it moves with the picker.
    ============================================================ */
 export type RecruitmentManagementDashboard = {
+  /** asOf applied to the REQUEST-side figures only (demand/attributed/gap/recruited/quit/transferOut/liveRequests) — see currentDwsAsOfDate. */
   asOfDate: string;
+  /**
+   * ALWAYS today (todayStr()) — currentDws (Employment roster) has no
+   * historical snapshot support; it never moves with `asOfDate`. Render it
+   * next to currentDws so the UI never implies it reflects the picked date.
+   */
+  currentDwsAsOfDate: string;
   summary: {
-    /** Current DWS — Employment source of truth (ACTIVE employment_sessions), NOT request-attributed. */
+    /** Current DWS — Employment source of truth (ACTIVE employment_sessions), NOT request-attributed. ALWAYS today — see currentDwsAsOfDate. */
     currentDws: GenderCounts;
     /** Live Recruitment Demand — sum of target (maleRq/femaleRq) over open (PENDING/PROCESSING) requests only. */
     demand: GenderCounts;
@@ -1973,6 +1989,7 @@ export async function getRecruitmentManagementDashboard(
 
   return {
     asOfDate: asOf,
+    currentDwsAsOfDate: todayStr(),
     summary: {
       currentDws: overallCurrentDws,
       demand: overallAgg.totalRequested,
