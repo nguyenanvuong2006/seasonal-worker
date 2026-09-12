@@ -11,8 +11,9 @@ import {
 } from "@/db/schema";
 import { SORTABLE_COLUMN_KEYS } from "@/lib/recruitment-request-columns";
 import { scopeAllowsDepartment } from "@/lib/data-scope";
-import { isFemale, isMale } from "@/lib/helpers";
-import { RECRUITED_STAGE } from "@/lib/workforce-request";
+import { isFemale, isMale, todayStr } from "@/lib/helpers";
+import { RECRUITED_STAGE, batchComputeRequestKpis } from "@/lib/workforce-request";
+import { resolveDefaultAsOf, type RequestKpi } from "@/lib/workforce-request-kpi";
 import {
   computeDateDeltas,
   computeRecruitedVsExpected,
@@ -431,6 +432,83 @@ export type RecruitmentRequestFilter = {
   sortDir?: "asc" | "desc";
 };
 
+/**
+ * C2 (Mission C — Product Consolidation): bounded candidate cap for the
+ * canonical-KPI list path below — mirrors the existing export route's own
+ * precedent (a fixed high cap, no offset) rather than adding any stored KPI
+ * cache table. UNFILLED/FILLED and the default sort bucket can only be
+ * decided AFTER computing the canonical, allocation-aware KPI (never the
+ * stale persisted totalBalance column), so those two cases fetch a bounded
+ * candidate set and filter/sort/paginate in memory; every other filter
+ * combination (explicit sortBy, no fulfillment filter) keeps the original
+ * single SQL query + COUNT(*) path unchanged — no perf regression there.
+ */
+const MAX_KPI_CANDIDATES = 2000;
+
+function isRecognizedSortKey(sortBy: string | undefined): boolean {
+  return sortBy === "createdAt" || sortBy === "expectedDate" || (!!sortBy && sortBy in SORTABLE_DB_COLUMNS);
+}
+
+function needsCanonicalKpiForListing(filter: RecruitmentRequestFilter): boolean {
+  return filter.fulfillment !== undefined || !isRecognizedSortKey(filter.sortBy);
+}
+
+function compareNullsLast<T>(a: T | null | undefined, b: T | null | undefined, dirMul: number, cmp: (x: T, y: T) => number): number {
+  const aNull = a === null || a === undefined;
+  const bNull = b === null || b === undefined;
+  if (aNull && bNull) return 0;
+  if (aNull) return 1;
+  if (bNull) return -1;
+  return dirMul * cmp(a as T, b as T);
+}
+
+const scalarCompare = (x: unknown, y: unknown): number => {
+  if (x instanceof Date && y instanceof Date) return x.getTime() - y.getTime();
+  if (typeof x === "number" && typeof y === "number") return x - y;
+  return String(x).localeCompare(String(y));
+};
+
+/**
+ * In-memory sort mirroring buildOrderBy()'s semantics exactly, but reading
+ * the CANONICAL kpi.totalBalance (via the supplied map) for the default
+ * bucket instead of the stale recruitmentRequests.totalBalance column.
+ */
+function sortRowsCanonical(
+  rows: RecruitmentRequest[],
+  filter: RecruitmentRequestFilter,
+  kpiByRequestId: Map<string, RequestKpi>,
+  today: string,
+): RecruitmentRequest[] {
+  const dirMul = filter.sortDir === "desc" ? -1 : 1;
+  const tiebreak = (a: RecruitmentRequest, b: RecruitmentRequest) => a.requestCode.localeCompare(b.requestCode);
+
+  if (filter.sortBy === "createdAt") {
+    return [...rows].sort((a, b) => compareNullsLast(a.createdAt, b.createdAt, dirMul, scalarCompare) || tiebreak(a, b));
+  }
+  if (filter.sortBy === "expectedDate") {
+    return [...rows].sort((a, b) => compareNullsLast(a.expectedDate, b.expectedDate, dirMul, scalarCompare) || tiebreak(a, b));
+  }
+  if (filter.sortBy && filter.sortBy in SORTABLE_DB_COLUMNS) {
+    const key = filter.sortBy as keyof RecruitmentRequest;
+    return [...rows].sort((a, b) => compareNullsLast(a[key], b[key], dirMul, scalarCompare) || tiebreak(a, b));
+  }
+
+  // Default bucket (Yêu cầu #5) — CANONICAL Balance, not the stale column.
+  const bucketOf = (r: RecruitmentRequest): number => {
+    if (!r.expectedDate) return 2;
+    const balance = kpiByRequestId.get(r.id)?.totalBalance ?? 0;
+    if (r.expectedDate < today && balance > 0 && r.status !== "COMPLETED" && r.status !== "CANCELLED") return 0;
+    return 1;
+  };
+  return [...rows].sort((a, b) => {
+    const bucketDiff = bucketOf(a) - bucketOf(b);
+    if (bucketDiff !== 0) return bucketDiff;
+    const dateDiff = compareNullsLast(a.expectedDate, b.expectedDate, 1, scalarCompare);
+    if (dateDiff !== 0) return dateDiff;
+    return tiebreak(a, b);
+  });
+}
+
 export async function listRecruitmentRequests(
   filter: RecruitmentRequestFilter,
   limit = 500,
@@ -458,8 +536,6 @@ export async function listRecruitmentRequests(
   if (filter.requestedTo) conditions.push(lte(recruitmentRequests.requestedDate, filter.requestedTo));
   if (filter.expectedFrom) conditions.push(gte(recruitmentRequests.expectedDate, filter.expectedFrom));
   if (filter.expectedTo) conditions.push(lte(recruitmentRequests.expectedDate, filter.expectedTo));
-  if (filter.fulfillment === "UNFILLED") conditions.push(sql`COALESCE(${recruitmentRequests.totalBalance}, 0) > 0`);
-  if (filter.fulfillment === "FILLED") conditions.push(sql`COALESCE(${recruitmentRequests.totalBalance}, 0) = 0`);
   if (filter.searchQuery?.trim()) {
     const q = `%${filter.searchQuery.trim()}%`;
     conditions.push(
@@ -476,18 +552,45 @@ export async function listRecruitmentRequests(
 
   const where = conditions.length > 1 ? and(...conditions) : conditions[0];
 
-  const [totalResult, rows] = await Promise.all([
-    db.select({ count: count() }).from(recruitmentRequests).where(where),
-    db
-      .select()
-      .from(recruitmentRequests)
-      .where(where)
-      .orderBy(...buildOrderBy(filter))
-      .limit(limit)
-      .offset(offset),
-  ]);
+  if (!needsCanonicalKpiForListing(filter)) {
+    // Fast path — explicit non-default sortBy, no fulfillment filter: neither
+    // needs canonical KPI, keep the original single SQL query + COUNT(*).
+    const [totalResult, rows] = await Promise.all([
+      db.select({ count: count() }).from(recruitmentRequests).where(where),
+      db
+        .select()
+        .from(recruitmentRequests)
+        .where(where)
+        .orderBy(...buildOrderBy(filter))
+        .limit(limit)
+        .offset(offset),
+    ]);
+    return { rows, total: totalResult[0]?.count ?? 0 };
+  }
 
-  return { rows, total: totalResult[0]?.count ?? 0 };
+  // CANONICAL PATH (C2) — bounded candidate fetch + batchComputeRequestKpis +
+  // in-memory filter/sort/paginate. UNFILLED/FILLED and the default sort
+  // bucket must agree with every other canonical consumer (Request Detail,
+  // Export, get_recruitment_stats, dashboard) — none of them may read the
+  // stale totalBalance column.
+  const candidates = await db
+    .select()
+    .from(recruitmentRequests)
+    .where(where)
+    .orderBy(desc(recruitmentRequests.createdAt))
+    .limit(MAX_KPI_CANDIDATES);
+
+  const today = todayStr();
+  const candidatesById = new Map(candidates.map((r) => [r.id, r]));
+  const kpiByRequestId = await batchComputeRequestKpis(candidates, (r) => resolveDefaultAsOf(candidatesById.get(r.id)!, today));
+
+  let filtered = candidates;
+  if (filter.fulfillment === "UNFILLED") filtered = filtered.filter((r) => (kpiByRequestId.get(r.id)?.totalBalance ?? 0) > 0);
+  else if (filter.fulfillment === "FILLED") filtered = filtered.filter((r) => (kpiByRequestId.get(r.id)?.totalBalance ?? 0) === 0);
+
+  const sorted = sortRowsCanonical(filtered, filter, kpiByRequestId, today);
+  const page = sorted.slice(offset, offset + limit);
+  return { rows: page, total: sorted.length };
 }
 
 /* ============================================================
@@ -629,6 +732,17 @@ export type RecruitmentStats = {
   totalBalance: number;
 };
 
+/**
+ * C2 (Mission C) — Recruited/Balance are now derived from the CANONICAL
+ * allocation-aware engine (batchComputeRequestKpis), never the stale
+ * persisted maleRecruited/femaleRecruited/maleBalance/femaleBalance/
+ * totalBalance columns. maleRq/femaleRq stay a plain SQL SUM — they are
+ * user-entered targets, not derived/stale. Status counts stay an exact
+ * SQL COUNT(*) (not bounded by MAX_KPI_CANDIDATES). Recruited/Balance sums
+ * are bounded by the same MAX_KPI_CANDIDATES cap as listRecruitmentRequests'
+ * canonical path (no stored KPI cache table; Production row counts for this
+ * table are modest — see Mission C audit).
+ */
 export async function getRecruitmentStats(scope?: string[] | null): Promise<RecruitmentStats> {
   const conditions: any[] = [isNull(recruitmentRequests.deletedAt)];
   // Data Scope theo department_id (FK), không theo tên phòng ban dạng text.
@@ -644,7 +758,7 @@ export async function getRecruitmentStats(scope?: string[] | null): Promise<Recr
 
   const where = conditions.length > 1 ? and(...conditions) : conditions[0];
 
-  const [statusCounts, sums] = await Promise.all([
+  const [statusCounts, candidates] = await Promise.all([
     db
       .select({
         status: recruitmentRequests.status,
@@ -654,21 +768,37 @@ export async function getRecruitmentStats(scope?: string[] | null): Promise<Recr
       .where(where)
       .groupBy(recruitmentRequests.status),
     db
-      .select({
-        maleRq: sql<number>`COALESCE(SUM(${recruitmentRequests.maleRq}), 0)`,
-        femaleRq: sql<number>`COALESCE(SUM(${recruitmentRequests.femaleRq}), 0)`,
-        maleRecruited: sql<number>`COALESCE(SUM(${recruitmentRequests.maleRecruited}), 0)`,
-        femaleRecruited: sql<number>`COALESCE(SUM(${recruitmentRequests.femaleRecruited}), 0)`,
-        maleBalance: sql<number>`COALESCE(SUM(${recruitmentRequests.maleBalance}), 0)`,
-        femaleBalance: sql<number>`COALESCE(SUM(${recruitmentRequests.femaleBalance}), 0)`,
-        totalBalance: sql<number>`COALESCE(SUM(${recruitmentRequests.totalBalance}), 0)`,
-      })
+      .select()
       .from(recruitmentRequests)
-      .where(where),
+      .where(where)
+      .orderBy(desc(recruitmentRequests.createdAt))
+      .limit(MAX_KPI_CANDIDATES),
   ]);
 
   const statusMap = new Map(statusCounts.map((r) => [r.status, r.count]));
-  const s = sums[0] ?? { maleRq: 0, femaleRq: 0, maleRecruited: 0, femaleRecruited: 0, maleBalance: 0, femaleBalance: 0, totalBalance: 0 };
+
+  const today = todayStr();
+  const candidatesById = new Map(candidates.map((r) => [r.id, r]));
+  const kpiByRequestId = await batchComputeRequestKpis(candidates, (r) => resolveDefaultAsOf(candidatesById.get(r.id)!, today));
+
+  let totalMaleRq = 0;
+  let totalFemaleRq = 0;
+  let totalMaleRecruited = 0;
+  let totalFemaleRecruited = 0;
+  let totalMaleBalance = 0;
+  let totalFemaleBalance = 0;
+  let totalBalance = 0;
+  for (const r of candidates) {
+    totalMaleRq += r.maleRq;
+    totalFemaleRq += r.femaleRq;
+    const kpi = kpiByRequestId.get(r.id);
+    if (!kpi) continue;
+    totalMaleRecruited += kpi.maleRecruited;
+    totalFemaleRecruited += kpi.femaleRecruited;
+    totalMaleBalance += kpi.maleBalance;
+    totalFemaleBalance += kpi.femaleBalance;
+    totalBalance += kpi.totalBalance;
+  }
 
   return {
     totalRequests: statusCounts.reduce((acc, r) => acc + r.count, 0),
@@ -676,13 +806,13 @@ export async function getRecruitmentStats(scope?: string[] | null): Promise<Recr
     processing: statusMap.get("PROCESSING") ?? 0,
     completed: statusMap.get("COMPLETED") ?? 0,
     cancelled: statusMap.get("CANCELLED") ?? 0,
-    totalMaleRq: s.maleRq,
-    totalFemaleRq: s.femaleRq,
-    totalMaleRecruited: s.maleRecruited,
-    totalFemaleRecruited: s.femaleRecruited,
-    totalMaleBalance: s.maleBalance,
-    totalFemaleBalance: s.femaleBalance,
-    totalBalance: s.totalBalance,
+    totalMaleRq,
+    totalFemaleRq,
+    totalMaleRecruited,
+    totalFemaleRecruited,
+    totalMaleBalance,
+    totalFemaleBalance,
+    totalBalance,
   };
 }
 

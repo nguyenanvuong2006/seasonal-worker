@@ -1,7 +1,7 @@
 import "server-only";
 import { and, desc, eq, gte, inArray, isNull, lte, or, sql } from "drizzle-orm";
 import { db } from "@/db";
-import { departments, employmentSessions, recruitmentRequests, workerProfiles, workforceMovements } from "@/db/schema";
+import { employmentSessions, recruitmentRequests, workerProfiles, workforceMovements } from "@/db/schema";
 import { getUserScope } from "@/lib/auth";
 import { bucketLabel, bucketStart, enumerateBuckets, pctChange, trendGranularity, type Granularity } from "@/lib/analytics-core";
 import { canAggregateTransferIn, canAggregateTransferOut } from "@/lib/data-scope";
@@ -268,9 +268,20 @@ const get_workforce_gap_rankings: ToolDefinition<RankingArgs, { rankings: Rankin
   },
 };
 
+/**
+ * C2 (Mission C — Product Consolidation): previously read the STALE persisted
+ * recruitmentRequests.totalBalance column directly via raw SQL SUM/filter —
+ * the exact source-of-truth violation Mission C's audit flagged (never the
+ * distinct, deliberately-kept-separate "Recruitment Balance vs Realtime Gap"
+ * snapshot metric in recruitment-kpi.ts, which this tool's old description
+ * text misleadingly referenced but did not actually call). Now reuses
+ * listWorkforceRequests()'s canonical, allocation-aware `.kpi.totalBalance`
+ * — the SAME engine/aggregation pattern as the sibling get_workforce_gap_rankings
+ * tool just above, bounded by the same MAX_KPI_CANDIDATES-equivalent limit.
+ */
 const get_recruitment_gap_rankings: ToolDefinition<RankingArgs, { rankings: RankingRow[]; asOfDate: string }> = {
   name: "get_recruitment_gap_rankings",
-  description: "Xếp hạng các bộ phận theo Recruitment Balance (công thức snapshot tại thời điểm mở Yêu cầu tuyển dụng — khác Realtime Gap), từ thiếu nhiều nhất đến ít nhất.",
+  description: "Xếp hạng các bộ phận theo khoảng trống Yêu cầu tuyển dụng (canonical Balance = max(0, Target − Current), allocation-aware), từ thiếu nhiều nhất đến ít nhất.",
   parameters: {
     type: "object",
     properties: { limit: { type: "number", description: "Số bộ phận top cần xem (mặc định 10, tối đa 15)." } },
@@ -282,26 +293,21 @@ const get_recruitment_gap_rankings: ToolDefinition<RankingArgs, { rankings: Rank
   },
   execute: async (ctx, args) => {
     const scope = await getUserScope(ctx.session);
-    const conditions = [isNull(recruitmentRequests.deletedAt), sql`COALESCE(${recruitmentRequests.totalBalance}, 0) > 0`];
-    if (scope !== null) {
-      if (scope.length === 0) return { data: { rankings: [], asOfDate: todayStr() }, source: { domains: ["recruitment"], asOf: todayStr() } };
-      conditions.push(inArray(recruitmentRequests.departmentId, scope));
+    const asOfDate = todayStr();
+    if (scope !== null && scope.length === 0) return { data: { rankings: [], asOfDate }, source: { domains: ["recruitment"], asOf: asOfDate } };
+    const rows = await listWorkforceRequests({ scope, asOf: asOfDate, limit: 2000 });
+    const byDept = new Map<string, RankingRow>();
+    for (const r of rows) {
+      const key = r.departmentId ?? "__none__";
+      const existing = byDept.get(key) ?? { departmentId: key, departmentName: r.deptName ?? r.department, requested: 0, current: 0, gap: 0 };
+      existing.requested += r.kpi.totalRequest;
+      existing.current += r.kpi.totalCurrent;
+      existing.gap += r.kpi.totalBalance;
+      byDept.set(key, existing);
     }
-    const rows = await db
-      .select({
-        departmentId: recruitmentRequests.departmentId,
-        departmentName: departments.deptName,
-        requested: sql<number>`COALESCE(SUM(${recruitmentRequests.totalRequest}), 0)`,
-        gap: sql<number>`COALESCE(SUM(${recruitmentRequests.totalBalance}), 0)`,
-      })
-      .from(recruitmentRequests)
-      .leftJoin(departments, eq(recruitmentRequests.departmentId, departments.id))
-      .where(and(...conditions))
-      .groupBy(recruitmentRequests.departmentId, departments.deptName)
-      .orderBy(desc(sql`COALESCE(SUM(${recruitmentRequests.totalBalance}), 0)`))
-      .limit(capLimit(args.limit, MAX_RANKING_ROWS, 10));
-    const rankings: RankingRow[] = rows.map((r) => ({ departmentId: r.departmentId ?? "__none__", departmentName: r.departmentName, requested: r.requested, current: r.requested - r.gap, gap: r.gap }));
-    return { data: { rankings, asOfDate: todayStr() }, source: { domains: ["recruitment"], asOf: todayStr() } };
+    const limit = capLimit(args.limit, MAX_RANKING_ROWS, 10);
+    const rankings = [...byDept.values()].sort((a, b) => b.gap - a.gap).slice(0, limit);
+    return { data: { rankings, asOfDate }, source: { domains: ["recruitment"], asOf: asOfDate } };
   },
 };
 
@@ -466,32 +472,33 @@ const get_department_risk_summary: ToolDefinition<RiskArgs, { departments: DeptR
     const lookaheadTo = new Date(new Date(asOfDate + "T00:00:00Z").getTime() + lookaheadDays * 86_400_000).toISOString().slice(0, 10);
 
     const requestRows = await listWorkforceRequests({ scope, departmentId: args.departmentId, asOf: asOfDate, limit: 500 });
-    const byDept = new Map<string, { departmentName: string | null; requested: number; current: number; gap: number; upcomingDemandCount: number }>();
+    const byDept = new Map<string, { departmentName: string | null; requested: number; current: number; gap: number; upcomingDemandCount: number; openRecruitmentGapCount: number }>();
     for (const r of requestRows) {
       const key = r.departmentId ?? "__none__";
-      const existing = byDept.get(key) ?? { departmentName: r.deptName ?? r.department, requested: 0, current: 0, gap: 0, upcomingDemandCount: 0 };
+      const existing = byDept.get(key) ?? { departmentName: r.deptName ?? r.department, requested: 0, current: 0, gap: 0, upcomingDemandCount: 0, openRecruitmentGapCount: 0 };
       existing.requested += r.kpi.totalRequest;
       existing.current += r.kpi.totalCurrent;
       existing.gap += r.kpi.totalBalance;
       if (r.expectedDate && r.expectedDate >= asOfDate && r.expectedDate <= lookaheadTo && r.kpi.totalBalance > 0) existing.upcomingDemandCount += 1;
+      // C2 (Mission C) — CANONICAL kpi.totalBalance, not the stale persisted
+      // totalBalance column; requestRows already carries it (one shared
+      // fetch, no extra query) so this replaces what used to be a separate
+      // raw-SQL COUNT(*)-WHERE-totalBalance>0 query below.
+      if ((r.status === "PENDING" || r.status === "PROCESSING") && r.kpi.totalBalance > 0) existing.openRecruitmentGapCount += 1;
       byDept.set(key, existing);
     }
 
     const deptIds = [...byDept.keys()].filter((k) => k !== "__none__");
-    const [exitRows, movementRows, recruitmentGapRows] = await Promise.all([
+    const [exitRows, movementRows] = await Promise.all([
       deptIds.length
         ? db.select({ deptId: employmentSessions.deptId, count: sql<number>`count(*)` }).from(employmentSessions).where(and(gte(employmentSessions.endDate, lookbackFrom), lte(employmentSessions.endDate, asOfDate), inArray(employmentSessions.deptId, deptIds))).groupBy(employmentSessions.deptId)
         : Promise.resolve([]),
       deptIds.length
         ? db.select({ deptId: workforceMovements.fromDeptId, count: sql<number>`count(*)` }).from(workforceMovements).where(and(eq(workforceMovements.movementType, "TRANSFER"), gte(workforceMovements.effectiveDate, lookbackFrom), lte(workforceMovements.effectiveDate, asOfDate), inArray(workforceMovements.fromDeptId, deptIds))).groupBy(workforceMovements.fromDeptId)
         : Promise.resolve([]),
-      deptIds.length
-        ? db.select({ deptId: recruitmentRequests.departmentId, count: sql<number>`count(*)` }).from(recruitmentRequests).where(and(isNull(recruitmentRequests.deletedAt), inArray(recruitmentRequests.status, ["PENDING", "PROCESSING"]), sql`COALESCE(${recruitmentRequests.totalBalance}, 0) > 0`, inArray(recruitmentRequests.departmentId, deptIds))).groupBy(recruitmentRequests.departmentId)
-        : Promise.resolve([]),
     ]);
     const exitsByDept = new Map(exitRows.map((r) => [r.deptId, r.count]));
     const movementByDept = new Map(movementRows.map((r) => [r.deptId, r.count]));
-    const recruitmentGapByDept = new Map(recruitmentGapRows.map((r) => [r.deptId, r.count]));
 
     const results: DeptRiskRow[] = [...byDept.entries()].map(([deptId, agg]) => {
       const signals: RiskSignals = {
@@ -499,7 +506,7 @@ const get_department_risk_summary: ToolDefinition<RiskArgs, { departments: DeptR
         totalRequested: agg.requested,
         recentExits: exitsByDept.get(deptId) ?? 0,
         recentMovementOutflow: movementByDept.get(deptId) ?? 0,
-        openRecruitmentGapCount: recruitmentGapByDept.get(deptId) ?? 0,
+        openRecruitmentGapCount: agg.openRecruitmentGapCount,
         upcomingDemandCount: agg.upcomingDemandCount,
       };
       const assessment = classifyDepartmentRisk(signals);

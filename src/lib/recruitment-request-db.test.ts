@@ -8,7 +8,6 @@ import {
   condsOf,
   eqValue,
   inArrayValues,
-  sqlTexts,
   type FakeDb,
   type QueryCall,
 } from "./test-support/fake-drizzle.ts";
@@ -48,7 +47,26 @@ const helpersStub = {
   toVNDateStr,
 };
 
-function load(db: FakeDb) {
+/**
+ * C2 (Mission C) fake canonical KPI — listRecruitmentRequests()/getRecruitmentStats()
+ * now compute UNFILLED/FILLED/default-sort/aggregates from batchComputeRequestKpis(),
+ * not the stale persisted totalBalance column. This test file only cares whether
+ * listRecruitmentRequests()/getRecruitmentStats() correctly APPLY whatever the
+ * canonical engine returns (filter/sort/aggregate wiring) — the engine's own
+ * correctness is covered by workforce-request-kpi.test.ts / workforce-request.test.ts.
+ * So this fake lets each test supply the exact totalBalance/etc. per row it needs,
+ * defaulting to "no current workforce yet" (balance = totalRequest) to match the
+ * real engine's behavior for a freshly-provisioned request.
+ */
+type FakeKpi = { totalBalance: number; maleBalance?: number; femaleBalance?: number; maleRecruited?: number; femaleRecruited?: number };
+type KpiOf = (row: { id: string; totalRequest?: number; maleRq?: number; femaleRq?: number }) => FakeKpi;
+
+const defaultKpiOf: KpiOf = (row) => {
+  const totalRequest = row.totalRequest ?? Number(row.maleRq ?? 0) + Number(row.femaleRq ?? 0);
+  return { totalBalance: totalRequest, maleBalance: row.maleRq ?? 0, femaleBalance: row.femaleRq ?? 0, maleRecruited: 0, femaleRecruited: 0 };
+};
+
+function load(db: FakeDb, kpiOf: KpiOf = defaultKpiOf) {
   const utils = loadModule(new URL("./recruitment-request-utils.ts", import.meta.url), { stubs: {} });
   const columns = loadModule(new URL("./recruitment-request-columns.ts", import.meta.url), { stubs: {} });
   const core = loadModule(new URL("./planning-recruitment-core.ts", import.meta.url), {
@@ -87,7 +105,15 @@ function load(db: FakeDb) {
       "@/lib/recruitment-request-utils": utils,
       "@/lib/recruitment-request-columns": columns,
       "@/lib/recruitment-request-provisioning": provisioning,
-      "@/lib/workforce-request": { RECRUITED_STAGE: "APPROVED" },
+      "@/lib/workforce-request": {
+        RECRUITED_STAGE: "APPROVED",
+        batchComputeRequestKpis: async (rows: { id: string }[]) => {
+          const map = new Map<string, FakeKpi>();
+          for (const r of rows) map.set(r.id, kpiOf(r as never));
+          return map;
+        },
+      },
+      "@/lib/workforce-request-kpi": workforceRequestKpi,
       "@/lib/data-scope": {
         scopeAllowsDepartment: (scope: string[] | null, deptId: string | null | undefined) =>
           scope === null || Boolean(deptId && scope.includes(deptId)),
@@ -131,44 +157,58 @@ function fieldUpdatesOf(db: FakeDb): QueryCall[] {
    1. SẮP XẾP MẶC ĐỊNH (Yêu cầu #5)
    ------------------------------------------------------------ */
 
-test("mặc định sắp xếp theo Expected Date gần → xa, KHÔNG theo ngày tạo", async () => {
-  const db = createFakeDb({ respond: () => [] });
-  const mod = load(db);
+/**
+ * C2 (Mission C) — the default bucket sort now reads the CANONICAL
+ * kpi.totalBalance (via batchComputeRequestKpis), not the stale persisted
+ * totalBalance column, so this asserts the SEMANTIC final row order rather
+ * than the old SQL CASE-expression shape (that SQL no longer exists for the
+ * default-sort path — see needsCanonicalKpiForListing()/sortRowsCanonical()
+ * in recruitment-request.ts). today = "2026-08-16" (helpersStub).
+ */
+function bucketFixtureRows() {
+  return [
+    // Oldest createdAt on purpose: if the fetch-order (createdAt desc) leaked
+    // into the final order instead of the in-memory bucket sort, this row
+    // would NOT end up first — proving the sort is not createdAt-based.
+    { id: "b", requestCode: "RQ-B", expectedDate: "2026-08-01", status: "PENDING", createdAt: new Date("2026-01-01"), totalRequest: 5 },
+    { id: "d", requestCode: "RQ-D", expectedDate: "2026-08-01", status: "COMPLETED", createdAt: new Date("2026-08-10"), totalRequest: 5 },
+    { id: "e", requestCode: "RQ-E", expectedDate: "2026-08-01", status: "PENDING", createdAt: new Date("2026-08-11"), totalRequest: 5 },
+    { id: "c", requestCode: "RQ-C", expectedDate: "2026-09-01", status: "PENDING", createdAt: new Date("2026-08-12"), totalRequest: 5 },
+    { id: "a", requestCode: "RQ-A", expectedDate: null, status: "PENDING", createdAt: new Date("2026-08-13"), totalRequest: 5 },
+  ];
+}
 
-  await (mod.listRecruitmentRequests as (f: unknown) => Promise<unknown>)({});
+const bucketKpiOf: KpiOf = (row) => ({ totalBalance: row.id === "e" ? 0 : 5 });
 
-  const args = orderByArgs(listQuery(db));
-  assert.ok(args.length >= 2, "phải sắp xếp nhiều tầng");
+test("mặc định sắp xếp theo Expected Date gần → xa, nhóm quá hạn-chưa-đủ lên đầu, KHÔNG theo ngày tạo", async () => {
+  const db = createFakeDb({ respond: () => bucketFixtureRows() });
+  const mod = load(db, bucketKpiOf);
 
-  const first = args[0] as { op: string; text: string };
-  assert.equal(first.op, "sql", "khoá đầu tiên là nhóm ưu tiên dạng CASE");
-  const caseText = first.text.toLowerCase();
-  assert.match(caseText, /case/);
-  assert.match(caseText, /current_date/, "quá hạn được tính theo ngày hiện tại");
-  assert.match(caseText, /coalesce/, "chỉ nhóm quá hạn khi còn thiếu người");
-  assert.match(caseText, /not in \('completed', 'cancelled'\)/);
+  const res = (await (mod.listRecruitmentRequests as (f: unknown) => Promise<{ rows: { requestCode: string }[] }>)({})) as {
+    rows: { requestCode: string }[];
+  };
 
-  const second = args[1] as { op: string; text: string };
-  assert.match(second.text.toLowerCase(), /asc nulls last/, "trong nhóm: ngày cần nhân lực gần nhất trước");
-
-  // KHÔNG được rơi về created_at như bản cũ.
-  const allText = JSON.stringify(args).toLowerCase();
-  assert.ok(!allText.includes("createdat"), "sắp xếp mặc định không được dựa vào createdAt");
+  // Bucket 0 (quá hạn + còn thiếu người + chưa COMPLETED/CANCELLED): chỉ RQ-B.
+  // RQ-D bị loại vì COMPLETED; RQ-E bị loại vì balance=0 (đã đủ).
+  // Bucket 1 (sắp tới / quá hạn nhưng đã loại): RQ-D, RQ-E (cùng ngày 08-01 —
+  // tiebreak theo requestCode), rồi RQ-C (09-01).
+  // Bucket 2 (không có ngày): RQ-A.
+  assert.equal(res.rows.map((r) => r.requestCode).join(","), ["RQ-B", "RQ-D", "RQ-E", "RQ-C", "RQ-A"].join(","));
 });
 
 test("nhóm ưu tiên khớp đúng thứ tự: quá hạn-chưa đủ (0) → sắp tới (1) → chưa có ngày (2)", async () => {
-  const db = createFakeDb({ respond: () => [] });
-  const mod = load(db);
-  await (mod.listRecruitmentRequests as (f: unknown) => Promise<unknown>)({});
+  const db = createFakeDb({ respond: () => bucketFixtureRows() });
+  const mod = load(db, bucketKpiOf);
 
-  const caseText = (orderByArgs(listQuery(db))[0] as { text: string }).text.replace(/\s+/g, " ").toLowerCase();
-  const posOverdue = caseText.indexOf("then 0");
-  const posNull = caseText.indexOf("then 2");
-  const posElse = caseText.indexOf("else 1");
+  const res = (await (mod.listRecruitmentRequests as (f: unknown) => Promise<{ rows: { requestCode: string }[] }>)({})) as {
+    rows: { requestCode: string }[];
+  };
+  const order = res.rows.map((r) => r.requestCode);
+  const posOverdue = order.indexOf("RQ-B");
+  const posUpcoming = order.indexOf("RQ-C");
+  const posNoDate = order.indexOf("RQ-A");
 
-  assert.ok(posNull > -1 && posOverdue > -1 && posElse > -1, "phải có đủ 3 nhóm");
-  // Yêu cầu chưa có ngày cần nhân lực bị đẩy xuống cuối cùng.
-  assert.ok(posNull < posOverdue, "nhánh NULL kiểm tra trước để không lọt vào nhóm quá hạn");
+  assert.ok(posOverdue < posUpcoming && posUpcoming < posNoDate, "quá hạn-chưa-đủ → sắp tới → chưa có ngày");
 });
 
 test("người dùng đổi được sắp xếp, mặc định chỉ là mặc định", async () => {
@@ -188,18 +228,26 @@ test("người dùng đổi được sắp xếp, mặc định chỉ là mặc 
   }
 });
 
-test("cột sắp xếp không nằm trong whitelist bị bỏ qua, quay về thứ tự mặc định", async () => {
-  // Chống chèn SQL qua ORDER BY: chuỗi tuỳ ý không bao giờ tới được câu lệnh.
+test("cột sắp xếp không nằm trong whitelist bị bỏ qua, quay về thứ tự mặc định (canonical)", async () => {
+  // Chống chèn SQL qua ORDER BY: chuỗi tuỳ ý không bao giờ tới được câu lệnh —
+  // và (C2) một sortBy không nhận diện được cũng phải rơi về CANONICAL default
+  // bucket sort giống hệt việc bỏ trống sortBy, không còn CASE dựa trên cột
+  // totalBalance cũ ở tầng SQL.
   for (const sortBy of ["id; drop table recruitment_requests", "deletedAt", "notes"]) {
-    const db = createFakeDb({ respond: () => [] });
-    const mod = load(db);
-    await (mod.listRecruitmentRequests as (f: unknown) => Promise<unknown>)({ sortBy, sortDir: "desc" });
+    const db = createFakeDb({ respond: () => bucketFixtureRows() });
+    const mod = load(db, bucketKpiOf);
+    const res = (await (mod.listRecruitmentRequests as (f: unknown) => Promise<{ rows: { requestCode: string }[] }>)({
+      sortBy,
+      sortDir: "desc",
+    })) as { rows: { requestCode: string }[] };
 
-    const texts = orderByArgs(listQuery(db))
-      .map((a) => (a as { text?: string }).text ?? "")
-      .join(" ");
-    assert.match(texts, /case/i, "phải rơi về biểu thức nhóm mặc định theo Ngày cần nhân lực");
-    assert.ok(!texts.includes("drop table"), "không được nhúng chuỗi người dùng vào ORDER BY");
+    assert.equal(
+      res.rows.map((r) => r.requestCode).join(","),
+      ["RQ-B", "RQ-D", "RQ-E", "RQ-C", "RQ-A"].join(","),
+      `sortBy không hợp lệ ("${sortBy}") phải rơi về đúng thứ tự mặc định canonical`,
+    );
+    const rawSql = JSON.stringify(db.calls).toLowerCase();
+    assert.ok(!rawSql.includes("drop table"), "không được nhúng chuỗi người dùng vào bất kỳ câu lệnh SQL nào");
   }
 });
 
@@ -265,18 +313,22 @@ test("thống kê cũng bị giới hạn bởi Data Scope", async () => {
    3. BỘ LỌC (Yêu cầu #12)
    ------------------------------------------------------------ */
 
-test("lọc được theo lý do, khoảng ngày và tình trạng tuyển đủ", async () => {
-  const db = createFakeDb({ respond: () => [] });
-  const mod = load(db);
+test("lọc được theo lý do, khoảng ngày (SQL) và tình trạng tuyển đủ (canonical, in-memory)", async () => {
+  const rows = [
+    { id: "u", requestCode: "RQ-U", expectedDate: "2026-08-20", status: "PENDING", createdAt: new Date(), totalRequest: 5 },
+    { id: "f", requestCode: "RQ-F", expectedDate: "2026-08-20", status: "PENDING", createdAt: new Date(), totalRequest: 5 },
+  ];
+  const db = createFakeDb({ respond: () => rows });
+  const mod = load(db, (row) => ({ totalBalance: row.id === "u" ? 3 : 0 }));
 
-  await (mod.listRecruitmentRequests as (f: unknown) => Promise<unknown>)({
+  const res = (await (mod.listRecruitmentRequests as (f: unknown) => Promise<{ rows: { requestCode: string }[] }>)({
     reason: "Thay thế",
     requestedFrom: "2026-01-01",
     requestedTo: "2026-06-30",
     expectedFrom: "2026-02-01",
     expectedTo: "2026-12-31",
     fulfillment: "UNFILLED",
-  });
+  })) as { rows: { requestCode: string }[] };
 
   const conds = condsOf(listQuery(db));
   const find = (op: string, col: string) => conds.find((c) => c.op === op && "col" in c && c.col === col);
@@ -286,23 +338,30 @@ test("lọc được theo lý do, khoảng ngày và tình trạng tuyển đủ
   assert.ok(find("lte", "recruitment_requests.requestedDate"), "lọc đến ngày yêu cầu");
   assert.ok(find("gte", "recruitment_requests.expectedDate"), "lọc từ ngày cần nhân lực");
   assert.ok(find("lte", "recruitment_requests.expectedDate"), "lọc đến ngày cần nhân lực");
-
-  const texts = sqlTexts(listQuery(db)).join(" | ").toLowerCase();
-  assert.match(texts, /coalesce/, "tình trạng tuyển đủ tính trên total_balance");
+  // C2 — tình trạng tuyển đủ KHÔNG còn ở tầng SQL (không có cột total_balance
+  // trong WHERE nữa); được lọc IN-MEMORY từ canonical kpi.totalBalance.
+  assert.equal(res.rows.map((r) => r.requestCode).join(","), "RQ-U", "UNFILLED chỉ giữ request còn thiếu người (canonical balance > 0)");
 });
 
-test("UNFILLED và FILLED là hai điều kiện ngược nhau trên Total Balance", async () => {
-  const unfilled = createFakeDb({ respond: () => [] });
-  await (load(unfilled).listRecruitmentRequests as (f: unknown) => Promise<unknown>)({ fulfillment: "UNFILLED" });
-  const filled = createFakeDb({ respond: () => [] });
-  await (load(filled).listRecruitmentRequests as (f: unknown) => Promise<unknown>)({ fulfillment: "FILLED" });
+test("UNFILLED và FILLED là hai điều kiện ngược nhau trên CANONICAL Balance (không phải cột total_balance cũ)", async () => {
+  const rows = [
+    { id: "u", requestCode: "RQ-U", expectedDate: "2026-08-20", status: "PENDING", createdAt: new Date(), totalRequest: 5 },
+    { id: "f", requestCode: "RQ-F", expectedDate: "2026-08-20", status: "PENDING", createdAt: new Date(), totalRequest: 5 },
+  ];
+  const kpiOf: KpiOf = (row) => ({ totalBalance: row.id === "u" ? 3 : 0 });
 
-  const u = sqlTexts(listQuery(unfilled)).join(" ");
-  const f = sqlTexts(listQuery(filled)).join(" ");
+  const unfilled = createFakeDb({ respond: () => rows });
+  const unfilledRes = (await (load(unfilled, kpiOf).listRecruitmentRequests as (f: unknown) => Promise<{ rows: { requestCode: string }[] }>)({
+    fulfillment: "UNFILLED",
+  })) as { rows: { requestCode: string }[] };
 
-  assert.ok(u.includes("> 0"), "chưa tuyển đủ: còn thiếu người");
-  assert.ok(f.includes("= 0"), "đã tuyển đủ: không còn thiếu");
-  assert.notEqual(u, f);
+  const filled = createFakeDb({ respond: () => rows });
+  const filledRes = (await (load(filled, kpiOf).listRecruitmentRequests as (f: unknown) => Promise<{ rows: { requestCode: string }[] }>)({
+    fulfillment: "FILLED",
+  })) as { rows: { requestCode: string }[] };
+
+  assert.equal(unfilledRes.rows.map((r) => r.requestCode).join(","), "RQ-U", "chưa tuyển đủ: còn thiếu người");
+  assert.equal(filledRes.rows.map((r) => r.requestCode).join(","), "RQ-F", "đã tuyển đủ: không còn thiếu");
 });
 
 /* ------------------------------------------------------------
