@@ -1,5 +1,5 @@
 import { NextResponse } from "next/server";
-import { getUserScope, requirePermission } from "@/lib/auth";
+import { getUserScope, hasPermission, requireAnyPermission } from "@/lib/auth";
 import { scopeAllowsDepartment } from "@/lib/data-scope";
 import { getRecruitmentRequest } from "@/lib/recruitment-request";
 import { getRequestDetail } from "@/lib/workforce-request";
@@ -23,7 +23,13 @@ export const dynamic = "force-dynamic";
  * tại 1 mốc bất kỳ (override mặc định).
  */
 export async function GET(req: Request, ctx: { params: Promise<{ id: string }> }) {
-  const guard = await requirePermission(["ADMIN", "HR_DIRECTOR", "HR_RECRUITER", "DEPT_MANAGER"], "planning.view");
+  // C1 (Mission C) — accepts EITHER canonical view permission (see route.ts's
+  // GET list handler for the full rationale); every action below still
+  // requires its own specific permission.
+  const guard = await requireAnyPermission(["ADMIN", "HR_DIRECTOR", "HR_RECRUITER", "DEPT_MANAGER"], [
+    "planning.view",
+    "workforce_request.view",
+  ]);
   if (!guard.ok) return NextResponse.json({ error: guard.error }, { status: guard.status });
 
   const { id } = await ctx.params;
@@ -55,5 +61,19 @@ export async function GET(req: Request, ctx: { params: Promise<{ id: string }> }
   // stale frozen-date badge. isLive is now computed HERE (server, same clock/timezone
   // todayStr() itself uses) and handed to the client as data — zero client-side date
   // math, zero timezone drift.
-  return NextResponse.json({ ...detail, asOf, isLive: asOf === today });
+  // C1 (Mission C — Product Consolidation): the canonical page now also
+  // hosts the legacy-only actions (allocate, override, comment, Planning
+  // link) that used to live only on /admin/workforce-requests. These `can`
+  // flags reuse the EXACT SAME permission keys those actions have always
+  // required — the canonical page merely surfaces them; it does not widen
+  // or narrow who may perform them, and each action route below still
+  // re-checks its own permission independently.
+  const can = {
+    allocate: await hasPermission(guard.session.role, "workforce_request.allocate"),
+    overallocate: await hasPermission(guard.session.role, "planning.overallocate"),
+    comment: await hasPermission(guard.session.role, "workforce_request.comment"),
+    linkPlanning: await hasPermission(guard.session.role, "planning.edit"),
+  };
+
+  return NextResponse.json({ ...detail, asOf, isLive: asOf === today, can });
 }

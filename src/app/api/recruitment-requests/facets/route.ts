@@ -16,7 +16,7 @@ import { NextResponse } from "next/server";
 import { isNull, sql } from "drizzle-orm";
 import { db } from "@/db";
 import { recruitmentRequests } from "@/db/schema";
-import { getUserScope, requirePermission } from "@/lib/auth";
+import { getUserScope, requireAnyPermission } from "@/lib/auth";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -36,10 +36,12 @@ const FACET_COLUMNS = [
 const MAX_VALUES_PER_FACET = 200;
 
 export async function GET() {
-  const guard = await requirePermission(
-    ["ADMIN", "HR_RECRUITER", "DEPT_MANAGER", "HR_DIRECTOR"],
+  // C1 (Mission C) — accepts EITHER canonical view permission (see
+  // ../route.ts's GET list handler for the full rationale).
+  const guard = await requireAnyPermission(["ADMIN", "HR_RECRUITER", "DEPT_MANAGER", "HR_DIRECTOR"], [
     "planning.view",
-  );
+    "workforce_request.view",
+  ]);
   if (!guard.ok) return NextResponse.json({ error: guard.error }, { status: guard.status });
 
   const scope = await getUserScope(guard.session);

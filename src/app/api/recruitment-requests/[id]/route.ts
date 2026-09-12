@@ -2,7 +2,7 @@ import { NextResponse } from "next/server";
 import { and, eq, inArray, isNull, or } from "drizzle-orm";
 import { db } from "@/db";
 import { dailyApplications, recruitmentRequests } from "@/db/schema";
-import { getUserScope, hasPermission, requirePermission, writeAudit } from "@/lib/auth";
+import { getUserScope, hasPermission, requireAnyPermission, requirePermission, writeAudit } from "@/lib/auth";
 import { scopeAllowsDepartment } from "@/lib/data-scope";
 import { getRecruitmentRequest, batchUpdateStatus, softDeleteRecruitmentRequests } from "@/lib/recruitment-request";
 import { listOpenAllocationsForRequest } from "@/lib/planning-reallocation";
@@ -28,8 +28,12 @@ export const dynamic = "force-dynamic";
  */
 export async function GET(_req: Request, ctx: { params: Promise<{ id: string }> }) {
   const { id } = await ctx.params;
-  // DEPT_MANAGER được phép XEM trong Data Scope (Yêu cầu #3).
-  const guard = await requirePermission(["ADMIN", "HR_DIRECTOR", "HR_RECRUITER", "DEPT_MANAGER"], "planning.view");
+  // DEPT_MANAGER được phép XEM trong Data Scope (Yêu cầu #3). C1 (Mission C) —
+  // accepts EITHER canonical view permission (see route.ts's GET list handler).
+  const guard = await requireAnyPermission(["ADMIN", "HR_DIRECTOR", "HR_RECRUITER", "DEPT_MANAGER"], [
+    "planning.view",
+    "workforce_request.view",
+  ]);
   if (!guard.ok) return NextResponse.json({ error: guard.error }, { status: guard.status });
 
   const row = await getRecruitmentRequest(id);

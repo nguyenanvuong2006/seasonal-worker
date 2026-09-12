@@ -109,8 +109,13 @@ export const NAV_GROUPS: NavGroup[] = [
     group: "Kế hoạch nhu cầu",
     items: [
       { href: "/admin/planning", label: "Planning (Nhu cầu)", icon: CalendarRange, roles: ["ADMIN", "HR_RECRUITER", "DEPT_MANAGER"], permission: "planning.view" },
-      { href: "/admin/workforce-requests", label: "Workforce Request", icon: UsersRound, roles: ["ADMIN", "HR_RECRUITER", "DEPT_MANAGER", "HR_DIRECTOR"], permission: "workforce_request.view" },
-      { href: "/admin/recruitment-requests", label: "Yêu cầu tuyển dụng", icon: FileSpreadsheet, roles: ["ADMIN", "HR_RECRUITER", "DEPT_MANAGER"], permission: "planning.view" },
+      // C1 (Mission C — Product Consolidation): ONE nav entry for the canonical
+      // Recruitment Requests surface, visible to EITHER of the two legacy view
+      // permissions (planning.view from the old /admin/recruitment-requests,
+      // workforce_request.view from the old /admin/workforce-requests) — see
+      // hasNavPermission()'s array = OR semantics below. /admin/workforce-requests
+      // still exists (not deleted) but is no longer a separate nav item.
+      { href: "/admin/recruitment-requests", label: "Yêu cầu tuyển dụng", icon: FileSpreadsheet, roles: ["ADMIN", "HR_RECRUITER", "DEPT_MANAGER", "HR_DIRECTOR"], permission: ["planning.view", "workforce_request.view"] },
     ],
   },
   {

@@ -2,7 +2,7 @@ import { NextResponse } from "next/server";
 import { and, eq, inArray, isNull } from "drizzle-orm";
 import { db } from "@/db";
 import { recruitmentRequests } from "@/db/schema";
-import { getUserScope, requirePermission, writeAudit } from "@/lib/auth";
+import { getUserScope, requireAnyPermission, requirePermission, writeAudit } from "@/lib/auth";
 import { scopeAllowsDepartment } from "@/lib/data-scope";
 import { listRecruitmentRequests, matchHierarchy, type RecruitmentRequestFilter } from "@/lib/recruitment-request";
 import {
@@ -19,9 +19,27 @@ import { todayStr } from "@/lib/helpers";
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
-/** Danh sách yêu cầu tuyển dụng — lọc theo Data Scope, Month, Location, Division, Department, Section, Group, Status, Requester, search Request Code. */
+/**
+ * Danh sách yêu cầu tuyển dụng — lọc theo Data Scope, Month, Location, Division,
+ * Department, Section, Group, Status, Requester, search Request Code.
+ *
+ * C1 (Mission C — Product Consolidation): this list is now the CANONICAL entry
+ * point for BOTH /admin/recruitment-requests (planning.view) and the legacy
+ * /admin/workforce-requests surface (workforce_request.view) — the two
+ * surfaces have always used different view permission keys. Accepting EITHER
+ * here (requireAnyPermission) never broadens or narrows anyone's access: a
+ * user who could already view one of the two pages can still view exactly
+ * that much; this only lets BOTH existing view permissions reach the SAME
+ * canonical page instead of duplicating the query/KPI logic behind a second
+ * route. Every write/action endpoint keeps its own specific permission
+ * unchanged (planning.edit/planning.request/planning.import, or
+ * workforce_request.allocate/comment for the ported actions).
+ */
 export async function GET(req: Request) {
-  const guard = await requirePermission(["ADMIN", "HR_RECRUITER", "DEPT_MANAGER", "HR_DIRECTOR"], "planning.view");
+  const guard = await requireAnyPermission(["ADMIN", "HR_RECRUITER", "DEPT_MANAGER", "HR_DIRECTOR"], [
+    "planning.view",
+    "workforce_request.view",
+  ]);
   if (!guard.ok) return NextResponse.json({ error: guard.error }, { status: guard.status });
 
   try {

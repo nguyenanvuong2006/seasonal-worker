@@ -46,6 +46,7 @@ function loadRoute(opts: {
     "@/db/schema": { recruitmentRequests: {} },
     "@/lib/auth": {
       requirePermission: async (roles: string[], key: string) => opts.guardFor(roles, key),
+      requireAnyPermission: async (roles: string[], keys: string[]) => opts.guardFor(roles, keys.join("|")),
       getUserScope: async () => null,
       writeAudit: async () => {},
     },
