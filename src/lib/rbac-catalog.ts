@@ -55,6 +55,9 @@ export const PERMISSION_GROUPS: readonly CatalogGroup[] = [
   { key: "van_tay", label: "Vân tay — IT Code" },
   { key: "bao_com", label: "Báo cơm" },
   { key: "ai_copilot", label: "Trợ lý AI Workforce" },
+  // WORKFORCE DATA MANAGEMENT (Mission D) — reset/import cho dữ liệu TEST/vận
+  // hành, tách biệt hoàn toàn khỏi các quyền nghiệp vụ thường ngày ở trên.
+  { key: "quan_ly_du_lieu", label: "Quản lý dữ liệu (Reset & Import)" },
 ];
 
 /** ~42 quyền — danh mục đầy đủ. Key phải trùng với key mà ROUTE thật sự kiểm tra. */
@@ -187,6 +190,19 @@ export const PERMISSION_CATALOG: readonly CatalogPermission[] = [
   // Scope, KHÔNG cấp quyền ghi (ví dụ planning.request) — hành động vẫn cần quyền
   // nghiệp vụ riêng của nó, xem action-registry.ts's requiredPermission.
   { key: "ai_copilot.view", name: "Trợ lý AI — tra cứu/phân tích trong phạm vi được phân quyền (không mở rộng Data Scope, không cấp quyền ghi)", group: "ai_copilot" },
+  // WORKFORCE DATA MANAGEMENT (Mission D) — reset dữ liệu nghiệp vụ (TEST) +
+  // import lại Master DW/Vân tay nhiều lần. MỖI quyền huỷ hoại (reset_*) tách
+  // riêng theo scope — không có quyền "reset chung chung", và factory_reset
+  // (reset toàn bộ dữ liệu nghiệp vụ) là quyền cao nhất, KHÔNG tự động đi kèm
+  // với data_management.view/import. Route thật LUÔN giới hạn role=["ADMIN"]
+  // (mục 51 đề bài: "global high-privilege operation only") — permission ở
+  // đây là lớp kiểm tra THỨ HAI, không phải lớp duy nhất.
+  { key: "data_management.view", name: "Xem Quản lý dữ liệu (tổng quan/lịch sử)", group: "quan_ly_du_lieu" },
+  { key: "data_management.import", name: "Import Master DW / Vân tay (dry-run + thực thi)", group: "quan_ly_du_lieu" },
+  { key: "data_management.reset_fingerprint", name: "Reset dữ liệu Vân tay (IT Code)", group: "quan_ly_du_lieu" },
+  { key: "data_management.reset_operational", name: "Reset dữ liệu vận hành Tuyển dụng/Planning", group: "quan_ly_du_lieu" },
+  { key: "data_management.reset_workforce", name: "Reset Workforce/DW (worker + employment + toàn bộ phụ thuộc)", group: "quan_ly_du_lieu" },
+  { key: "data_management.factory_reset", name: "Reset TOÀN BỘ dữ liệu nghiệp vụ (Factory Reset)", group: "quan_ly_du_lieu" },
 ];
 
 /** 4 vai trò hệ thống + nền tảng cho vai trò tuỳ chỉnh. */

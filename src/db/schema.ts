@@ -1117,6 +1117,66 @@ export const stagingDailyApplication = pgTable(
 export type ImportJob = typeof importJobs.$inferSelect;
 export type ImportJobError = typeof importJobErrors.$inferSelect;
 
+/* ============================================================
+   WORKFORCE DATA MANAGEMENT (Mission D) — repeatable Master DW (dw_data)
+   upsert import + Fingerprint (IT Code) reconciliation import batch
+   tracking. Deliberately NOT the same tables as importBatches/
+   importStagingRows above (Import Engine v2, still live for
+   department/dw_data insert-only-dedup/daily_application via
+   /admin/import-data) — see the migration file's docblock for why a
+   brand-new table pair was used instead of extending that one.
+
+   The destructive RESET side of Data Management (src/lib/data-management/
+   reset-*.ts) needs NO new schema at all: operation history reuses
+   audit_logs (category="DATA_MANAGEMENT"), and cross-request mutual
+   exclusion uses a Postgres advisory lock — neither needs a table.
+   ============================================================ */
+export const workforceDataImportBatches = pgTable(
+  "workforce_data_import_batches",
+  {
+    id: uuid("id").defaultRandom().primaryKey(),
+    importType: varchar("import_type", { length: 40 }).notNull(), // WORKFORCE_MASTER | FINGERPRINT
+    datasetMode: varchar("dataset_mode", { length: 16 }).notNull().default("TEST"), // TEST | OFFICIAL — administrative label only, never read by Employment/Current Workforce logic
+    environment: varchar("environment", { length: 24 }).notNull(),
+    sourceFilename: varchar("source_filename", { length: 255 }).notNull(),
+    sourceChecksum: varchar("source_checksum", { length: 64 }).notNull(),
+    status: varchar("status", { length: 20 }).notNull().default("STAGED"), // STAGED|VALIDATING|VALIDATED|IMPORTING|COMPLETED|FAILED|REPLACED
+    totalRows: integer("total_rows").notNull().default(0),
+    validRows: integer("valid_rows").notNull().default(0),
+    invalidRows: integer("invalid_rows").notNull().default(0),
+    newRows: integer("new_rows").notNull().default(0),
+    existingRows: integer("existing_rows").notNull().default(0),
+    matchedRows: integer("matched_rows").notNull().default(0),
+    unmatchedRows: integer("unmatched_rows").notNull().default(0),
+    duplicateRows: integer("duplicate_rows").notNull().default(0),
+    processedRows: integer("processed_rows").notNull().default(0),
+    notes: text("notes"),
+    createdBy: varchar("created_by", { length: 64 }).notNull(),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+    validatedAt: timestamp("validated_at", { withTimezone: true }),
+    completedAt: timestamp("completed_at", { withTimezone: true }),
+  },
+  (t) => [index("workforce_data_import_batch_type_status_idx").on(t.importType, t.status, t.createdAt)],
+);
+
+export const workforceDataImportRows = pgTable(
+  "workforce_data_import_rows",
+  {
+    id: uuid("id").defaultRandom().primaryKey(),
+    batchId: uuid("batch_id")
+      .notNull()
+      .references(() => workforceDataImportBatches.id, { onDelete: "cascade" }),
+    rowNumber: integer("row_number").notNull(),
+    rawData: jsonb("raw_data").$type<Record<string, string>>().notNull(),
+    status: varchar("status", { length: 20 }).notNull().default("PENDING"), // PENDING|VALID|INVALID|INSERTED|UPDATED|MATCHED|UNMATCHED|DUPLICATE|ERROR
+    message: text("message"),
+  },
+  (t) => [index("workforce_data_import_row_batch_status_idx").on(t.batchId, t.status)],
+);
+
+export type WorkforceDataImportBatch = typeof workforceDataImportBatches.$inferSelect;
+export type WorkforceDataImportRow = typeof workforceDataImportRows.$inferSelect;
+
 export type User = typeof users.$inferSelect;
 export type Role = typeof roles.$inferSelect;
 export type Permission = typeof permissions.$inferSelect;

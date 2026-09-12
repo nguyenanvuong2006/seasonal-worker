@@ -34,6 +34,7 @@ import {
   ScanFace,
   UtensilsCrossed,
   Sparkles,
+  ShieldAlert,
   type LucideIcon,
 } from "lucide-react";
 import { DOCUMENT_MERGE_PERMISSION_KEYS } from "./document-merge/module-visibility.ts";
@@ -143,6 +144,10 @@ export const NAV_GROUPS: NavGroup[] = [
       { href: "/admin/audit", label: "Nhật ký hệ thống", icon: ScrollText, roles: ["ADMIN"], permission: "audit.view" },
       { href: "/admin/import-data", label: "Nhập dữ liệu ban đầu", icon: UploadCloud, roles: ["ADMIN"], permission: "import.run" },
       { href: "/admin/recycle-bin", label: "Thùng rác", icon: Trash2, roles: ["ADMIN"], permission: "recycle_bin.manage" },
+      // WORKFORCE DATA MANAGEMENT (Mission D) — destructive; ADMIN-only role
+      // gate at the nav AND route level (mục 51 đề bài), never a normal
+      // Admin-adjacent role like HR_DIRECTOR/HR_RECRUITER.
+      { href: "/admin/data-management", label: "Quản lý dữ liệu", icon: ShieldAlert, roles: ["ADMIN"], permission: "data_management.view" },
     ],
   },
 ];

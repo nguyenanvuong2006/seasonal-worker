@@ -1187,6 +1187,30 @@ export const MIGRATION_MANIFEST = [
     notes:
       "Notable governance anomaly documented in its own scoped runner script: this migration shipped with app code but had NO scoped runner and was never actually applied to Production until its runner script was written specifically to close that gap, per explicit user authorization with an explicit written backup WAIVER (USER_BACKUP_DECISION=WAIVED_BY_USER) — a rare case where requiresBackup was consciously overridden by the system owner, not skipped by omission.",
   },
+  {
+    filename: "2026-09-12-workforce-data-management.sql",
+    category: "SCHEMA_ADDITIVE",
+    objectsCreatedOrModified: [
+      "table:workforce_data_import_batches",
+      "table:workforce_data_import_rows",
+      "index:workforce_data_import_batch_checksum_uq",
+      "index:workforce_data_import_batch_type_status_idx",
+      "index:workforce_data_import_row_batch_status_idx",
+    ],
+    idempotent: true,
+    transactionSafe: true,
+    appDependency: "REQUIRED",
+    appDependencyEvidence:
+      "src/db/schema.ts declares workforceDataImportBatches/workforceDataImportRows; src/lib/data-management/import-workforce-master.ts and import-fingerprint.ts insert into and query these tables when staging/merging a Master DW or Fingerprint import through /admin/data-management — routes fail closed with DATA_MANAGEMENT_NOT_MIGRATED if the tables do not exist yet (see checkDataManagementSchemaPresent()).",
+    executionMechanism: "MANUAL_PSQL_GENERIC",
+    supersededBy: null,
+    tombstoned: false,
+    tombstonedReason: null,
+    requiresBackup: false,
+    productionAllowed: true,
+    notes:
+      "Purely additive — two brand-new tables, zero changes to any existing table (deliberately NOT extending the existing import_batches/import_staging_rows tables, whose Drizzle-declared column list would otherwise break their current, already-working queries the instant this code deploys ahead of the migration). Run via the canonical single-migration runner (scripts/run-migration.mjs). Workforce Data Management's own destructive reset feature (src/lib/data-management/reset-*.ts) requires NO migration at all — it reuses audit_logs for operation history and a Postgres advisory lock for concurrency, touching no new schema.",
+  },
 ];
 
 /** @type {Map<string, MigrationManifestEntry>} */
