@@ -5,6 +5,7 @@ import { departments, employmentSessions, workerProfiles } from "@/db/schema";
 import { getUserScope } from "@/lib/auth";
 import { isFemale, isMale, todayStr } from "@/lib/helpers";
 import { countActiveDepartmentWorkforce } from "@/lib/recruitment-kpi";
+import { searchOrganizationUnits } from "@/lib/organization-search";
 import type { ToolContext, ToolDefinition, ToolResult } from "../types.ts";
 import { ToolExecutionError } from "../types.ts";
 import { intersectDepartmentFilter } from "../scope-helpers.ts";
@@ -12,25 +13,34 @@ import { intersectDepartmentFilter } from "../scope-helpers.ts";
 /**
  * Domain: Organization hierarchy + current workforce headcount (audit
  * domains 1-2). departments.id is the REAL Data-Scope FK unit (getUserScope()
- * returns department UUIDs, not organization_units.id — see audit); the
- * arbitrary-depth org tree in organization-units.ts is deliberately NOT used
- * here since none of its exported functions accept a Data Scope.
+ * returns department UUIDs, not organization_units.id — see audit).
  *
  * Company-wide (no departmentId) ACTIVE headcount by gender has no existing
  * authoritative function (a confirmed audit gap) — this reuses the exact
  * canonical ACTIVE predicate (status='APPROVED' AND end_date IS NULL,
  * worker_profiles.deleted_at IS NULL) that countActiveDepartmentWorkforce
  * itself encodes, just without pinning to a single department.
+ *
+ * Entity resolution fix (Production bug — false "no department named X"):
+ * `search_organization_units` is the canonical partial/abbreviated-name
+ * resolver (src/lib/organization-search.ts), built on the SAME
+ * organization_units table the Cây tổ chức admin UI reads — never a second,
+ * AI-only directory. list_departments' own `search` filter is now powered
+ * by the same resolver instead of an exact-string match against
+ * departments.deptName (which could never contain a compound display name
+ * like "Chrysanth Spray — Fast" — that string lives in organization_units,
+ * composed from deptName + groupName at migration time).
  */
 
 type ListDepartmentsArgs = { search?: string };
 
 const list_departments: ToolDefinition<ListDepartmentsArgs, { departments: { id: string; name: string; activeWorkforce: number }[] }> = {
   name: "list_departments",
-  description: "Liệt kê các bộ phận (phòng ban) mà người dùng hiện tại có quyền xem, kèm số lao động đang làm việc (ACTIVE) mỗi bộ phận. Dùng khi câu hỏi cần biết có những bộ phận nào hoặc so sánh nhân lực giữa các bộ phận.",
+  description:
+    "Liệt kê các bộ phận (phòng ban) mà người dùng hiện tại có quyền xem, kèm số lao động đang làm việc (ACTIVE) mỗi bộ phận. Dùng khi câu hỏi cần biết có những bộ phận nào hoặc so sánh nhân lực giữa các bộ phận. `search` hỗ trợ tên KHÔNG đầy đủ/viết tắt (khớp một phần) — không cần gõ đúng tên đầy đủ.",
   parameters: {
     type: "object",
-    properties: { search: { type: "string", description: "Lọc theo tên bộ phận (tuỳ chọn)." } },
+    properties: { search: { type: "string", description: "Lọc theo tên bộ phận — hỗ trợ tên một phần/viết tắt (tuỳ chọn)." } },
     additionalProperties: false,
   },
   parseArgs: (raw) => {
@@ -44,7 +54,12 @@ const list_departments: ToolDefinition<ListDepartmentsArgs, { departments: { id:
       if (scope.length === 0) return { data: { departments: [] }, source: { domains: ["organization"], asOf: new Date().toISOString() } };
       conditions.push(inArray(departments.id, scope));
     }
-    if (args.search) conditions.push(eq(departments.deptName, args.search));
+    if (args.search) {
+      const resolved = await searchOrganizationUnits({ query: args.search, scope, limit: 50 });
+      const deptIds = resolved.candidates.map((c) => c.legacyDepartmentId).filter((id): id is string => id !== null);
+      if (deptIds.length === 0) return { data: { departments: [] }, source: { domains: ["organization"], asOf: new Date().toISOString() } };
+      conditions.push(inArray(departments.id, deptIds));
+    }
     const rows = await db
       .select({ id: departments.id, name: departments.deptName })
       .from(departments)
@@ -54,6 +69,65 @@ const list_departments: ToolDefinition<ListDepartmentsArgs, { departments: { id:
       rows.map(async (d) => ({ id: d.id, name: d.name, activeWorkforce: (await countActiveDepartmentWorkforce(db, d.id)).total })),
     );
     return { data: { departments: withCounts }, source: { domains: ["organization"], asOf: new Date().toISOString() } };
+  },
+};
+
+type SearchOrgUnitsArgs = { query: string; includeInactive?: boolean; limit?: number };
+type SearchOrgUnitsResult = {
+  query: string;
+  normalizedQuery: string;
+  status: "RESOLVED" | "AMBIGUOUS" | "NOT_FOUND";
+  totalMatches: number;
+  truncated: boolean;
+  candidates: { id: string; name: string; unitType: string; isActive: boolean; breadcrumb: string; departmentId: string | null }[];
+};
+
+const search_organization_units: ToolDefinition<SearchOrgUnitsArgs, SearchOrgUnitsResult> = {
+  name: "search_organization_units",
+  description:
+    "Tra cứu đơn vị tổ chức (bộ phận/phòng ban/nhóm ở bất kỳ tầng nào trong cây tổ chức — không chỉ 'Department') theo tên KHÔNG đầy đủ, viết tắt, hoặc không đúng thứ tự từ (ví dụ 'Fast', 'Middle 1', 'Spray Fast'). BẮT BUỘC gọi tool này TRƯỚC KHI kết luận một đơn vị/bộ phận không tồn tại — không bao giờ tự khẳng định 'không có bộ phận nào tên X' chỉ dựa vào suy đoán hoặc một tool khác không hỗ trợ tìm kiếm một phần. Kết quả trả về status: RESOLVED (đúng 1 đơn vị khớp mạnh — dùng luôn), AMBIGUOUS (nhiều đơn vị cùng khớp — PHẢI liệt kê các candidates và hỏi người dùng chọn, KHÔNG được tự chọn đại 1 cái hoặc coi là không tìm thấy), hoặc NOT_FOUND (thực sự không có đơn vị nào khớp trong phạm vi dữ liệu được phép — chỉ được nói 'không tìm thấy' khi tool trả về đúng trạng thái này). Nếu truncated=true, còn nhiều kết quả hơn totalMatches hiển thị — không khẳng định đã liệt kê hết, hãy đề nghị người dùng thu hẹp tên tìm kiếm.",
+  parameters: {
+    type: "object",
+    properties: {
+      query: { type: "string", description: "Tên đơn vị cần tìm — có thể một phần/viết tắt/không đúng thứ tự." },
+      includeInactive: { type: "boolean", description: "true để bao gồm cả đơn vị đã vô hiệu hoá (mặc định false — chỉ tìm đơn vị đang hoạt động)." },
+      limit: { type: "number", description: "Số kết quả tối đa (mặc định 20, tối đa 50)." },
+    },
+    required: ["query"],
+    additionalProperties: false,
+  },
+  parseArgs: (raw) => {
+    const body = (raw ?? {}) as Record<string, unknown>;
+    if (typeof body.query !== "string" || !body.query.trim()) throw new ToolExecutionError("INVALID_ARGS", "query là bắt buộc.");
+    return {
+      query: body.query.trim().slice(0, 200),
+      includeInactive: typeof body.includeInactive === "boolean" ? body.includeInactive : undefined,
+      limit: typeof body.limit === "number" ? body.limit : undefined,
+    };
+  },
+  execute: async (ctx: ToolContext, args): Promise<ToolResult<SearchOrgUnitsResult>> => {
+    const scope = await getUserScope(ctx.session);
+    const result = await searchOrganizationUnits({ query: args.query, scope, includeInactive: args.includeInactive, limit: args.limit });
+    return {
+      data: {
+        query: result.query,
+        normalizedQuery: result.normalizedQuery,
+        status: result.status,
+        totalMatches: result.totalMatches,
+        truncated: result.truncated,
+        candidates: result.candidates.map((c) => ({
+          id: c.id,
+          name: c.name,
+          unitType: c.unitType,
+          isActive: c.isActive,
+          breadcrumb: c.breadcrumb.map((b) => b.name).join(" > "),
+          departmentId: c.legacyDepartmentId,
+        })),
+      },
+      source: { domains: ["organization"], asOf: new Date().toISOString() },
+      truncated: result.truncated,
+      totalCount: result.totalMatches,
+    };
   },
 };
 
@@ -129,4 +203,4 @@ const get_department_workforce: ToolDefinition<{ departmentId: string }, Headcou
   },
 };
 
-export const organizationTools = [list_departments, get_current_headcount, get_department_workforce];
+export const organizationTools = [list_departments, search_organization_units, get_current_headcount, get_department_workforce];
