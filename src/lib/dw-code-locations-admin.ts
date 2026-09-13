@@ -1,8 +1,9 @@
 import "server-only";
-import { eq } from "drizzle-orm";
+import { eq, sql } from "drizzle-orm";
 import { db } from "@/db";
 import { dwCodeLocations, dwCodes, organizationUnits } from "@/db/schema";
 import { previewDwCode } from "@/lib/dw-code-pool";
+import { parseDwCodeFormat } from "@/lib/operational-code-activation";
 
 /**
  * MISSION E section 4-7, 52 — admin config for the Internal DW Code namespace
@@ -105,13 +106,41 @@ export function validateDwCodeLocationInput(input: {
   return null;
 }
 
+/**
+ * MISSION F section 41 fail-closed guard — the P1 bootstrap-safety check (mission section 3)
+ * enforced AT THE MOMENT a location is created, not merely reported by a separate diagnostic.
+ * Scans legacy `dw_data.code` (free-text, pre-dates this pool entirely — see dw-code-pool.ts's
+ * docblock) for the highest sequence number ever observed under this prefix, using the EXACT
+ * same parser the go-live readiness planner uses (operational-code-activation.ts), so the two
+ * never disagree about what counts as a match. ILIKE is only a server-side pre-filter for
+ * efficiency — the authoritative check is the exact-prefix match after parsing.
+ */
+async function findLegacyMaxSequenceForPrefix(prefix: string): Promise<number | null> {
+  const result = await db.execute<{ code: string }>(sql`SELECT code FROM dw_data WHERE code IS NOT NULL AND deleted_at IS NULL AND code ILIKE ${prefix + "%"}`);
+  let max: number | null = null;
+  for (const row of result.rows) {
+    const parsed = parseDwCodeFormat(row.code);
+    if (parsed && parsed.prefix === prefix) max = max === null ? parsed.sequence : Math.max(max, parsed.sequence);
+  }
+  return max;
+}
+
 export async function createDwCodeLocation(input: CreateDwCodeLocationInput) {
+  const prefix = input.prefix.toUpperCase();
+  const legacyMax = await findLegacyMaxSequenceForPrefix(prefix);
+  if (legacyMax !== null && input.startNumber <= legacyMax) {
+    throw new Error(
+      `SEQUENCE_UNSAFE_STARTNUMBER: Prefix "${prefix}" đã có mã cũ (dw_data.code) với số thứ tự lớn nhất quan sát được là ${legacyMax}. ` +
+        `Số bắt đầu (startNumber) phải >= ${legacyMax + 1} để không cấp trùng một mã đang/đã được dùng theo hệ thống cũ.`,
+    );
+  }
+
   const [created] = await db
     .insert(dwCodeLocations)
     .values({
       organizationUnitId: input.organizationUnitId,
       name: input.name.trim(),
-      prefix: input.prefix.toUpperCase(),
+      prefix,
       sequenceDigits: input.sequenceDigits,
       separator: input.separator,
       suffix: input.suffix.toUpperCase(),

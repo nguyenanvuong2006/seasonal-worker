@@ -17,6 +17,10 @@ import {
   workerProfiles,
   dwData,
   planningTasks,
+  dwCodeAssignments,
+  itCodeAssignments,
+  sameDayLifecycleEvents,
+  mealExclusions,
 } from "@/db/schema";
 import { writeAudit, type Session } from "@/lib/auth";
 import { checkDataResetAllowed } from "./environment";
@@ -71,6 +75,18 @@ async function countDomainRows(domain: ResetDomainKey): Promise<number> {
       return countAll(startDateCorrections);
     case "workforce_movements":
       return countAll(workforceMovements);
+    case "dw_code_assignments":
+      return countAll(dwCodeAssignments);
+    case "it_code_assignment_history":
+      return countAll(itCodeAssignments);
+    case "same_day_lifecycle_events":
+      return countAll(sameDayLifecycleEvents);
+    case "meal_exclusions":
+      return countAll(mealExclusions);
+    case "dw_code_pool_reset": {
+      const result = await db.execute<{ c: string }>(sql`SELECT count(*)::text AS c FROM dw_codes WHERE status = 'ASSIGNED'`);
+      return Number(result.rows[0]?.c ?? 0);
+    }
     case "employment_sessions":
       return countAll(employmentSessions);
     case "daily_applications":
@@ -168,6 +184,18 @@ async function deleteDomain(tx: typeof db, domain: ResetDomainKey): Promise<numb
       return deleteAll(tx, startDateCorrections);
     case "workforce_movements":
       return deleteAll(tx, workforceMovements);
+    case "dw_code_assignments":
+      return deleteAll(tx, dwCodeAssignments);
+    case "it_code_assignment_history":
+      return deleteAll(tx, itCodeAssignments);
+    case "same_day_lifecycle_events":
+      return deleteAll(tx, sameDayLifecycleEvents);
+    case "meal_exclusions":
+      return deleteAll(tx, mealExclusions);
+    case "dw_code_pool_reset": {
+      const res = await tx.execute(sql`UPDATE dw_codes SET status = 'AVAILABLE' WHERE status = 'ASSIGNED'`);
+      return (res as { rowCount?: number }).rowCount ?? 0;
+    }
     case "employment_sessions":
       return deleteAll(tx, employmentSessions);
     case "daily_applications":

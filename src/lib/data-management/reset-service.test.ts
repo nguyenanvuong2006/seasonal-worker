@@ -27,6 +27,10 @@ const TABLE_NAMES = [
   "worker_profiles",
   "dw_data",
   "planning_tasks",
+  "dw_code_assignments",
+  "it_code_assignments",
+  "same_day_lifecycle_events",
+  "meal_exclusions",
 ];
 const tables = Object.fromEntries(TABLE_NAMES.map((n) => [n, makeTable(n)]));
 
@@ -44,6 +48,10 @@ const schemaStub = {
   workerProfiles: tables.worker_profiles,
   dwData: tables.dw_data,
   planningTasks: tables.planning_tasks,
+  dwCodeAssignments: tables.dw_code_assignments,
+  itCodeAssignments: tables.it_code_assignments,
+  sameDayLifecycleEvents: tables.same_day_lifecycle_events,
+  mealExclusions: tables.meal_exclusions,
 };
 
 type FakePoolClient = { query: (text: string, params?: unknown[]) => Promise<{ rows: unknown[] }>; release: () => void };
@@ -227,8 +235,34 @@ test("R4/R9-happy-path — valid token + exact phrase + lock free + environment 
   if (result.ok) {
     assert.equal(result.effectiveScopes.length, 1);
     assert.equal(result.effectiveScopes[0], "WORKFORCE");
-    assert.ok(result.rowCountsDeleted.length >= 12, "WORKFORCE must delete its full forced dependency set");
+    assert.ok(result.rowCountsDeleted.length >= 17, "WORKFORCE must delete its full forced dependency set, including the 5 Mission E domains");
+    const domains = result.rowCountsDeleted.map((d) => d.domain);
+    for (const missionEDomain of ["dw_code_assignments", "it_code_assignment_history", "same_day_lifecycle_events", "meal_exclusions", "dw_code_pool_reset"]) {
+      assert.ok(domains.includes(missionEDomain), `WORKFORCE must include Mission E domain ${missionEDomain}`);
+    }
   }
   assert.equal(db.transactions, 1, "exactly one transaction for the whole reset");
   assert.equal(auditCalls.length, 1, "exactly one audit row written");
+});
+
+test("Mission E go-live prep — WORKFORCE reset deletes dw_code_assignments/it_code_assignments/same_day_lifecycle_events/meal_exclusions BEFORE worker_profiles/employment_sessions/dw_data/daily_applications (real Postgres FK RESTRICT from those history tables)", async () => {
+  const auditCalls: unknown[] = [];
+  const db = createFakeDb({ respond: respondAllCounts(2) });
+  const pool = makeFakePool({ lockAvailable: true });
+  const mod = await loadResetService({ db, pool, auditCalls });
+
+  const preview = await mod.previewReset({ session: SESSION, requestedScopes: ["WORKFORCE"] });
+  const result = await mod.executeReset({ session: SESSION, previewToken: preview.previewToken, confirmationPhrase: "RESET WORKFORCE DATA" });
+  assert.equal(result.ok, true);
+  if (!result.ok) return;
+
+  const order = result.rowCountsDeleted.map((d) => d.domain);
+  const idx = (k: string) => order.indexOf(k);
+  for (const historyDomain of ["dw_code_assignments", "it_code_assignment_history", "same_day_lifecycle_events", "meal_exclusions"]) {
+    assert.ok(idx(historyDomain) < idx("worker_profiles"), `${historyDomain} must delete before worker_profiles (real FK RESTRICT)`);
+    assert.ok(idx(historyDomain) < idx("employment_sessions"), `${historyDomain} must delete before employment_sessions (real FK RESTRICT)`);
+    assert.ok(idx(historyDomain) < idx("dw_data"), `${historyDomain} must delete before dw_data (real FK RESTRICT)`);
+  }
+  assert.ok(idx("meal_exclusions") < idx("daily_applications"), "meal_exclusions must delete before daily_applications (real FK RESTRICT)");
+  assert.ok(idx("same_day_lifecycle_events") < idx("daily_applications"), "same_day_lifecycle_events must delete before daily_applications (real FK RESTRICT)");
 });

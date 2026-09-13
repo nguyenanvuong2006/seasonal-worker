@@ -2,12 +2,12 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { expandResetScopes, requiredConfirmationPhrase, RESET_DOMAIN_META } from "./scopes.ts";
 
-test("IT_CODE: expands to exactly the 3 NULL_COLUMNS domains, never touches worker/employment rows", () => {
+test("IT_CODE: expands to the 3 NULL_COLUMNS mirror domains plus its own it_code_assignment_history table, never touches worker/employment rows", () => {
   const plan = expandResetScopes(["IT_CODE"]);
   assert.deepEqual(plan.effectiveScopes, ["IT_CODE"]);
   const keys = plan.domains.map((d) => d.key);
-  assert.deepEqual(keys, ["it_code_worker_profiles", "it_code_dw_data", "it_code_daily_applications"]);
-  assert.ok(plan.domains.every((d) => d.kind === "NULL_COLUMNS"), "IT_CODE must never delete rows");
+  assert.deepEqual(new Set(keys), new Set(["it_code_worker_profiles", "it_code_dw_data", "it_code_daily_applications", "it_code_assignment_history"]));
+  assert.ok(!keys.includes("worker_profiles") && !keys.includes("employment_sessions") && !keys.includes("dw_data"), "IT_CODE must never delete worker/employment/dw_data rows");
 });
 
 test("RECRUITMENT_OPERATIONS: does not include daily_applications (soft-referenced by employment_sessions, no hard FK)", () => {
