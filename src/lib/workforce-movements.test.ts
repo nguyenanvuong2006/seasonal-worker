@@ -63,15 +63,24 @@ type Session = {
   regDate: string;
 };
 
-function makeStore(movement: Movement, session: Session) {
+function makeStore(movement: Movement, session: Session, dailyApps: Map<string, { id: string; dwId: string | null }> = new Map()) {
   const movements = new Map<string, Movement>([[movement.id, { ...movement }]]);
   const sessions = new Map<string, Session>([[session.id, { ...session }]]);
   const writes: { table: string; id: string; patch: Record<string, unknown> }[] = [];
   const allocCalls: unknown[] = [];
   const transferAllocCalls: unknown[] = [];
   const autoAllocateCalls: unknown[] = [];
+  const dwCodeReleaseCalls: { employmentSessionId: string; releaseReason: string }[] = [];
+  const itCodeReleaseCalls: { employmentSessionId: string; dailyApplicationId: string; workerId: string; dwDataId: string | null; releaseReason: string }[] = [];
 
   const respond = (call: QueryCall): unknown => {
+    if (call.table === "daily_applications") {
+      if (call.root === "select") {
+        const idEq = eqValue(call, "daily_applications.id");
+        const app = idEq !== undefined ? dailyApps.get(idEq as string) : undefined;
+        return app ? [{ dwId: app.dwId }] : [];
+      }
+    }
     if (call.table === "workforce_movements") {
       if (call.root === "select") {
         const idEq = eqValue(call, "workforce_movements.id");
@@ -114,7 +123,7 @@ function makeStore(movement: Movement, session: Session) {
   };
 
   const db = createFakeDb({ respond });
-  return { db, movements, sessions, writes, allocCalls, transferAllocCalls, autoAllocateCalls };
+  return { db, movements, sessions, writes, allocCalls, transferAllocCalls, autoAllocateCalls, dwCodeReleaseCalls, itCodeReleaseCalls };
 }
 
 async function loadWith(store: ReturnType<typeof makeStore>) {
@@ -142,8 +151,17 @@ async function loadWith(store: ReturnType<typeof makeStore>) {
       },
       "@/lib/recruitment-kpi": { recomputeStoredRecruitmentBalance: async () => undefined },
       "@/lib/dw-code-pool": {
-        releaseDwCode: async () => ({ released: false, code: null }),
+        releaseDwCode: async (input: { employmentSessionId: string; releaseReason: string }) => {
+          store.dwCodeReleaseCalls.push(input);
+          return { released: false, code: null };
+        },
         allocateDwCode: async () => ({ ok: false, error: "LOCATION_NOT_FOUND" }),
+      },
+      "@/lib/it-code-assignment": {
+        releaseItCode: async (input: { employmentSessionId: string; dailyApplicationId: string; workerId: string; dwDataId: string | null; releaseReason: string }) => {
+          store.itCodeReleaseCalls.push(input);
+          return { released: false, itCode: null };
+        },
       },
       "@/lib/helpers": { todayStr: () => TODAY },
     },
@@ -209,6 +227,11 @@ test("RESIGNATION — approved with effectiveDate in the PAST -> applied immedia
   assert.equal(store.sessions.get("s1")!.status, "ENDED");
   assert.equal(store.sessions.get("s1")!.endDate, "2026-09-01");
   assert.equal(store.allocCalls.length, 1, "allocation cleanup must run for an immediately-effective resignation");
+  // MISSION F2 section 9 — B: an immediately-effective (lifecycle-applied) resignation must
+  // release the worker's DW/IT codes in the SAME transaction, using the canonical EMPLOYMENT_ENDED reason.
+  assert.equal(store.dwCodeReleaseCalls.length, 1, "DW code release must run once the resignation actually applies");
+  assert.equal(store.dwCodeReleaseCalls[0].employmentSessionId, "s1");
+  assert.equal(store.dwCodeReleaseCalls[0].releaseReason, "EMPLOYMENT_ENDED");
 });
 
 test("RESIGNATION — approved with effectiveDate TODAY -> applied immediately (today counts as effective)", async () => {
@@ -229,6 +252,10 @@ test("RESIGNATION — approved with a FUTURE effectiveDate -> decision recorded,
   assert.equal(store.sessions.get("s1")!.status, "APPROVED", "session must remain untouched (worker stays ACTIVE) until the effective date");
   assert.equal(store.sessions.get("s1")!.endDate, null);
   assert.equal(store.allocCalls.length, 0, "no allocation cleanup yet — nothing has taken effect");
+  // MISSION F2 section 9 — A: a future-dated resignation must NOT release DW/IT codes yet —
+  // the worker is still actively working until the effective date arrives.
+  assert.equal(store.dwCodeReleaseCalls.length, 0, "codes must remain assigned — resignation has not taken effect yet");
+  assert.equal(store.itCodeReleaseCalls.length, 0);
 });
 
 test("applyEffectiveWorkforceMovements — applies a resignation whose effective date has now arrived, exactly once", async () => {
@@ -241,11 +268,41 @@ test("applyEffectiveWorkforceMovements — applies a resignation whose effective
   assert.equal(result.resignationsApplied, 1);
   assert.equal(store.sessions.get("s1")!.status, "ENDED");
   assert.ok(store.movements.get("m1")!.lifecycleAppliedAt);
+  // MISSION F2 section 9 — B: the scheduler path (a deferred resignation becoming due) must also
+  // release codes, exactly once, the moment the effective date arrives.
+  assert.equal(store.dwCodeReleaseCalls.length, 1);
 
   // Idempotency: running it again must be a no-op (already applied).
   const secondRun = await mod.applyEffectiveWorkforceMovements(TODAY);
   assert.equal(secondRun.resignationsApplied, 0);
   assert.equal(secondRun.checked, 0, "an already-applied movement must not even be re-scanned as due");
+  // MISSION F2 section 9 — C: retry must be idempotent — the already-applied movement is never
+  // re-scanned, so finalizeResignationEffect (and its code-release calls) never runs a second time.
+  assert.equal(store.dwCodeReleaseCalls.length, 1, "must not release codes a second time on retry");
+});
+
+test("RESIGNATION — session with a dailyApplicationId releases the IT code with the correct workerId/dwDataId (looked up from daily_applications)", async () => {
+  const dailyApps = new Map([["app1", { id: "app1", dwId: "dw1" }]]);
+  const store = makeStore(baseResignation({ effectiveDate: "2026-09-01" }), activeSession({ dailyApplicationId: "app1" }), dailyApps);
+  const mod = await loadWith(store);
+  await mod.applyMovementAction(ACTOR, "m1", "APPROVE_RESIGNATION");
+
+  assert.equal(store.itCodeReleaseCalls.length, 1, "IT code release must run once the resignation applies for a session with a dailyApplicationId");
+  const call = store.itCodeReleaseCalls[0];
+  assert.equal(call.employmentSessionId, "s1");
+  assert.equal(call.dailyApplicationId, "app1");
+  assert.equal(call.workerId, "w1");
+  assert.equal(call.dwDataId, "dw1", "dwDataId must be looked up from daily_applications.dwId, never guessed");
+  assert.equal(call.releaseReason, "EMPLOYMENT_ENDED");
+});
+
+test("RESIGNATION — session with NO dailyApplicationId releases the DW code but never attempts an IT code release", async () => {
+  const store = makeStore(baseResignation({ effectiveDate: "2026-09-01" }), activeSession({ dailyApplicationId: null }));
+  const mod = await loadWith(store);
+  await mod.applyMovementAction(ACTOR, "m1", "APPROVE_RESIGNATION");
+
+  assert.equal(store.dwCodeReleaseCalls.length, 1);
+  assert.equal(store.itCodeReleaseCalls.length, 0, "no dailyApplicationId to key an IT code release on — must not call releaseItCode with a fabricated id");
 });
 
 test("applyEffectiveWorkforceMovements — a movement with a FUTURE effective date is never picked up", async () => {

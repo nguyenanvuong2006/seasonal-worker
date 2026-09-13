@@ -7,6 +7,7 @@ import { autoAllocateInternship } from "@/lib/planning";
 import { endActiveRequestAllocationsForWorker, endActiveRequestAllocationsForTransfer } from "@/lib/workforce-request";
 import { recomputeStoredRecruitmentBalance } from "@/lib/recruitment-kpi";
 import { allocateDwCode, releaseDwCode } from "@/lib/dw-code-pool";
+import { releaseItCode } from "@/lib/it-code-assignment";
 import { todayStr } from "@/lib/helpers";
 import type { Session } from "@/lib/auth";
 
@@ -108,8 +109,9 @@ export async function finalizeResignationEffect(
   movement: MovementForFinalize,
   actorUsername: string,
 ): Promise<{ employmentSessionId: string | null }> {
+  const sessionColumns = { id: employmentSessions.id, dailyApplicationId: employmentSessions.dailyApplicationId };
   const [activeSession] = await tx
-    .select({ id: employmentSessions.id })
+    .select(sessionColumns)
     .from(employmentSessions)
     .where(and(
       eq(employmentSessions.workerId, movement.workerId),
@@ -121,7 +123,7 @@ export async function finalizeResignationEffect(
   const fallbackSession = activeSession
     ? null
     : (await tx
-        .select({ id: employmentSessions.id })
+        .select(sessionColumns)
         .from(employmentSessions)
         .where(eq(employmentSessions.workerId, movement.workerId))
         .orderBy(desc(employmentSessions.regDate))
@@ -152,6 +154,37 @@ export async function finalizeResignationEffect(
   );
   for (const requestId of affectedRequestIds) {
     await recomputeStoredRecruitmentBalance(tx, requestId);
+  }
+
+  // MISSION F2 section 9 — normal (non-same-day) resignation used to never release DW/IT codes
+  // at all (same-day-lifecycle.ts's STARTED_THEN_LEFT branch was the ONLY path that did). Release
+  // both here, inside the SAME transaction, using the canonical `EMPLOYMENT_ENDED` reason that has
+  // existed in the ReleaseReason union since Mission E but was never actually passed anywhere.
+  // Both releaseDwCode()/releaseItCode() are idempotent no-ops when nothing is active — safe to
+  // call even for the "no session to end" edge case (sessionToEnd null) is skipped below since
+  // there is no employmentSessionId to key the release on.
+  if (sessionToEnd) {
+    await releaseDwCode({ employmentSessionId: sessionToEnd.id, releasedBy: actorUsername, releaseReason: "EMPLOYMENT_ENDED", note: `Nghỉ việc có hiệu lực (movement ${movement.id})` }, tx);
+
+    if (sessionToEnd.dailyApplicationId) {
+      const [app] = await tx
+        .select({ dwId: dailyApplications.dwId })
+        .from(dailyApplications)
+        .where(eq(dailyApplications.id, sessionToEnd.dailyApplicationId))
+        .limit(1);
+      await releaseItCode(
+        {
+          employmentSessionId: sessionToEnd.id,
+          dailyApplicationId: sessionToEnd.dailyApplicationId,
+          workerId: movement.workerId,
+          dwDataId: app?.dwId ?? null,
+          releasedBy: actorUsername,
+          releaseReason: "EMPLOYMENT_ENDED",
+          note: `Nghỉ việc có hiệu lực (movement ${movement.id})`,
+        },
+        tx,
+      );
+    }
   }
 
   return { employmentSessionId: sessionToEnd?.id ?? null };

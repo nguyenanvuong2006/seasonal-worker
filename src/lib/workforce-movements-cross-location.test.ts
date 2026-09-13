@@ -253,6 +253,7 @@ async function loadWith(store: ReturnType<typeof makeStore>) {
       },
       "@/lib/recruitment-kpi": { recomputeStoredRecruitmentBalance: async () => undefined },
       "@/lib/dw-code-pool": dwCodePoolMod,
+      "@/lib/it-code-assignment": { releaseItCode: async () => ({ released: false, itCode: null }) },
       "@/lib/helpers": { todayStr: () => TODAY },
     },
   });
