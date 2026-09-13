@@ -57,7 +57,25 @@ export async function GET(req: Request) {
 type SubmitItem = { dailyApplicationId: string; dwDataId: string; code: string };
 type RowResult = { dailyApplicationId: string; ok: boolean; reason: string };
 
-/** Submit hàng loạt (mục VI) — idempotent (UPDATE theo id, không tạo bản ghi mới). */
+/**
+ * MISSION F2 section 5/249 — NOT CANONICALIZED, DOCUMENTED BLOCKER (not silently skipped).
+ * This is the PRIMARY writer of the legacy free-text `dw_data.code` field — the 2026-09-13
+ * read-only Production diagnostic found 13,486 non-null values here, almost entirely produced
+ * through this exact route. Canonicalizing it onto dw-code-pool.ts's allocateDwCode()/
+ * dw_codes/dw_code_assignments is a STRUCTURAL impossibility right now, not a scope choice:
+ * `dw_codes.location_id` is NOT NULL (schema.ts) — every dw_codes row requires a
+ * dw_code_locations row to exist first, and the same diagnostic found ZERO dw_code_locations
+ * rows configured in Production. Creating one is explicitly NOT AUTHORIZED under this mission's
+ * ABSOLUTE SAFETY ("no location-config write"). Writing a dw_codes row for the "DR" prefix
+ * (the one prefix actually observed) would either throw a hard FK violation or require the very
+ * location-config bootstrap this mission is forbidden from performing.
+ *
+ * This route also does not match allocateDwCode()'s semantics anyway — staff type an arbitrary
+ * free-text code here (matching whatever is printed on the physical badge that day), never an
+ * auto-generated next-sequence value.
+ *
+ * Submit hàng loạt (mục VI) — idempotent (UPDATE theo id, không tạo bản ghi mới).
+ */
 export async function PATCH(req: Request) {
   const guard = await requirePermission(["ADMIN", "ADMINISTRATION"], "administration.daily_code.submit");
   if (!guard.ok) return NextResponse.json({ error: guard.error }, { status: guard.status });

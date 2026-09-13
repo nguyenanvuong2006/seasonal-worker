@@ -266,3 +266,41 @@ test("Mission E go-live prep — WORKFORCE reset deletes dw_code_assignments/it_
   assert.ok(idx("meal_exclusions") < idx("daily_applications"), "meal_exclusions must delete before daily_applications (real FK RESTRICT)");
   assert.ok(idx("same_day_lifecycle_events") < idx("daily_applications"), "same_day_lifecycle_events must delete before daily_applications (real FK RESTRICT)");
 });
+
+/**
+ * MISSION F2 section 23-24/252 — composed proof (real reset-service.ts + real scopes.ts, the
+ * actual REAL sql`` template from drizzle-orm, not a stub) that a full ALL_BUSINESS_DATA reset
+ * run — the broadest scope, union of everything — really does issue the dw_codes status-reset SQL
+ * AND never issues any query-builder call or raw SQL execute() against dw_code_locations. This
+ * complements scopes.test.ts's static "never a domain target table" proof with an end-to-end one:
+ * even if some FUTURE domain wiring mistake bypassed RESET_DOMAIN_META's exhaustiveness (e.g. a
+ * stray direct call), this test would still catch it because it inspects every call the real
+ * service actually issued, not just the declared domain list.
+ */
+test("ALL_BUSINESS_DATA reset composed end-to-end: dw_codes status IS reset via raw SQL, dw_code_locations is NEVER touched by any query or raw SQL", async () => {
+  const auditCalls: unknown[] = [];
+  const db = createFakeDb({ respond: respondAllCounts(3) });
+  const pool = makeFakePool({ lockAvailable: true });
+  const mod = await loadResetService({ db, pool, auditCalls });
+
+  const preview = await mod.previewReset({ session: SESSION, requestedScopes: ["ALL_BUSINESS_DATA"] });
+  const result = await mod.executeReset({ session: SESSION, previewToken: preview.previewToken, confirmationPhrase: "RESET ALL BUSINESS DATA" });
+  assert.equal(result.ok, true);
+
+  assert.equal(db.calls.some((c) => c.table === "dw_code_locations"), false, "no query-builder call may ever target dw_code_locations");
+
+  const executeCalls = db.calls.filter((c) => c.root === "execute");
+  assert.ok(executeCalls.length > 0, "the dw_code_pool_reset domain must issue at least one raw SQL execute()");
+  const sqlTexts = executeCalls.map((c) => {
+    const sqlArg = c.ops[0]?.args[0] as { queryChunks?: unknown[] } | undefined;
+    return (sqlArg?.queryChunks ?? [])
+      .map((chunk) => {
+        if (typeof chunk === "string") return chunk;
+        const value = (chunk as { value?: unknown[] } | undefined)?.value;
+        return Array.isArray(value) ? value.filter((v) => typeof v === "string").join("") : "";
+      })
+      .join("");
+  });
+  assert.ok(sqlTexts.some((t) => t.includes("dw_codes") && t.includes("AVAILABLE")), "must reset dw_codes.status back to AVAILABLE");
+  assert.ok(!sqlTexts.some((t) => t.includes("dw_code_locations")), "no raw SQL execute() may ever reference dw_code_locations");
+});
