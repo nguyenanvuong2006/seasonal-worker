@@ -282,6 +282,20 @@ export default function RegistrationsGrid({
   const [newModalOpen, setNewModalOpen] = React.useState(false);
   const [newSel, setNewSel] = React.useState<Record<string, boolean>>({});
   const [newDept, setNewDept] = React.useState("");
+  // MISSION E — Daily Arrangement decision-support preview (đề xuất Recruitment Request,
+  // cảnh báo vượt nhu cầu, gợi ý bộ phận khác đang thiếu người). Chỉ HIỂN THỊ — việc phân
+  // bổ THẬT vẫn tự động chạy nguyên trong autoAllocateInternship() khi PATCH duyệt hồ sơ.
+  type EligibleRequestOption = { requestId: string; requestCode: string; target: number; current: number; balance: number; recommended: boolean };
+  const [arrangementPreview, setArrangementPreview] = React.useState<{
+    recommendedRequest: { requestId: string; requestCode: string; target: number; current: number; balance: number } | null;
+    eligibleRequests: EligibleRequestOption[];
+    unattributedWarning: boolean;
+    projected: { selectedCount: number; projectedTotal: number; overNeed: number } | null;
+    otherDepartments: { deptId: string; deptName: string; target: number; current: number; balance: number }[];
+  } | null>(null);
+  // Recruiter's override — "" nghĩa là dùng đề xuất mặc định (recommendedRequest). Reset mỗi khi
+  // đổi bộ phận để không vô tình mang lựa chọn của bộ phận trước sang bộ phận mới.
+  const [selectedRequestId, setSelectedRequestId] = React.useState("");
   // EMPLOYMENT LIFECYCLE (#7-9, #23) — modal chặn "xếp việc âm thầm" khi ứng viên còn ACTIVE session.
   const [employmentGuard, setEmploymentGuard] = React.useState<{ row: AppRow; pendingPatch: Partial<AppRow> } | null>(null);
   // EMPLOYMENT LIFECYCLE (#11) — modal yêu cầu điều chỉnh ngày nhận việc (không backdate trực tiếp).
@@ -674,6 +688,47 @@ export default function RegistrationsGrid({
   const newInSel = selRows.filter((r) => r.dwMatch === "NEW").length;
   const newApplicants = React.useMemo(() => rows.filter((r) => r.dwMatch === "NEW"), [rows]);
   const newSelIds = Object.keys(newSel).filter((k) => newSel[k]);
+
+  React.useEffect(() => {
+    if (!newDept) {
+      setArrangementPreview(null);
+      setSelectedRequestId("");
+      return;
+    }
+    let cancelled = false;
+    void (async () => {
+      try {
+        const params = new URLSearchParams({ deptId: newDept, count: String(newSelIds.length) });
+        if (selectedRequestId) params.set("requestId", selectedRequestId);
+        const res = await fetch(`/api/planning/arrangement-preview?${params.toString()}`);
+        if (!res.ok || cancelled) return;
+        const data = await res.json();
+        if (!cancelled) setArrangementPreview(data);
+      } catch {
+        /* preview chỉ là hỗ trợ quyết định — lỗi tải không chặn luồng duyệt/xếp việc chính */
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [newDept, newSelIds.length, selectedRequestId]);
+
+  // Đổi bộ phận -> danh sách Request eligible cũ không còn hợp lệ, quay về đề xuất mặc định.
+  React.useEffect(() => {
+    setSelectedRequestId("");
+  }, [newDept]);
+
+  // Khi preview tải xong, hiển thị đúng lựa chọn hiện tại trong dropdown (mặc định = đề xuất) —
+  // tránh lệch giữa `value` thật (rỗng) và option hiển thị đầu tiên của trình duyệt.
+  React.useEffect(() => {
+    if (!arrangementPreview) return;
+    const stillEligible = arrangementPreview.eligibleRequests.some((r) => r.requestId === selectedRequestId);
+    if (!stillEligible) {
+      setSelectedRequestId(arrangementPreview.recommendedRequest?.requestId ?? "");
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [arrangementPreview]);
+
   type RowOutcome = { id: string; cccd: string | null; fullName: string | null; ok: boolean; reason: string };
   const [bulkResult, setBulkResult] = React.useState<{
     title: string;
@@ -683,7 +738,7 @@ export default function RegistrationsGrid({
 
   // BƯỚC A — "Sắp xếp công việc/bộ phận" (Duyệt/Từ chối). KHÔNG đụng DW Data
   // (mục IV trong đề bài — xếp việc và Nhập DW Data là hai hành động tách bạch).
-  const runApprove = async (ids: string[], status: "APPROVED" | "REJECTED", deptId?: string) => {
+  const runApprove = async (ids: string[], status: "APPROVED" | "REJECTED", deptId?: string, requestId?: string | null) => {
     if (ids.length === 0) {
       toast({ title: "Chưa chọn hồ sơ nào", variant: "destructive" });
       return null;
@@ -697,7 +752,7 @@ export default function RegistrationsGrid({
       const res = await fetch("/api/bulk-import", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ ids, departmentId: deptId || null, status }),
+        body: JSON.stringify({ ids, departmentId: deptId || null, status, requestId: requestId || null }),
       });
       const d = await res.json();
       if (!res.ok) {
@@ -792,8 +847,8 @@ export default function RegistrationsGrid({
 
   /** Luồng tiện lợi cho người MỚI: duyệt/xếp việc RỒI nhập DW Data — 2 lệnh gọi API
    *  tách biệt, nối tiếp nhau (không phải 1 hành động gộp ở tầng server). */
-  const handleApproveThenImport = async (ids: string[], deptId?: string) => {
-    const approveRes = await runApprove(ids, "APPROVED", deptId);
+  const handleApproveThenImport = async (ids: string[], deptId?: string, requestId?: string | null) => {
+    const approveRes = await runApprove(ids, "APPROVED", deptId, requestId);
     if (!approveRes) return;
     const approvedIds = approveRes.results.filter((r) => r.ok).map((r) => r.id);
     const dwRes = approvedIds.length > 0 ? await runDwImport(approvedIds) : null;
@@ -1143,13 +1198,51 @@ export default function RegistrationsGrid({
             </select>
           </div>
 
+          {newDept && arrangementPreview && (
+            <div className="space-y-2 rounded-[10px] border border-border bg-surface-hover/60 p-3 text-xs">
+              {arrangementPreview.eligibleRequests.length > 0 ? (
+                <div>
+                  <p className="mb-1 font-semibold text-fg-muted">Recruitment Request (có thể đổi trước khi duyệt)</p>
+                  <select
+                    value={selectedRequestId}
+                    onChange={(e) => setSelectedRequestId(e.target.value)}
+                    className="h-9 w-full rounded-[8px] border border-border-strong bg-surface px-2 text-xs font-medium text-fg outline-none focus:border-primary"
+                  >
+                    {arrangementPreview.eligibleRequests.map((r) => (
+                      <option key={r.requestId} value={r.requestId}>
+                        {r.requestCode} — còn thiếu {r.balance} (hiện có {r.current}/{r.target}){r.recommended ? " · Đề xuất" : ""}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+              ) : (
+                <p className="font-semibold text-warning">
+                  Không có Recruitment Request nào đang mở cho bộ phận này — người được xếp sẽ vẫn được duyệt/xếp việc
+                  bình thường nhưng chưa gắn với Request nào (UNATTRIBUTED).
+                </p>
+              )}
+              {arrangementPreview.projected && arrangementPreview.projected.overNeed > 0 && (
+                <p className="font-semibold text-danger">
+                  Bạn đang xếp {arrangementPreview.projected.selectedCount} người. Projected ={" "}
+                  {arrangementPreview.projected.projectedTotal}. Vượt nhu cầu {arrangementPreview.projected.overNeed}.
+                </p>
+              )}
+              {arrangementPreview.otherDepartments.length > 0 && (
+                <p className="text-fg-muted">
+                  Bộ phận khác đang thiếu:{" "}
+                  {arrangementPreview.otherDepartments.map((d) => `${d.deptName} thiếu ${d.balance}`).join(", ")}.
+                </p>
+              )}
+            </div>
+          )}
+
           <Button
             variant="primary"
             size="xl"
             className="w-full"
             disabled={busy || newSelIds.length === 0}
             loading={busy}
-            onClick={() => handleApproveThenImport(newSelIds, newDept)}
+            onClick={() => handleApproveThenImport(newSelIds, newDept, selectedRequestId || arrangementPreview?.recommendedRequest?.requestId || null)}
           >
             Duyệt & Nhập vào DW Data ({newSelIds.length} người)
           </Button>

@@ -176,12 +176,20 @@ export const PERMISSION_CATALOG: readonly CatalogPermission[] = [
   // Hành chính — Mã số công nhật (mục VI, X)
   { key: "administration.daily_code.view", name: "Xem hàng chờ Mã số công nhật", group: "hanh_chinh" },
   { key: "administration.daily_code.submit", name: "Submit Mã số công nhật hàng loạt", group: "hanh_chinh" },
+  // MISSION E — cấu hình namespace Mã số công nhật nội bộ theo địa điểm (Prefix/Số chữ
+  // số/Separator/Suffix/Số bắt đầu) — quyền ADMIN-level riêng, KHÔNG gộp chung với
+  // administration.daily_code.submit (gán/thu hồi mã hàng ngày) vì đây là cấu hình
+  // ảnh hưởng toàn hệ thống, không phải thao tác vận hành hàng ngày.
+  { key: "dw_code.configure", name: "Cấu hình namespace Mã số công nhật theo địa điểm", group: "hanh_chinh" },
   // Vân tay — IT Code (mục VIII, X)
   { key: "fingerprint.view", name: "Xem hàng chờ IT Code / Vân tay", group: "van_tay" },
   { key: "fingerprint.submit", name: "Submit IT Code hàng loạt", group: "van_tay" },
   // Báo cơm (mục IX, X)
   { key: "meal.view", name: "Xem danh sách Báo cơm", group: "bao_com" },
   { key: "meal.export", name: "Xuất danh sách Báo cơm", group: "bao_com" },
+  // MISSION E — cấu hình giờ chốt Báo cơm (mealCutoffTime) dùng để phân biệt
+  // CANCELLED_BEFORE_CUTOFF / REPORTED_AFTER_MEAL_CUTOFF khi có báo cáo trong ngày.
+  { key: "meal.configure", name: "Cấu hình giờ chốt Báo cơm", group: "bao_com" },
   // AI Admin Copilot (Phase 1) — hỏi đáp dữ liệu hệ thống bằng ngôn ngữ tự nhiên,
   // chỉ ĐỌC (read-only), mỗi tool tự re-check Data Scope của người hỏi.
   // Tên quyền cố tình nêu rõ ranh giới ngay trong 1 dòng (trang /admin/permissions

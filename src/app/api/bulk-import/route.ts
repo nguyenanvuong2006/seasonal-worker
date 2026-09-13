@@ -31,10 +31,16 @@ export async function POST(req: Request) {
   if (!guard.ok) return NextResponse.json({ error: guard.error }, { status: guard.status });
 
   try {
-    const { ids, departmentId, status } = (await req.json()) as {
+    const { ids, departmentId, status, requestId } = (await req.json()) as {
       ids: string[];
       departmentId?: string | null;
       status?: string;
+      /**
+       * MISSION E section 30-42 — Daily Arrangement editable RQ: recruiter's explicit choice
+       * from GET /api/planning/arrangement-preview's candidate list, overriding the deterministic
+       * default. Optional — omit to keep today's auto-recommended behavior unchanged.
+       */
+      requestId?: string | null;
     };
 
     if (!Array.isArray(ids) || ids.length === 0) {
@@ -176,21 +182,38 @@ export async function POST(req: Request) {
           ...(assignmentActor ?? {}),
         })
         .where(inArray(employmentSessions.dailyApplicationId, targets.map((t) => t.id)))
-        .returning({ id: employmentSessions.id, deptId: employmentSessions.deptId, startingDate: employmentSessions.startingDate });
+        .returning({
+          id: employmentSessions.id,
+          dailyApplicationId: employmentSessions.dailyApplicationId,
+          deptId: employmentSessions.deptId,
+          startingDate: employmentSessions.startingDate,
+        });
 
+      // MISSION E — nếu recruiter chọn tường minh 1 Recruitment Request (thay vì để hệ thống tự
+      // đề xuất), requestId đó phải KHỚP với 1 kế hoạch ACTIVE của ĐÚNG bộ phận đang xếp — nếu
+      // không, autoAllocateInternship trả về REQUEST_NOT_ELIGIBLE (không bao giờ âm thầm rơi về
+      // đề xuất mặc định). Việc xếp việc/Employment vẫn thành công bình thường — chỉ phần gắn
+      // Request bị bỏ qua, và ghi rõ lý do cho recruiter thấy trong kết quả trả về.
+      const requestNotEligibleAppIds = new Set<string>();
       if (finalStatus === "APPROVED") {
         for (const s of updatedSessions) {
           const targetDept = s.deptId ?? deptId;
           if (targetDept) {
-            await autoAllocateInternship(s.id, targetDept, s.startingDate, guard.session.username, tx);
+            const outcome = await autoAllocateInternship(s.id, targetDept, s.startingDate, guard.session.username, tx, requestId ?? null);
+            if (!outcome.planningAllocated && outcome.requestSync.status === "REQUEST_NOT_ELIGIBLE" && s.dailyApplicationId) {
+              requestNotEligibleAppIds.add(s.dailyApplicationId);
+            }
           }
         }
       }
 
       for (const t of targets) {
+        const requestWarning = requestNotEligibleAppIds.has(t.id)
+          ? " — Yêu cầu tuyển dụng đã chọn không áp dụng được cho bộ phận này (chưa gắn Request)."
+          : "";
         const reason =
           finalStatus === "APPROVED"
-            ? "Đã duyệt và xếp việc — dùng “Nhập vào DW Data” để hoàn tất bước tiếp theo"
+            ? `Đã duyệt và xếp việc — dùng “Nhập vào DW Data” để hoàn tất bước tiếp theo${requestWarning}`
             : finalStatus === "REJECTED"
               ? "Đã từ chối"
               : "Đã chuyển vào danh sách dự phòng (Waitlist)";
@@ -247,6 +270,7 @@ export async function POST(req: Request) {
       updated: result.updated,
       skipped: result.results.filter((r) => !r.ok).length,
       departmentId: deptId,
+      ...(requestId ? { requestId } : {}),
       // ASSIGNMENT ACTOR AUDIT — safe operator identifiers for the assignment
       // event (username + display name), no PII expansion.
       ...(assignmentActor

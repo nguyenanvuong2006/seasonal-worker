@@ -24,7 +24,14 @@ import { loadModule, serverOnlyStub } from "./test-support/load-module.ts";
 const workforceMovements = makeTable("workforce_movements");
 const employmentSessions = makeTable("employment_sessions");
 const dailyApplications = makeTable("daily_applications");
-const schemaStub = { workforceMovements, employmentSessions, dailyApplications };
+// MISSION E cross-location DW Code review — these tests never configure department.location
+// data, so applyCrossLocationDwCodeTransfer()'s `departments`/`dw_code_locations` selects fall
+// through createFakeDb's default (unhandled select -> []), fromLocation/toLocation stay null,
+// and the new code path early-returns before ever touching dw-code-pool.ts — see the DEDICATED
+// workforce-movements-cross-location.test.ts for the actual cross-location behavior.
+const departments = makeTable("departments");
+const dwCodeLocations = makeTable("dw_code_locations");
+const schemaStub = { workforceMovements, employmentSessions, dailyApplications, departments, dwCodeLocations };
 
 const TODAY = "2026-09-10";
 
@@ -134,6 +141,10 @@ async function loadWith(store: ReturnType<typeof makeStore>) {
         },
       },
       "@/lib/recruitment-kpi": { recomputeStoredRecruitmentBalance: async () => undefined },
+      "@/lib/dw-code-pool": {
+        releaseDwCode: async () => ({ released: false, code: null }),
+        allocateDwCode: async () => ({ ok: false, error: "LOCATION_NOT_FOUND" }),
+      },
       "@/lib/helpers": { todayStr: () => TODAY },
     },
   });

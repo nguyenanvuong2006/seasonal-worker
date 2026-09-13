@@ -2091,3 +2091,231 @@ export type AiConversation = typeof aiConversations.$inferSelect;
 export type NewAiConversation = typeof aiConversations.$inferInsert;
 export type AiConversationMessage = typeof aiConversationMessages.$inferSelect;
 export type NewAiConversationMessage = typeof aiConversationMessages.$inferInsert;
+
+/* ============================================================
+   MISSION E — OPERATIONAL WORKFORCE ORCHESTRATION (2026-09-13)
+   ------------------------------------------------------------
+   Internal DW Code (Mã số công nhật, dw_data.code) and IT Code
+   (dw_data.it_code) were plain free-text varchar columns with zero
+   pool/sequence/assignment-history — audited and confirmed before this
+   mission. dw_data.code / dw_data.it_code remain the READ MIRRORS every
+   existing screen/eligibility rule already reads (daily-code-list.ts,
+   fingerprint-it-code-list.ts, meal-list.ts via isEligibleFor*) — this
+   mission adds APPEND-ONLY pool/assignment-history infrastructure
+   alongside them, written through by the new assignment services.
+   Existing historical dw_data.code/it_code values are left untouched —
+   no forced backfill into the new pool (they may not conform to any
+   prefix scheme).
+   ============================================================ */
+
+/**
+ * One row per operational-code-issuing location. Links to an EXISTING
+ * `organization_units` row (soft ref — no duplicate location master, per
+ * mission section 52) rather than introducing a second location concept.
+ * `nextSequence` is the transaction-safe counter: allocation does
+ * `UPDATE ... SET next_sequence = next_sequence + 1 WHERE id = $1
+ * RETURNING next_sequence` inside the allocating transaction, which is
+ * race-free via Postgres row-level locking — never `MAX(code)+1`.
+ */
+export const dwCodeLocations = pgTable(
+  "dw_code_locations",
+  {
+    id: uuid("id").defaultRandom().primaryKey(),
+    organizationUnitId: uuid("organization_unit_id").notNull(), // tham chiếu mềm -> organization_units.id
+    name: varchar("name", { length: 160 }).notNull(), // snapshot hiển thị — không suy diễn lại từ organization_units mỗi lần
+    prefix: varchar("prefix", { length: 8 }).notNull(), // vd "DR", "DL" — stable, KHÔNG derive lại từ tên
+    sequenceDigits: integer("sequence_digits").notNull().default(5),
+    separator: varchar("separator", { length: 4 }).notNull().default("-"),
+    suffix: varchar("suffix", { length: 8 }).notNull().default("D"),
+    startNumber: integer("start_number").notNull().default(1),
+    nextSequence: integer("next_sequence").notNull().default(1), // atomic counter — xem docblock trên
+    isActive: boolean("is_active").notNull().default(true),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+    updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
+    createdBy: varchar("created_by", { length: 64 }),
+    updatedBy: varchar("updated_by", { length: 64 }),
+  },
+  (t) => [
+    uniqueIndex("dw_code_location_org_unit_uq").on(t.organizationUnitId),
+    uniqueIndex("dw_code_location_prefix_uq").on(t.prefix),
+  ],
+);
+
+/**
+ * One row per DW Code ever generated (the pool). `status` — MISSION E
+ * section 7 lists AVAILABLE -> ASSIGNED -> RELEASED -> AVAILABLE; the
+ * RELEASED step is modeled as an EVENT in dw_code_assignments
+ * (releasedAt/releaseReason), not a separate persistent code state —
+ * a released code becomes immediately AVAILABLE again for reuse, matching
+ * mission section 49's reuse-before-new-sequence policy. RETIRED is a
+ * one-way terminal state for MANUAL_CORRECTION (never reused).
+ */
+export const dwCodes = pgTable(
+  "dw_codes",
+  {
+    id: uuid("id").defaultRandom().primaryKey(),
+    locationId: uuid("location_id").notNull(), // -> dw_code_locations.id
+    sequenceNumber: integer("sequence_number").notNull(),
+    code: varchar("code", { length: 40 }).notNull(), // formatted string, vd "DR00001-D"
+    status: varchar("status", { length: 16 }).notNull().default("AVAILABLE"), // AVAILABLE | ASSIGNED | RETIRED
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [
+    uniqueIndex("dw_code_location_sequence_uq").on(t.locationId, t.sequenceNumber),
+    uniqueIndex("dw_code_code_uq").on(t.code),
+    index("dw_code_location_status_idx").on(t.locationId, t.status),
+  ],
+);
+
+/**
+ * Append-only assignment history for `dw_codes` — mirrors the
+ * `request_allocations` ACTIVE/ENDED pattern (via releasedAt IS NULL /
+ * NOT NULL instead of a status column). Partial unique indexes are the DB
+ * invariant: a code cannot be ASSIGNED to two workers at once, and a
+ * worker cannot hold two ACTIVE DW Code assignments at once.
+ */
+export const dwCodeAssignments = pgTable(
+  "dw_code_assignments",
+  {
+    id: uuid("id").defaultRandom().primaryKey(),
+    codeId: uuid("code_id").notNull(), // -> dw_codes.id
+    workerId: uuid("worker_id").notNull(), // -> worker_profiles.id (denormalized, như request_allocations)
+    employmentSessionId: uuid("employment_session_id").notNull(), // -> employment_sessions.id
+    dwDataId: uuid("dw_data_id").notNull(), // -> dw_data.id — hàng có cột `code` được mirror
+    assignedAt: timestamp("assigned_at", { withTimezone: true }).notNull().defaultNow(),
+    assignedBy: varchar("assigned_by", { length: 64 }).notNull(),
+    releasedAt: timestamp("released_at", { withTimezone: true }),
+    releasedBy: varchar("released_by", { length: 64 }),
+    // NO_SHOW | DECLINED_AT_START | STARTED_THEN_LEFT | EMPLOYMENT_ENDED | CROSS_LOCATION_TRANSFER | MANUAL_CORRECTION
+    releaseReason: varchar("release_reason", { length: 32 }),
+    note: text("note"),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [
+    uniqueIndex("dw_code_assignment_one_active_per_code_uq").on(t.codeId).where(sql`released_at is null`),
+    uniqueIndex("dw_code_assignment_one_active_per_worker_uq").on(t.workerId).where(sql`released_at is null`),
+    index("dw_code_assignment_session_idx").on(t.employmentSessionId),
+    index("dw_code_assignment_dw_data_idx").on(t.dwDataId),
+    index("dw_code_assignment_worker_idx").on(t.workerId),
+  ],
+);
+
+/**
+ * Append-only assignment history for IT Code — independent lifecycle from
+ * DW Code (mission section 8/22): IT Code values are assigned from the
+ * external attendance system, not generated by this app, so there is no
+ * pool/sequence table here — only the assign/release/reuse history.
+ */
+export const itCodeAssignments = pgTable(
+  "it_code_assignments",
+  {
+    id: uuid("id").defaultRandom().primaryKey(),
+    itCode: varchar("it_code", { length: 40 }).notNull(),
+    workerId: uuid("worker_id").notNull(),
+    employmentSessionId: uuid("employment_session_id").notNull(),
+    dwDataId: uuid("dw_data_id").notNull(), // -> dw_data.id — hàng có cột `it_code` được mirror
+    assignedAt: timestamp("assigned_at", { withTimezone: true }).notNull().defaultNow(),
+    assignedBy: varchar("assigned_by", { length: 64 }).notNull(),
+    releasedAt: timestamp("released_at", { withTimezone: true }),
+    releasedBy: varchar("released_by", { length: 64 }),
+    releaseReason: varchar("release_reason", { length: 32 }),
+    note: text("note"),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [
+    uniqueIndex("it_code_assignment_one_active_per_code_uq").on(t.itCode).where(sql`released_at is null`),
+    uniqueIndex("it_code_assignment_one_active_per_worker_uq").on(t.workerId).where(sql`released_at is null`),
+    index("it_code_assignment_session_idx").on(t.employmentSessionId),
+    index("it_code_assignment_dw_data_idx").on(t.dwDataId),
+    index("it_code_assignment_worker_idx").on(t.workerId),
+  ],
+);
+
+/**
+ * Same-day non-start / early-leave lifecycle event (mission sections
+ * 9-21). A NEW standalone table rather than a third `workforce_movements`
+ * movementType — that state machine's ALLOWED_ACTIONS/finalizers are
+ * tightly scoped to RESIGNATION/TRANSFER (per audit), and this repo's own
+ * convention favors additive standalone tables over widening a shared,
+ * high-traffic table. STARTED_THEN_LEFT additionally creates a REAL
+ * `workforce_movements` resignation row (movementId below) so canonical
+ * Quit-counting KPI naturally includes it — never a second counting path.
+ * The `*_ended`/`*_released` booleans are the exact-effect audit trail
+ * required by section 45 (never claim an effect happened silently).
+ * Unique on employmentSessionId = idempotency at the DB level (section
+ * 46): a session can only ever be same-day-reported once.
+ */
+export const sameDayLifecycleEvents = pgTable(
+  "same_day_lifecycle_events",
+  {
+    id: uuid("id").defaultRandom().primaryKey(),
+    dailyApplicationId: uuid("daily_application_id").notNull(),
+    employmentSessionId: uuid("employment_session_id").notNull(),
+    workerId: uuid("worker_id").notNull(),
+    deptId: uuid("dept_id"), // snapshot của bộ phận tại thời điểm báo cáo
+    outcome: varchar("outcome", { length: 24 }).notNull(), // NO_SHOW | DECLINED_AT_START | STARTED_THEN_LEFT
+    eventAt: timestamp("event_at", { withTimezone: true }).notNull(), // thời điểm thực tế manager cung cấp
+    reason: text("reason"),
+    reportedBy: varchar("reported_by", { length: 64 }).notNull(),
+    reportedAt: timestamp("reported_at", { withTimezone: true }).notNull().defaultNow(),
+    // NOT_APPLICABLE | CANCELLED_BEFORE_CUTOFF | REPORTED_AFTER_MEAL_CUTOFF
+    mealAction: varchar("meal_action", { length: 32 }).notNull().default("NOT_APPLICABLE"),
+    dwCodeReleased: boolean("dw_code_released").notNull().default(false),
+    itCodeReleased: boolean("it_code_released").notNull().default(false),
+    requestAllocationEnded: boolean("request_allocation_ended").notNull().default(false),
+    planningAllocationEnded: boolean("planning_allocation_ended").notNull().default(false),
+    movementId: uuid("movement_id"), // -> workforce_movements.id, chỉ set khi STARTED_THEN_LEFT
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [
+    uniqueIndex("same_day_event_session_uq").on(t.employmentSessionId),
+    index("same_day_event_dept_idx").on(t.deptId, t.eventAt),
+    index("same_day_event_worker_idx").on(t.workerId),
+  ],
+);
+
+/** Singleton settings row — mirrors the existing `branding_settings` fixed-id-row pattern. */
+export const mealCutoffSettings = pgTable("meal_cutoff_settings", {
+  id: varchar("id", { length: 20 }).primaryKey().default("default"),
+  cutoffTime: varchar("cutoff_time", { length: 5 }).notNull().default("10:00"), // "HH:MM", Asia/Ho_Chi_Minh wall-clock
+  updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
+  updatedBy: varchar("updated_by", { length: 64 }),
+});
+
+/**
+ * Per-(dailyApplication, date) meal-eligibility exclusion marker (mission
+ * sections 16-18). Additive-only: meal-list.ts's eligibility RULE never
+ * changes (đã nhập DW + có Mã số công nhật, IT Code irrelevant) — this
+ * table only EXCLUDES rows that rule would otherwise include, for a
+ * worker who became NO_SHOW/DECLINED_AT_START/STARTED_THEN_LEFT before
+ * the configured cutoff on that specific business date.
+ */
+export const mealExclusions = pgTable(
+  "meal_exclusions",
+  {
+    id: uuid("id").defaultRandom().primaryKey(),
+    dailyApplicationId: uuid("daily_application_id").notNull(),
+    excludeDate: date("exclude_date").notNull(), // VN business date this exclusion applies to
+    reason: varchar("reason", { length: 32 }).notNull(), // NO_SHOW | DECLINED_AT_START | STARTED_THEN_LEFT | MANUAL_CORRECTION
+    excludedBy: varchar("excluded_by", { length: 64 }).notNull(),
+    excludedAt: timestamp("excluded_at", { withTimezone: true }).notNull().defaultNow(),
+    sameDayEventId: uuid("same_day_event_id"), // -> same_day_lifecycle_events.id, khi có
+  },
+  (t) => [
+    uniqueIndex("meal_exclusion_app_date_uq").on(t.dailyApplicationId, t.excludeDate),
+    index("meal_exclusion_date_idx").on(t.excludeDate),
+  ],
+);
+
+export type DwCodeLocation = typeof dwCodeLocations.$inferSelect;
+export type NewDwCodeLocation = typeof dwCodeLocations.$inferInsert;
+export type DwCode = typeof dwCodes.$inferSelect;
+export type NewDwCode = typeof dwCodes.$inferInsert;
+export type DwCodeAssignment = typeof dwCodeAssignments.$inferSelect;
+export type NewDwCodeAssignment = typeof dwCodeAssignments.$inferInsert;
+export type ItCodeAssignment = typeof itCodeAssignments.$inferSelect;
+export type NewItCodeAssignment = typeof itCodeAssignments.$inferInsert;
+export type SameDayLifecycleEvent = typeof sameDayLifecycleEvents.$inferSelect;
+export type NewSameDayLifecycleEvent = typeof sameDayLifecycleEvents.$inferInsert;
+export type MealExclusion = typeof mealExclusions.$inferSelect;
+export type NewMealExclusion = typeof mealExclusions.$inferInsert;

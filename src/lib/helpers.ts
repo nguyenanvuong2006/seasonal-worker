@@ -20,6 +20,14 @@ export function todayStr(): string {
   return toVNDateStr(new Date());
 }
 
+/** Wall-clock time in Asia/Ho_Chi_Minh as zero-padded "HH:MM" — for time-of-day cutoff comparisons (never a raw UTC hour). */
+export function toVNTimeStr(date: Date): string {
+  const vn = new Date(date.getTime() + (VN_TZ_OFFSET_MINUTES + date.getTimezoneOffset()) * 60000);
+  const h = String(vn.getHours()).padStart(2, "0");
+  const m = String(vn.getMinutes()).padStart(2, "0");
+  return `${h}:${m}`;
+}
+
 export function formatDate(value?: string | null): string {
   if (!value) return "—";
   const [y, m, d] = value.slice(0, 10).split("-");
