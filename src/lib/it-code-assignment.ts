@@ -1,7 +1,7 @@
 import "server-only";
 import { and, eq, isNull } from "drizzle-orm";
 import { db } from "@/db";
-import { dailyApplications, dwData, itCodeAssignments, workerProfiles } from "@/db/schema";
+import { dailyApplications, dwData, employmentSessions, itCodeAssignments, workerProfiles } from "@/db/schema";
 import type { ReleaseReason } from "@/lib/dw-code-pool";
 
 /** Same pattern as dw-code-pool.ts/workforce-request.ts — accepts `db` or an existing transaction so this composes into a larger atomic orchestration. */
@@ -158,5 +158,106 @@ export async function releaseItCode(input: ReleaseItCodeInput, executor: Executo
 
     await clearItCodeMirrors(tx, input.dwDataId, input.workerId, input.dailyApplicationId, input.releasedBy);
     return { released: true, itCode: dw.itCode };
+  }
+}
+
+export type UpdateWorkerBiometricInput = {
+  workerId: string;
+  fingerprintCode: string | null;
+  fingerprintDevice: string | null;
+  fingerprintStatus: string | null;
+  updatedBy: string;
+};
+
+export type UpdateWorkerBiometricResult =
+  | { ok: true; itCodeRoute: "CANONICAL" | "DIRECT_NO_ACTIVE_ENGAGEMENT" }
+  | { ok: false; error: "WORKER_NOT_FOUND" | "IT_CODE_ALREADY_ACTIVE" | "WORKER_ALREADY_HAS_ACTIVE_IT_CODE" };
+
+/**
+ * MISSION F2 section 11/250 — the ADMIN "Biometric" edit routes (PATCH /api/worker-profiles/by-id/
+ * [workerId]/fingerprint and its legacy CCCD-keyed twin PATCH /api/worker-profiles/[cccd]) used to
+ * write `worker_profiles.fingerprint_code` directly — bypassing `it_code_assignments` history
+ * entirely AND never touching the other two mirrors (`dw_data.it_code`, `daily_applications.
+ * it_code`), which is exactly the MISSING_MIRROR/CONFLICTING_VALUES state the diagnostic script
+ * flags. It also silently let one admin edit overwrite an IT Code another worker's assignment was
+ * still actively holding — assignItCode()'s IT_CODE_ALREADY_ACTIVE/WORKER_ALREADY_HAS_ACTIVE_IT_CODE
+ * checks now catch that instead.
+ *
+ * When the worker has an ACTIVE employment session with a linked dw_data row (the same
+ * session/mirror context assignItCode()/releaseItCode() need), the IT Code identity change is
+ * routed through the canonical service — same assign/release/no-op decision as the bulk PATCH
+ * /api/fingerprint/it-code handler. Device/status metadata (not part of the IT Code identity) is
+ * still written directly afterward, preserving this admin tool's existing free-form status/device
+ * override UX.
+ *
+ * When there is no active session or no matching dw_data row, there is no employment context to
+ * attach an assignment-history row to — this falls back to a direct mirror write (matches the
+ * original behavior for that edge case; documented, not silently dropped).
+ */
+export async function updateWorkerBiometric(input: UpdateWorkerBiometricInput, executor: Executor = db): Promise<UpdateWorkerBiometricResult> {
+  if (executor === db) return db.transaction((tx) => updateWorkerBiometric(input, tx));
+  const tx = executor;
+  {
+    const [worker] = await tx
+      .select({ id: workerProfiles.id, cccd: workerProfiles.cccd })
+      .from(workerProfiles)
+      .where(and(eq(workerProfiles.id, input.workerId), isNull(workerProfiles.deletedAt)))
+      .limit(1);
+    if (!worker) return { ok: false, error: "WORKER_NOT_FOUND" as const };
+
+    const [session] = await tx
+      .select({ id: employmentSessions.id, dailyApplicationId: employmentSessions.dailyApplicationId })
+      .from(employmentSessions)
+      .where(and(eq(employmentSessions.workerId, worker.id), eq(employmentSessions.status, "APPROVED"), isNull(employmentSessions.endDate)))
+      .limit(1);
+    const [dw] = await tx
+      .select({ id: dwData.id })
+      .from(dwData)
+      .where(and(eq(dwData.cccd, worker.cccd), isNull(dwData.deletedAt)))
+      .limit(1);
+
+    const itCode = input.fingerprintCode?.trim() || null;
+
+    if (session?.dailyApplicationId && dw) {
+      const actionInput = {
+        employmentSessionId: session.id,
+        dailyApplicationId: session.dailyApplicationId,
+        workerId: worker.id,
+        dwDataId: dw.id,
+        releasedBy: input.updatedBy,
+        releaseReason: "MANUAL_CORRECTION" as const,
+      };
+      const [currentActive] = await tx
+        .select({ itCode: itCodeAssignments.itCode })
+        .from(itCodeAssignments)
+        .where(and(eq(itCodeAssignments.employmentSessionId, session.id), isNull(itCodeAssignments.releasedAt)))
+        .limit(1);
+
+      if (itCode === null) {
+        if (currentActive) await releaseItCode(actionInput, tx);
+      } else if (currentActive?.itCode !== itCode) {
+        if (currentActive) await releaseItCode(actionInput, tx);
+        const assignResult = await assignItCode(
+          { itCode, workerId: worker.id, employmentSessionId: session.id, dwDataId: dw.id, dailyApplicationId: session.dailyApplicationId, cccd: worker.cccd, assignedBy: input.updatedBy },
+          tx,
+        );
+        if (!assignResult.ok) return { ok: false, error: assignResult.error };
+      }
+
+      // Device/status metadata is not part of the IT Code identity assignItCode()/releaseItCode()
+      // manage — write it directly, after the canonical call so it is never clobbered by the
+      // fixed DA_CAP/CHUA_CAP status those functions set on the code-identity mirror fields.
+      await tx
+        .update(workerProfiles)
+        .set({ fingerprintDevice: input.fingerprintDevice, fingerprintStatus: input.fingerprintStatus || "DA_CAP", fingerprintCreatedAt: new Date(), updatedAt: new Date() })
+        .where(eq(workerProfiles.id, worker.id));
+      return { ok: true, itCodeRoute: "CANONICAL" as const };
+    }
+
+    await tx
+      .update(workerProfiles)
+      .set({ fingerprintCode: itCode, fingerprintDevice: input.fingerprintDevice, fingerprintStatus: input.fingerprintStatus || "DA_CAP", fingerprintCreatedAt: new Date(), updatedAt: new Date() })
+      .where(eq(workerProfiles.id, worker.id));
+    return { ok: true, itCodeRoute: "DIRECT_NO_ACTIVE_ENGAGEMENT" as const };
   }
 }
