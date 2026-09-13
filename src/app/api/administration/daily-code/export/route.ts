@@ -1,11 +1,12 @@
 import { NextResponse } from "next/server";
 import { requirePermission, getUserScope, hasPermission, writeAudit } from "@/lib/auth";
 import { scopeAllowsDepartment } from "@/lib/data-scope";
-import { todayStr } from "@/lib/helpers";
+import { formatDate } from "@/lib/helpers";
 import { normalizePersonName } from "@/lib/person-name";
 import { getDailyCodeRows, type DailyCodeRow, type DailyCodeStatusFilter } from "@/lib/daily-code-list";
 import { maskCccd } from "@/lib/daily-intake-workflow";
 import { buildDailyOperationsWorkbook, exportFilenameHeaders } from "@/lib/daily-operations-export";
+import { formatDateRangeLabel, parseOperationalDateRange, rangeFilenameSuffix } from "@/lib/date-range";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -13,17 +14,19 @@ export const dynamic = "force-dynamic";
 /**
  * ADMINISTRATION — "Xuất danh sách nhập mã công nhật" (mục VI). Server
  * enforce điều kiện (DW imported) — KHÔNG export toàn bộ Daily Application
- * rồi để người dùng tự lọc. Nhận CÙNG bộ filter (date/deptId/q/status) với
- * GET /api/administration/daily-code qua getDailyCodeRows dùng chung, để
- * file xuất LUÔN khớp danh sách đang hiển thị trên màn hình. Audit mỗi lần
- * export.
+ * rồi để người dùng tự lọc. Nhận CÙNG bộ filter (from/to/deptId/q/status)
+ * với GET /api/administration/daily-code qua getDailyCodeRows dùng chung,
+ * để file xuất LUÔN khớp danh sách đang hiển thị trên màn hình. Audit mỗi
+ * lần export.
  */
 export async function GET(req: Request) {
   const guard = await requirePermission(["ADMIN", "ADMINISTRATION"], "administration.daily_code.view");
   if (!guard.ok) return NextResponse.json({ error: guard.error }, { status: guard.status });
 
   const url = new URL(req.url);
-  const date = url.searchParams.get("date") || todayStr();
+  const rangeResult = parseOperationalDateRange(url.searchParams);
+  if (!rangeResult.ok) return NextResponse.json({ error: rangeResult.error.code, message: rangeResult.error.message }, { status: 400 });
+  const { range } = rangeResult;
   const deptId = url.searchParams.get("deptId") || null;
   const q = url.searchParams.get("q") || null;
   const status = (url.searchParams.get("status") as DailyCodeStatusFilter | null) || "ALL";
@@ -33,11 +36,11 @@ export async function GET(req: Request) {
   }
   const canViewCccd = await hasPermission(guard.session.role, "privacy.view_cccd");
 
-  const rows = await getDailyCodeRows(date, scope, { deptId, q, status });
+  const rows = await getDailyCodeRows(range, scope, { deptId, q, status });
 
   const buffer = await buildDailyOperationsWorkbook<DailyCodeRow>({
     sheetName: "Nhập mã công nhật",
-    title: `Danh sách nhập mã công nhật — ngày ${date}`,
+    title: `Danh sách nhập mã công nhật — ${formatDateRangeLabel(range, formatDate)}`,
     columns: [
       { header: "STT", width: 6, value: (_r, i) => i + 1 },
       { header: "Họ và tên", width: 28, value: (r) => normalizePersonName(r.fullName) },
@@ -50,7 +53,8 @@ export async function GET(req: Request) {
   });
 
   await writeAudit(guard.session, "EXPORT_DAILY_CODE_LIST", "dw_data", {
-    date,
+    from: range.from,
+    to: range.to,
     deptId,
     q,
     status,
@@ -58,5 +62,5 @@ export async function GET(req: Request) {
     departmentScope: scope,
   }, "EXPORT");
 
-  return new NextResponse(new Uint8Array(buffer), { headers: exportFilenameHeaders("ma-cong-nhat", date) });
+  return new NextResponse(new Uint8Array(buffer), { headers: exportFilenameHeaders("ma-cong-nhat", rangeFilenameSuffix(range)) });
 }

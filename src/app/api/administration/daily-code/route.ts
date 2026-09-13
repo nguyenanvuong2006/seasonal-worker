@@ -5,9 +5,9 @@ import { dailyApplications, dwData } from "@/db/schema";
 import { getUserScope, hasPermission, requirePermission, writeAudit } from "@/lib/auth";
 import { scopeAllowsDepartment } from "@/lib/data-scope";
 import { normalizePersonName } from "@/lib/person-name";
-import { todayStr } from "@/lib/helpers";
 import { maskCccd } from "@/lib/daily-intake-workflow";
 import { getDailyCodeRows, type DailyCodeStatusFilter } from "@/lib/daily-code-list";
+import { parseOperationalDateRange } from "@/lib/date-range";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -17,16 +17,19 @@ export const dynamic = "force-dynamic";
  * Hàng chờ = lao động ĐÃ được Recruiter đưa vào DW Data (dw_imported_at IS NOT
  * NULL) trong ngày đang chọn. Mã số công nhật = dw_data.code (giữ nguyên
  * semantics đã audit — cột này đã được dùng làm mã định danh DW từ trước).
- * Hỗ trợ deptId + q + status — CÙNG bộ filter với GET
+ * Hỗ trợ from/to (range) + deptId + q + status — CÙNG bộ filter với GET
  * /api/administration/daily-code/export để danh sách hiển thị và file xuất
- * luôn khớp nhau (theo đúng mẫu lib/meal-list.ts).
+ * luôn khớp nhau (theo đúng mẫu lib/meal-list.ts). Legacy `date=` vẫn được
+ * hỗ trợ (from=to=date) — GLOBAL DATE RANGE STANDARDIZATION.
  */
 export async function GET(req: Request) {
   const guard = await requirePermission(["ADMIN", "ADMINISTRATION"], "administration.daily_code.view");
   if (!guard.ok) return NextResponse.json({ error: guard.error }, { status: guard.status });
 
   const url = new URL(req.url);
-  const date = url.searchParams.get("date") || todayStr();
+  const rangeResult = parseOperationalDateRange(url.searchParams);
+  if (!rangeResult.ok) return NextResponse.json({ error: rangeResult.error.code, message: rangeResult.error.message }, { status: 400 });
+  const { range } = rangeResult;
   const deptId = url.searchParams.get("deptId") || null;
   const q = url.searchParams.get("q") || null;
   const status = (url.searchParams.get("status") as DailyCodeStatusFilter | null) || "ALL";
@@ -36,7 +39,7 @@ export async function GET(req: Request) {
     return NextResponse.json({ error: "Ngoài phạm vi dữ liệu được cấp." }, { status: 403 });
   }
 
-  const rows = await getDailyCodeRows(date, scope, { deptId, q, status });
+  const rows = await getDailyCodeRows(range, scope, { deptId, q, status });
 
   // BLOCKER #3 — ADMINISTRATION không có privacy.view_cccd theo baseline: KHÔNG
   // được trả CCCD đầy đủ mặc định, phải áp dụng đúng permission hiện có
@@ -48,7 +51,7 @@ export async function GET(req: Request) {
     cccd: maskCccd(r.cccd, canViewCccd) ?? r.cccd,
   }));
 
-  return NextResponse.json({ rows: mapped, date });
+  return NextResponse.json({ rows: mapped, from: range.from, to: range.to });
 }
 
 type SubmitItem = { dailyApplicationId: string; dwDataId: string; code: string };

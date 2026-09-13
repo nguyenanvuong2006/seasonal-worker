@@ -35,7 +35,7 @@ function loadRoute(opts: {
     compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2020, esModuleInterop: true },
   }).outputText;
 
-  const calls: { date: string; scope: string[] | null; filters: Record<string, unknown> }[] = [];
+  const calls: { range: { from: string; to: string }; scope: string[] | null; filters: Record<string, unknown> }[] = [];
   const audits: { action: string; detail: Record<string, unknown> }[] = [];
   const ADMIN_GUARD: Guard = { ok: true, session: { id: "u1", role: "ADMIN", username: "admin1" } };
 
@@ -70,11 +70,24 @@ function loadRoute(opts: {
         return scope.includes(deptId);
       },
     },
-    "@/lib/helpers": { todayStr: () => "2026-08-17" },
+    "@/lib/helpers": { todayStr: () => "2026-08-17", formatDate: (v: string) => v.split("-").reverse().join("/") },
+    "@/lib/date-range": {
+      parseOperationalDateRange: (searchParams: { get(name: string): string | null }) => {
+        const from = searchParams.get("from");
+        const to = searchParams.get("to");
+        const date = searchParams.get("date");
+        if (from || to) return { ok: true, range: { from: from || to, to: to || from } };
+        if (date) return { ok: true, range: { from: date, to: date } };
+        return { ok: true, range: { from: "2026-08-17", to: "2026-08-17" } };
+      },
+      formatDateRangeLabel: (range: { from: string; to: string }, formatDate: (v: string) => string) =>
+        range.from === range.to ? `NGÀY ${formatDate(range.from)}` : `TỪ ${formatDate(range.from)} ĐẾN ${formatDate(range.to)}`,
+      rangeFilenameSuffix: (range: { from: string; to: string }) => (range.from === range.to ? range.from : `${range.from}_${range.to}`),
+    },
     "@/lib/person-name": { normalizePersonName: (s: string) => s },
     "@/lib/fingerprint-it-code-list": {
-      getFingerprintItCodeRows: async (date: string, scope: string[] | null, filters: Record<string, unknown>) => {
-        calls.push({ date, scope, filters });
+      getFingerprintItCodeRows: async (range: { from: string; to: string }, scope: string[] | null, filters: Record<string, unknown>) => {
+        calls.push({ range, scope, filters });
         return opts.rows ?? [];
       },
     },
@@ -147,29 +160,33 @@ test("deptId ngoài Data Scope -> 403, KHÔNG gọi getFingerprintItCodeRows, KH
   assert.equal(calls.length, 0, "fail-closed: không được truy vấn/xuất dữ liệu ngoài Data Scope");
 });
 
-test("deptId + q + filter hợp lệ được truyền đúng xuống getFingerprintItCodeRows — CÙNG hàm với GET /api/fingerprint/it-code", async () => {
+test("deptId + q + classification + itCodeStatus hợp lệ được truyền đúng xuống getFingerprintItCodeRows — CÙNG hàm với GET /api/fingerprint/it-code", async () => {
   const { mod, calls, audits } = loadRoute({
     scope: ["dept-A", "dept-B"],
     rows: [{ dailyApplicationId: "app-1", cccd: "010000000001", fullName: "Nguyen Van A", deptId: "dept-A", deptName: "Dept A", groupName: null, code: "CN-001", itCode: "IT-001" }],
   });
   const GET = mod.GET as (req: Request) => Promise<{ status: number }>;
-  const res = await GET(makeReq("http://localhost/api/fingerprint/it-code/export?date=2026-08-17&deptId=dept-A&q=Nguyen&filter=DONE"));
+  const res = await GET(makeReq("http://localhost/api/fingerprint/it-code/export?from=2026-09-01&to=2026-09-13&deptId=dept-A&q=Nguyen&classification=RETURNING&itCodeStatus=HAS"));
 
   assert.equal(res.status, 200);
   assert.equal(calls.length, 1);
-  assert.equal(calls[0].date, "2026-08-17");
+  assert.equal(calls[0].range.from, "2026-09-01");
+  assert.equal(calls[0].range.to, "2026-09-13");
   assert.equal(calls[0].filters.deptId, "dept-A");
   assert.equal(calls[0].filters.q, "Nguyen");
-  assert.equal(calls[0].filters.status, "DONE", "route param tên là 'filter' nhưng phải truyền vào getFingerprintItCodeRows như filters.status");
+  assert.equal(calls[0].filters.classification, "RETURNING", "classification phải là bộ lọc ĐỘC LẬP với itCodeStatus");
+  assert.equal(calls[0].filters.itCodeStatus, "HAS");
   assert.equal(audits.length, 1, "phải audit mỗi lần export");
   assert.equal(audits[0].detail.deptId, "dept-A");
-  assert.equal(audits[0].detail.filter, "DONE");
+  assert.equal(audits[0].detail.classification, "RETURNING");
+  assert.equal(audits[0].detail.itCodeStatus, "HAS");
 });
 
-test("filter mặc định là ALL khi không truyền trên query string", async () => {
+test("classification/itCodeStatus mặc định là ALL khi không truyền trên query string", async () => {
   const { mod, calls } = loadRoute({ scope: null });
   const GET = mod.GET as (req: Request) => Promise<{ status: number }>;
   await GET(makeReq("http://localhost/api/fingerprint/it-code/export?date=2026-08-17"));
 
-  assert.equal(calls[0].filters.status, "ALL");
+  assert.equal(calls[0].filters.classification, "ALL");
+  assert.equal(calls[0].filters.itCodeStatus, "ALL");
 });

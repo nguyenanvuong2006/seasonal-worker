@@ -1,8 +1,9 @@
 import "server-only";
-import { and, desc, eq, inArray, isNotNull, isNull } from "drizzle-orm";
+import { and, desc, eq, gte, inArray, isNotNull, isNull, lte } from "drizzle-orm";
 import { db } from "@/db";
 import { dailyApplications, departments, dwData } from "@/db/schema";
 import { isEligibleForMealExport } from "@/lib/daily-intake-workflow";
+import type { DateRange } from "@/lib/date-range";
 
 export type MealEligibleRow = {
   dailyApplicationId: string;
@@ -33,20 +34,29 @@ export type MealListFilters = {
  * CODE làm blocker Meal). "KHÔNG ĐỦ ĐIỀU KIỆN" (status=INELIGIBLE) là điều
  * kiện phủ định AN TOÀN của cùng quy tắc đó — KHÔNG phải một khái niệm
  * nghiệp vụ mới: đã nhập DW (tức đã ở trong hàng chờ vận hành trong ngày)
- * nhưng chưa có Mã số công nhật. Nguồn dùng CHUNG cho cả list (GET
- * /api/meal) và export (GET /api/meal/export) — CÙNG bộ filters
- * (date/deptId/q/status) để danh sách hiển thị và file xuất luôn khớp nhau
- * (mục IX: "không export toàn bộ Daily Application rồi để người dùng tự lọc").
+ * nhưng chưa có Mã số công nhật. Đăng ký trong khoảng ngày đang chọn (GLOBAL
+ * DATE RANGE STANDARDIZATION — cột `daily_applications.reg_date`, DATE
+ * column, so >= / <= is exact, no timestamp half-open boundary needed).
+ * Nguồn dùng CHUNG cho cả list (GET /api/meal) và export (GET
+ * /api/meal/export) — CÙNG bộ filters (range/deptId/q/status) để danh sách
+ * hiển thị và file xuất luôn khớp nhau (mục IX: "không export toàn bộ Daily
+ * Application rồi để người dùng tự lọc").
+ *
+ * ENTITY/DEDUP KEY: one row per daily_applications.id — same rationale as
+ * fingerprint-it-code-list.ts / daily-code-list.ts. Eligibility formula
+ * itself (`isEligibleForMealExport`) is UNCHANGED by the range — the range
+ * only changes which registrations are considered.
  */
 export async function getMealEligibleWorkers(
-  date: string,
+  range: DateRange,
   scope: string[] | null,
   filters: MealListFilters = {},
 ): Promise<MealEligibleRow[]> {
   if (scope !== null && scope.length === 0) return [];
 
   const conditions = [
-    eq(dailyApplications.regDate, date),
+    gte(dailyApplications.regDate, range.from),
+    lte(dailyApplications.regDate, range.to),
     isNull(dailyApplications.deletedAt),
     isNotNull(dailyApplications.dwImportedAt),
   ];

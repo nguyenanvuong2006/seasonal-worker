@@ -2,7 +2,9 @@
 
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { Badge, Button, Card, EmptyState, ErrorState, Input, MetricStrip, MetricStripItem, PageHeader, SkeletonTable } from "@/components/ui";
-import { formatDate, todayStr } from "@/lib/helpers";
+import { formatDate } from "@/lib/helpers";
+import { DateRangeFilter } from "@/components/date-range-filter";
+import { buildDateRangePreset, type DateRange } from "@/lib/date-range";
 import { Calendar, CheckCircle2, Download, RefreshCw, Search, UtensilsCrossed, XCircle } from "lucide-react";
 
 type Row = {
@@ -23,7 +25,7 @@ type StatusFilter = "ALL" | "ELIGIBLE" | "INELIGIBLE";
 const isEligible = (r: Row) => !!(r.code && r.code.trim());
 
 export default function MealExportPage() {
-  const [date, setDate] = useState(todayStr());
+  const [range, setRange] = useState<DateRange>(() => buildDateRangePreset("TODAY"));
   const [deptId, setDeptId] = useState("");
   const [q, setQ] = useState("");
   const [status, setStatus] = useState<StatusFilter>("ELIGIBLE");
@@ -47,11 +49,11 @@ export default function MealExportPage() {
   // Luôn tải TOÀN BỘ (status=ALL, server-authorized theo date/deptId/q) — bộ
   // lọc trạng thái áp dụng ở client trên CÙNG tập dữ liệu, để KPI và danh
   // sách hiển thị luôn nhất quán (bấm 1 thẻ KPI không cần gọi lại API).
-  const load = useCallback(async (d: string, dept: string, query: string) => {
+  const load = useCallback(async (r: DateRange, dept: string, query: string) => {
     setLoading(true);
     setError(null);
     try {
-      const params = new URLSearchParams({ date: d, status: "ALL" });
+      const params = new URLSearchParams({ from: r.from, to: r.to, status: "ALL" });
       if (dept) params.set("deptId", dept);
       if (query.trim()) params.set("q", query.trim());
       const res = await fetch(`/api/meal?${params.toString()}`);
@@ -71,13 +73,13 @@ export default function MealExportPage() {
   }, []);
 
   useEffect(() => {
-    void load(date, deptId, q);
+    void load(range, deptId, q);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [date, deptId]);
+  }, [range.from, range.to, deptId]);
 
   // Tìm nhanh: debounce để không gọi API theo từng ký tự gõ.
   useEffect(() => {
-    const timer = setTimeout(() => void load(date, deptId, q), 350);
+    const timer = setTimeout(() => void load(range, deptId, q), 350);
     return () => clearTimeout(timer);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [q]);
@@ -96,7 +98,7 @@ export default function MealExportPage() {
   }, [rows, status]);
 
   const exportHref = (() => {
-    const params = new URLSearchParams({ date, status });
+    const params = new URLSearchParams({ from: range.from, to: range.to, status });
     if (deptId) params.set("deptId", deptId);
     if (q.trim()) params.set("q", q.trim());
     return `/api/meal/export?${params.toString()}`;
@@ -111,18 +113,16 @@ export default function MealExportPage() {
 
       <MetricStrip
         items={[
-          <MetricStripItem key="total" icon={<UtensilsCrossed className="h-4 w-4" />} value={stats.total} label="Đã nhập DW" context={formatDate(date)} tone="primary" onClick={() => setStatus("ALL")} active={status === "ALL"} />,
+          <MetricStripItem key="total" icon={<UtensilsCrossed className="h-4 w-4" />} value={stats.total} label="Đã nhập DW" tone="primary" onClick={() => setStatus("ALL")} active={status === "ALL"} />,
           <MetricStripItem key="eligible" icon={<CheckCircle2 className="h-4 w-4" />} value={stats.eligible} label="Đủ điều kiện" tone="success" onClick={() => setStatus("ELIGIBLE")} active={status === "ELIGIBLE"} />,
           <MetricStripItem key="ineligible" icon={<XCircle className="h-4 w-4" />} value={stats.ineligible} label="Không đủ điều kiện" tone="warning" onClick={() => setStatus("INELIGIBLE")} active={status === "INELIGIBLE"} />,
         ]}
       />
 
       <Card className="p-3">
-        <div className="flex flex-wrap items-end gap-2.5">
-          <div>
-            <p className="mb-1 text-[11px] font-semibold text-fg-muted">Ngày</p>
-            <Input type="date" value={date} onChange={(e) => setDate(e.target.value)} className="h-10 w-40" />
-          </div>
+        <div className="flex flex-col gap-3">
+          <DateRangeFilter value={range} onChange={setRange} />
+          <div className="flex flex-wrap items-end gap-2.5">
           <div>
             <p className="mb-1 text-[11px] font-semibold text-fg-muted">Bộ phận</p>
             <select
@@ -151,10 +151,10 @@ export default function MealExportPage() {
               <option value="INELIGIBLE">Không đủ điều kiện</option>
             </select>
           </div>
-          <Button variant="outline" className="h-10" onClick={() => setDate(todayStr())}>
+          <Button variant="outline" className="h-10" onClick={() => setRange(buildDateRangePreset("TODAY"))}>
             <Calendar className="h-4 w-4" /> Về hôm nay
           </Button>
-          <Button variant="outline" className="h-10" onClick={() => void load(date, deptId, q)}>
+          <Button variant="outline" className="h-10" onClick={() => void load(range, deptId, q)}>
             <RefreshCw className={loading ? "h-4 w-4 animate-spin" : "h-4 w-4"} /> Tải lại
           </Button>
           <div className="min-w-[180px] flex-1">
@@ -170,6 +170,7 @@ export default function MealExportPage() {
           >
             <Download className="h-4 w-4" /> Xuất danh sách báo cơm
           </a>
+          </div>
         </div>
       </Card>
 
@@ -179,7 +180,7 @@ export default function MealExportPage() {
             <SkeletonTable rows={6} cols={6} />
           </div>
         ) : error ? (
-          <ErrorState description={error} onRetry={() => void load(date, deptId, q)} />
+          <ErrorState description={error} onRetry={() => void load(range, deptId, q)} />
         ) : !displayRows || displayRows.length === 0 ? (
           <EmptyState
             title="Không có lao động nào phù hợp bộ lọc"

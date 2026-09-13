@@ -46,6 +46,14 @@ export async function GET(req: Request) {
       status: url.searchParams.get("status") || undefined,
       requester: url.searchParams.get("requester") || undefined,
       searchQuery: url.searchParams.get("q") || undefined,
+      // GLOBAL DATE RANGE STANDARDIZATION — phải nhận CÙNG bộ filter khoảng
+      // ngày (requestedFrom/To, expectedFrom/To) với GET
+      // /api/recruitment-requests, nếu không file xuất sẽ lệch khỏi danh
+      // sách đang lọc trên UI.
+      requestedFrom: url.searchParams.get("requestedFrom") || undefined,
+      requestedTo: url.searchParams.get("requestedTo") || undefined,
+      expectedFrom: url.searchParams.get("expectedFrom") || undefined,
+      expectedTo: url.searchParams.get("expectedTo") || undefined,
       scope,
     },
     2000,
