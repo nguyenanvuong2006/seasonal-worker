@@ -19,12 +19,14 @@ import {
 
 const allKeys = PERMISSION_CATALOG.map((p) => p.key);
 
-test("catalog: ~42-80 permissions, mỗi key duy nhất", () => {
+test("catalog: ~42-90 permissions, mỗi key duy nhất", () => {
   // Mục X (Workflow tiếp nhận — tách vai trò) thêm 7 quyền mới: dw.import_from_registration
   // + administration.daily_code.{view,submit} + fingerprint.{view,submit} + meal.{view,export}.
   // (KHÔNG có key ".edit" riêng — backend chỉ enforce ".submit", xem mục V blocker #5.)
   // AI Admin Copilot (Phase 1) thêm 1 quyền mới: ai_copilot.view.
-  assert.ok(allKeys.length >= 40 && allKeys.length <= 80, `expected 40-80 permissions, got ${allKeys.length}`);
+  // Workforce Data Management (Mission D) thêm 6 quyền mới: data_management.{view,import,
+  // reset_it_code,reset_operational,reset_workforce,factory_reset}.
+  assert.ok(allKeys.length >= 40 && allKeys.length <= 90, `expected 40-90 permissions, got ${allKeys.length}`);
   assert.equal(new Set(allKeys).size, allKeys.length, "permission keys must be unique");
 });
 
@@ -33,7 +35,7 @@ test("catalog: mỗi permission thuộc đúng 1 nhóm đã khai báo", () => {
   assert.equal(groupKeys.size, PERMISSION_GROUPS.length, "group keys must be unique");
   // 17 nhóm gốc + 3 nhóm mới (mục X): hanh_chinh, van_tay, bao_com + 1 nhóm mới (AI Admin
   // Copilot Phase 1): ai_copilot.
-  assert.equal(PERMISSION_GROUPS.length, 21, "21 nhóm quyền mặc định (bao gồm document_merge + employment + workflow tiếp nhận + ai_copilot)");
+  assert.equal(PERMISSION_GROUPS.length, 22, "22 nhóm quyền mặc định (bao gồm document_merge + employment + workflow tiếp nhận + ai_copilot + quan_ly_du_lieu)");
   for (const p of PERMISSION_CATALOG) {
     assert.ok(groupKeys.has(p.group), `permission ${p.key} has unknown group ${p.group}`);
   }

@@ -17,6 +17,8 @@ import {
 import { formatDate, todayStr } from "@/lib/helpers";
 import { Calendar, CheckCircle2, Download, RefreshCw, ScanFace, Search } from "lucide-react";
 
+type Classification = "NEW" | "RETURNING" | "TRANSFERRED";
+
 type Row = {
   dailyApplicationId: string;
   cccd: string;
@@ -29,10 +31,17 @@ type Row = {
   itCode: string | null;
   itCodeUpdatedAt: string | null;
   itCodeUpdatedBy: string | null;
+  classification: Classification | null;
 };
 
 type DeptOption = { id: string; deptName: string; groupName: string | null };
-type FilterMode = "ALL" | "MISSING" | "DONE";
+type FilterMode = "ALL" | "MISSING" | "DONE" | "NEW" | "RETURNING" | "TRANSFERRED";
+
+const CLASSIFICATION_LABELS: Record<Classification, string> = {
+  NEW: "Công nhật mới",
+  RETURNING: "Cũ quay lại",
+  TRANSFERRED: "Cũ thuyên chuyển",
+};
 
 const hasItCode = (r: Row) => !!(r.itCode && r.itCode.trim());
 
@@ -111,6 +120,9 @@ export default function FingerprintItCodePage() {
     if (!rows) return rows;
     if (filterMode === "MISSING") return rows.filter((r) => !hasItCode(r));
     if (filterMode === "DONE") return rows.filter(hasItCode);
+    if (filterMode === "NEW" || filterMode === "RETURNING" || filterMode === "TRANSFERRED") {
+      return rows.filter((r) => r.classification === filterMode);
+    }
     return rows;
   }, [rows, filterMode]);
 
@@ -197,6 +209,9 @@ export default function FingerprintItCodePage() {
               className="h-10 rounded-[10px] border border-border-strong bg-surface px-3 text-[13px] font-medium text-fg outline-none focus:border-primary focus:ring-2 focus:ring-primary/15"
             >
               <option value="ALL">Tất cả</option>
+              <option value="NEW">Công nhật mới</option>
+              <option value="RETURNING">Công nhật cũ quay lại</option>
+              <option value="TRANSFERRED">Công nhật cũ thuyên chuyển</option>
               <option value="MISSING">Chưa có IT CODE</option>
               <option value="DONE">Đã có IT CODE</option>
             </select>
@@ -255,6 +270,7 @@ export default function FingerprintItCodePage() {
                   <th className="px-3 py-2.5 text-left text-[10px] font-bold uppercase text-primary">Họ và tên</th>
                   <th className="px-3 py-2.5 text-left text-[10px] font-bold uppercase text-primary">CCCD</th>
                   <th className="px-3 py-2.5 text-left text-[10px] font-bold uppercase text-primary">Bộ phận</th>
+                  <th className="px-3 py-2.5 text-left text-[10px] font-bold uppercase text-primary">Phân loại</th>
                   <th className="px-3 py-2.5 text-left text-[10px] font-bold uppercase text-primary">IT CODE</th>
                   <th className="px-3 py-2.5 text-left text-[10px] font-bold uppercase text-primary">Trạng thái</th>
                 </tr>
@@ -276,6 +292,15 @@ export default function FingerprintItCodePage() {
                     <td className="px-3 py-1.5 text-[12px] text-fg-secondary">
                       {r.deptName ?? "—"}
                       {r.groupName ? ` — ${r.groupName}` : ""}
+                    </td>
+                    <td className="px-3 py-1.5 text-[12px]">
+                      {r.classification ? (
+                        <Badge tone={r.classification === "TRANSFERRED" ? "blue" : r.classification === "RETURNING" ? "amber" : "green"}>
+                          {CLASSIFICATION_LABELS[r.classification]}
+                        </Badge>
+                      ) : (
+                        "—"
+                      )}
                     </td>
                     <td className="px-3 py-1.5">
                       <Input
