@@ -220,6 +220,18 @@ async function finalizeTransferEffect(tx: Executor, movement: MovementForFinaliz
  * Nếu thiếu dữ liệu location ở 1 trong 2 đầu, KHÔNG đoán — giữ nguyên mã (an toàn hơn thu hồi
  * nhầm mã của người đang làm việc bình thường).
  */
+/**
+ * MISSION F section 18 fix — precondition order matters: this function used to call
+ * `releaseDwCode()` FIRST and only check destination-config readiness AFTER, so a transfer to a
+ * location with no (or inactive) DW Code namespace would release the worker's old code and then
+ * simply return, leaving them with NO code at all — a real destructive bug, not a hypothetical.
+ * Every precondition that can make the "assign the new code" half fail is now checked FIRST
+ * (read-only) and the function returns WITHOUT touching anything if any of them fail — the old
+ * code is only ever released once we already know the new one can be assigned right after, in the
+ * same transaction. This preserves the original no-op semantics for a worker who currently holds
+ * no active code (releaseDwCode's own idempotent no-op still applies), while eliminating the
+ * partial-release window for every other case.
+ */
 async function applyCrossLocationDwCodeTransfer(
   tx: Executor,
   movement: MovementForFinalize,
@@ -233,6 +245,21 @@ async function applyCrossLocationDwCodeTransfer(
   const toLocation = toDept?.location?.trim() || null;
   if (!fromLocation || !toLocation || fromLocation === toLocation) return;
 
+  if (!currentSession.dailyApplicationId) return;
+  const [app] = await tx
+    .select({ dwId: dailyApplications.dwId })
+    .from(dailyApplications)
+    .where(eq(dailyApplications.id, currentSession.dailyApplicationId))
+    .limit(1);
+  if (!app?.dwId) return; // Chưa có DW Data — không thể cấp Mã số công nhật, KHÔNG được release mã cũ.
+
+  const [destLocation] = await tx
+    .select({ id: dwCodeLocations.id, isActive: dwCodeLocations.isActive })
+    .from(dwCodeLocations)
+    .where(sql`lower(trim(${dwCodeLocations.name})) = lower(trim(${toLocation}))`)
+    .limit(1);
+  if (!destLocation?.isActive) return; // Chưa cấu hình namespace mã cho địa điểm đích — không tự đoán, KHÔNG được release mã cũ.
+
   const released = await releaseDwCode(
     {
       employmentSessionId: currentSession.id,
@@ -243,26 +270,12 @@ async function applyCrossLocationDwCodeTransfer(
     tx,
   );
   if (!released.released) return; // Không có mã DW nào đang active — không có gì để cấp lại.
-  if (!currentSession.dailyApplicationId) return;
-
-  const [app] = await tx
-    .select({ dwId: dailyApplications.dwId })
-    .from(dailyApplications)
-    .where(eq(dailyApplications.id, currentSession.dailyApplicationId))
-    .limit(1);
-  if (!app?.dwId) return; // Chưa có DW Data — không thể cấp Mã số công nhật.
-
-  const [destLocation] = await tx
-    .select({ id: dwCodeLocations.id, isActive: dwCodeLocations.isActive })
-    .from(dwCodeLocations)
-    .where(sql`lower(trim(${dwCodeLocations.name})) = lower(trim(${toLocation}))`)
-    .limit(1);
-  if (!destLocation?.isActive) return; // Chưa cấu hình namespace mã cho địa điểm đích — không tự đoán.
 
   // WORKER_ALREADY_HAS_ACTIVE_CODE chỉ có thể xảy ra nếu hàm này chạy lại cho ĐÚNG movement đã
   // áp dụng — không xảy ra trong luồng bình thường (lifecycleAppliedAt chỉ được set 1 lần bởi
-  // đúng 1 trong 2 call site). Bỏ qua thay vì throw để không rollback phần Employment/Request/
-  // Planning đã áp dụng đúng ở trên.
+  // đúng 1 trong 2 call site). Nếu allocate vẫn thất bại ở đây, toàn bộ transaction bên ngoài
+  // (finalizeTransferEffect chạy trong 1 transaction chung) vẫn còn COMMIT bình thường — chấp
+  // nhận được vì mọi precondition đã kiểm tra xong ở trên, đây chỉ còn là race lý thuyết.
   await allocateDwCode(
     { locationId: destLocation.id, workerId: movement.workerId, employmentSessionId: currentSession.id, dwDataId: app.dwId, assignedBy: actorUsername },
     tx,

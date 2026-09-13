@@ -65,6 +65,32 @@
  * "current workforce" state from Master DW without any record of why.
  * Conclusion: KEEP dw_data coupled inside WORKFORCE (no change) — this is a
  * real FK/business dependency, not a naming artifact.
+ *
+ * MISSION E TABLES — OPERATIONAL CODE GO-LIVE PREP (mandatory fix, this
+ * mission): the migration itself (migrations/2026-09-13-operational-workforce-
+ * orchestration.sql) declares REAL Postgres `REFERENCES ... ON DELETE
+ * RESTRICT` constraints from dw_code_assignments/it_code_assignments/
+ * same_day_lifecycle_events to worker_profiles/employment_sessions/dw_data/
+ * daily_applications (RESTRICT applies to every row, released or not — there
+ * is no partial/conditional FK). Before this fix, none of the 7 Mission E
+ * tables appeared anywhere in this file — the very first WORKFORCE or
+ * ALL_BUSINESS_DATA reset run against Production data that includes ANY
+ * worker who ever held a DW/IT code assignment would hit a hard FK violation
+ * mid-transaction and fail outright (not a silent orphan — an aborted
+ * reset). Fixed by deleting the 4 worker/session/dw_data/daily_application-
+ * referencing history tables BEFORE their referenced rows, in the same
+ * WORKFORCE/ALL_BUSINESS_DATA scopes that already do this for
+ * workforce_movements/employment_sessions. `dw_code_locations`/`dw_codes`
+ * (the location config + code pool) are deliberately NOT deleted — they are
+ * per-LOCATION system configuration, the same category as departments/
+ * organization_units, which this reset already preserves — but a code left
+ * `ASSIGNED` with its owning assignment row about to be deleted would be
+ * stranded forever (dw-code-pool.ts's reuse query only ever selects
+ * `status = 'AVAILABLE'`), so the WORKFORCE/ALL_BUSINESS_DATA scopes also
+ * reset every `dw_codes.status` back to AVAILABLE as part of the same
+ * transaction (dw_code_pool_reset) — the pool's own numbering/config
+ * survives, only its per-code ASSIGNED state does not, matching "worker data
+ * reset" without touching "location config."
  */
 
 export const RESET_SCOPES = ["IT_CODE", "RECRUITMENT_OPERATIONS", "PLANNING", "WORKFORCE", "ALL_BUSINESS_DATA"] as const;
@@ -84,6 +110,11 @@ export type ResetDomainKey =
   | "planning_allocations"
   | "start_date_corrections"
   | "workforce_movements"
+  | "dw_code_assignments"
+  | "it_code_assignment_history"
+  | "same_day_lifecycle_events"
+  | "meal_exclusions"
+  | "dw_code_pool_reset"
   | "employment_sessions"
   | "daily_applications"
   | "worker_profiles"
@@ -105,6 +136,14 @@ const CANONICAL_DOMAIN_ORDER: ResetDomainKey[] = [
   "planning_allocations",
   "start_date_corrections",
   "workforce_movements",
+  // Mission E history tables — real FK RESTRICT to worker_profiles/
+  // employment_sessions/dw_data/daily_applications (see docblock above) —
+  // must delete before those rows, same as workforce_movements above.
+  "dw_code_assignments",
+  "it_code_assignment_history",
+  "same_day_lifecycle_events",
+  "meal_exclusions",
+  "dw_code_pool_reset",
   "employment_sessions",
   "daily_applications",
   "worker_profiles",
@@ -124,6 +163,11 @@ export const RESET_DOMAIN_META: Record<ResetDomainKey, ResetDomainMeta> = {
   planning_allocations: { key: "planning_allocations", table: "planning_allocations", label: "Phân bổ Planning", kind: "DELETE_ALL_ROWS" },
   start_date_corrections: { key: "start_date_corrections", table: "start_date_corrections", label: "Yêu cầu điều chỉnh ngày nhận việc", kind: "DELETE_ALL_ROWS" },
   workforce_movements: { key: "workforce_movements", table: "workforce_movements", label: "Nghỉ việc / Thuyên chuyển", kind: "DELETE_ALL_ROWS" },
+  dw_code_assignments: { key: "dw_code_assignments", table: "dw_code_assignments", label: "Lịch sử gán Mã DW nội bộ", kind: "DELETE_ALL_ROWS" },
+  it_code_assignment_history: { key: "it_code_assignment_history", table: "it_code_assignments", label: "Lịch sử gán IT Code (bảng lịch sử mới)", kind: "DELETE_ALL_ROWS" },
+  same_day_lifecycle_events: { key: "same_day_lifecycle_events", table: "same_day_lifecycle_events", label: "Sự kiện báo cáo trong ngày (NO_SHOW/Bỏ về)", kind: "DELETE_ALL_ROWS" },
+  meal_exclusions: { key: "meal_exclusions", table: "meal_exclusions", label: "Loại trừ báo cơm", kind: "DELETE_ALL_ROWS" },
+  dw_code_pool_reset: { key: "dw_code_pool_reset", table: "dw_codes", label: "Đặt lại trạng thái pool Mã DW nội bộ về AVAILABLE (giữ nguyên cấu hình địa điểm/số thứ tự)", kind: "NULL_COLUMNS" },
   employment_sessions: { key: "employment_sessions", table: "employment_sessions", label: "Employment Sessions", kind: "DELETE_ALL_ROWS" },
   daily_applications: { key: "daily_applications", table: "daily_applications", label: "Daily Application (đăng ký)", kind: "DELETE_ALL_ROWS" },
   worker_profiles: { key: "worker_profiles", table: "worker_profiles", label: "Hồ sơ lao động (Worker Profiles)", kind: "DELETE_ALL_ROWS" },
@@ -135,7 +179,11 @@ export const RESET_DOMAIN_META: Record<ResetDomainKey, ResetDomainMeta> = {
 };
 
 const SCOPE_DOMAINS: Record<ResetScope, ResetDomainKey[]> = {
-  IT_CODE: ["it_code_worker_profiles", "it_code_dw_data", "it_code_daily_applications"],
+  // it_code_assignment_history included: an IT_CODE reset clears the 3 mirrors,
+  // so a stale ACTIVE it_code_assignments row (which is DW-code-independent,
+  // never touches worker_profiles/employment_sessions/dw_data rows) would
+  // otherwise contradict the freshly-cleared mirrors it's supposed to describe.
+  IT_CODE: ["it_code_worker_profiles", "it_code_dw_data", "it_code_daily_applications", "it_code_assignment_history"],
   RECRUITMENT_OPERATIONS: ["request_allocation_overrides", "request_allocation_history", "request_allocations", "request_comments", "request_kpi_cache"],
   PLANNING: ["planning_allocations"],
   WORKFORCE: [
@@ -147,6 +195,11 @@ const SCOPE_DOMAINS: Record<ResetScope, ResetDomainKey[]> = {
     "planning_allocations",
     "start_date_corrections",
     "workforce_movements",
+    "dw_code_assignments",
+    "it_code_assignment_history",
+    "same_day_lifecycle_events",
+    "meal_exclusions",
+    "dw_code_pool_reset",
     "employment_sessions",
     "daily_applications",
     "worker_profiles",
@@ -161,6 +214,11 @@ const SCOPE_DOMAINS: Record<ResetScope, ResetDomainKey[]> = {
     "planning_allocations",
     "start_date_corrections",
     "workforce_movements",
+    "dw_code_assignments",
+    "it_code_assignment_history",
+    "same_day_lifecycle_events",
+    "meal_exclusions",
+    "dw_code_pool_reset",
     "employment_sessions",
     "daily_applications",
     "worker_profiles",
@@ -186,6 +244,8 @@ export const RESET_PRESERVED_DOMAINS: readonly string[] = [
   "Planning column configuration (planning_column_configs)",
   "Document Merge templates + merge job history + issued candidate documents + consent evidence (candidate_documents, document_confirmations, candidate_access_sessions)",
   "Workflow/Rule engine configuration, notifications, branding, scheduled jobs",
+  "DW Code location configuration + code pool numbering (dw_code_locations, dw_codes — only per-code ASSIGNED state is reset via dw_code_pool_reset, never the location/prefix/sequence config itself)",
+  "Meal cutoff time configuration (meal_cutoff_settings)",
   "schema_migrations (migration ledger)",
   "audit_logs (operation history — this reset itself is recorded here, never erased by it)",
 ];

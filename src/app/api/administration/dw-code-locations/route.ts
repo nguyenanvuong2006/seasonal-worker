@@ -64,6 +64,9 @@ export async function POST(req: Request) {
     if (message.includes("dw_code_location_prefix_uq")) {
       return NextResponse.json({ error: "Prefix này đã được dùng cho địa điểm khác." }, { status: 409 });
     }
+    if (message.startsWith("SEQUENCE_UNSAFE_STARTNUMBER:")) {
+      return NextResponse.json({ error: message.replace(/^SEQUENCE_UNSAFE_STARTNUMBER:\s*/, "") }, { status: 409 });
+    }
     return NextResponse.json({ error: "Lỗi hệ thống: " + message }, { status: 500 });
   }
 }

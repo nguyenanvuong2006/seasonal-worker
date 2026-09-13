@@ -309,6 +309,35 @@ test("a FUTURE-dated cross-location transfer does not swap the code early — on
   assert.equal(store.assignments.size, 1);
 });
 
+test("MISSION F section 18 fix — transfer to a destination location with NO dw_code_locations config at all must NOT release the old code (no partial state)", async () => {
+  const store = makeStore();
+  store.depts.set("d4", { id: "d4", location: "Lâm Hà" }); // no matching dw_code_locations row anywhere in `store.locations`
+  store.movements.get("m1")!.toDeptId = "d4";
+  const mod = await loadWith(store);
+
+  await mod.applyMovementAction(ACTOR, "m1", "CONFIRM_ARRIVED");
+
+  const assignment = store.assignments.get("assign-1")!;
+  assert.equal(assignment.releasedAt, null, "old code must remain ACTIVE — destination has no code namespace to receive a new one");
+  assert.equal(store.codes.get("code-dr-3")!.status, "ASSIGNED", "old code must NOT be returned to the pool");
+  assert.equal(store.assignments.size, 1, "no new assignment may be created either");
+});
+
+test("MISSION F section 18 fix — transfer to a destination location whose config exists but is INACTIVE must NOT release the old code", async () => {
+  const store = makeStore();
+  store.depts.set("d4", { id: "d4", location: "Lâm Hà" });
+  store.locations.set("loc-lh", { id: "loc-lh", name: "Lâm Hà", prefix: "LH", sequenceDigits: 5, separator: "-", suffix: "D", startNumber: 1, nextSequence: 1, isActive: false });
+  store.movements.get("m1")!.toDeptId = "d4";
+  const mod = await loadWith(store);
+
+  await mod.applyMovementAction(ACTOR, "m1", "CONFIRM_ARRIVED");
+
+  const assignment = store.assignments.get("assign-1")!;
+  assert.equal(assignment.releasedAt, null, "old code must remain ACTIVE — destination namespace is configured but INACTIVE");
+  assert.equal(store.codes.get("code-dr-3")!.status, "ASSIGNED");
+  assert.equal(store.assignments.size, 1);
+});
+
 test("retrying applyEffectiveWorkforceMovements for an already-applied cross-location transfer does not release/assign twice", async () => {
   const store = makeStore();
   store.movements.get("m1")!.status = "TRANSFER_COMPLETED";

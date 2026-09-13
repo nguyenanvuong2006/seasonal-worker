@@ -1,7 +1,7 @@
 import { NextResponse } from "next/server";
 import { and, eq, inArray, isNull } from "drizzle-orm";
 import { db } from "@/db";
-import { dailyApplications, dwData, workerProfiles } from "@/db/schema";
+import { dailyApplications, dwData, employmentSessions, itCodeAssignments, workerProfiles } from "@/db/schema";
 import { getUserScope, hasPermission, requirePermission, writeAudit } from "@/lib/auth";
 import { scopeAllowsDepartment } from "@/lib/data-scope";
 import { normalizePersonName } from "@/lib/person-name";
@@ -12,6 +12,7 @@ import {
   type ItCodeStatusFilter,
 } from "@/lib/fingerprint-it-code-list";
 import { parseOperationalDateRange } from "@/lib/date-range";
+import { assignItCode, releaseItCode } from "@/lib/it-code-assignment";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -58,9 +59,23 @@ type SubmitItem = { dailyApplicationId: string; dwDataId: string; itCode: string
 type RowResult = { dailyApplicationId: string; ok: boolean; reason: string };
 
 /**
- * Submit hàng loạt IT CODE (mục VIII). Source of truth: dw_data.it_code.
- * Mirror sang worker_profiles.fingerprint_code (hồ sơ điện tử nhất quán) và
- * daily_applications.it_code (backward compatibility — chỉ mirror, không còn editable).
+ * Submit hàng loạt IT CODE (mục VIII).
+ *
+ * MISSION F section 13/39 canonicalization: mỗi dòng giờ đi qua CHÍNH XÁC
+ * `assignItCode`/`releaseItCode` (src/lib/it-code-assignment.ts) — bảng lịch
+ * sử `it_code_assignments` mới không còn là "dead code" chỉ được test riêng,
+ * mà là con đường ghi THẬT của màn hình vận hành hằng ngày này. 3 mirror
+ * (`dw_data.it_code`, `worker_profiles.fingerprint_code`, `daily_applications.
+ * it_code`) vẫn được ghi giống hệt như trước — UX/API contract cho client
+ * không đổi (cùng request/response shape) — chỉ nguồn ghi đổi từ raw UPDATE
+ * sang canonical service:
+ *   - itCode rỗng                      -> releaseItCode() (release, idempotent)
+ *   - itCode mới, chưa có assignment   -> assignItCode()
+ *   - itCode mới == assignment hiện tại -> no-op (đã đúng, tránh
+ *     WORKER_ALREADY_HAS_ACTIVE_IT_CODE giả khi submit lại giá trị cũ)
+ *   - itCode mới != assignment hiện tại -> release cái cũ (MANUAL_CORRECTION)
+ *     rồi assign cái mới, CÙNG một transaction (sửa lỗi đánh máy = 1 kỳ gán
+ *     kết thúc + 1 kỳ gán mới bắt đầu, lịch sử không bao giờ biến mất âm thầm).
  */
 export async function PATCH(req: Request) {
   const guard = await requirePermission(["ADMIN", "FINGERPRINT_STAFF"], "fingerprint.submit");
@@ -81,6 +96,11 @@ export async function PATCH(req: Request) {
     const appById = new Map(apps.map((a) => [a.id, a]));
     const dwRows = await db.select().from(dwData).where(inArray(dwData.id, items.map((i) => i.dwDataId)));
     const dwById = new Map(dwRows.map((d) => [d.id, d]));
+    // employment_session_daily_app_uq (schema.ts) — at most 1 session per dailyApplicationId.
+    const sessions = await db.select().from(employmentSessions).where(inArray(employmentSessions.dailyApplicationId, appIds));
+    const sessionByAppId = new Map(sessions.map((s) => [s.dailyApplicationId, s]));
+    const workers = await db.select().from(workerProfiles).where(isNull(workerProfiles.deletedAt));
+    const workerByCccd = new Map(workers.map((w) => [w.cccd, w]));
 
     const results: RowResult[] = [];
     let updated = 0;
@@ -113,19 +133,46 @@ export async function PATCH(req: Request) {
           results.push({ dailyApplicationId: item.dailyApplicationId, ok: false, reason: "Chưa có Mã số công nhật — không thể nhập IT CODE." });
           continue;
         }
-        const itCode = item.itCode.trim() || null;
+        const session = sessionByAppId.get(item.dailyApplicationId);
+        if (!session) {
+          results.push({ dailyApplicationId: item.dailyApplicationId, ok: false, reason: "Chưa có Employment Session tương ứng — không thể gán IT Code qua canonical service." });
+          continue;
+        }
+        const worker = workerByCccd.get(app.cccd);
+        if (!worker) {
+          results.push({ dailyApplicationId: item.dailyApplicationId, ok: false, reason: "Không tìm thấy Hồ sơ lao động (Worker Profile) khớp CCCD." });
+          continue;
+        }
 
-        await tx
-          .update(dwData)
-          .set({ itCode, itCodeUpdatedAt: new Date(), itCodeUpdatedBy: guard.session.username })
-          .where(eq(dwData.id, item.dwDataId));
-        await tx
-          .update(workerProfiles)
-          .set({ fingerprintCode: itCode, fingerprintStatus: itCode ? "DA_CAP" : "CHUA_CAP", updatedAt: new Date() })
-          .where(and(eq(workerProfiles.cccd, app.cccd), isNull(workerProfiles.deletedAt)));
-        // Mirror sang daily_applications.it_code — backward compatibility (chỉ mirror,
-        // không còn là nguồn ghi — mục VIII).
-        await tx.update(dailyApplications).set({ itCode, updatedAt: new Date() }).where(eq(dailyApplications.id, app.id));
+        const itCode = item.itCode.trim() || null;
+        const actionInput = { employmentSessionId: session.id, dailyApplicationId: app.id, workerId: worker.id, dwDataId: item.dwDataId, releasedBy: guard.session.username, releaseReason: "MANUAL_CORRECTION" as const };
+
+        if (itCode === null) {
+          await releaseItCode(actionInput, tx);
+          updated += 1;
+          results.push({ dailyApplicationId: item.dailyApplicationId, ok: true, reason: "Đã xoá IT CODE." });
+          continue;
+        }
+
+        const [currentActive] = await tx
+          .select({ itCode: itCodeAssignments.itCode })
+          .from(itCodeAssignments)
+          .where(and(eq(itCodeAssignments.employmentSessionId, session.id), isNull(itCodeAssignments.releasedAt)))
+          .limit(1);
+        if (currentActive?.itCode === itCode) {
+          updated += 1;
+          results.push({ dailyApplicationId: item.dailyApplicationId, ok: true, reason: "IT CODE không đổi." });
+          continue;
+        }
+        if (currentActive) {
+          await releaseItCode(actionInput, tx);
+        }
+        const assignResult = await assignItCode({ itCode, workerId: worker.id, employmentSessionId: session.id, dwDataId: item.dwDataId, dailyApplicationId: app.id, cccd: app.cccd, assignedBy: guard.session.username }, tx);
+        if (!assignResult.ok) {
+          const reason = assignResult.error === "IT_CODE_ALREADY_ACTIVE" ? "IT Code này đang được gán cho người khác." : "Worker đã có IT Code đang hoạt động (xung đột).";
+          results.push({ dailyApplicationId: item.dailyApplicationId, ok: false, reason });
+          continue;
+        }
 
         updated += 1;
         results.push({ dailyApplicationId: item.dailyApplicationId, ok: true, reason: "Đã cập nhật IT CODE." });
