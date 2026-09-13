@@ -6,7 +6,7 @@ import type { ResetScope } from "./scopes";
 /**
  * WORKFORCE DATA MANAGEMENT — reset preview token (mission section 6).
  * Execution must be bound to the EXACT preview the caller saw: a token
- * minted for FINGERPRINT can never be replayed against a WORKFORCE
+ * minted for IT_CODE can never be replayed against a WORKFORCE
  * execute call. Reuses the app's existing AUTH_SECRET/jose signing
  * primitive (same as session cookies in lib/auth.ts) rather than inventing
  * a second secret/signing scheme.

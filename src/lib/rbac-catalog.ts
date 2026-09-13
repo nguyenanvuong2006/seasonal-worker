@@ -198,8 +198,8 @@ export const PERMISSION_CATALOG: readonly CatalogPermission[] = [
   // (mục 51 đề bài: "global high-privilege operation only") — permission ở
   // đây là lớp kiểm tra THỨ HAI, không phải lớp duy nhất.
   { key: "data_management.view", name: "Xem Quản lý dữ liệu (tổng quan/lịch sử)", group: "quan_ly_du_lieu" },
-  { key: "data_management.import", name: "Import Master DW / Vân tay (dry-run + thực thi)", group: "quan_ly_du_lieu" },
-  { key: "data_management.reset_fingerprint", name: "Reset dữ liệu Vân tay (IT Code)", group: "quan_ly_du_lieu" },
+  { key: "data_management.import", name: "Import Master DW / IT Code (dry-run + thực thi)", group: "quan_ly_du_lieu" },
+  { key: "data_management.reset_it_code", name: "Reset dữ liệu Mã IT / Mã số công nhật", group: "quan_ly_du_lieu" },
   { key: "data_management.reset_operational", name: "Reset dữ liệu vận hành Tuyển dụng/Planning", group: "quan_ly_du_lieu" },
   { key: "data_management.reset_workforce", name: "Reset Workforce/DW (worker + employment + toàn bộ phụ thuộc)", group: "quan_ly_du_lieu" },
   { key: "data_management.factory_reset", name: "Reset TOÀN BỘ dữ liệu nghiệp vụ (Factory Reset)", group: "quan_ly_du_lieu" },

@@ -1135,7 +1135,7 @@ export const workforceDataImportBatches = pgTable(
   "workforce_data_import_batches",
   {
     id: uuid("id").defaultRandom().primaryKey(),
-    importType: varchar("import_type", { length: 40 }).notNull(), // WORKFORCE_MASTER | FINGERPRINT
+    importType: varchar("import_type", { length: 40 }).notNull(), // WORKFORCE_MASTER | IT_CODE
     datasetMode: varchar("dataset_mode", { length: 16 }).notNull().default("TEST"), // TEST | OFFICIAL — administrative label only, never read by Employment/Current Workforce logic
     environment: varchar("environment", { length: 24 }).notNull(),
     sourceFilename: varchar("source_filename", { length: 255 }).notNull(),

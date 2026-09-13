@@ -6,6 +6,7 @@ import { normalizePersonName } from "@/lib/person-name";
 import { getFingerprintItCodeRows, type FingerprintItCodeRow, type FingerprintStatusFilter } from "@/lib/fingerprint-it-code-list";
 import { maskCccd } from "@/lib/daily-intake-workflow";
 import { buildDailyOperationsWorkbook, exportFilenameHeaders } from "@/lib/daily-operations-export";
+import { CLASSIFICATION_LABELS } from "@/lib/fingerprint-classification";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -44,6 +45,7 @@ export async function GET(req: Request) {
       { header: "Họ và tên", width: 28, value: (r) => normalizePersonName(r.fullName) },
       { header: "CCCD", width: 16, value: (r) => maskCccd(r.cccd, canViewCccd) ?? r.cccd },
       { header: "Bộ phận", width: 26, value: (r) => [r.deptName, r.groupName].filter(Boolean).join(" — ") },
+      { header: "Phân loại", width: 22, value: (r) => (r.classification ? CLASSIFICATION_LABELS[r.classification] : "") },
       { header: "IT CODE", width: 18, value: (r) => r.itCode ?? "" },
     ],
     rows,

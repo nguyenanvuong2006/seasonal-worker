@@ -2,12 +2,12 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { expandResetScopes, requiredConfirmationPhrase, RESET_DOMAIN_META } from "./scopes.ts";
 
-test("FINGERPRINT: expands to exactly the 3 NULL_COLUMNS domains, never touches worker/employment rows", () => {
-  const plan = expandResetScopes(["FINGERPRINT"]);
-  assert.deepEqual(plan.effectiveScopes, ["FINGERPRINT"]);
+test("IT_CODE: expands to exactly the 3 NULL_COLUMNS domains, never touches worker/employment rows", () => {
+  const plan = expandResetScopes(["IT_CODE"]);
+  assert.deepEqual(plan.effectiveScopes, ["IT_CODE"]);
   const keys = plan.domains.map((d) => d.key);
-  assert.deepEqual(keys, ["fingerprint_worker_profiles", "fingerprint_dw_data", "fingerprint_daily_applications"]);
-  assert.ok(plan.domains.every((d) => d.kind === "NULL_COLUMNS"), "FINGERPRINT must never delete rows");
+  assert.deepEqual(keys, ["it_code_worker_profiles", "it_code_dw_data", "it_code_daily_applications"]);
+  assert.ok(plan.domains.every((d) => d.kind === "NULL_COLUMNS"), "IT_CODE must never delete rows");
 });
 
 test("RECRUITMENT_OPERATIONS: does not include daily_applications (soft-referenced by employment_sessions, no hard FK)", () => {
@@ -43,8 +43,8 @@ test("WORKFORCE forces the full dependency union — no standalone MOVEMENTS-onl
   ]) {
     assert.ok(keys.includes(required), `WORKFORCE must force-include ${required}`);
   }
-  // NOT included: the standalone NULL_COLUMNS fingerprint domains (subsumed by row deletion) and planning_tasks (factory-reset only).
-  assert.ok(!keys.includes("fingerprint_worker_profiles"));
+  // NOT included: the standalone NULL_COLUMNS IT Code domains (subsumed by row deletion) and planning_tasks (factory-reset only).
+  assert.ok(!keys.includes("it_code_worker_profiles"));
   assert.ok(!keys.includes("planning_tasks"));
 });
 
@@ -61,26 +61,26 @@ test("WORKFORCE delete order: children before worker_profiles/dw_data, and workf
 });
 
 test("ALL_BUSINESS_DATA: WORKFORCE union plus planning_tasks, and subsumes any other requested scope", () => {
-  const plan = expandResetScopes(["ALL_BUSINESS_DATA", "FINGERPRINT", "PLANNING"]);
+  const plan = expandResetScopes(["ALL_BUSINESS_DATA", "IT_CODE", "PLANNING"]);
   assert.deepEqual(plan.effectiveScopes, ["ALL_BUSINESS_DATA"]);
   const keys = plan.domains.map((d) => d.key);
   assert.ok(keys.includes("planning_tasks"));
   assert.ok(keys.includes("worker_profiles"));
-  assert.ok(!keys.includes("fingerprint_worker_profiles"), "row deletion subsumes the column-null fingerprint domains");
+  assert.ok(!keys.includes("it_code_worker_profiles"), "row deletion subsumes the column-null IT Code domains");
 });
 
-test("WORKFORCE requested alongside FINGERPRINT collapses to effectiveScopes=[WORKFORCE] (FINGERPRINT is redundant, not double-counted)", () => {
-  const plan = expandResetScopes(["FINGERPRINT", "WORKFORCE"]);
+test("WORKFORCE requested alongside IT_CODE collapses to effectiveScopes=[WORKFORCE] (IT_CODE is redundant, not double-counted)", () => {
+  const plan = expandResetScopes(["IT_CODE", "WORKFORCE"]);
   assert.deepEqual(plan.effectiveScopes, ["WORKFORCE"]);
 });
 
-test("Multiple independent non-subsuming scopes (FINGERPRINT + PLANNING) union their domains without duplication", () => {
-  const plan = expandResetScopes(["FINGERPRINT", "PLANNING"]);
-  assert.deepEqual(new Set(plan.effectiveScopes), new Set(["FINGERPRINT", "PLANNING"]));
+test("Multiple independent non-subsuming scopes (IT_CODE + PLANNING) union their domains without duplication", () => {
+  const plan = expandResetScopes(["IT_CODE", "PLANNING"]);
+  assert.deepEqual(new Set(plan.effectiveScopes), new Set(["IT_CODE", "PLANNING"]));
   const keys = plan.domains.map((d) => d.key);
   assert.equal(new Set(keys).size, keys.length, "no duplicate domains");
   assert.ok(keys.includes("planning_allocations"));
-  assert.ok(keys.includes("fingerprint_dw_data"));
+  assert.ok(keys.includes("it_code_dw_data"));
 });
 
 test("Empty request produces an empty, safe plan", () => {
@@ -90,7 +90,7 @@ test("Empty request produces an empty, safe plan", () => {
 });
 
 test("requiredConfirmationPhrase: exact phrases per mission section 9", () => {
-  assert.equal(requiredConfirmationPhrase(["FINGERPRINT"]), "RESET FINGERPRINT");
+  assert.equal(requiredConfirmationPhrase(["IT_CODE"]), "RESET IT CODE");
   assert.equal(requiredConfirmationPhrase(["WORKFORCE"]), "RESET WORKFORCE DATA");
   assert.equal(requiredConfirmationPhrase(["ALL_BUSINESS_DATA"]), "RESET ALL BUSINESS DATA");
 });

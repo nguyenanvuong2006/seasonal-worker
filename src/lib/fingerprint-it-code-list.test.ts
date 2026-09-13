@@ -41,7 +41,7 @@ function makeChain(rows: Record<string, unknown>[]) {
   return chain;
 }
 
-function loadFingerprintItCodeList(rows: Record<string, unknown>[]) {
+function loadFingerprintItCodeList(rows: Record<string, unknown>[], classifications: Record<string, string> = {}) {
   const url = new URL("./fingerprint-it-code-list.ts", import.meta.url);
   const source = readFileSync(url, "utf8");
   const js = ts.transpileModule(source, {
@@ -88,6 +88,13 @@ function loadFingerprintItCodeList(rows: Record<string, unknown>[]) {
       isEligibleForFingerprintQueue: (app: { dwImportedAt: unknown }, dw: { code: string | null }) =>
         app.dwImportedAt !== null && app.dwImportedAt !== undefined && typeof dw.code === "string" && dw.code.trim().length > 0,
     },
+    // Classification is a separate, independently-tested service
+    // (fingerprint-classification.test.ts) — stubbed here as "no
+    // classification data" so this file's tests stay focused on the
+    // date/deptId/q/status filter contract, unaffected by classification.
+    "@/lib/fingerprint-classification": {
+      classifyWorkforceEngagements: async (ids: string[]) => new Map(ids.filter((id) => id in classifications).map((id) => [id, classifications[id]])),
+    },
   };
 
   const moduleObj = { exports: {} as Record<string, unknown> };
@@ -126,7 +133,7 @@ function loadFingerprintItCodeList(rows: Record<string, unknown>[]) {
     getFingerprintItCodeRows: (
       date: string,
       scope: string[] | null,
-      filters?: { deptId?: string | null; q?: string | null; status?: "ALL" | "MISSING" | "DONE" },
+      filters?: { deptId?: string | null; q?: string | null; status?: "ALL" | "MISSING" | "DONE" | "NEW" | "RETURNING" | "TRANSFERRED" },
     ) => Promise<Record<string, unknown>[]>;
   };
 }
@@ -223,4 +230,40 @@ test("đúng ngày regDate (2026-08-17) -> trả về đúng dữ liệu của n
   const { getFingerprintItCodeRows } = loadFingerprintItCodeList(ROWS);
   const rows = await getFingerprintItCodeRows("2026-08-17", null);
   assert.ok(rows.length > 0);
+});
+
+/* ------------------------------------------------------------
+   IDENTITY & IT CODE CONTRACT REVIEW (2026-09-13) — classification
+   (NEW/RETURNING/TRANSFERRED) is attached per row from the shared
+   classifyWorkforceEngagements() service (stubbed here) and is filterable
+   through the SAME single "status" filter as MISSING/DONE, orthogonally.
+   ------------------------------------------------------------ */
+test("classification is attached to each row when the classification service provides it", async () => {
+  const { getFingerprintItCodeRows } = loadFingerprintItCodeList(ROWS, { "app-1": "RETURNING", "app-2": "NEW" });
+  const rows = await getFingerprintItCodeRows("2026-08-17", null);
+  const byId = new Map(rows.map((r) => [r.dailyApplicationId, r.classification]));
+  assert.equal(byId.get("app-1"), "RETURNING");
+  assert.equal(byId.get("app-2"), "NEW");
+});
+
+test("status=NEW: filters by classification, independent from IT CODE presence", async () => {
+  const { getFingerprintItCodeRows } = loadFingerprintItCodeList(ROWS, { "app-1": "RETURNING", "app-2": "NEW" });
+  const rows = await getFingerprintItCodeRows("2026-08-17", null, { status: "NEW" });
+  assert.equal(rows.length, 1);
+  assert.equal(rows[0].dailyApplicationId, "app-2");
+});
+
+test("status=TRANSFERRED: returns only rows classified TRANSFERRED", async () => {
+  const { getFingerprintItCodeRows } = loadFingerprintItCodeList(ROWS, { "app-1": "TRANSFERRED", "app-2": "NEW" });
+  const rows = await getFingerprintItCodeRows("2026-08-17", null, { status: "TRANSFERRED" });
+  assert.equal(rows.length, 1);
+  assert.equal(rows[0].dailyApplicationId, "app-1");
+});
+
+test("row with no employment_sessions entry yet gets classification=null, never guessed as NEW", async () => {
+  const { getFingerprintItCodeRows } = loadFingerprintItCodeList(ROWS, { "app-1": "RETURNING" });
+  const rows = await getFingerprintItCodeRows("2026-08-17", null, { status: "DONE" });
+  assert.equal(rows.length, 1);
+  assert.equal(rows[0].dailyApplicationId, "app-1");
+  assert.equal(rows[0].classification, "RETURNING");
 });

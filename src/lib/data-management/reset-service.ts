@@ -35,7 +35,7 @@ import { hashRowCounts, signResetPreviewToken, verifyResetPreviewToken } from ".
 // One well-known advisory lock key for the whole feature — cross-request
 // mutual exclusion for ANY destructive data-management operation (reset OR
 // import execute), not per-scope. Simpler and safer than per-scope locks:
-// a Fingerprint reset racing a Workforce import is exactly as unsafe as two
+// an IT Code reset racing a Workforce import is exactly as unsafe as two
 // Workforce resets racing each other.
 export const DATA_MANAGEMENT_ADVISORY_LOCK_KEY = 847_291_003;
 
@@ -81,15 +81,15 @@ async function countDomainRows(domain: ResetDomainKey): Promise<number> {
       return countAll(dwData);
     case "planning_tasks":
       return countAll(planningTasks);
-    case "fingerprint_worker_profiles": {
+    case "it_code_worker_profiles": {
       const result = await db.execute<{ c: string }>(sql`SELECT count(*)::text AS c FROM worker_profiles WHERE fingerprint_code IS NOT NULL OR fingerprint_status IS DISTINCT FROM 'CHUA_CAP'`);
       return Number(result.rows[0]?.c ?? 0);
     }
-    case "fingerprint_dw_data": {
+    case "it_code_dw_data": {
       const result = await db.execute<{ c: string }>(sql`SELECT count(*)::text AS c FROM dw_data WHERE it_code IS NOT NULL`);
       return Number(result.rows[0]?.c ?? 0);
     }
-    case "fingerprint_daily_applications": {
+    case "it_code_daily_applications": {
       const result = await db.execute<{ c: string }>(sql`SELECT count(*)::text AS c FROM daily_applications WHERE it_code IS NOT NULL`);
       return Number(result.rows[0]?.c ?? 0);
     }
@@ -178,15 +178,15 @@ async function deleteDomain(tx: typeof db, domain: ResetDomainKey): Promise<numb
       return deleteAll(tx, dwData);
     case "planning_tasks":
       return deleteAll(tx, planningTasks);
-    case "fingerprint_worker_profiles": {
+    case "it_code_worker_profiles": {
       const res = await tx.execute(sql`UPDATE worker_profiles SET fingerprint_code = NULL, fingerprint_device = NULL, fingerprint_status = 'CHUA_CAP', fingerprint_created_at = NULL, fingerprint_last_used_at = NULL, updated_at = now()`);
       return (res as { rowCount?: number }).rowCount ?? 0;
     }
-    case "fingerprint_dw_data": {
+    case "it_code_dw_data": {
       const res = await tx.execute(sql`UPDATE dw_data SET it_code = NULL, it_code_updated_at = NULL, it_code_updated_by = NULL WHERE it_code IS NOT NULL`);
       return (res as { rowCount?: number }).rowCount ?? 0;
     }
-    case "fingerprint_daily_applications": {
+    case "it_code_daily_applications": {
       const res = await tx.execute(sql`UPDATE daily_applications SET it_code = NULL, updated_at = now() WHERE it_code IS NOT NULL`);
       return (res as { rowCount?: number }).rowCount ?? 0;
     }

@@ -85,6 +85,9 @@ function loadRoute(opts: {
         return value.length > 4 ? `••••••••${value.slice(-4)}` : "••••••••";
       },
     },
+    "@/lib/fingerprint-classification": {
+      CLASSIFICATION_LABELS: { NEW: "Công nhật mới đăng ký", RETURNING: "Công nhật cũ quay lại", TRANSFERRED: "Công nhật cũ thuyên chuyển" },
+    },
     "@/lib/daily-operations-export": {
       buildDailyOperationsWorkbook: async () => Buffer.from("fake-xlsx"),
       exportFilenameHeaders: (baseName: string, date: string) => ({

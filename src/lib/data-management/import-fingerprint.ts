@@ -6,17 +6,28 @@ import { CCCD_ERROR_MESSAGE, isValidCccd, normalizeCccd } from "@/lib/validators
 import type { DataManagementEnvironment } from "./environment";
 
 /**
- * WORKFORCE DATA MANAGEMENT — bulk Fingerprint (IT Code) reconciliation
- * import (mission sections 5/19-23). "Fingerprint data" in this system is
- * NOT a biometric template or scan — it is an assignment code/ID string
- * (dw_data.it_code, varchar(40)) a FINGERPRINT_STAFF operator types in one
- * row at a time today via PATCH /api/fingerprint/it-code. This module adds
- * the missing BULK path (an exported file from the fingerprint device),
+ * WORKFORCE DATA MANAGEMENT — bulk IT Code (mã số công nhật) reconciliation
+ * import (mission sections 5/19-23; corrected terminology per the identity &
+ * IT Code contract review, 2026-09-13). This system has no biometric
+ * fingerprint table — "IT Code" is an operational attendance/day-worker
+ * assignment code string (dw_data.it_code, varchar(40)) a FINGERPRINT_STAFF
+ * operator types in one row at a time today via PATCH /api/fingerprint/it-code
+ * (route/UI path names are legacy and intentionally left as-is — renaming a
+ * live route is a separate, out-of-scope change). This module adds the
+ * missing BULK path (an exported file from the attendance/IT-Code device),
  * reusing the EXACT SAME source-of-truth/mirror contract that route already
  * enforces — dw_data.it_code is the source of truth, mirrored to
  * worker_profiles.fingerprint_code/fingerprint_status and
  * daily_applications.it_code (mirror only) — so results are identical
  * whether an operator types one row or imports a file of thousands.
+ *
+ * IDENTITY CONTRACT (locked): CCCD is the person identity used to resolve
+ * WHO an IT Code row belongs to. IT Code itself is never identity — it is
+ * the operational payload/assignment being reconciled FOR that person. This
+ * import flow is exactly: row → CCCD → resolve person/DW → assign/reconcile
+ * IT Code. That is correct and unchanged by the terminology review; only
+ * labels/comments referring to it as "fingerprint"/biometric data have been
+ * corrected.
  *
  * Reconciliation key is cccd (this system's real natural key — see
  * import-workforce-master.ts's docblock), matched against dw_data — NEVER
@@ -26,7 +37,7 @@ import type { DataManagementEnvironment } from "./environment";
  * PATCH route enforces ("Chưa có Mã số công nhật — không thể nhập IT CODE.")
  * — never a laxer bulk-only rule.
  *
- * Fingerprint content safety (mission section 19): it_code is a short
+ * IT Code content safety (mission section 19): it_code is a short
  * device-assigned string, not raw biometric data — but this module still
  * never logs/echoes it anywhere except the per-row result the importing
  * admin already has (their own uploaded file).
@@ -163,7 +174,7 @@ export async function createFingerprintBatch(input: CreateFingerprintBatchInput)
     const [batch] = await db
       .insert(workforceDataImportBatches)
       .values({
-        importType: "FINGERPRINT",
+        importType: "IT_CODE",
         datasetMode: input.datasetMode,
         environment: input.environment,
         sourceFilename: input.fileName,

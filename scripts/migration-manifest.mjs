@@ -1201,7 +1201,7 @@ export const MIGRATION_MANIFEST = [
     transactionSafe: true,
     appDependency: "REQUIRED",
     appDependencyEvidence:
-      "src/db/schema.ts declares workforceDataImportBatches/workforceDataImportRows; src/lib/data-management/import-workforce-master.ts and import-fingerprint.ts insert into and query these tables when staging/merging a Master DW or Fingerprint import through /admin/data-management — routes fail closed with DATA_MANAGEMENT_NOT_MIGRATED if the tables do not exist yet (see checkDataManagementSchemaPresent()).",
+      "src/db/schema.ts declares workforceDataImportBatches/workforceDataImportRows; src/lib/data-management/import-workforce-master.ts and import-fingerprint.ts insert into and query these tables when staging/merging a Master DW or IT Code import through /admin/data-management — routes fail closed with DATA_MANAGEMENT_NOT_MIGRATED if the tables do not exist yet (see checkDataManagementSchemaPresent()).",
     executionMechanism: "MANUAL_PSQL_GENERIC",
     supersededBy: null,
     tombstoned: false,

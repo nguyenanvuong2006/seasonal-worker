@@ -131,7 +131,7 @@ test("R9 — INVALID_CONFIRMATION: wrong typed phrase -> zero writes, no transac
   const pool = makeFakePool({ lockAvailable: true });
   const mod = await loadResetService({ db, pool, auditCalls });
 
-  const preview = await mod.previewReset({ session: SESSION, requestedScopes: ["FINGERPRINT"] });
+  const preview = await mod.previewReset({ session: SESSION, requestedScopes: ["IT_CODE"] });
   const result = await mod.executeReset({ session: SESSION, previewToken: preview.previewToken, confirmationPhrase: "WRONG PHRASE" });
 
   assert.equal(result.ok, false);
@@ -185,8 +185,8 @@ test("R12 — Production disabled by environment guard -> zero writes even with 
     const pool = makeFakePool({ lockAvailable: true });
     const mod = await loadResetService({ db, pool, auditCalls });
 
-    const preview = await mod.previewReset({ session: SESSION, requestedScopes: ["FINGERPRINT"] });
-    const result = await mod.executeReset({ session: SESSION, previewToken: preview.previewToken, confirmationPhrase: "RESET FINGERPRINT" });
+    const preview = await mod.previewReset({ session: SESSION, requestedScopes: ["IT_CODE"] });
+    const result = await mod.executeReset({ session: SESSION, previewToken: preview.previewToken, confirmationPhrase: "RESET IT CODE" });
 
     assert.equal(result.ok, false);
     if (!result.ok) assert.equal(result.error.code, "DATA_RESET_DISABLED");
@@ -206,8 +206,8 @@ test("R13 — concurrency lock already held -> DATA_MANAGEMENT_BUSY, zero writes
   const pool = makeFakePool({ lockAvailable: false }); // another operation already holds the lock
   const mod = await loadResetService({ db, pool, auditCalls });
 
-  const preview = await mod.previewReset({ session: SESSION, requestedScopes: ["FINGERPRINT"] });
-  const result = await mod.executeReset({ session: SESSION, previewToken: preview.previewToken, confirmationPhrase: "RESET FINGERPRINT" });
+  const preview = await mod.previewReset({ session: SESSION, requestedScopes: ["IT_CODE"] });
+  const result = await mod.executeReset({ session: SESSION, previewToken: preview.previewToken, confirmationPhrase: "RESET IT CODE" });
 
   assert.equal(result.ok, false);
   if (!result.ok) assert.equal(result.error.code, "DATA_MANAGEMENT_BUSY");

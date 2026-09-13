@@ -13,7 +13,7 @@ const SUMMARY = {
   resetBlockedReason: null,
   currentDatasets: [
     { importType: "WORKFORCE_MASTER", datasetMode: "TEST", sourceFilename: "master.xlsx", importedAt: "2026-09-01T00:00:00Z", rowCount: 100 },
-    { importType: "FINGERPRINT", datasetMode: null, sourceFilename: null, importedAt: null, rowCount: null },
+    { importType: "IT_CODE", datasetMode: null, sourceFilename: null, importedAt: null, rowCount: null },
   ],
   quickCounts: { dwDataRows: 200, workerProfileRows: 150, activeEmploymentSessions: 120 },
   scopes: [],
@@ -72,11 +72,11 @@ test("Reset tab: selecting a scope enables Preview; typed confirmation phrase ga
       if (url.includes("/summary")) return SUMMARY;
       if (url.includes("/reset/preview")) {
         return {
-          effectiveScopes: ["FINGERPRINT"],
-          affected: [{ domain: "fingerprint_worker_profiles", label: "Mã vân tay trên Hồ sơ lao động", rows: 42 }],
+          effectiveScopes: ["IT_CODE"],
+          affected: [{ domain: "it_code_worker_profiles", label: "IT Code / Mã số công nhật trên Hồ sơ lao động", rows: 42 }],
           preserved: ["Organization"],
           warnings: [],
-          requiredConfirmationPhrase: "RESET FINGERPRINT",
+          requiredConfirmationPhrase: "RESET IT CODE",
           previewToken: "fake-token",
           expiresAt: new Date(Date.now() + 60000).toISOString(),
         };

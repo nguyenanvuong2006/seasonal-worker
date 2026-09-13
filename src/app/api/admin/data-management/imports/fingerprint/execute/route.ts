@@ -10,7 +10,7 @@ export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 export const maxDuration = 60;
 
-/** Same bounded-chunk/resumable contract as the Workforce Master execute route. Distinct permission (data_management.import — same as workforce; the destructive RESET side has its own separate fingerprint permission, reset_fingerprint, which this route never touches). */
+/** Same bounded-chunk/resumable contract as the Workforce Master execute route. Distinct permission (data_management.import — same as workforce; the destructive RESET side has its own separate IT Code permission, reset_it_code, which this route never touches). */
 export async function POST(req: Request) {
   const guard = await requirePermission(["ADMIN"], "data_management.import");
   if (!guard.ok) return NextResponse.json({ error: guard.error }, { status: guard.status });
@@ -50,12 +50,12 @@ export async function POST(req: Request) {
     if (!created.ok) return NextResponse.json({ error: created.error, message: created.message }, { status: 409 });
     batchId = created.batchId;
 
-    await writeAudit(guard.session, "DATA_MANAGEMENT_IMPORT_STARTED", "workforce_data_import_batches", { batchId, importType: "FINGERPRINT", fileName: file.name, totalRows: rows.length, datasetMode }, "IMPORT");
+    await writeAudit(guard.session, "DATA_MANAGEMENT_IMPORT_STARTED", "workforce_data_import_batches", { batchId, importType: "IT_CODE", fileName: file.name, totalRows: rows.length, datasetMode }, "IMPORT");
   }
 
   const chunk = await mergeFingerprintChunk(batchId, guard.session.username);
   if (chunk.done) {
-    await writeAudit(guard.session, "DATA_MANAGEMENT_IMPORT_COMPLETED", "workforce_data_import_batches", { batchId, importType: "FINGERPRINT" }, "IMPORT");
+    await writeAudit(guard.session, "DATA_MANAGEMENT_IMPORT_COMPLETED", "workforce_data_import_batches", { batchId, importType: "IT_CODE" }, "IMPORT");
   }
 
   return NextResponse.json({ batchId, ...chunk });

@@ -4,10 +4,10 @@ import { useCallback, useEffect, useState } from "react";
 import { AlertPanel, Badge, Button, Card, EmptyState, ErrorState, Input, Modal, PageHeader, SkeletonTable, toast } from "@/components/ui";
 import { AlertTriangle, Database, Fingerprint, History, LayoutDashboard, Lock } from "lucide-react";
 
-type ResetScope = "FINGERPRINT" | "RECRUITMENT_OPERATIONS" | "PLANNING" | "WORKFORCE" | "ALL_BUSINESS_DATA";
+type ResetScope = "IT_CODE" | "RECRUITMENT_OPERATIONS" | "PLANNING" | "WORKFORCE" | "ALL_BUSINESS_DATA";
 
 const SCOPE_LABELS: Record<ResetScope, string> = {
-  FINGERPRINT: "Vân tay (IT Code)",
+  IT_CODE: "Mã IT / Mã số công nhật",
   RECRUITMENT_OPERATIONS: "Tuyển dụng vận hành",
   PLANNING: "Planning allocations",
   WORKFORCE: "Workforce / DW",
@@ -36,7 +36,7 @@ type ResetPreview = {
 const TABS = [
   { key: "overview", label: "Tổng quan", icon: LayoutDashboard },
   { key: "workforce", label: "Import DW", icon: Database },
-  { key: "fingerprint", label: "Vân tay", icon: Fingerprint },
+  { key: "fingerprint", label: "IT Code", icon: Fingerprint },
   { key: "reset", label: "Reset dữ liệu", icon: AlertTriangle },
   { key: "history", label: "Lịch sử", icon: History },
 ] as const;
@@ -46,7 +46,7 @@ export default function DataManagementPage() {
   const [tab, setTab] = useState<TabKey>("overview");
   return (
     <div className="space-y-4">
-      <PageHeader title="Quản lý dữ liệu" description="Preview/Reset dữ liệu nghiệp vụ (TEST) + import lại Master DW / Vân tay. Thao tác huỷ hoại — luôn có Preview + xác nhận gõ tay trước khi thực thi." />
+      <PageHeader title="Quản lý dữ liệu" description="Preview/Reset dữ liệu nghiệp vụ (TEST) + import lại Master DW / IT Code. Thao tác huỷ hoại — luôn có Preview + xác nhận gõ tay trước khi thực thi." />
       <div className="flex flex-wrap gap-2 border-b border-border pb-2">
         {TABS.map((t) => (
           <button
@@ -122,7 +122,7 @@ function OverviewTab() {
           {summary.currentDatasets.map((d) => (
             <div key={d.importType} className="flex items-center justify-between rounded-[10px] border border-border p-3 text-[13px]">
               <div>
-                <span className="font-semibold">{d.importType === "WORKFORCE_MASTER" ? "Master DW" : "Vân tay"}</span>
+                <span className="font-semibold">{d.importType === "WORKFORCE_MASTER" ? "Master DW" : "IT Code"}</span>
                 {d.sourceFilename ? <span className="ml-2 text-fg-muted">{d.sourceFilename}</span> : <span className="ml-2 text-fg-muted">Chưa có batch nào hoàn tất</span>}
               </div>
               {d.datasetMode ? <Badge tone={d.datasetMode === "OFFICIAL" ? "green" : "amber"}>{d.datasetMode}</Badge> : null}
@@ -144,7 +144,7 @@ function NumberBox({ label, value }: { label: string; value: number }) {
 }
 
 /* ============================================================
-   IMPORT (Workforce Master DW / Fingerprint) — dry run preview, then
+   IMPORT (Workforce Master DW / IT Code) — dry run preview, then
    bounded-chunk resumable execute (mission section 38).
    ============================================================ */
 function ImportTab({ kind }: { kind: "workforce" | "fingerprint" }) {
@@ -214,7 +214,7 @@ function ImportTab({ kind }: { kind: "workforce" | "fingerprint" }) {
   return (
     <div className="space-y-4">
       <Card className="p-5">
-        <h3 className="mb-3 text-[14px] font-semibold text-fg">{kind === "workforce" ? "Import Master DW (dw_data) — UPSERT lặp lại được" : "Import Vân tay (IT Code) — đối chiếu theo CCCD"}</h3>
+        <h3 className="mb-3 text-[14px] font-semibold text-fg">{kind === "workforce" ? "Import Master DW (dw_data) — UPSERT lặp lại được" : "Import IT Code (Mã số công nhật) — đối chiếu theo CCCD"}</h3>
         <p className="mb-3 text-[12.5px] text-fg-muted">
           {kind === "workforce"
             ? "CCCD đã có trong hệ thống sẽ được CẬP NHẬT; CCCD mới sẽ được TẠO MỚI; lao động vắng mặt trong file KHÔNG bị xoá/suy diễn nghỉ việc."

@@ -1,6 +1,8 @@
 -- WORKFORCE DATA MANAGEMENT (Mission D) — import batch tracking for the NEW
--- repeatable Master DW (dw_data) upsert import and Fingerprint (IT Code)
--- reconciliation import.
+-- repeatable Master DW (dw_data) upsert import and IT Code (mã số công nhật)
+-- reconciliation import. IT Code is an operational attendance/day-worker
+-- assignment code, never the worker identity key (CCCD is) — see the
+-- identity & IT Code contract review, 2026-09-13.
 --
 -- Additive only: two brand-new tables, zero changes to any existing table.
 -- Deliberately NOT reusing the existing `import_batches`/`import_staging_rows`
@@ -19,7 +21,7 @@
 
 CREATE TABLE IF NOT EXISTS workforce_data_import_batches (
   id                uuid PRIMARY KEY DEFAULT gen_random_uuid(),
-  import_type       varchar(40) NOT NULL,               -- WORKFORCE_MASTER | FINGERPRINT
+  import_type       varchar(40) NOT NULL,               -- WORKFORCE_MASTER | IT_CODE
   dataset_mode      varchar(16) NOT NULL DEFAULT 'TEST', -- TEST | OFFICIAL (administrative label only — never read by Employment/Current Workforce logic)
   environment       varchar(24) NOT NULL,                -- snapshot of the resolved environment at run time (development | preview | production)
   source_filename   varchar(255) NOT NULL,
@@ -30,7 +32,7 @@ CREATE TABLE IF NOT EXISTS workforce_data_import_batches (
   invalid_rows      integer NOT NULL DEFAULT 0,
   new_rows          integer NOT NULL DEFAULT 0,
   existing_rows     integer NOT NULL DEFAULT 0,
-  matched_rows      integer NOT NULL DEFAULT 0,          -- fingerprint reconciliation: MATCHED against dw_data
+  matched_rows      integer NOT NULL DEFAULT 0,          -- IT Code reconciliation: MATCHED against dw_data
   unmatched_rows    integer NOT NULL DEFAULT 0,
   duplicate_rows    integer NOT NULL DEFAULT 0,           -- duplicate CCCD within the file itself
   processed_rows    integer NOT NULL DEFAULT 0,

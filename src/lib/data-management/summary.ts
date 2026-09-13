@@ -15,7 +15,7 @@ import { RESET_SCOPES, RESET_SCOPE_LABELS, expandResetScopes, type ResetScope } 
  */
 
 export type DatasetStateEntry = {
-  importType: "WORKFORCE_MASTER" | "FINGERPRINT";
+  importType: "WORKFORCE_MASTER" | "IT_CODE";
   datasetMode: "TEST" | "OFFICIAL" | null;
   batchId: string | null;
   sourceFilename: string | null;
@@ -37,7 +37,7 @@ export async function getDataManagementSummary(): Promise<DataManagementSummary>
   const guard = checkDataResetAllowed();
 
   const currentDatasets: DatasetStateEntry[] = [];
-  for (const importType of ["WORKFORCE_MASTER", "FINGERPRINT"] as const) {
+  for (const importType of ["WORKFORCE_MASTER", "IT_CODE"] as const) {
     const [latest] = await db
       .select()
       .from(workforceDataImportBatches)

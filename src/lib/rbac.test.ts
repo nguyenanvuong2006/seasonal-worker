@@ -25,7 +25,7 @@ test("catalog: ~42-90 permissions, mỗi key duy nhất", () => {
   // (KHÔNG có key ".edit" riêng — backend chỉ enforce ".submit", xem mục V blocker #5.)
   // AI Admin Copilot (Phase 1) thêm 1 quyền mới: ai_copilot.view.
   // Workforce Data Management (Mission D) thêm 6 quyền mới: data_management.{view,import,
-  // reset_fingerprint,reset_operational,reset_workforce,factory_reset}.
+  // reset_it_code,reset_operational,reset_workforce,factory_reset}.
   assert.ok(allKeys.length >= 40 && allKeys.length <= 90, `expected 40-90 permissions, got ${allKeys.length}`);
   assert.equal(new Set(allKeys).size, allKeys.length, "permission keys must be unique");
 });

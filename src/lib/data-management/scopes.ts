@@ -7,9 +7,18 @@
  *
  * UI NEVER sends raw table names — only one of the ResetScope values below.
  * The server always decides the actual table/dependency plan; a client
- * requesting FINGERPRINT can never end up touching WORKFORCE data, and a
+ * requesting IT_CODE can never end up touching WORKFORCE data, and a
  * client requesting WORKFORCE always gets its full, forced dependency set —
  * the client cannot opt out of a required dependent.
+ *
+ * TERMINOLOGY (identity contract review, 2026-09-13): this scope is named
+ * IT_CODE, not FINGERPRINT — this system has no biometric fingerprint table.
+ * "IT Code" (mã số công nhật, e.g. "DR0001-D") is an operational attendance/
+ * day-worker assignment code stored on dw_data.it_code, mirrored to
+ * worker_profiles.fingerprint_code and daily_applications.it_code (those two
+ * DB column names predate this correction and are intentionally left
+ * unrenamed here — renaming a live column name is a separate, out-of-scope
+ * change). IT Code is NEVER the worker identity key: CCCD is.
  *
  * SCHEMA REALITY THIS IS BUILT ON (audited from src/db/schema.ts + real hard
  * FKs — grep of `REFERENCES worker_profiles`/`REFERENCES employment_sessions`
@@ -42,9 +51,23 @@
  * documented as "hệ thống này KHÔNG phải chấm công" — not an attendance
  * system). Mission section 24 is conditional ("if attendance is separate...")
  * and that condition is false here.
+ *
+ * dw_data COUPLING RE-AUDIT (identity contract review, section 22): re-checked
+ * whether dw_data reset should decouple from WORKFORCE. Finding: a REAL FK
+ * exists — daily_applications.dw_id REFERENCES dw_data(id) ON DELETE SET
+ * NULL (schema.sql:78) — so dw_data is not merely "conceptually" related to
+ * Workforce, it is a genuine business dependency: the IT Code queue itself
+ * (getFingerprintItCodeRows) INNER JOINs daily_applications to dw_data via
+ * dw_id, and DW-import state (dwImportedAt/dwMatch) drives eligibility for
+ * the IT Code queue, Meal export, and document classification. Resetting
+ * dw_data alone (leaving daily_applications/worker_profiles/employment_sessions
+ * intact) would silently null out dw_id, break that join, and desynchronize
+ * "current workforce" state from Master DW without any record of why.
+ * Conclusion: KEEP dw_data coupled inside WORKFORCE (no change) — this is a
+ * real FK/business dependency, not a naming artifact.
  */
 
-export const RESET_SCOPES = ["FINGERPRINT", "RECRUITMENT_OPERATIONS", "PLANNING", "WORKFORCE", "ALL_BUSINESS_DATA"] as const;
+export const RESET_SCOPES = ["IT_CODE", "RECRUITMENT_OPERATIONS", "PLANNING", "WORKFORCE", "ALL_BUSINESS_DATA"] as const;
 export type ResetScope = (typeof RESET_SCOPES)[number];
 
 export function isResetScope(value: unknown): value is ResetScope {
@@ -66,9 +89,9 @@ export type ResetDomainKey =
   | "worker_profiles"
   | "dw_data"
   | "planning_tasks"
-  | "fingerprint_worker_profiles"
-  | "fingerprint_dw_data"
-  | "fingerprint_daily_applications";
+  | "it_code_worker_profiles"
+  | "it_code_dw_data"
+  | "it_code_daily_applications";
 
 export type ResetDomainMeta = { key: ResetDomainKey; table: string; label: string; kind: "DELETE_ALL_ROWS" | "NULL_COLUMNS" };
 
@@ -87,9 +110,9 @@ const CANONICAL_DOMAIN_ORDER: ResetDomainKey[] = [
   "worker_profiles",
   "dw_data",
   "planning_tasks",
-  "fingerprint_worker_profiles",
-  "fingerprint_dw_data",
-  "fingerprint_daily_applications",
+  "it_code_worker_profiles",
+  "it_code_dw_data",
+  "it_code_daily_applications",
 ];
 
 export const RESET_DOMAIN_META: Record<ResetDomainKey, ResetDomainMeta> = {
@@ -106,13 +129,13 @@ export const RESET_DOMAIN_META: Record<ResetDomainKey, ResetDomainMeta> = {
   worker_profiles: { key: "worker_profiles", table: "worker_profiles", label: "Hồ sơ lao động (Worker Profiles)", kind: "DELETE_ALL_ROWS" },
   dw_data: { key: "dw_data", table: "dw_data", label: "DW Data (Master DW)", kind: "DELETE_ALL_ROWS" },
   planning_tasks: { key: "planning_tasks", table: "planning_tasks", label: "Task Center (Planning)", kind: "DELETE_ALL_ROWS" },
-  fingerprint_worker_profiles: { key: "fingerprint_worker_profiles", table: "worker_profiles", label: "Mã vân tay trên Hồ sơ lao động", kind: "NULL_COLUMNS" },
-  fingerprint_dw_data: { key: "fingerprint_dw_data", table: "dw_data", label: "IT Code trên DW Data", kind: "NULL_COLUMNS" },
-  fingerprint_daily_applications: { key: "fingerprint_daily_applications", table: "daily_applications", label: "IT Code trên Daily Application (mirror)", kind: "NULL_COLUMNS" },
+  it_code_worker_profiles: { key: "it_code_worker_profiles", table: "worker_profiles", label: "IT Code / Mã số công nhật trên Hồ sơ lao động", kind: "NULL_COLUMNS" },
+  it_code_dw_data: { key: "it_code_dw_data", table: "dw_data", label: "IT Code trên DW Data", kind: "NULL_COLUMNS" },
+  it_code_daily_applications: { key: "it_code_daily_applications", table: "daily_applications", label: "IT Code trên Daily Application (mirror)", kind: "NULL_COLUMNS" },
 };
 
 const SCOPE_DOMAINS: Record<ResetScope, ResetDomainKey[]> = {
-  FINGERPRINT: ["fingerprint_worker_profiles", "fingerprint_dw_data", "fingerprint_daily_applications"],
+  IT_CODE: ["it_code_worker_profiles", "it_code_dw_data", "it_code_daily_applications"],
   RECRUITMENT_OPERATIONS: ["request_allocation_overrides", "request_allocation_history", "request_allocations", "request_comments", "request_kpi_cache"],
   PLANNING: ["planning_allocations"],
   WORKFORCE: [
@@ -147,7 +170,7 @@ const SCOPE_DOMAINS: Record<ResetScope, ResetDomainKey[]> = {
 };
 
 export const RESET_SCOPE_LABELS: Record<ResetScope, string> = {
-  FINGERPRINT: "Vân tay (IT Code)",
+  IT_CODE: "Mã IT / Mã số công nhật",
   RECRUITMENT_OPERATIONS: "Tuyển dụng vận hành (Daily Application/phân bổ yêu cầu)",
   PLANNING: "Planning allocations",
   WORKFORCE: "Workforce / DW",
@@ -200,7 +223,7 @@ export function expandResetScopes(requested: ResetScope[]): ResetPlan {
   return { requestedScopes: [...requestedSet], effectiveScopes, domains };
 }
 
-/** Permission key(s) required to EXECUTE a given effective scope set (mission section 8) — distinct from data_management.view, which only gates seeing the summary/preview. Callers must hold EVERY key returned (AND, not OR): requesting FINGERPRINT+PLANNING together requires both reset_fingerprint and reset_operational. */
+/** Permission key(s) required to EXECUTE a given effective scope set (mission section 8) — distinct from data_management.view, which only gates seeing the summary/preview. Callers must hold EVERY key returned (AND, not OR): requesting IT_CODE+PLANNING together requires both reset_it_code and reset_operational. */
 export function permissionKeysForScopes(effectiveScopes: ResetScope[]): string[] {
   const keys = new Set<string>();
   for (const scope of effectiveScopes) {
@@ -211,8 +234,8 @@ export function permissionKeysForScopes(effectiveScopes: ResetScope[]): string[]
       case "WORKFORCE":
         keys.add("data_management.reset_workforce");
         break;
-      case "FINGERPRINT":
-        keys.add("data_management.reset_fingerprint");
+      case "IT_CODE":
+        keys.add("data_management.reset_it_code");
         break;
       case "RECRUITMENT_OPERATIONS":
       case "PLANNING":
@@ -227,9 +250,9 @@ export function permissionKeysForScopes(effectiveScopes: ResetScope[]): string[]
 export function requiredConfirmationPhrase(effectiveScopes: ResetScope[]): string {
   if (effectiveScopes.includes("ALL_BUSINESS_DATA")) return "RESET ALL BUSINESS DATA";
   if (effectiveScopes.includes("WORKFORCE")) return "RESET WORKFORCE DATA";
-  if (effectiveScopes.length === 1 && effectiveScopes[0] === "FINGERPRINT") return "RESET FINGERPRINT";
+  if (effectiveScopes.length === 1 && effectiveScopes[0] === "IT_CODE") return "RESET IT CODE";
   if (effectiveScopes.length === 1 && effectiveScopes[0] === "RECRUITMENT_OPERATIONS") return "RESET RECRUITMENT OPERATIONS";
   if (effectiveScopes.length === 1 && effectiveScopes[0] === "PLANNING") return "RESET PLANNING";
-  // Multiple independent non-subsuming scopes requested together (e.g. FINGERPRINT + PLANNING).
+  // Multiple independent non-subsuming scopes requested together (e.g. IT_CODE + PLANNING).
   return "RESET " + effectiveScopes.map((s) => RESET_SCOPE_LABELS[s]).join(" + ").toUpperCase();
 }

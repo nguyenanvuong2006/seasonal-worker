@@ -3,6 +3,7 @@ import { and, desc, eq, inArray, isNotNull, isNull } from "drizzle-orm";
 import { db } from "@/db";
 import { dailyApplications, departments, dwData } from "@/db/schema";
 import { isEligibleForFingerprintQueue } from "@/lib/daily-intake-workflow";
+import { classifyWorkforceEngagements, type WorkforceClassification } from "@/lib/fingerprint-classification";
 
 export type FingerprintItCodeRow = {
   dailyApplicationId: string;
@@ -17,18 +18,29 @@ export type FingerprintItCodeRow = {
   itCode: string | null;
   itCodeUpdatedAt: Date | null;
   itCodeUpdatedBy: string | null;
+  /** NEW/RETURNING/TRANSFERRED, derived from employment_sessions + workforce_movements — see fingerprint-classification.ts. null when the row has no employment_sessions entry yet (not yet classifiable). */
+  classification: WorkforceClassification | null;
 };
 
-export type FingerprintStatusFilter = "ALL" | "MISSING" | "DONE";
+/**
+ * ALL | MISSING (chưa có IT CODE) | DONE (đã có IT CODE) | NEW (Công nhật mới
+ * đăng ký) | RETURNING (Công nhật cũ quay lại) | TRANSFERRED (Công nhật cũ
+ * thuyên chuyển) — one single "Lọc" dropdown, matching the existing UI
+ * pattern; NEW/RETURNING/TRANSFERRED filter by classification, MISSING/DONE
+ * by IT Code presence — orthogonal dimensions, never combined server-side.
+ */
+export type FingerprintStatusFilter = "ALL" | "MISSING" | "DONE" | "NEW" | "RETURNING" | "TRANSFERRED";
 
 export type FingerprintItCodeListFilters = {
   /** Lọc theo 1 bộ phận cụ thể — caller (route) PHẢI tự kiểm tra deptId nằm trong Data Scope TRƯỚC khi gọi. */
   deptId?: string | null;
   /** Tìm theo họ tên / CCCD / Mã số công nhật / IT CODE. */
   q?: string | null;
-  /** ALL (mặc định) | MISSING (chưa có IT CODE) | DONE (đã có IT CODE). */
+  /** ALL (mặc định) | MISSING | DONE | NEW | RETURNING | TRANSFERRED. */
   status?: FingerprintStatusFilter;
 };
+
+const CLASSIFICATION_FILTERS: readonly WorkforceClassification[] = ["NEW", "RETURNING", "TRANSFERRED"];
 
 /**
  * FINGERPRINT_STAFF — "IT Code / Vân tay" (mục VIII). Hàng chờ = lao động
@@ -77,9 +89,18 @@ export async function getFingerprintItCodeRows(
 
   const eligible = rows.filter((r) => isEligibleForFingerprintQueue({ status: "APPROVED", dwImportedAt: r.dwImportedAt }, { code: r.code }));
 
+  const classificationByAppId = await classifyWorkforceEngagements(eligible.map((r) => r.dailyApplicationId));
+  const withClassification: FingerprintItCodeRow[] = eligible.map((r) => ({
+    ...r,
+    classification: classificationByAppId.get(r.dailyApplicationId) ?? null,
+  }));
+
   const status = filters.status ?? "ALL";
-  const filtered =
-    status === "MISSING" ? eligible.filter((r) => !r.itCode) : status === "DONE" ? eligible.filter((r) => !!r.itCode) : eligible;
+  let filtered: FingerprintItCodeRow[];
+  if (status === "MISSING") filtered = withClassification.filter((r) => !r.itCode);
+  else if (status === "DONE") filtered = withClassification.filter((r) => !!r.itCode);
+  else if ((CLASSIFICATION_FILTERS as readonly string[]).includes(status)) filtered = withClassification.filter((r) => r.classification === status);
+  else filtered = withClassification;
 
   const q = filters.q?.trim().toLowerCase();
   if (!q) return filtered;
