@@ -25,7 +25,10 @@ const RESIGNED_ROWS = [
   { workerId: "w9", fullName: "Pham Thi D", cccd: "010000000009", gender: "Nữ", phone: "0900000009", deptId: "d1", deptName: "Đóng gói", groupName: null, section: null, startingDate: null, lifecycleState: "RESIGNED", upcoming: null, effectiveDate: "2026-08-01" },
 ];
 
-async function renderPage(env: RenderEnv, opts: { onResignationPost?: (body: unknown) => { status: number } } = {}) {
+async function renderPage(
+  env: RenderEnv,
+  opts: { onResignationPost?: (body: unknown) => { status: number }; onSameDayPost?: (body: unknown) => { status: number } } = {},
+) {
   const requests: FetchCall[] = [];
   (globalThis as Record<string, unknown>).fetch = async (input: unknown, init?: RequestInit) => {
     const url = String(input);
@@ -45,6 +48,10 @@ async function renderPage(env: RenderEnv, opts: { onResignationPost?: (body: unk
     if (url.endsWith("/api/workforce-movements") && method === "POST") {
       const result = opts.onResignationPost?.(body) ?? { status: 200 };
       return json({ success: true }, result.status);
+    }
+    if (url.endsWith("/api/workforce/same-day-event") && method === "POST") {
+      const result = opts.onSameDayPost?.(body) ?? { status: 200 };
+      return json({ ok: true, alreadyApplied: false, eventId: "evt-1", mealAction: "CANCELLED_BEFORE_CUTOFF", dwCodeReleased: true, itCodeReleased: false }, result.status);
     }
     return json({});
   };
@@ -148,6 +155,32 @@ test("bulk resignation submit posts the roster's own workerId directly to /api/w
     assert.equal(postBody.movementType, "resignation");
     assert.ok(["w1", "w2"].includes(postBody.workerId), "workerId must come straight from the roster row, no /api/worker-profiles lookup needed");
     assert.ok(!ui.requests.some((r) => r.url.includes("/api/worker-profiles/")), "must never fall back to a CCCD lookup when workerId is already known");
+  } finally {
+    env.cleanup();
+  }
+});
+
+test("MISSION E: same-day report submits outcome+workerId to /api/workforce/same-day-event and refreshes the roster", async () => {
+  const env = installDom();
+  try {
+    const ui = await renderPage(env, { onSameDayPost: () => ({ status: 200 }) });
+    const rowCheckbox = ui.checkboxes()[0];
+    const { act } = await import("react");
+    await act(async () => {
+      rowCheckbox.dispatchEvent(new env.window.MouseEvent("click", { bubbles: true, cancelable: true }));
+      await Promise.resolve();
+    });
+    await ui.clickLabelled("Báo cáo trong ngày");
+    await ui.clickLabelled("Xác nhận báo cáo");
+
+    const sameDayPost = ui.requests.find((r) => r.url.endsWith("/api/workforce/same-day-event") && r.method === "POST");
+    assert.ok(sameDayPost, "must submit a same-day lifecycle report");
+    const postBody = sameDayPost!.body as { workerId: string; outcome: string };
+    assert.equal(postBody.outcome, "NO_SHOW", "NO_SHOW is the default pre-selected outcome");
+    assert.ok(["w1", "w2"].includes(postBody.workerId));
+
+    const rosterCallsAfter = ui.requests.filter((r) => r.url.includes("/api/employment/current-workforce"));
+    assert.ok(rosterCallsAfter.length >= 2, "roster must be reloaded after a successful same-day report so the worker disappears if no longer Current Workforce");
   } finally {
     env.cleanup();
   }

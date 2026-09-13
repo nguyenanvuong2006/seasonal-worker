@@ -74,6 +74,13 @@ function loadMealList(rows: Record<string, unknown>[]) {
     },
     dwData: { __table: "dw_data", id: col("dwDataId"), code: col("code") },
     departments: { __table: "departments", deptName: col("deptName"), groupName: col("groupName"), id: col("deptTableId") },
+    // MISSION E — meal_exclusions LEFT JOIN (section 16-17). `.select()` is
+    // ignored by this mock (returns pre-baked `rows` verbatim from `.from()`),
+    // so these markers only need to exist so building the join condition /
+    // `sql` projection argument doesn't throw — the actual "excluded" signal
+    // for a test case comes from the fixture row itself (see exclusion tests
+    // below), exactly like every other field in this file's ROWS fixtures.
+    mealExclusions: { __table: "meal_exclusions", id: col("mealExclusionId"), dailyApplicationId: col("mealExclusionAppId"), excludeDate: col("mealExclusionDate") },
   };
 
   const stubs: Record<string, unknown> = {
@@ -87,6 +94,10 @@ function loadMealList(rows: Record<string, unknown>[]) {
       inArray: (col: unknown, v: unknown) => ({ op: "inArray", col, v }),
       isNotNull: (col: unknown) => ({ op: "isNotNull", col }),
       isNull: (col: unknown) => ({ op: "isNull", col }),
+      // Passthrough tag — `.select()` is ignored by this mock, so the actual
+      // computed value never matters here, only that building the argument
+      // object (which evaluates the tagged template) doesn't throw.
+      sql: (strings: TemplateStringsArray, ...values: unknown[]) => ({ op: "sql", strings, values }),
     },
     "@/db": { db: dbStub },
     "@/db/schema": schemaStub,
@@ -293,4 +304,28 @@ test("B6: mỗi hồ sơ (dailyApplicationId) là 1 đơn vị dedup riêng bi�
   const { getMealEligibleWorkers } = loadMealList(sameCccdTwoDays);
   const rows = await getMealEligibleWorkers({ from: "2026-09-01", to: "2026-09-13" }, null, { status: "ELIGIBLE" });
   assert.equal(rows.length, 2, "2 daily_applications rows riêng biệt (2 lượt đăng ký thật trong 2 ngày khác nhau) — dedup key là dailyApplicationId, không phải cccd");
+});
+
+// MISSION E section 16 — một sự kiện NO_SHOW/DECLINED_AT_START/STARTED_THEN_LEFT được báo TRƯỚC
+// giờ chốt phải loại người đó khỏi TOÀN BỘ danh sách hôm nay (không phải ELIGIBLE, cũng không phải
+// INELIGIBLE) — nhưng KHÔNG được thay đổi công thức đủ điều kiện gốc cho bất kỳ ai khác.
+test("MISSION E: excluded=true (meal_exclusions match) loại hồ sơ khỏi list dù công thức gốc coi là ĐỦ ĐIỀU KIỆN", async () => {
+  const rowsWithExclusion = [
+    { ...ROWS[0], excluded: false },
+    { ...ROWS[1], excluded: true },
+  ];
+  const { getMealEligibleWorkers } = loadMealList(rowsWithExclusion);
+  const eligible = await getMealEligibleWorkers(day("2026-08-17"), null, { status: "ELIGIBLE" });
+  assert.equal(eligible.length, 1);
+  assert.equal(eligible[0].dailyApplicationId, "app-1");
+
+  const all = await getMealEligibleWorkers(day("2026-08-17"), null, { status: "ALL" });
+  assert.equal(all.some((r) => r.dailyApplicationId === "app-2"), false, "excluded row không được xuất hiện ở BẤT KỲ status filter nào, kể cả ALL");
+});
+
+test("MISSION E: excluded field không bao giờ rò rỉ ra ngoài shape MealEligibleRow", async () => {
+  const rowsWithExclusion = [{ ...ROWS[0], excluded: false }];
+  const { getMealEligibleWorkers } = loadMealList(rowsWithExclusion);
+  const rows = await getMealEligibleWorkers(day("2026-08-17"), null, {});
+  assert.ok(!("excluded" in rows[0]), "excluded là chi tiết nội bộ của lớp lọc, không phải field nghiệp vụ của MealEligibleRow");
 });

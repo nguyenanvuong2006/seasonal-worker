@@ -282,6 +282,15 @@ export default function RegistrationsGrid({
   const [newModalOpen, setNewModalOpen] = React.useState(false);
   const [newSel, setNewSel] = React.useState<Record<string, boolean>>({});
   const [newDept, setNewDept] = React.useState("");
+  // MISSION E — Daily Arrangement decision-support preview (đề xuất Recruitment Request,
+  // cảnh báo vượt nhu cầu, gợi ý bộ phận khác đang thiếu người). Chỉ HIỂN THỊ — việc phân
+  // bổ THẬT vẫn tự động chạy nguyên trong autoAllocateInternship() khi PATCH duyệt hồ sơ.
+  const [arrangementPreview, setArrangementPreview] = React.useState<{
+    recommendedRequest: { requestId: string; requestCode: string; target: number; current: number; balance: number } | null;
+    unattributedWarning: boolean;
+    projected: { selectedCount: number; projectedTotal: number; overNeed: number } | null;
+    otherDepartments: { deptId: string; deptName: string; target: number; current: number; balance: number }[];
+  } | null>(null);
   // EMPLOYMENT LIFECYCLE (#7-9, #23) — modal chặn "xếp việc âm thầm" khi ứng viên còn ACTIVE session.
   const [employmentGuard, setEmploymentGuard] = React.useState<{ row: AppRow; pendingPatch: Partial<AppRow> } | null>(null);
   // EMPLOYMENT LIFECYCLE (#11) — modal yêu cầu điều chỉnh ngày nhận việc (không backdate trực tiếp).
@@ -674,6 +683,28 @@ export default function RegistrationsGrid({
   const newInSel = selRows.filter((r) => r.dwMatch === "NEW").length;
   const newApplicants = React.useMemo(() => rows.filter((r) => r.dwMatch === "NEW"), [rows]);
   const newSelIds = Object.keys(newSel).filter((k) => newSel[k]);
+
+  React.useEffect(() => {
+    if (!newDept) {
+      setArrangementPreview(null);
+      return;
+    }
+    let cancelled = false;
+    void (async () => {
+      try {
+        const res = await fetch(`/api/planning/arrangement-preview?deptId=${newDept}&count=${newSelIds.length}`);
+        if (!res.ok || cancelled) return;
+        const data = await res.json();
+        if (!cancelled) setArrangementPreview(data);
+      } catch {
+        /* preview chỉ là hỗ trợ quyết định — lỗi tải không chặn luồng duyệt/xếp việc chính */
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [newDept, newSelIds.length]);
+
   type RowOutcome = { id: string; cccd: string | null; fullName: string | null; ok: boolean; reason: string };
   const [bulkResult, setBulkResult] = React.useState<{
     title: string;
@@ -1142,6 +1173,36 @@ export default function RegistrationsGrid({
               ))}
             </select>
           </div>
+
+          {newDept && arrangementPreview && (
+            <div className="space-y-2 rounded-[10px] border border-border bg-surface-hover/60 p-3 text-xs">
+              {arrangementPreview.recommendedRequest ? (
+                <p className="text-fg">
+                  <Badge tone="purple">Đề xuất</Badge>{" "}
+                  <b>{arrangementPreview.recommendedRequest.requestCode}</b> — còn thiếu{" "}
+                  <b>{arrangementPreview.recommendedRequest.balance}</b> (hiện có {arrangementPreview.recommendedRequest.current}/
+                  {arrangementPreview.recommendedRequest.target}). Hệ thống sẽ tự động gán khi duyệt.
+                </p>
+              ) : (
+                <p className="font-semibold text-warning">
+                  Không có Recruitment Request nào đang mở cho bộ phận này — người được xếp sẽ vẫn được duyệt/xếp việc
+                  bình thường nhưng chưa gắn với Request nào (UNATTRIBUTED).
+                </p>
+              )}
+              {arrangementPreview.projected && arrangementPreview.projected.overNeed > 0 && (
+                <p className="font-semibold text-danger">
+                  Bạn đang xếp {arrangementPreview.projected.selectedCount} người. Projected ={" "}
+                  {arrangementPreview.projected.projectedTotal}. Vượt nhu cầu {arrangementPreview.projected.overNeed}.
+                </p>
+              )}
+              {arrangementPreview.otherDepartments.length > 0 && (
+                <p className="text-fg-muted">
+                  Bộ phận khác đang thiếu:{" "}
+                  {arrangementPreview.otherDepartments.map((d) => `${d.deptName} thiếu ${d.balance}`).join(", ")}.
+                </p>
+              )}
+            </div>
+          )}
 
           <Button
             variant="primary"

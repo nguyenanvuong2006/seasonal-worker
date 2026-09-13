@@ -17,6 +17,7 @@ import {
   toast,
 } from "@/components/ui";
 import {
+  AlertTriangle,
   ArrowLeftRight,
   Download,
   FileSpreadsheet,
@@ -131,6 +132,15 @@ export default function MyDepartmentPage() {
   const [transferDate, setTransferDate] = useState(() => new Date().toISOString().slice(0, 10));
   const [transferNote, setTransferNote] = useState("");
   const [submittingTransfer, setSubmittingTransfer] = useState(false);
+
+  // Same-day non-start / early-leave report modal (MISSION E — "Không đến nhận việc" /
+  // "Đến nhưng không nhận việc" / "Bỏ về trong ca"). Effective immediately — không qua HR duyệt
+  // như Báo nghỉ/Thuyên chuyển, vì đây là sự kiện xảy ra ngay trong ngày.
+  const [sameDayModalOpen, setSameDayModalOpen] = useState(false);
+  const [sameDayTargetRows, setSameDayTargetRows] = useState<RosterRow[]>([]);
+  const [sameDayOutcome, setSameDayOutcome] = useState<"NO_SHOW" | "DECLINED_AT_START" | "STARTED_THEN_LEFT">("NO_SHOW");
+  const [sameDayReason, setSameDayReason] = useState("");
+  const [submittingSameDay, setSubmittingSameDay] = useState(false);
 
   // Load departments + the currently selected filter's roster (Data Scope applied server-side)
   const loadData = useCallback(async () => {
@@ -321,6 +331,54 @@ export default function MyDepartmentPage() {
     }
     if (failCount > 0) {
       toast({ title: `Có ${failCount} người không thể tạo yêu cầu nghỉ`, variant: "destructive" });
+    }
+  };
+
+  // Mở modal Báo cáo trong ngày (không đến / đến nhưng không nhận việc / bỏ về trong ca)
+  const openSameDay = (rows: RosterRow[]) => {
+    if (rows.length === 0) return;
+    setSameDayTargetRows(rows);
+    setSameDayOutcome("NO_SHOW");
+    setSameDayReason("");
+    setSameDayModalOpen(true);
+  };
+
+  // Submit same-day report (single or bulk) — hiệu lực ngay, không qua HR duyệt.
+  const submitSameDay = async () => {
+    if (sameDayTargetRows.length === 0) return;
+    setSubmittingSameDay(true);
+    let successCount = 0;
+    let failCount = 0;
+
+    for (const r of sameDayTargetRows) {
+      try {
+        const res = await fetch("/api/workforce/same-day-event", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            workerId: r.workerId,
+            outcome: sameDayOutcome,
+            reason: sameDayReason || null,
+          }),
+        });
+        if (res.ok) successCount++;
+        else failCount++;
+      } catch (e) {
+        failCount++;
+      }
+    }
+
+    setSubmittingSameDay(false);
+    setSameDayModalOpen(false);
+
+    if (successCount > 0) {
+      toast({ title: `Đã ghi nhận ${successCount} báo cáo trong ngày. Đã thu hồi mã và cập nhật danh sách báo cơm nếu áp dụng.` });
+      deselectAll();
+      await loadData();
+      await loadSummary();
+    }
+    if (failCount > 0) {
+      toast({ title: `Có ${failCount} báo cáo không thể ghi nhận`, variant: "destructive" });
     }
   };
 
@@ -675,6 +733,14 @@ export default function MyDepartmentPage() {
           <Button
             variant="outline"
             size="sm"
+            onClick={() => openSameDay(filteredRows.filter((r) => selectedIds.has(r.workerId)))}
+            className="gap-1.5 text-xs font-semibold text-white border-white/30 bg-white/10 hover:bg-white/20"
+          >
+            <AlertTriangle className="h-3.5 w-3.5" /> Báo cáo trong ngày ({selectedIds.size})
+          </Button>
+          <Button
+            variant="outline"
+            size="sm"
             onClick={exportData}
             className="gap-1.5 text-xs text-white border-white/30 bg-white/10 hover:bg-white/20"
           >
@@ -817,6 +883,77 @@ export default function MyDepartmentPage() {
 
           <Button variant="primary" size="lg" className="w-full" loading={submittingTransfer} onClick={submitTransfer}>
             Xác nhận gửi yêu cầu thuyên chuyển ({transferTargetRows.length})
+          </Button>
+        </div>
+      </Modal>
+
+      {/* Modal: Báo cáo trong ngày (Không đến / Đến nhưng không nhận việc / Bỏ về trong ca) */}
+      <Modal
+        open={sameDayModalOpen}
+        onClose={() => setSameDayModalOpen(false)}
+        title={
+          sameDayTargetRows.length > 1
+            ? `Báo Cáo Trong Ngày Hàng Loạt (${sameDayTargetRows.length} Người)`
+            : `Báo Cáo Trong Ngày — ${sameDayTargetRows[0]?.fullName ?? ""}`
+        }
+      >
+        <div className="space-y-4">
+          <p className="text-xs text-fg-muted">
+            Dùng khi người tập nghề đã được sắp xếp/xếp việc nhưng KHÔNG đến nhận việc, đến nhưng
+            từ chối nhận việc, hoặc đã nhận việc rồi bỏ về giữa ca — trong cùng ngày. Có hiệu lực
+            NGAY LẬP TỨC (không qua HR duyệt): người này sẽ không còn hiển thị ở &quot;Đang làm
+            việc&quot;, mã số công nhật/IT Code sẽ được thu hồi, và nếu còn trước giờ chốt báo cơm
+            thì sẽ được gỡ khỏi danh sách báo cơm hôm nay.
+          </p>
+
+          <div className="max-h-40 overflow-auto rounded-[8px] border border-border">
+            <table className="w-full text-xs">
+              <thead className="sticky top-0 bg-primary text-white">
+                <tr>
+                  <th className="px-2 py-1.5 text-left text-[10px] uppercase">Họ và tên</th>
+                  <th className="px-2 py-1.5 text-left text-[10px] uppercase">Department</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-border">
+                {sameDayTargetRows.map((r) => (
+                  <tr key={r.workerId} className="bg-surface">
+                    <td className="px-2 py-1.5 font-semibold text-fg">{r.fullName}</td>
+                    <td className="px-2 py-1.5 text-fg-secondary">{r.deptName || "—"}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+
+          <FormField label="Loại sự kiện" required>
+            <div className="space-y-2">
+              {(
+                [
+                  { value: "NO_SHOW", label: "Không đến nhận việc" },
+                  { value: "DECLINED_AT_START", label: "Đến nhưng không nhận việc" },
+                  { value: "STARTED_THEN_LEFT", label: "Bỏ về trong ca" },
+                ] as const
+              ).map((o) => (
+                <label key={o.value} className="flex cursor-pointer items-center gap-2 text-sm text-fg">
+                  <input
+                    type="radio"
+                    name="sameDayOutcome"
+                    checked={sameDayOutcome === o.value}
+                    onChange={() => setSameDayOutcome(o.value)}
+                    className="h-4 w-4 accent-primary"
+                  />
+                  {o.label}
+                </label>
+              ))}
+            </div>
+          </FormField>
+
+          <FormField label="Ghi chú (tuỳ chọn)">
+            <Input placeholder="Lý do chi tiết hoặc thông tin khác..." value={sameDayReason} onChange={(e) => setSameDayReason(e.target.value)} />
+          </FormField>
+
+          <Button variant="danger" size="lg" className="w-full" loading={submittingSameDay} onClick={submitSameDay}>
+            Xác nhận báo cáo ({sameDayTargetRows.length})
           </Button>
         </div>
       </Modal>

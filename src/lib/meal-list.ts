@@ -1,7 +1,7 @@
 import "server-only";
-import { and, desc, eq, gte, inArray, isNotNull, isNull, lte } from "drizzle-orm";
+import { and, desc, eq, gte, inArray, isNotNull, isNull, lte, sql } from "drizzle-orm";
 import { db } from "@/db";
-import { dailyApplications, departments, dwData } from "@/db/schema";
+import { dailyApplications, departments, dwData, mealExclusions } from "@/db/schema";
 import { isEligibleForMealExport } from "@/lib/daily-intake-workflow";
 import type { DateRange } from "@/lib/date-range";
 
@@ -75,17 +75,28 @@ export async function getMealEligibleWorkers(
       startingDate: dailyApplications.startingDate,
       dwImportedAt: dailyApplications.dwImportedAt,
       code: dwData.code,
+      excluded: sql<boolean>`${mealExclusions.id} is not null`,
     })
     .from(dailyApplications)
     .innerJoin(dwData, eq(dailyApplications.dwId, dwData.id))
     .leftJoin(departments, eq(dailyApplications.deptId, departments.id))
+    .leftJoin(
+      mealExclusions,
+      and(eq(mealExclusions.dailyApplicationId, dailyApplications.id), eq(mealExclusions.excludeDate, dailyApplications.regDate)),
+    )
     .where(and(...conditions))
     .orderBy(desc(dailyApplications.dwImportedAt));
 
+  // MISSION E section 16 — a same-day NO_SHOW/DECLINED_AT_START/STARTED_THEN_LEFT
+  // reported before the meal cutoff removes the worker from today's meal list
+  // ENTIRELY (never shown as eligible or ineligible) — this never changes the
+  // canonical eligibility RULE itself, only which rows this query returns.
+  const notExcluded = rows.filter((r) => !r.excluded);
+
   const status = filters.status ?? "ELIGIBLE";
-  const isEligible = (r: (typeof rows)[number]) => isEligibleForMealExport({ status: "APPROVED", dwImportedAt: r.dwImportedAt }, { code: r.code });
-  const scoped = status === "ELIGIBLE" ? rows.filter(isEligible) : status === "INELIGIBLE" ? rows.filter((r) => !isEligible(r)) : rows;
-  const shaped = scoped.map(({ dwImportedAt: _dwImportedAt, ...rest }) => rest);
+  const isEligible = (r: (typeof notExcluded)[number]) => isEligibleForMealExport({ status: "APPROVED", dwImportedAt: r.dwImportedAt }, { code: r.code });
+  const scoped = status === "ELIGIBLE" ? notExcluded.filter(isEligible) : status === "INELIGIBLE" ? notExcluded.filter((r) => !isEligible(r)) : notExcluded;
+  const shaped = scoped.map(({ dwImportedAt: _dwImportedAt, excluded: _excluded, ...rest }) => rest);
 
   const q = filters.q?.trim().toLowerCase();
   if (!q) return shaped;

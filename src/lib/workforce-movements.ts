@@ -64,7 +64,7 @@ type Executor = typeof db | Parameters<Parameters<typeof db.transaction>[0]>[0];
 // db.select(), which selects every column schema.ts declares and would
 // throw for the WHOLE row the moment schema.ts drifts ahead of the real
 // Production table on ANY column, not just an unused one).
-type MovementForFinalize = {
+export type MovementForFinalize = {
   id: string;
   movementType: string;
   workerId: string;
@@ -102,7 +102,7 @@ const MOVEMENT_FINALIZE_COLUMNS = {
  * applyEffectiveWorkforceMovements() (khi effectiveDate vừa tới) — CÙNG MỘT logic, không có
  * đường xử lý thứ 2 nào khác cho việc kết thúc session vì nghỉ việc.
  */
-async function finalizeResignationEffect(
+export async function finalizeResignationEffect(
   tx: Executor,
   movement: MovementForFinalize,
   actorUsername: string,

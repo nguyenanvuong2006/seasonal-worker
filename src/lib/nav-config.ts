@@ -24,6 +24,7 @@ import {
   Users,
   ShieldCheck,
   Map as MapIcon,
+  MapPin,
   Gauge,
   ScrollText,
   UploadCloud,
@@ -127,6 +128,7 @@ export const NAV_GROUPS: NavGroup[] = [
       { href: "/admin/workflow", label: "Workflow", icon: GitBranch, roles: ["ADMIN"], permission: "workflow.manage" },
       { href: "/admin/rules", label: "Rule Engine", icon: SlidersHorizontal, roles: ["ADMIN"], permission: "rules.manage" },
       { href: "/admin/notifications", label: "Thông báo", icon: Bell, roles: ["ADMIN", "HR_RECRUITER"], permission: "notifications.manage" },
+      { href: "/admin/dw-code-locations", label: "Mã số công nhật — theo địa điểm", icon: MapPin, roles: ["ADMIN"], permission: "dw_code.configure" },
     ],
   },
   {

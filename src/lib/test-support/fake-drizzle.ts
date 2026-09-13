@@ -304,3 +304,24 @@ export function createFakeDb(options: FakeDbOptions = {}): FakeDb {
 
   return db;
 }
+
+/**
+ * For modules using the "reentrant executor" pattern
+ * (`if (executor === db) return db.transaction((tx) => fn(input, tx))`, e.g.
+ * dw-code-pool.ts/it-code-assignment.ts) — real Drizzle's `tx` is always a
+ * DIFFERENT object from `db`, which is exactly what makes that pattern
+ * terminate (the recursive call takes the `tx` branch, not the self-wrap
+ * branch again). Plain `createFakeDb()`'s `.transaction()` hands back the
+ * SAME object as `tx`, so `executor === db` stays true forever and the
+ * recursive call loops until the stack overflows — a pure test-harness
+ * artifact, not a production bug. This variant returns a `db` whose
+ * `.transaction()` invokes the callback with a genuinely distinct `tx`
+ * object (same underlying query log/respond callback, different identity),
+ * matching real Drizzle's contract.
+ */
+export function createFakeDbWithTx(options: FakeDbOptions = {}): { db: FakeDb; tx: FakeDb } {
+  const raw = createFakeDb(options);
+  const tx: FakeDb = { ...raw, transaction: async <T>(fn: (t: FakeDb) => Promise<T>) => fn(tx) };
+  const db: FakeDb = { ...raw, transaction: async <T>(fn: (t: FakeDb) => Promise<T>): Promise<T> => { raw.transactions += 1; return fn(tx); } };
+  return { db, tx };
+}
