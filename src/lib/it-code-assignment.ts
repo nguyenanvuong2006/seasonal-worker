@@ -20,6 +20,21 @@ type Executor = typeof db | Parameters<Parameters<typeof db.transaction>[0]>[0];
  * handler already writes — this module keeps writing all three in one
  * transaction, exactly like that handler, so nothing already depending
  * on those mirrors sees a behavior change.
+ *
+ * MIRROR CONTRACT (mission F2 section 12-13/251) — all THREE mirrors
+ * (`dw_data.it_code`, `worker_profiles.fingerprint_code`, `daily_applications.
+ * it_code`) are CURRENT-MIRRORS, never historical/append-only: each reflects
+ * only "what IT Code does this worker/engagement hold RIGHT NOW", overwritten
+ * on assign and cleared to NULL on release — never left showing a stale value
+ * for a worker who no longer holds that code. `daily_applications.it_code`'s
+ * "current" is naturally scoped to that one engagement's lifetime (a new
+ * registration cycle gets its own `daily_applications` row), unlike
+ * `dw_data`/`worker_profiles` which are per-worker and get overwritten across
+ * engagements. `it_code_assignments` (this module's own table) is the ONLY
+ * historical source — one row per assignment PERIOD, `releasedAt` marking
+ * active vs. history — any reader needing "who has EVER held code X" or "what
+ * codes has this worker held over time" must query it directly, never infer
+ * history from a mirror's current value.
  */
 
 export type AssignItCodeInput = {
