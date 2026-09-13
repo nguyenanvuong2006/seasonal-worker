@@ -110,7 +110,16 @@ function loadRoute(opts: {
       },
     },
     "@/lib/person-name": { normalizePersonName: (s: string) => s },
-    "@/lib/helpers": { todayStr: () => "2026-08-17" },
+    "@/lib/date-range": {
+      parseOperationalDateRange: (searchParams: { get(name: string): string | null }) => {
+        const from = searchParams.get("from");
+        const to = searchParams.get("to");
+        const date = searchParams.get("date");
+        if (from || to) return { ok: true, range: { from: from || to, to: to || from } };
+        if (date) return { ok: true, range: { from: date, to: date } };
+        return { ok: true, range: { from: "2026-08-17", to: "2026-08-17" } };
+      },
+    },
     "@/lib/daily-intake-workflow": {
       maskCccd: (value: string | null, canView: boolean) => {
         if (!value) return value;

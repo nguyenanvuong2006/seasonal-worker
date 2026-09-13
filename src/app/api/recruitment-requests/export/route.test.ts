@@ -183,3 +183,30 @@ test("request EXPIRED -> KPI được tính tại asOf=endDate (đóng băng), k
   assert.equal(kpiCalls.length, 1);
   assert.equal(kpiCalls[0].rows.length, 1);
 });
+
+/* ------------------------------------------------------------
+   GLOBAL DATE RANGE STANDARDIZATION — export PHẢI nhận CÙNG bộ filter
+   khoảng ngày (requestedFrom/To, expectedFrom/To) với GET
+   /api/recruitment-requests, nếu không file xuất sẽ lệch khỏi danh sách
+   đang lọc trên UI (bug đã phát hiện qua audit — trước đây export bỏ qua
+   4 tham số này hoàn toàn).
+   ------------------------------------------------------------ */
+test("requestedFrom/requestedTo/expectedFrom/expectedTo được chuyển tiếp NGUYÊN VẸN xuống listRecruitmentRequests filter", async () => {
+  const { mod, listCalls } = loadRoute({ scope: null, rows: [] });
+  const GET = mod.GET as (req: Request) => Promise<{ status: number }>;
+  await GET(makeReq("?requestedFrom=2026-09-01&requestedTo=2026-09-13&expectedFrom=2026-10-01&expectedTo=2026-10-31"));
+  assert.equal(listCalls[0].filter.requestedFrom, "2026-09-01");
+  assert.equal(listCalls[0].filter.requestedTo, "2026-09-13");
+  assert.equal(listCalls[0].filter.expectedFrom, "2026-10-01");
+  assert.equal(listCalls[0].filter.expectedTo, "2026-10-31");
+});
+
+test("không truyền requestedFrom/To/expectedFrom/To -> filter tương ứng là undefined (không tự áp đặt khoảng ngày mặc định)", async () => {
+  const { mod, listCalls } = loadRoute({ scope: null, rows: [] });
+  const GET = mod.GET as (req: Request) => Promise<{ status: number }>;
+  await GET(makeReq());
+  assert.equal(listCalls[0].filter.requestedFrom, undefined);
+  assert.equal(listCalls[0].filter.requestedTo, undefined);
+  assert.equal(listCalls[0].filter.expectedFrom, undefined);
+  assert.equal(listCalls[0].filter.expectedTo, undefined);
+});

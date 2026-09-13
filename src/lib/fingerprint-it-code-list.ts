@@ -1,9 +1,10 @@
 import "server-only";
-import { and, desc, eq, inArray, isNotNull, isNull } from "drizzle-orm";
+import { and, desc, eq, gte, inArray, isNotNull, isNull, lte } from "drizzle-orm";
 import { db } from "@/db";
 import { dailyApplications, departments, dwData } from "@/db/schema";
 import { isEligibleForFingerprintQueue } from "@/lib/daily-intake-workflow";
 import { classifyWorkforceEngagements, type WorkforceClassification } from "@/lib/fingerprint-classification";
+import type { DateRange } from "@/lib/date-range";
 
 export type FingerprintItCodeRow = {
   dailyApplicationId: string;
@@ -23,24 +24,29 @@ export type FingerprintItCodeRow = {
 };
 
 /**
- * ALL | MISSING (chưa có IT CODE) | DONE (đã có IT CODE) | NEW (Công nhật mới
- * đăng ký) | RETURNING (Công nhật cũ quay lại) | TRANSFERRED (Công nhật cũ
- * thuyên chuyển) — one single "Lọc" dropdown, matching the existing UI
- * pattern; NEW/RETURNING/TRANSFERRED filter by classification, MISSING/DONE
- * by IT Code presence — orthogonal dimensions, never combined server-side.
+ * "Loại công nhật" — independent from IT Code status (mission: identity &
+ * IT Code contract review section 14). ALL | NEW | RETURNING | TRANSFERRED.
  */
-export type FingerprintStatusFilter = "ALL" | "MISSING" | "DONE" | "NEW" | "RETURNING" | "TRANSFERRED";
+export type FingerprintClassificationFilter = "ALL" | WorkforceClassification;
+
+/**
+ * "Trạng thái IT Code" — whether dw_data.it_code has been assigned yet.
+ * Independent from classification: a worker can be RETURNING+MISSING,
+ * TRANSFERRED+HAS, etc. — never conflate the two into one dropdown
+ * (GLOBAL DATE RANGE STANDARDIZATION mission section 14).
+ */
+export type ItCodeStatusFilter = "ALL" | "MISSING" | "HAS";
 
 export type FingerprintItCodeListFilters = {
   /** Lọc theo 1 bộ phận cụ thể — caller (route) PHẢI tự kiểm tra deptId nằm trong Data Scope TRƯỚC khi gọi. */
   deptId?: string | null;
   /** Tìm theo họ tên / CCCD / Mã số công nhật / IT CODE. */
   q?: string | null;
-  /** ALL (mặc định) | MISSING | DONE | NEW | RETURNING | TRANSFERRED. */
-  status?: FingerprintStatusFilter;
+  /** ALL (mặc định) | NEW | RETURNING | TRANSFERRED. */
+  classification?: FingerprintClassificationFilter;
+  /** ALL (mặc định) | MISSING | HAS. */
+  itCodeStatus?: ItCodeStatusFilter;
 };
-
-const CLASSIFICATION_FILTERS: readonly WorkforceClassification[] = ["NEW", "RETURNING", "TRANSFERRED"];
 
 /**
  * FINGERPRINT_STAFF — "IT Code / Vân tay" (mục VIII). Hàng chờ = lao động
@@ -48,18 +54,34 @@ const CLASSIFICATION_FILTERS: readonly WorkforceClassification[] = ["NEW", "RETU
  * lib/daily-intake-workflow.ts#isEligibleForFingerprintQueue, nguồn DUY
  * NHẤT cho điều kiện này. Nguồn dùng CHUNG cho cả list (GET
  * /api/fingerprint/it-code) và export (GET /api/fingerprint/it-code/export)
- * — CÙNG bộ filters (date/deptId/q/status) để danh sách hiển thị và file
- * xuất luôn khớp nhau, theo đúng mẫu đã thiết lập ở lib/meal-list.ts.
+ * — CÙNG bộ filters (range/deptId/q/classification/itCodeStatus) để danh
+ * sách hiển thị và file xuất luôn khớp nhau.
+ *
+ * DATE SEMANTICS (GLOBAL DATE RANGE STANDARDIZATION): the date column is
+ * `daily_applications.reg_date` — the SAME registration-date semantics the
+ * single-day screen always used, now inclusive over [range.from, range.to].
+ * `reg_date` is a DATE column, so a plain >= / <= comparison is exact — no
+ * timestamp half-open boundary needed here.
+ *
+ * ENTITY/DEDUP KEY: one row per `daily_applications.id` (one row per
+ * registration/engagement), unchanged from the single-day screen. A worker
+ * who registered on two different days already produced two distinct rows
+ * in the old single-day view (viewed on each of those two days
+ * separately) — extending to a multi-day range simply shows both rows
+ * together; this is not double-counting the same registration, it is two
+ * real, distinct daily_applications rows for two real, distinct
+ * registration events.
  */
 export async function getFingerprintItCodeRows(
-  date: string,
+  range: DateRange,
   scope: string[] | null,
   filters: FingerprintItCodeListFilters = {},
 ): Promise<FingerprintItCodeRow[]> {
   if (scope !== null && scope.length === 0) return [];
 
   const conditions = [
-    eq(dailyApplications.regDate, date),
+    gte(dailyApplications.regDate, range.from),
+    lte(dailyApplications.regDate, range.to),
     isNull(dailyApplications.deletedAt),
     isNotNull(dailyApplications.dwImportedAt),
   ];
@@ -95,16 +117,20 @@ export async function getFingerprintItCodeRows(
     classification: classificationByAppId.get(r.dailyApplicationId) ?? null,
   }));
 
-  const status = filters.status ?? "ALL";
-  let filtered: FingerprintItCodeRow[];
-  if (status === "MISSING") filtered = withClassification.filter((r) => !r.itCode);
-  else if (status === "DONE") filtered = withClassification.filter((r) => !!r.itCode);
-  else if ((CLASSIFICATION_FILTERS as readonly string[]).includes(status)) filtered = withClassification.filter((r) => r.classification === status);
-  else filtered = withClassification;
+  const itCodeStatus = filters.itCodeStatus ?? "ALL";
+  const byItCodeStatus =
+    itCodeStatus === "MISSING"
+      ? withClassification.filter((r) => !r.itCode)
+      : itCodeStatus === "HAS"
+        ? withClassification.filter((r) => !!r.itCode)
+        : withClassification;
+
+  const classification = filters.classification ?? "ALL";
+  const byClassification = classification === "ALL" ? byItCodeStatus : byItCodeStatus.filter((r) => r.classification === classification);
 
   const q = filters.q?.trim().toLowerCase();
-  if (!q) return filtered;
-  return filtered.filter(
+  if (!q) return byClassification;
+  return byClassification.filter(
     (r) =>
       r.fullName.toLowerCase().includes(q) ||
       r.cccd.includes(q) ||

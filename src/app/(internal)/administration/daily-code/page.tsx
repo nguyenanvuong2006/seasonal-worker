@@ -14,7 +14,9 @@ import {
   SkeletonTable,
   toast,
 } from "@/components/ui";
-import { formatDate, todayStr } from "@/lib/helpers";
+import { formatDate } from "@/lib/helpers";
+import { DateRangeFilter } from "@/components/date-range-filter";
+import { buildDateRangePreset, type DateRange } from "@/lib/date-range";
 import { BadgeCheck, Calendar, CheckCircle2, Download, RefreshCw, Search, Users } from "lucide-react";
 
 type Row = {
@@ -38,7 +40,7 @@ type StatusFilter = "ALL" | "MISSING" | "DONE";
 const hasCode = (r: Row) => !!(r.code && r.code.trim());
 
 export default function AdministrationDailyCodePage() {
-  const [date, setDate] = useState(todayStr());
+  const [range, setRange] = useState<DateRange>(() => buildDateRangePreset("TODAY"));
   const [deptId, setDeptId] = useState("");
   const [q, setQ] = useState("");
   const [status, setStatus] = useState<StatusFilter>("ALL");
@@ -65,11 +67,11 @@ export default function AdministrationDailyCodePage() {
   // Luôn tải TOÀN BỘ (status=ALL, server-authorized theo date/deptId/q) — bộ
   // lọc trạng thái áp dụng ở client trên CÙNG tập dữ liệu, để KPI và danh
   // sách hiển thị luôn nhất quán (bấm 1 thẻ KPI không cần gọi lại API).
-  const load = useCallback(async (d: string, dept: string, query: string) => {
+  const load = useCallback(async (r: DateRange, dept: string, query: string) => {
     setLoading(true);
     setError(null);
     try {
-      const params = new URLSearchParams({ date: d, status: "ALL" });
+      const params = new URLSearchParams({ from: r.from, to: r.to, status: "ALL" });
       if (dept) params.set("deptId", dept);
       if (query.trim()) params.set("q", query.trim());
       const res = await fetch(`/api/administration/daily-code?${params.toString()}`);
@@ -91,13 +93,13 @@ export default function AdministrationDailyCodePage() {
   }, []);
 
   useEffect(() => {
-    void load(date, deptId, q);
+    void load(range, deptId, q);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [date, deptId]);
+  }, [range.from, range.to, deptId]);
 
   // Tìm nhanh: debounce để không gọi API theo từng ký tự gõ.
   useEffect(() => {
-    const timer = setTimeout(() => void load(date, deptId, q), 350);
+    const timer = setTimeout(() => void load(range, deptId, q), 350);
     return () => clearTimeout(timer);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [q]);
@@ -115,10 +117,24 @@ export default function AdministrationDailyCodePage() {
     return rows;
   }, [rows, status]);
 
+  useEffect(() => {
+    if (!displayRows) return;
+    const visibleIds = new Set(displayRows.map((r) => r.dailyApplicationId));
+    setSelected((prev) => {
+      let changed = false;
+      const next: Record<string, boolean> = {};
+      for (const [id, checked] of Object.entries(prev)) {
+        if (visibleIds.has(id)) next[id] = checked;
+        else changed = true;
+      }
+      return changed ? next : prev;
+    });
+  }, [displayRows]);
+
   const selectedIds = Object.keys(selected).filter((k) => selected[k]);
 
   const exportHref = (() => {
-    const params = new URLSearchParams({ date, status });
+    const params = new URLSearchParams({ from: range.from, to: range.to, status });
     if (deptId) params.set("deptId", deptId);
     if (q.trim()) params.set("q", q.trim());
     return `/api/administration/daily-code/export?${params.toString()}`;
@@ -147,7 +163,7 @@ export default function AdministrationDailyCodePage() {
         return;
       }
       toast({ title: `✅ Đã cập nhật ${d.updated}${d.skipped ? ` • Không thành công ${d.skipped}` : ""}` });
-      await load(date, deptId, q);
+      await load(range, deptId, q);
     } finally {
       setBusy(false);
     }
@@ -162,18 +178,16 @@ export default function AdministrationDailyCodePage() {
 
       <MetricStrip
         items={[
-          <MetricStripItem key="total" icon={<Users className="h-4 w-4" />} value={stats.total} label="Đã nhập DW" context={formatDate(date)} tone="primary" onClick={() => setStatus("ALL")} active={status === "ALL"} />,
+          <MetricStripItem key="total" icon={<Users className="h-4 w-4" />} value={stats.total} label="Đã nhập DW" tone="primary" onClick={() => setStatus("ALL")} active={status === "ALL"} />,
           <MetricStripItem key="done" icon={<CheckCircle2 className="h-4 w-4" />} value={stats.done} label="Đã có mã" tone="success" onClick={() => setStatus("DONE")} active={status === "DONE"} />,
           <MetricStripItem key="missing" icon={<BadgeCheck className="h-4 w-4" />} value={stats.missing} label="Chưa có mã" tone="warning" onClick={() => setStatus("MISSING")} active={status === "MISSING"} />,
         ]}
       />
 
       <Card className="p-3">
-        <div className="flex flex-wrap items-end gap-2.5">
-          <div>
-            <p className="mb-1 text-[11px] font-semibold text-fg-muted">Ngày</p>
-            <Input type="date" value={date} onChange={(e) => setDate(e.target.value)} className="h-10 w-40" />
-          </div>
+        <div className="flex flex-col gap-3">
+          <DateRangeFilter value={range} onChange={setRange} />
+          <div className="flex flex-wrap items-end gap-2.5">
           <div>
             <p className="mb-1 text-[11px] font-semibold text-fg-muted">Bộ phận</p>
             <select
@@ -202,10 +216,10 @@ export default function AdministrationDailyCodePage() {
               <option value="DONE">Đã có mã</option>
             </select>
           </div>
-          <Button variant="outline" className="h-10" onClick={() => setDate(todayStr())}>
+          <Button variant="outline" className="h-10" onClick={() => setRange(buildDateRangePreset("TODAY"))}>
             <Calendar className="h-4 w-4" /> Về hôm nay
           </Button>
-          <Button variant="outline" className="h-10" onClick={() => void load(date, deptId, q)}>
+          <Button variant="outline" className="h-10" onClick={() => void load(range, deptId, q)}>
             <RefreshCw className={loading ? "h-4 w-4 animate-spin" : "h-4 w-4"} /> Tải lại
           </Button>
           <div className="min-w-[180px] flex-1">
@@ -230,6 +244,7 @@ export default function AdministrationDailyCodePage() {
           >
             Submit mã công nhật ({selectedIds.length})
           </Button>
+          </div>
         </div>
       </Card>
 
@@ -239,7 +254,7 @@ export default function AdministrationDailyCodePage() {
             <SkeletonTable rows={6} cols={7} />
           </div>
         ) : error ? (
-          <ErrorState description={error} onRetry={() => void load(date, deptId, q)} />
+          <ErrorState description={error} onRetry={() => void load(range, deptId, q)} />
         ) : !displayRows || displayRows.length === 0 ? (
           <EmptyState
             title="Chưa có lao động nào cần nhập mã công nhật"

@@ -1,7 +1,8 @@
 import "server-only";
-import { and, desc, eq, inArray, isNotNull, isNull } from "drizzle-orm";
+import { and, desc, eq, gte, inArray, isNotNull, isNull, lte } from "drizzle-orm";
 import { db } from "@/db";
 import { dailyApplications, departments, dwData } from "@/db/schema";
+import type { DateRange } from "@/lib/date-range";
 
 export type DailyCodeRow = {
   dailyApplicationId: string;
@@ -31,21 +32,29 @@ export type DailyCodeListFilters = {
 
 /**
  * ADMINISTRATION — "Nhập mã công nhật" (mục VI). Hàng chờ = lao động ĐÃ
- * được Recruiter đưa vào DW Data (dw_imported_at IS NOT NULL) trong ngày
- * đang chọn. Nguồn dùng CHUNG cho cả list (GET /api/administration/daily-code)
- * và export (GET /api/administration/daily-code/export) — CÙNG bộ filters
- * (date/deptId/q/status) để danh sách hiển thị và file xuất luôn khớp
+ * được Recruiter đưa vào DW Data (dw_imported_at IS NOT NULL), đăng ký
+ * trong khoảng ngày đang chọn (GLOBAL DATE RANGE STANDARDIZATION — cột
+ * `daily_applications.reg_date`, DATE column, so >= / <= is exact, no
+ * timestamp half-open boundary needed). Nguồn dùng CHUNG cho cả list (GET
+ * /api/administration/daily-code) và export (GET
+ * /api/administration/daily-code/export) — CÙNG bộ filters
+ * (range/deptId/q/status) để danh sách hiển thị và file xuất luôn khớp
  * nhau, theo đúng mẫu đã thiết lập ở lib/meal-list.ts.
+ *
+ * ENTITY/DEDUP KEY: one row per daily_applications.id — unchanged from the
+ * single-day screen (see fingerprint-it-code-list.ts's docblock for the
+ * full rationale, identical here).
  */
 export async function getDailyCodeRows(
-  date: string,
+  range: DateRange,
   scope: string[] | null,
   filters: DailyCodeListFilters = {},
 ): Promise<DailyCodeRow[]> {
   if (scope !== null && scope.length === 0) return [];
 
   const conditions = [
-    eq(dailyApplications.regDate, date),
+    gte(dailyApplications.regDate, range.from),
+    lte(dailyApplications.regDate, range.to),
     isNull(dailyApplications.deletedAt),
     isNotNull(dailyApplications.dwImportedAt),
   ];
