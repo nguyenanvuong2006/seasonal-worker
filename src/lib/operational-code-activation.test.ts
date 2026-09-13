@@ -16,6 +16,7 @@ async function loadMod() {
       "drizzle-orm": await import("drizzle-orm"),
       "node:crypto": await import("node:crypto"),
       "@/db": { db: { execute: async () => ({ rows: [] }) } },
+      "@/lib/operational-code-activation-plan": await import("./operational-code-activation-plan.ts"),
     },
   }) as unknown as {
     parseDwCodeFormat: (code: string) => { prefix: string; sequence: number; separator: string; suffix: string } | null;
