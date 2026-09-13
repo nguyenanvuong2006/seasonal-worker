@@ -335,7 +335,7 @@ export type AutoAllocateRequestSyncOutcome =
   | { status: "REJECTED_FULL"; requestId: string };
 
 export type AutoAllocateOutcome =
-  | { planningAllocated: false; planningPeriodId: null; requestSync: { status: "NO_ACTIVE_PERIOD" } }
+  | { planningAllocated: false; planningPeriodId: null; requestSync: { status: "NO_ACTIVE_PERIOD" | "REQUEST_NOT_ELIGIBLE" } }
   | { planningAllocated: true; planningPeriodId: string; requestSync: AutoAllocateRequestSyncOutcome };
 
 /**
@@ -356,6 +356,15 @@ export async function autoAllocateInternship(
   startingDate?: string | null,
   allocatedBy = "SYSTEM",
   executor: Executor = db,
+  /**
+   * MISSION E section 30-42 — Recruiter đã chọn tường minh 1 Recruitment Request thay vì dùng
+   * đề xuất mặc định (Daily Arrangement). Khi có giá trị này, chỉ kế hoạch ACTIVE gắn với ĐÚNG
+   * request này (và vẫn thuộc departmentId, vẫn ACTIVE — hai điều kiện đã lọc sẵn ở
+   * `activePeriods` bên dưới) mới được coi là ứng viên — một requestId lạ/khác bộ phận/đã đóng
+   * sẽ KHÔNG match bất kỳ activePeriods nào và bị từ chối tường minh (REQUEST_NOT_ELIGIBLE),
+   * không bao giờ âm thầm rơi về đề xuất mặc định.
+   */
+  preferredRequestId?: string | null,
 ): Promise<AutoAllocateOutcome> {
   // Tìm các kế hoạch ACTIVE của bộ phận này
   const activePeriods = await executor
@@ -393,7 +402,15 @@ export async function autoAllocateInternship(
     ? activePeriods.filter((p) => p.startDate <= startingDate && p.endDate >= startingDate)
     : activePeriods;
 
-  const candidatePeriods = matchingDatePeriods.length > 0 ? matchingDatePeriods : activePeriods;
+  let candidatePeriods = matchingDatePeriods.length > 0 ? matchingDatePeriods : activePeriods;
+
+  if (preferredRequestId) {
+    const preferredMatches = activePeriods.filter((p) => p.requestId === preferredRequestId);
+    if (preferredMatches.length === 0) {
+      return { planningAllocated: false, planningPeriodId: null, requestSync: { status: "REQUEST_NOT_ELIGIBLE" } };
+    }
+    candidatePeriods = preferredMatches;
+  }
 
   // Lấy giới tính của người tập nghề
   const [session] = await executor

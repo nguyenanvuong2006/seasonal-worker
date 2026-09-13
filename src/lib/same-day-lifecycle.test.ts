@@ -289,3 +289,58 @@ test("outcomeLabel returns the expected Vietnamese label for each outcome", asyn
   assert.equal(mod.outcomeLabel("DECLINED_AT_START"), "Đến nhưng không nhận việc");
   assert.equal(mod.outcomeLabel("STARTED_THEN_LEFT"), "Bỏ về trong ca");
 });
+
+/**
+ * PRE-MIGRATION INDEPENDENT REVIEW (2026-09-13) — item #3: NO_SHOW/DECLINED_AT_START without an
+ * active Employment. Trace: in THIS codebase's actual data model, "arranged to a department" and
+ * "Employment Session ACTIVE" are the SAME moment — daily_applications.status flips to APPROVED
+ * and employment_sessions.status flips to APPROVED atomically in the SAME transaction (see
+ * PATCH /api/registrations/[id] and POST /api/bulk-import — both call autoAllocateInternship()
+ * only after the same write that sets status=APPROVED). There is no persisted intermediate
+ * "assigned but not yet active" state, and "Bộ phận của tôi" (the only entry point wired to this
+ * service) only ever lists workers whose employment session IS already ACTIVE — so a manager can
+ * only ever see, and only ever report on, a worker who already has one. A worker whose ONLY
+ * session is still PENDING (never approved / never actually arranged to any department) is NOT
+ * something a department manager would ever see or need to report on — nobody was ever told to
+ * expect them. These tests prove the safe behavior for that residual, off-the-happy-path case:
+ * NEVER fabricate an Employment session merely to end it — an honest NO_ACTIVE_SESSION instead.
+ */
+test("a worker whose ONLY employment session is still PENDING (never approved/arranged) yields NO_ACTIVE_SESSION, never a fabricated Employment", async () => {
+  const pendingOnly = { ...SESSION, status: "PENDING" };
+  const store = makeStore({ activeSession: null, mostRecentSession: pendingOnly });
+  const mod = await loadWith(store);
+
+  const result = await mod.applySameDayLifecycleEvent({
+    workerId: "worker-1",
+    outcome: "NO_SHOW",
+    eventAt: new Date(),
+    reason: null,
+    session: ACTOR,
+    scope: null,
+  });
+
+  assert.equal(result.ok, false);
+  if (result.ok) return;
+  assert.equal(result.error, "NO_ACTIVE_SESSION");
+  assert.equal(store.inserted.length, 0, "must never create a session/event to represent a worker who was never actually arranged");
+  assert.equal(store.writes.length, 0, "must never mutate the PENDING session — it was never active to begin with");
+});
+
+test("STARTED_THEN_LEFT still requires a real ACTIVE session — same NO_ACTIVE_SESSION guard applies to every outcome, not just NO_SHOW", async () => {
+  const store = makeStore({ activeSession: null, mostRecentSession: null });
+  const mod = await loadWith(store);
+
+  const result = await mod.applySameDayLifecycleEvent({
+    workerId: "worker-ghost",
+    outcome: "STARTED_THEN_LEFT",
+    eventAt: new Date(),
+    reason: null,
+    session: ACTOR,
+    scope: null,
+  });
+
+  assert.equal(result.ok, false);
+  if (result.ok) return;
+  assert.equal(result.error, "NO_ACTIVE_SESSION");
+  assert.equal(store.calls.finalizeResignation, 0, "must never fabricate a resignation/Quit event for a worker who was never active");
+});

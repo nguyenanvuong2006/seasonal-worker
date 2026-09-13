@@ -133,7 +133,7 @@ export async function applySameDayLifecycleEvent(input: ApplySameDayLifecycleEve
     if (!session.dailyApplicationId) return { ok: false as const, error: "NO_ACTIVE_SESSION" as const };
 
     const [app] = await tx
-      .select({ id: dailyApplications.id, regDate: dailyApplications.regDate })
+      .select({ id: dailyApplications.id, regDate: dailyApplications.regDate, dwId: dailyApplications.dwId })
       .from(dailyApplications)
       .where(eq(dailyApplications.id, session.dailyApplicationId))
       .limit(1);
@@ -209,6 +209,8 @@ export async function applySameDayLifecycleEvent(input: ApplySameDayLifecycleEve
       {
         employmentSessionId: session.id,
         dailyApplicationId: session.dailyApplicationId,
+        workerId: input.workerId,
+        dwDataId: app.dwId,
         releasedBy: input.session.username,
         releaseReason: input.outcome,
         note: reasonText,

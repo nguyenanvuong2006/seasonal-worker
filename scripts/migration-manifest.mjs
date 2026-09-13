@@ -1248,7 +1248,7 @@ export const MIGRATION_MANIFEST = [
     transactionSafe: true,
     appDependency: "REQUIRED",
     appDependencyEvidence:
-      "src/db/schema.ts declares dwCodeLocations/dwCodes/dwCodeAssignments/itCodeAssignments/sameDayLifecycleEvents/mealCutoffSettings/mealExclusions; src/lib/dw-code-pool.ts, src/lib/it-code-assignment.ts, src/lib/same-day-lifecycle.ts, and meal-list.ts's exclusion lookup query and write into these tables — routes fail closed (structured error, never a raw DB error) if the tables do not exist yet.",
+      "src/db/schema.ts declares dwCodeLocations/dwCodes/dwCodeAssignments/itCodeAssignments/sameDayLifecycleEvents/mealCutoffSettings/mealExclusions; src/lib/dw-code-pool.ts, src/lib/it-code-assignment.ts, src/lib/same-day-lifecycle.ts, and meal-list.ts's exclusion lookup query and write into these tables. Deployment ordering is safe regardless: no EXISTING route/screen queries these tables (meal-list.ts's new LEFT JOIN degrades to 'no exclusions' only once the table exists, but is additive to an already-working query), so shipping this code before the migration runs breaks nothing already in Production. Only the BRAND-NEW endpoints that read/write these tables directly (POST /api/workforce/same-day-event, GET/POST /api/administration/dw-code-locations, PATCH .../[id], PATCH /api/meal/cutoff-settings) will return an unhandled 500 (raw Postgres 'relation does not exist' error, not a friendly structured error) until the migration is applied — acceptable since nothing calls them yet, but worth fixing with a table-existence guard if this code is expected to sit unmigrated in Production for any length of time.",
     executionMechanism: "MANUAL_PSQL_GENERIC",
     supersededBy: null,
     tombstoned: false,

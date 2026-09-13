@@ -21,12 +21,13 @@ export async function GET(req: Request) {
 
   const countParam = Number(url.searchParams.get("count") ?? "0");
   const selectedCount = Number.isFinite(countParam) && countParam > 0 ? Math.floor(countParam) : 0;
+  const selectedRequestId = url.searchParams.get("requestId") || null;
 
   const scope = await getUserScope(guard.session);
   if (!scopeAllowsDepartment(scope, deptId)) {
     return NextResponse.json({ error: "Bộ phận ngoài phạm vi dữ liệu được cấp." }, { status: 403 });
   }
 
-  const preview = await getDailyArrangementPreview(scope, deptId, selectedCount);
+  const preview = await getDailyArrangementPreview(scope, deptId, selectedCount, selectedRequestId);
   return NextResponse.json(preview);
 }

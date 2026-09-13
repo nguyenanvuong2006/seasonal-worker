@@ -40,6 +40,8 @@ export type RecommendedRequestPreview = {
   balance: number;
 };
 
+export type EligibleRequestCandidate = RecommendedRequestPreview & { recommended: boolean };
+
 export type OtherDepartmentGap = {
   deptId: string;
   deptName: string;
@@ -51,6 +53,15 @@ export type OtherDepartmentGap = {
 export type DailyArrangementPreview = {
   deptId: string;
   recommendedRequest: RecommendedRequestPreview | null;
+  /**
+   * MISSION E section 30-42 — Daily Arrangement EDITABLE Request: mọi Request ACTIVE hợp lệ cho
+   * ĐÚNG bộ phận này (không chỉ cái được đề xuất) — UI dựng dropdown từ đây, mặc định chọn
+   * `recommended: true`, nhưng recruiter có thể chọn 1 request eligible khác trước khi submit.
+   * Đây CHÍNH LÀ danh sách server sẽ chấp nhận cho `requestId` khi submit — chọn ngoài danh sách
+   * này bị autoAllocateInternship() từ chối tường minh (REQUEST_NOT_ELIGIBLE), không bao giờ rơi
+   * về đề xuất mặc định một cách âm thầm.
+   */
+  eligibleRequests: EligibleRequestCandidate[];
   /** true khi KHÔNG có live Recruitment Request nào sẽ được tự động gán cho bộ phận này —
    *  xếp việc vẫn được phép tiếp tục (Employment/Planning không phụ thuộc Request), nhưng
    *  cần cảnh báo quản lý (mục 33). */
@@ -60,7 +71,13 @@ export type DailyArrangementPreview = {
   otherDepartments: OtherDepartmentGap[];
 };
 
-async function findCandidateRequestId(deptId: string, asOfDate: string): Promise<string | null> {
+/**
+ * TOÀN BỘ requestId ứng viên hợp lệ cho bộ phận này (mọi kế hoạch ACTIVE trong cửa sổ ngày hiện
+ * tại có gắn Request) — thứ tự deterministic GIỐNG HỆT candidatePeriods trong
+ * autoAllocateInternship() (ORIGINAL trước SUPPLEMENT, createdAt sớm hơn trước), để "đề xuất" ở
+ * đây và lựa chọn mặc định thật khi không override luôn khớp nhau.
+ */
+async function findCandidateRequestIds(deptId: string, asOfDate: string): Promise<string[]> {
   const periods = await db
     .select({
       id: planningPeriods.id,
@@ -72,40 +89,58 @@ async function findCandidateRequestId(deptId: string, asOfDate: string): Promise
     .where(and(eq(planningPeriods.departmentId, deptId), eq(planningPeriods.status, "ACTIVE")))
     .orderBy(asc(planningPeriods.supplementIndex), asc(planningPeriods.createdAt));
 
-  if (periods.length === 0) return null;
+  if (periods.length === 0) return [];
   const withinWindow = periods.filter((p) => p.startDate <= asOfDate && p.endDate >= asOfDate);
   const candidates = withinWindow.length > 0 ? withinWindow : periods;
-  return candidates.find((p) => p.requestId)?.requestId ?? null;
+
+  const seen = new Set<string>();
+  const requestIds: string[] = [];
+  for (const p of candidates) {
+    if (p.requestId && !seen.has(p.requestId)) {
+      seen.add(p.requestId);
+      requestIds.push(p.requestId);
+    }
+  }
+  return requestIds;
 }
 
 export async function getDailyArrangementPreview(
   scope: string[] | null,
   deptId: string,
   selectedCount: number,
+  /** Recruiter's explicit choice (from a previous call's `eligibleRequests`) — when given and
+   *  still eligible, the batch-capacity projection reflects THIS request instead of the default
+   *  recommendation, so the over-need warning matches what will actually be submitted. */
+  selectedRequestId?: string | null,
 ): Promise<DailyArrangementPreview> {
   const today = todayStr();
-  const requestId = await findCandidateRequestId(deptId, today);
+  const candidateRequestIds = await findCandidateRequestIds(deptId, today);
 
-  let recommendedRequest: RecommendedRequestPreview | null = null;
-  if (requestId) {
-    const detail = await getRequestDetail(requestId);
-    if (detail && !isHistoricalRequestStatus(detail.request.status)) {
-      recommendedRequest = {
-        requestId,
-        requestCode: detail.request.requestCode,
-        target: detail.kpi.totalRequest,
-        current: detail.kpi.totalCurrent,
-        balance: detail.kpi.totalBalance,
-      };
-    }
+  const eligibleRequests: EligibleRequestCandidate[] = [];
+  for (const id of candidateRequestIds) {
+    const detail = await getRequestDetail(id);
+    if (!detail || isHistoricalRequestStatus(detail.request.status)) continue;
+    eligibleRequests.push({
+      requestId: id,
+      requestCode: detail.request.requestCode,
+      target: detail.kpi.totalRequest,
+      current: detail.kpi.totalCurrent,
+      balance: detail.kpi.totalBalance,
+      recommended: false,
+    });
   }
+  // Đề xuất mặc định = ứng viên ĐẦU TIÊN CÒN HỢP LỆ theo đúng thứ tự deterministic — CHÍNH XÁC
+  // cái autoAllocateInternship() sẽ chọn khi không có preferredRequestId override.
+  if (eligibleRequests.length > 0) eligibleRequests[0].recommended = true;
+  const recommendedRequest = eligibleRequests[0] ?? null;
+  const projectionTarget = (selectedRequestId ? eligibleRequests.find((r) => r.requestId === selectedRequestId) : null) ?? recommendedRequest;
 
   const projected =
-    recommendedRequest && selectedCount > 0
+    projectionTarget && selectedCount > 0
       ? {
           selectedCount,
-          projectedTotal: recommendedRequest.current + selectedCount,
-          overNeed: Math.max(0, recommendedRequest.current + selectedCount - recommendedRequest.target),
+          projectedTotal: projectionTarget.current + selectedCount,
+          overNeed: Math.max(0, projectionTarget.current + selectedCount - projectionTarget.target),
         }
       : null;
 
@@ -135,6 +170,7 @@ export async function getDailyArrangementPreview(
   return {
     deptId,
     recommendedRequest,
+    eligibleRequests,
     unattributedWarning: recommendedRequest === null,
     projected,
     otherDepartments: Array.from(otherDepartments)

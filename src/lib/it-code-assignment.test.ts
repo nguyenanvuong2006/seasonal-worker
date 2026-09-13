@@ -18,7 +18,13 @@ const workerProfiles = makeTable("worker_profiles");
 const dailyApplications = makeTable("daily_applications");
 const schemaStub = { itCodeAssignments, dwData, workerProfiles, dailyApplications };
 
-function makeStore(opts: { codeAlreadyActive?: boolean; workerAlreadyHasActive?: boolean; activeAssignment?: { id: string; itCode: string; dwDataId: string; workerId: string } | null }) {
+function makeStore(opts: {
+  codeAlreadyActive?: boolean;
+  workerAlreadyHasActive?: boolean;
+  activeAssignment?: { id: string; itCode: string; dwDataId: string; workerId: string } | null;
+  /** PRE-MIGRATION REVIEW #7 — dw_data.it_code mirror value for the legacy-compatibility fallback (no it_code_assignments row at all). */
+  legacyMirrorItCode?: string | null;
+}) {
   const writes: { table: string; patch: unknown }[] = [];
   const inserted: { table: string; values: unknown }[] = [];
 
@@ -41,12 +47,15 @@ function makeStore(opts: { codeAlreadyActive?: boolean; workerAlreadyHasActive?:
         return [{}];
       }
     }
-    if (call.table === "dw_data" && call.root === "update") {
-      writes.push({ table: "dw_data", patch: argOf(call, "set") });
-      return [{}];
+    if (call.table === "dw_data") {
+      if (call.root === "select") return opts.legacyMirrorItCode ? [{ itCode: opts.legacyMirrorItCode }] : [];
+      if (call.root === "update") {
+        writes.push({ table: "dw_data", patch: argOf(call, "set") });
+        return [{}];
+      }
     }
     if (call.table === "worker_profiles") {
-      if (call.root === "select") return opts.activeAssignment ? [{ cccd: "001099001234" }] : [];
+      if (call.root === "select") return opts.activeAssignment || opts.legacyMirrorItCode ? [{ cccd: "001099001234" }] : [];
       if (call.root === "update") {
         writes.push({ table: "worker_profiles", patch: argOf(call, "set") });
         return [{}];
@@ -114,7 +123,7 @@ test("releaseItCode clears all 3 mirrors and is idempotent when nothing is activ
   const store = makeStore({ activeAssignment });
   const mod = await loadWith(store);
 
-  const result = await mod.releaseItCode({ employmentSessionId: "s1", dailyApplicationId: "app1", releasedBy: "staff1", releaseReason: "NO_SHOW" });
+  const result = await mod.releaseItCode({ employmentSessionId: "s1", dailyApplicationId: "app1", workerId: "w1", dwDataId: "dw1", releasedBy: "staff1", releaseReason: "NO_SHOW" });
   assert.equal(result.released, true);
   assert.equal(result.itCode, "IT001");
   assert.equal(store.writes.some((w) => w.table === "dw_data" && (w.patch as Record<string, unknown>).itCode === null), true);
@@ -122,8 +131,41 @@ test("releaseItCode clears all 3 mirrors and is idempotent when nothing is activ
 
   const storeNoActive = makeStore({ activeAssignment: null });
   const modNoActive = await loadWith(storeNoActive);
-  const noopResult = await modNoActive.releaseItCode({ employmentSessionId: "s-none", dailyApplicationId: "app1", releasedBy: "staff1", releaseReason: "NO_SHOW" });
+  const noopResult = await modNoActive.releaseItCode({ employmentSessionId: "s-none", dailyApplicationId: "app1", workerId: "w-none", dwDataId: "dw-none", releasedBy: "staff1", releaseReason: "NO_SHOW" });
   assert.equal(noopResult.released, false);
   assert.equal(noopResult.itCode, null);
   assert.equal(storeNoActive.writes.length, 0);
+});
+
+/**
+ * PRE-MIGRATION INDEPENDENT REVIEW (2026-09-13) — item #7: an IT Code assigned through the
+ * legacy bulk PATCH /api/fingerprint/it-code screen (deliberately left untouched by this
+ * mission) never writes an it_code_assignments history row. releaseItCode() must still clear
+ * the mirrors correctly in that case via the dw_data fallback — never silently leave a departed
+ * worker's IT Code mirror populated (which would cause the same external code, if reissued to a
+ * different worker later, to disagree between the two workers' mirrors).
+ */
+test("legacy-assigned IT Code (no it_code_assignments row at all) is still correctly released via the dw_data mirror fallback", async () => {
+  const store = makeStore({ activeAssignment: null, legacyMirrorItCode: "IT777" });
+  const mod = await loadWith(store);
+
+  const result = await mod.releaseItCode({ employmentSessionId: "s1", dailyApplicationId: "app1", workerId: "w1", dwDataId: "dw1", releasedBy: "staff1", releaseReason: "NO_SHOW" });
+
+  assert.equal(result.released, true, "must NOT treat this as a no-op just because no history row exists");
+  assert.equal(result.itCode, "IT777");
+  assert.equal(store.writes.some((w) => w.table === "dw_data" && (w.patch as Record<string, unknown>).itCode === null), true);
+  assert.equal(store.writes.some((w) => w.table === "worker_profiles" && (w.patch as Record<string, unknown>).fingerprintStatus === "CHUA_CAP"), true);
+  assert.equal(store.writes.some((w) => w.table === "daily_applications" && (w.patch as Record<string, unknown>).itCode === null), true);
+});
+
+test("legacy fallback never fires when the dw_data mirror is already empty (nothing to release) and never fires without a dwDataId", async () => {
+  const store = makeStore({ activeAssignment: null, legacyMirrorItCode: null });
+  const mod = await loadWith(store);
+
+  const result = await mod.releaseItCode({ employmentSessionId: "s1", dailyApplicationId: "app1", workerId: "w1", dwDataId: "dw1", releasedBy: "staff1", releaseReason: "NO_SHOW" });
+  assert.equal(result.released, false);
+  assert.equal(store.writes.length, 0);
+
+  const result2 = await mod.releaseItCode({ employmentSessionId: "s1", dailyApplicationId: "app1", workerId: "w1", dwDataId: null, releasedBy: "staff1", releaseReason: "NO_SHOW" });
+  assert.equal(result2.released, false);
 });

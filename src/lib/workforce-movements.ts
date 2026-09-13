@@ -1,11 +1,12 @@
 import "server-only";
 import { and, desc, eq, isNull, lte, or, sql } from "drizzle-orm";
 import { db } from "@/db";
-import { dailyApplications, employmentSessions, workforceMovements } from "@/db/schema";
+import { dailyApplications, departments, dwCodeLocations, employmentSessions, workforceMovements } from "@/db/schema";
 import { queueNotification } from "@/lib/notifications";
 import { autoAllocateInternship } from "@/lib/planning";
 import { endActiveRequestAllocationsForWorker, endActiveRequestAllocationsForTransfer } from "@/lib/workforce-request";
 import { recomputeStoredRecruitmentBalance } from "@/lib/recruitment-kpi";
+import { allocateDwCode, releaseDwCode } from "@/lib/dw-code-pool";
 import { todayStr } from "@/lib/helpers";
 import type { Session } from "@/lib/auth";
 
@@ -200,6 +201,72 @@ async function finalizeTransferEffect(tx: Executor, movement: MovementForFinaliz
 
   // Tự động phân bổ lại vào Kế hoạch Tập nghề của bộ phận đích khi Transfer có hiệu lực.
   await autoAllocateInternship(currentSession.id, movement.toDeptId, movement.effectiveDate, actorUsername, tx);
+
+  // MISSION E section 21-22 — Internal DW Code lifecycle theo địa điểm: cùng địa điểm giữ
+  // nguyên mã, khác địa điểm thu hồi mã cũ + cấp mã theo địa điểm đích. Chỉ chạy ở ĐÚNG thời
+  // điểm transfer CÓ HIỆU LỰC thật (bên trong cùng transaction với phần trên), không phải khi
+  // HR chỉ mới duyệt (effectiveDate tương lai không gọi tới hàm này — xem 2 call site).
+  await applyCrossLocationDwCodeTransfer(tx, movement, currentSession, actorUsername);
+}
+
+/**
+ * IT Code KHÔNG bị đụng tới ở đây theo đúng khoá mission (section 22): "IT Code độc lập,
+ * KHÔNG tự động đổi khi thuyên chuyển trừ khi có quy tắc nghiệp vụ khác yêu cầu" — chỉ Internal
+ * DW Code mới mang ngữ nghĩa địa điểm.
+ *
+ * So sánh "cùng địa điểm hay khác địa điểm" bằng `departments.location` (cột free-text đã có sẵn
+ * và đã dùng cho đúng khái niệm "Địa điểm" ở khắp ứng dụng — vd DR/DL/SG/LH/DQ trong đề bài mục 1
+ * chính là các giá trị department.location khác nhau) — KHÔNG tạo thêm cột/bảng liên kết mới.
+ * Nếu thiếu dữ liệu location ở 1 trong 2 đầu, KHÔNG đoán — giữ nguyên mã (an toàn hơn thu hồi
+ * nhầm mã của người đang làm việc bình thường).
+ */
+async function applyCrossLocationDwCodeTransfer(
+  tx: Executor,
+  movement: MovementForFinalize,
+  currentSession: { id: string; dailyApplicationId: string | null },
+  actorUsername: string,
+): Promise<void> {
+  if (!movement.fromDeptId || !movement.toDeptId) return;
+  const [fromDept] = await tx.select({ location: departments.location }).from(departments).where(eq(departments.id, movement.fromDeptId)).limit(1);
+  const [toDept] = await tx.select({ location: departments.location }).from(departments).where(eq(departments.id, movement.toDeptId)).limit(1);
+  const fromLocation = fromDept?.location?.trim() || null;
+  const toLocation = toDept?.location?.trim() || null;
+  if (!fromLocation || !toLocation || fromLocation === toLocation) return;
+
+  const released = await releaseDwCode(
+    {
+      employmentSessionId: currentSession.id,
+      releasedBy: actorUsername,
+      releaseReason: "CROSS_LOCATION_TRANSFER",
+      note: `Thuyên chuyển ${fromLocation} -> ${toLocation} (movement ${movement.id})`,
+    },
+    tx,
+  );
+  if (!released.released) return; // Không có mã DW nào đang active — không có gì để cấp lại.
+  if (!currentSession.dailyApplicationId) return;
+
+  const [app] = await tx
+    .select({ dwId: dailyApplications.dwId })
+    .from(dailyApplications)
+    .where(eq(dailyApplications.id, currentSession.dailyApplicationId))
+    .limit(1);
+  if (!app?.dwId) return; // Chưa có DW Data — không thể cấp Mã số công nhật.
+
+  const [destLocation] = await tx
+    .select({ id: dwCodeLocations.id, isActive: dwCodeLocations.isActive })
+    .from(dwCodeLocations)
+    .where(sql`lower(trim(${dwCodeLocations.name})) = lower(trim(${toLocation}))`)
+    .limit(1);
+  if (!destLocation?.isActive) return; // Chưa cấu hình namespace mã cho địa điểm đích — không tự đoán.
+
+  // WORKER_ALREADY_HAS_ACTIVE_CODE chỉ có thể xảy ra nếu hàm này chạy lại cho ĐÚNG movement đã
+  // áp dụng — không xảy ra trong luồng bình thường (lifecycleAppliedAt chỉ được set 1 lần bởi
+  // đúng 1 trong 2 call site). Bỏ qua thay vì throw để không rollback phần Employment/Request/
+  // Planning đã áp dụng đúng ở trên.
+  await allocateDwCode(
+    { locationId: destLocation.id, workerId: movement.workerId, employmentSessionId: currentSession.id, dwDataId: app.dwId, assignedBy: actorUsername },
+    tx,
+  );
 }
 
 /**

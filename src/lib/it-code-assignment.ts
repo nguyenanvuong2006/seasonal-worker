@@ -84,6 +84,13 @@ export async function assignItCode(input: AssignItCodeInput, executor: Executor 
 export type ReleaseItCodeInput = {
   employmentSessionId: string;
   dailyApplicationId: string;
+  /**
+   * MISSION E pre-migration review — needed ONLY for the legacy-compatibility fallback below
+   * (worker's CCCD to clear the worker_profiles mirror, dw_data.id to check/clear the it_code
+   * mirror, when no it_code_assignments history row exists for this session at all).
+   */
+  workerId: string;
+  dwDataId: string | null;
   releasedBy: string;
   releaseReason: ReleaseReason;
   note?: string | null;
@@ -91,7 +98,35 @@ export type ReleaseItCodeInput = {
 
 export type ReleaseItCodeResult = { released: boolean; itCode: string | null };
 
-/** Idempotent — releasing an employment session with no active IT Code assignment is a safe no-op (mission section 46). */
+async function clearItCodeMirrors(tx: Executor, dwDataId: string, workerId: string, dailyApplicationId: string, releasedBy: string): Promise<void> {
+  await tx
+    .update(dwData)
+    .set({ itCode: null, itCodeUpdatedAt: new Date(), itCodeUpdatedBy: releasedBy })
+    .where(eq(dwData.id, dwDataId));
+
+  const [worker] = await tx.select({ cccd: workerProfiles.cccd }).from(workerProfiles).where(eq(workerProfiles.id, workerId)).limit(1);
+  if (worker) {
+    await tx
+      .update(workerProfiles)
+      .set({ fingerprintCode: null, fingerprintStatus: "CHUA_CAP", updatedAt: new Date() })
+      .where(eq(workerProfiles.cccd, worker.cccd));
+  }
+
+  await tx.update(dailyApplications).set({ itCode: null, updatedAt: new Date() }).where(eq(dailyApplications.id, dailyApplicationId));
+}
+
+/**
+ * Idempotent — releasing an employment session with no active IT Code assignment is a safe
+ * no-op (mission section 46) — UNLESS the `dw_data.it_code` mirror is still populated for this
+ * EXACT worker/dw_data row, in which case that's a code assigned through the legacy bulk
+ * `PATCH /api/fingerprint/it-code` screen (deliberately left untouched by this mission — see PR
+ * body — it never writes an `it_code_assignments` history row). Clearing the mirrors in THAT
+ * case is safe and unambiguous (this employment session's OWN current dw_data row, never another
+ * worker's) — it is NOT a historical backfill of assignment history, only the same 3-mirror
+ * clear this function already performs for the tracked-history case, so a departed worker never
+ * keeps showing an IT Code they no longer hold and a future assignment of the same external code
+ * to someone else is never left showing stale, disagreeing values.
+ */
 export async function releaseItCode(input: ReleaseItCodeInput, executor: Executor = db): Promise<ReleaseItCodeResult> {
   if (executor === db) return db.transaction((tx) => releaseItCode(input, tx));
   const tx = executor;
@@ -106,28 +141,22 @@ export async function releaseItCode(input: ReleaseItCodeInput, executor: Executo
       .from(itCodeAssignments)
       .where(and(eq(itCodeAssignments.employmentSessionId, input.employmentSessionId), isNull(itCodeAssignments.releasedAt)))
       .limit(1);
-    if (!active) return { released: false, itCode: null };
 
-    await tx
-      .update(itCodeAssignments)
-      .set({ releasedAt: new Date(), releasedBy: input.releasedBy, releaseReason: input.releaseReason, note: input.note ?? null })
-      .where(eq(itCodeAssignments.id, active.id));
-
-    await tx
-      .update(dwData)
-      .set({ itCode: null, itCodeUpdatedAt: new Date(), itCodeUpdatedBy: input.releasedBy })
-      .where(eq(dwData.id, active.dwDataId));
-
-    const [worker] = await tx.select({ cccd: workerProfiles.cccd }).from(workerProfiles).where(eq(workerProfiles.id, active.workerId)).limit(1);
-    if (worker) {
+    if (active) {
       await tx
-        .update(workerProfiles)
-        .set({ fingerprintCode: null, fingerprintStatus: "CHUA_CAP", updatedAt: new Date() })
-        .where(eq(workerProfiles.cccd, worker.cccd));
+        .update(itCodeAssignments)
+        .set({ releasedAt: new Date(), releasedBy: input.releasedBy, releaseReason: input.releaseReason, note: input.note ?? null })
+        .where(eq(itCodeAssignments.id, active.id));
+      await clearItCodeMirrors(tx, active.dwDataId, active.workerId, input.dailyApplicationId, input.releasedBy);
+      return { released: true, itCode: active.itCode };
     }
 
-    await tx.update(dailyApplications).set({ itCode: null, updatedAt: new Date() }).where(eq(dailyApplications.id, input.dailyApplicationId));
+    // Legacy-compatibility fallback — see docblock above.
+    if (!input.dwDataId) return { released: false, itCode: null };
+    const [dw] = await tx.select({ itCode: dwData.itCode }).from(dwData).where(eq(dwData.id, input.dwDataId)).limit(1);
+    if (!dw?.itCode) return { released: false, itCode: null };
 
-    return { released: true, itCode: active.itCode };
+    await clearItCodeMirrors(tx, input.dwDataId, input.workerId, input.dailyApplicationId, input.releasedBy);
+    return { released: true, itCode: dw.itCode };
   }
 }
