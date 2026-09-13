@@ -25,6 +25,20 @@ type Executor = typeof db | Parameters<Parameters<typeof db.transaction>[0]>[0];
  * a separate persistent code state: releasing a code makes it immediately
  * AVAILABLE again for reuse (see schema.ts docblock for the full
  * rationale). RETIRED is one-way (MANUAL_CORRECTION only).
+ *
+ * MIRROR CONTRACT (mission F2 section 12-13/251) — `dw_data.code` is a
+ * CURRENT-MIRROR, never a historical/append-only field: it always reflects
+ * "what code does this dw_data row's worker hold RIGHT NOW" (or NULL if
+ * none), overwritten on every allocate and cleared on every release. A
+ * worker's PAST codes are never derivable from this single column — that is
+ * exactly what `dw_code_assignments` exists for (one row per assignment
+ * PERIOD, `releasedAt` distinguishing active from historical). Any reader
+ * that needs "who has EVER held code X" or "what codes has worker Y held
+ * over time" must query `dw_code_assignments`, never infer it from
+ * `dw_data.code`'s current value — and must never treat a NULL/changed
+ * mirror value as evidence a historical assignment "didn't happen" (the
+ * history row is the source of truth; the mirror is a read-optimization
+ * only, same category as a materialized view).
  */
 
 export type ReleaseReason =

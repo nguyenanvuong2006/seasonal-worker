@@ -11,13 +11,18 @@
  * This is the ONE pre-existing write action carried over — no NEW write
  * capability was added to the 360° profile (see mission's "do not turn
  * profile into a write center").
+ *
+ * MISSION F2 section 11/250 — the IT Code identity change now routes through
+ * updateWorkerBiometric() (src/lib/it-code-assignment.ts), which reuses the
+ * canonical assignItCode()/releaseItCode() service when the worker has an
+ * active engagement — never a direct fingerprint_code overwrite that could
+ * silently steal another worker's still-active IT Code or desync the other
+ * two mirrors (dw_data.it_code, daily_applications.it_code).
  */
 import { NextResponse } from "next/server";
-import { eq } from "drizzle-orm";
 import { requirePermission, getUserScope, writeAudit } from "@/lib/auth";
-import { db } from "@/db";
-import { workerProfiles } from "@/db/schema";
 import { getWorker360Profile } from "@/lib/worker-360-profile";
+import { updateWorkerBiometric } from "@/lib/it-code-assignment";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -36,18 +41,18 @@ export async function PATCH(req: Request, ctx: { params: Promise<{ workerId: str
   if (!authorized) return NextResponse.json({ error: "Không tìm thấy hồ sơ trong phạm vi dữ liệu được cấp." }, { status: 404 });
 
   const body = (await req.json()) as { fingerprintCode?: string; fingerprintDevice?: string; fingerprintStatus?: string };
-  const [row] = await db
-    .update(workerProfiles)
-    .set({
-      fingerprintCode: body.fingerprintCode || null,
-      fingerprintDevice: body.fingerprintDevice || null,
-      fingerprintStatus: body.fingerprintStatus || "DA_CAP",
-      fingerprintCreatedAt: new Date(),
-      updatedAt: new Date(),
-    })
-    .where(eq(workerProfiles.id, workerId))
-    .returning();
-  if (!row) return NextResponse.json({ error: "Không tìm thấy hồ sơ." }, { status: 404 });
-  await writeAudit(guard.session, "UPDATE_FINGERPRINT", "worker_profiles", { workerId });
-  return NextResponse.json({ success: true, row });
+  const result = await updateWorkerBiometric({
+    workerId,
+    fingerprintCode: body.fingerprintCode ?? null,
+    fingerprintDevice: body.fingerprintDevice ?? null,
+    fingerprintStatus: body.fingerprintStatus ?? null,
+    updatedBy: guard.session.username,
+  });
+  if (!result.ok) {
+    if (result.error === "WORKER_NOT_FOUND") return NextResponse.json({ error: "Không tìm thấy hồ sơ." }, { status: 404 });
+    const reason = result.error === "IT_CODE_ALREADY_ACTIVE" ? "IT Code này đang được gán cho người khác." : "Worker đã có IT Code đang hoạt động (xung đột).";
+    return NextResponse.json({ error: reason }, { status: 409 });
+  }
+  await writeAudit(guard.session, "UPDATE_FINGERPRINT", "worker_profiles", { workerId, itCodeRoute: result.itCodeRoute });
+  return NextResponse.json({ success: true });
 }

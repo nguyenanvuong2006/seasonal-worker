@@ -103,6 +103,8 @@ function loadRoute(opts: {
                 receiptId: null,
               })),
           };
+        case "@/lib/it-code-assignment":
+          return { updateWorkerBiometric: async () => ({ ok: true as const, itCodeRoute: "DIRECT_NO_ACTIVE_ENGAGEMENT" as const }) };
         default:
           throw new Error(`Unexpected require("${id}") — route không được phụ thuộc module này.`);
       }

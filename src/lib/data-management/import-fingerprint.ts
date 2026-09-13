@@ -209,6 +209,14 @@ export async function createFingerprintBatch(input: CreateFingerprintBatchInput)
 
 export type MergeChunkResult = { processed: number; matched: number; unmatched: number; duplicate: number; done: boolean };
 
+/**
+ * MISSION F2 section 7/250 — NOT CANONICALIZED, DOCUMENTED BLOCKER. Writes `dw_data.it_code`
+ * directly (see below). Same blocker as import-workforce-master.ts's mergeWorkforceMasterChunk():
+ * assignItCode() (it-code-assignment.ts) requires an employmentSessionId/dailyApplicationId to
+ * attach an it_code_assignments history row to, but bulk import runs before any employment
+ * session exists for the imported workers — there is no engagement context here to canonicalize
+ * onto.
+ */
 export async function mergeFingerprintChunk(batchId: string, actor: string): Promise<MergeChunkResult> {
   const pending = await db
     .select()

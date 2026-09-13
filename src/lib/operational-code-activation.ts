@@ -133,6 +133,14 @@ export async function prepareOperationalCodeActivation(options: { dryRun: true }
  * This function intentionally throws so it can exist in the codebase (satisfying "code changes"
  * from the mission's ABSOLUTE SAFETY allow-list) without being callable — there is also no
  * route/UI button anywhere in this PR that invokes it.
+ *
+ * ACTIVATION STATE (mission section 20-22/253) — DISABLED, never SHADOW or ACTIVE. This is not a
+ * runtime flag that could be flipped by mistake — there IS no mode variable, because there is no
+ * callable path at all: `grep -r "applyOperationalCodeActivation\|prepareOperationalCodeActivation"
+ * src/app` returns zero matches (2026-09-13) — no API route, no server action, no admin UI button
+ * anywhere in the application surface calls either function. `applyOperationalCodeActivation()`
+ * itself always throws regardless. Fail-closed is structural, not configurable: there is nothing
+ * to disable because nothing was ever wired to be enabled.
  */
 export async function applyOperationalCodeActivation(_planChecksum: string): Promise<never> {
   throw new Error(

@@ -103,3 +103,22 @@ test("Every domain key referenced anywhere has metadata (label/table/kind) — n
     assert.ok(meta.kind === "DELETE_ALL_ROWS" || meta.kind === "NULL_COLUMNS");
   }
 });
+
+/**
+ * MISSION F2 section 23-24/252 — dw_code_locations (per-location prefix/sequence/config, the
+ * mission recommends this SURVIVES a reset — same category as departments/organization_units)
+ * must never appear as a reset domain's target table, in ANY scope, including ALL_BUSINESS_DATA.
+ * `RESET_DOMAIN_META` is typed as `Record<ResetDomainKey, ResetDomainMeta>` (exhaustive over the
+ * ResetDomainKey union) — this is a structural proof, not a snapshot of today's list: adding a new
+ * domain that targets dw_code_locations would require both a new ResetDomainKey member AND wiring
+ * it into some scope's domain set, so this test catches that the moment it happens, in any scope.
+ * The pool's per-code ASSIGNED/AVAILABLE status (dw_code_pool_reset) DOES reset — only the
+ * location/prefix/sequence CONFIGURATION survives — matching "worker data reset" without touching
+ * "location config" (see the docblock above RESET_SCOPES in scopes.ts for the full rationale).
+ */
+test("dw_code_locations (location config) is never a reset-domain target table — dw_code_pool_reset only touches dw_codes' per-code status", () => {
+  const tables = Object.values(RESET_DOMAIN_META).map((m) => m.table);
+  assert.ok(!tables.includes("dw_code_locations"), "location/prefix/sequence config must survive every reset scope, including ALL_BUSINESS_DATA");
+  assert.equal(RESET_DOMAIN_META.dw_code_pool_reset.table, "dw_codes");
+  assert.equal(RESET_DOMAIN_META.dw_code_pool_reset.kind, "NULL_COLUMNS", "must reset per-code status in place, never DELETE_ALL_ROWS the pool's numbering rows");
+});

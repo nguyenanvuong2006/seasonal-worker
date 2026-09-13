@@ -6,6 +6,7 @@ import { getUserScope, requirePermission, writeAudit } from "@/lib/auth";
 import { normalizePersonName } from "@/lib/person-name";
 import { CCCD_ERROR_MESSAGE, isValidCccd, normalizeCccd } from "@/lib/validators";
 import { getElectronicConfirmationHistory } from "@/lib/candidate-consent/confirmation-queries";
+import { updateWorkerBiometric } from "@/lib/it-code-assignment";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -77,7 +78,15 @@ export async function GET(_req: Request, ctx: { params: Promise<{ cccd: string }
   });
 }
 
-/** Cập nhật thông tin Biometric (#16) cho 1 hồ sơ điện tử. */
+/**
+ * Cập nhật thông tin Biometric (#16) cho 1 hồ sơ điện tử.
+ *
+ * MISSION F2 section 11/250 — legacy CCCD-keyed twin of PATCH /api/worker-
+ * profiles/by-id/[workerId]/fingerprint; now shares the exact same
+ * updateWorkerBiometric() canonicalization (see that route's own docblock)
+ * so this surface can no longer silently steal another worker's active IT
+ * Code or desync the dw_data.it_code/daily_applications.it_code mirrors.
+ */
 export async function PATCH(req: Request, ctx: { params: Promise<{ cccd: string }> }) {
   const guard = await requirePermission(["ADMIN"], "worker_profile.edit");
   if (!guard.ok) return NextResponse.json({ error: guard.error }, { status: guard.status });
@@ -89,18 +98,18 @@ export async function PATCH(req: Request, ctx: { params: Promise<{ cccd: string 
   if (!authorized) return NextResponse.json({ error: "Không tìm thấy hồ sơ trong phạm vi dữ liệu được cấp." }, { status: 404 });
 
   const body = (await req.json()) as { fingerprintCode?: string; fingerprintDevice?: string; fingerprintStatus?: string };
-  const [row] = await db
-    .update(workerProfiles)
-    .set({
-      fingerprintCode: body.fingerprintCode || null,
-      fingerprintDevice: body.fingerprintDevice || null,
-      fingerprintStatus: body.fingerprintStatus || "DA_CAP",
-      fingerprintCreatedAt: new Date(),
-      updatedAt: new Date(),
-    })
-    .where(and(eq(workerProfiles.cccd, cccd), isNull(workerProfiles.deletedAt)))
-    .returning();
-  if (!row) return NextResponse.json({ error: "Không tìm thấy hồ sơ." }, { status: 404 });
-  await writeAudit(guard.session, "UPDATE_FINGERPRINT", "worker_profiles", { cccd });
-  return NextResponse.json({ success: true, row });
+  const result = await updateWorkerBiometric({
+    workerId: authorized.profile.id,
+    fingerprintCode: body.fingerprintCode ?? null,
+    fingerprintDevice: body.fingerprintDevice ?? null,
+    fingerprintStatus: body.fingerprintStatus ?? null,
+    updatedBy: guard.session.username,
+  });
+  if (!result.ok) {
+    if (result.error === "WORKER_NOT_FOUND") return NextResponse.json({ error: "Không tìm thấy hồ sơ." }, { status: 404 });
+    const reason = result.error === "IT_CODE_ALREADY_ACTIVE" ? "IT Code này đang được gán cho người khác." : "Worker đã có IT Code đang hoạt động (xung đột).";
+    return NextResponse.json({ error: reason }, { status: 409 });
+  }
+  await writeAudit(guard.session, "UPDATE_FINGERPRINT", "worker_profiles", { cccd, itCodeRoute: result.itCodeRoute });
+  return NextResponse.json({ success: true });
 }

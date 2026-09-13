@@ -162,3 +162,122 @@ test("releaseDwCode is idempotent when no active assignment exists for the sessi
   assert.equal(result.code, null);
   assert.equal(store.writes.length, 0);
 });
+
+/**
+ * MISSION F2 section 25-26/253 — SELF-SERVICE ISOLATION SECURITY REGRESSION. Code reuse (a
+ * released code being handed to a NEW worker, the exact scenario "allocateDwCode reuses an
+ * AVAILABLE released code" above proves happens) must NEVER let the new holder's active
+ * assignment be conflated with the departed worker's identity or history. A stateful in-memory
+ * model (not static per-call responses) so real release-THEN-reuse sequencing is exercised end to
+ * end against the REAL releaseDwCode()/allocateDwCode(), exactly like workforce-movements-cross-
+ * location.test.ts does for the transfer flow.
+ */
+test("SECURITY — a released code reused by a new worker never leaks or overwrites the departed worker's assignment row/identity", async () => {
+  const location = { id: "loc-1", prefix: "DR", sequenceDigits: 5, separator: "-", suffix: "D", nextSequence: 9, isActive: true };
+  const codes = new Map([["code-1", { id: "code-1", locationId: "loc-1", sequenceNumber: 3, code: "DR00003-D", status: "ASSIGNED" }]]);
+  const assignments = new Map([
+    ["assign-A", { id: "assign-A", codeId: "code-1", workerId: "worker-A", employmentSessionId: "sess-A", dwDataId: "dw-A", assignedBy: "hr1", releasedAt: null as Date | null, releasedBy: null as string | null, releaseReason: null as string | null }],
+  ]);
+  const dws = new Map([
+    ["dw-A", { id: "dw-A", code: "DR00003-D" }],
+    ["dw-B", { id: "dw-B", code: null as string | null }],
+  ]);
+  let nextAssignmentId = 1;
+
+  const respond = (call: QueryCall): unknown => {
+    if (call.table === "dw_code_locations") {
+      if (call.root === "select") return [location];
+    }
+    if (call.table === "dw_code_assignments") {
+      if (call.root === "select") {
+        const empSessEq = eqValue(call, "dw_code_assignments.employmentSessionId");
+        if (empSessEq !== undefined) {
+          const active = [...assignments.values()].find((a) => a.employmentSessionId === empSessEq && a.releasedAt === null);
+          return active ? [active] : [];
+        }
+        const workerEq = eqValue(call, "dw_code_assignments.workerId");
+        if (workerEq !== undefined) {
+          const active = [...assignments.values()].find((a) => a.workerId === workerEq && a.releasedAt === null);
+          return active ? [{ id: active.id }] : [];
+        }
+        return [];
+      }
+      if (call.root === "insert") {
+        const values = argOf(call, "values") as Record<string, unknown>;
+        const id = `assign-new-${nextAssignmentId++}`;
+        assignments.set(id, { id, codeId: values.codeId as string, workerId: values.workerId as string, employmentSessionId: values.employmentSessionId as string, dwDataId: values.dwDataId as string, assignedBy: values.assignedBy as string, releasedAt: null, releasedBy: null, releaseReason: null });
+        return [{}];
+      }
+      if (call.root === "update") {
+        const idEq = eqValue(call, "dw_code_assignments.id") as string;
+        const patch = argOf(call, "set") as Record<string, unknown>;
+        const existing = assignments.get(idEq);
+        if (existing) Object.assign(existing, patch);
+        return [{}];
+      }
+    }
+    if (call.table === "dw_codes") {
+      if (call.root === "select") {
+        const available = [...codes.values()].find((c) => c.locationId === "loc-1" && c.status === "AVAILABLE");
+        return available ? [available] : [];
+      }
+      if (call.root === "update") {
+        const idEq = eqValue(call, "dw_codes.id") as string;
+        const patch = argOf(call, "set") as Record<string, unknown>;
+        const code = codes.get(idEq);
+        if (code) Object.assign(code, patch);
+        return [{ code: code?.code ?? null }];
+      }
+    }
+    if (call.table === "dw_data" && call.root === "update") {
+      const idEq = eqValue(call, "dw_data.id") as string;
+      const patch = argOf(call, "set") as Record<string, unknown>;
+      const dw = dws.get(idEq);
+      if (dw) Object.assign(dw, patch);
+      return [{}];
+    }
+    return undefined;
+  };
+
+  const { db } = createFakeDbWithTx({ respond });
+  const mod = loadModule(new URL("./dw-code-pool.ts", import.meta.url), {
+    stubs: { "server-only": serverOnlyStub, "drizzle-orm": drizzleStub, "@/db": { db }, "@/db/schema": schemaStub },
+  }) as unknown as {
+    allocateDwCode: (input: Record<string, unknown>) => Promise<{ ok: true; code: string; codeId: string; reused: boolean } | { ok: false; error: string }>;
+    releaseDwCode: (input: Record<string, unknown>) => Promise<{ released: boolean; code: string | null }>;
+  };
+
+  // Worker A departs — their DW code is released.
+  const releaseResult = await mod.releaseDwCode({ employmentSessionId: "sess-A", releasedBy: "hr1", releaseReason: "EMPLOYMENT_ENDED" });
+  assert.equal(releaseResult.released, true);
+  assert.equal(releaseResult.code, "DR00003-D");
+  const originalAssignment = assignments.get("assign-A")!;
+  assert.ok(originalAssignment.releasedAt, "A's own history row must record the release");
+  assert.equal(originalAssignment.workerId, "worker-A", "A's history row must never change owner");
+
+  // Worker B is now assigned the SAME code (reuse).
+  const allocateResult = await mod.allocateDwCode({ locationId: "loc-1", workerId: "worker-B", employmentSessionId: "sess-B", dwDataId: "dw-B", assignedBy: "hr1" });
+  assert.equal(allocateResult.ok, true);
+  if (!allocateResult.ok) return;
+  assert.equal(allocateResult.reused, true, "must reuse the just-released code, never mint a new sequence while one is AVAILABLE");
+  assert.equal(allocateResult.code, "DR00003-D");
+
+  // A's history row must be COMPLETELY UNTOUCHED by B's allocation — still exactly 2 distinct rows.
+  assert.equal(assignments.size, 2, "reuse must INSERT a new assignment row, never UPDATE/overwrite A's row");
+  const aRow = assignments.get("assign-A")!;
+  assert.equal(aRow.workerId, "worker-A", "A's row must still say A, never silently become B after reuse");
+  assert.ok(aRow.releasedAt, "A's row must remain released — reuse must not un-release it");
+
+  const bRow = [...assignments.values()].find((a) => a.id !== "assign-A")!;
+  assert.equal(bRow.workerId, "worker-B");
+  assert.equal(bRow.releasedAt, null, "B's row must be the only ACTIVE (releasedAt IS NULL) row for this code");
+
+  // "Who currently holds this code" must resolve to EXACTLY B — never both, never A.
+  const currentHolders = [...assignments.values()].filter((a) => a.codeId === "code-1" && a.releasedAt === null);
+  assert.equal(currentHolders.length, 1, "exactly one current holder — the query pattern every real lookup (diagnostic script, activation planner, pool status) uses");
+  assert.equal(currentHolders[0].workerId, "worker-B");
+
+  // dw_data mirrors: A's old mirror was cleared by releaseDwCode; B's new mirror reflects the code.
+  assert.equal(dws.get("dw-A")!.code, null, "A's dw_data mirror must be cleared on release, never left showing a code A no longer holds");
+  assert.equal(dws.get("dw-B")!.code, "DR00003-D");
+});

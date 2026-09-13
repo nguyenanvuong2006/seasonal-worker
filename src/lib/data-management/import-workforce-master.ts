@@ -207,7 +207,20 @@ export async function createWorkforceMasterBatch(input: CreateBatchInput): Promi
 
 export type MergeChunkResult = { processed: number; inserted: number; updated: number; invalid: number; done: boolean };
 
-/** One bounded chunk per call (mission section 38) — the caller (route) loops until done=true. Never one giant transaction for the whole file. */
+/**
+ * MISSION F2 section 6/250 — NOT CANONICALIZED, DOCUMENTED BLOCKER (not silently skipped).
+ * This bulk importer writes `dw_data.code`/`dw_data.it_code` directly (below). Canonicalizing the
+ * DW code side onto dw-code-pool.ts is the SAME structural impossibility documented on PATCH
+ * /api/administration/daily-code/route.ts: `dw_codes.location_id` is NOT NULL and Production has
+ * zero `dw_code_locations` rows — writing a `dw_codes` row here would need the location-config
+ * bootstrap this mission's ABSOLUTE SAFETY forbids. The IT code side has a DIFFERENT blocker:
+ * assignItCode() (it-code-assignment.ts) requires an `employmentSessionId`/`dailyApplicationId` to
+ * attach an assignment-history row to, but bulk import runs BEFORE any employment session exists
+ * for the imported workers — there is no engagement context to canonicalize onto at this stage of
+ * the pipeline.
+ *
+ * One bounded chunk per call (mission section 38) — the caller (route) loops until done=true. Never one giant transaction for the whole file.
+ */
 export async function mergeWorkforceMasterChunk(batchId: string): Promise<MergeChunkResult> {
   const defs = await getFieldDefinitions("dw_data");
   const pending = await db
