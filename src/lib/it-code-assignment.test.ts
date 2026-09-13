@@ -333,3 +333,20 @@ test("updateWorkerBiometric — rejects with IT_CODE_ALREADY_ACTIVE instead of s
   if (!result.ok) assert.equal(result.error, "IT_CODE_ALREADY_ACTIVE");
   assert.equal(store.writes.some((w) => w.table === "worker_profiles" && w.patch.fingerprintDevice !== undefined), false, "must not write device/status metadata when the identity change itself was rejected");
 });
+
+// Independent-review fix — matches the original direct-write routes' `body.fingerprintDevice ||
+// null` semantics (an empty string was never stored as-is, only as NULL); the canonicalization
+// must preserve that, in BOTH the CANONICAL and DIRECT_NO_ACTIVE_ENGAGEMENT write paths.
+test("updateWorkerBiometric — an empty/whitespace fingerprintDevice is normalized to NULL, never stored as an empty string", async () => {
+  const canonicalStore = makeUwbStore({ currentActiveItCode: "IT999" });
+  const canonicalMod = await loadUwbWith(canonicalStore);
+  await canonicalMod.updateWorkerBiometric({ ...UWB_INPUT, fingerprintDevice: "   " });
+  const canonicalWrite = canonicalStore.writes.find((w) => w.table === "worker_profiles");
+  assert.equal(canonicalWrite?.patch.fingerprintDevice, null);
+
+  const directStore = makeUwbStore({ session: null });
+  const directMod = await loadUwbWith(directStore);
+  await directMod.updateWorkerBiometric({ ...UWB_INPUT, fingerprintDevice: "" });
+  const directWrite = directStore.writes.find((w) => w.table === "worker_profiles");
+  assert.equal(directWrite?.patch.fingerprintDevice, null);
+});

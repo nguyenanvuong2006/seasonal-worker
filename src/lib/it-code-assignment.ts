@@ -213,6 +213,11 @@ export async function updateWorkerBiometric(input: UpdateWorkerBiometricInput, e
   if (executor === db) return db.transaction((tx) => updateWorkerBiometric(input, tx));
   const tx = executor;
   {
+    // Matches the original direct-write routes' `body.fingerprintDevice || null` semantics — an
+    // empty string is never stored as-is, only as NULL (fingerprintStatus already falls back to
+    // "DA_CAP" the same way, below).
+    const fingerprintDevice = input.fingerprintDevice?.trim() || null;
+
     const [worker] = await tx
       .select({ id: workerProfiles.id, cccd: workerProfiles.cccd })
       .from(workerProfiles)
@@ -264,14 +269,14 @@ export async function updateWorkerBiometric(input: UpdateWorkerBiometricInput, e
       // fixed DA_CAP/CHUA_CAP status those functions set on the code-identity mirror fields.
       await tx
         .update(workerProfiles)
-        .set({ fingerprintDevice: input.fingerprintDevice, fingerprintStatus: input.fingerprintStatus || "DA_CAP", fingerprintCreatedAt: new Date(), updatedAt: new Date() })
+        .set({ fingerprintDevice, fingerprintStatus: input.fingerprintStatus || "DA_CAP", fingerprintCreatedAt: new Date(), updatedAt: new Date() })
         .where(eq(workerProfiles.id, worker.id));
       return { ok: true, itCodeRoute: "CANONICAL" as const };
     }
 
     await tx
       .update(workerProfiles)
-      .set({ fingerprintCode: itCode, fingerprintDevice: input.fingerprintDevice, fingerprintStatus: input.fingerprintStatus || "DA_CAP", fingerprintCreatedAt: new Date(), updatedAt: new Date() })
+      .set({ fingerprintCode: itCode, fingerprintDevice, fingerprintStatus: input.fingerprintStatus || "DA_CAP", fingerprintCreatedAt: new Date(), updatedAt: new Date() })
       .where(eq(workerProfiles.id, worker.id));
     return { ok: true, itCodeRoute: "DIRECT_NO_ACTIVE_ENGAGEMENT" as const };
   }
