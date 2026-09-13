@@ -6,7 +6,7 @@ import { queueNotification } from "@/lib/notifications";
 import { autoAllocateInternship } from "@/lib/planning";
 import { endActiveRequestAllocationsForWorker, endActiveRequestAllocationsForTransfer } from "@/lib/workforce-request";
 import { recomputeStoredRecruitmentBalance } from "@/lib/recruitment-kpi";
-import { allocateDwCode, releaseDwCode } from "@/lib/dw-code-pool";
+import { allocateDwCode, releaseDwCode, type ReleaseReason } from "@/lib/dw-code-pool";
 import { releaseItCode } from "@/lib/it-code-assignment";
 import { todayStr } from "@/lib/helpers";
 import type { Session } from "@/lib/auth";
@@ -108,7 +108,8 @@ export async function finalizeResignationEffect(
   tx: Executor,
   movement: MovementForFinalize,
   actorUsername: string,
-): Promise<{ employmentSessionId: string | null }> {
+  codeReleaseOptions?: { releaseReason: ReleaseReason; note: string },
+): Promise<{ employmentSessionId: string | null; dwCodeReleased: boolean; itCodeReleased: boolean }> {
   const sessionColumns = { id: employmentSessions.id, dailyApplicationId: employmentSessions.dailyApplicationId };
   const [activeSession] = await tx
     .select(sessionColumns)
@@ -157,14 +158,22 @@ export async function finalizeResignationEffect(
   }
 
   // MISSION F2 section 9 — normal (non-same-day) resignation used to never release DW/IT codes
-  // at all (same-day-lifecycle.ts's STARTED_THEN_LEFT branch was the ONLY path that did). Release
-  // both here, inside the SAME transaction, using the canonical `EMPLOYMENT_ENDED` reason that has
-  // existed in the ReleaseReason union since Mission E but was never actually passed anywhere.
-  // Both releaseDwCode()/releaseItCode() are idempotent no-ops when nothing is active — safe to
-  // call even for the "no session to end" edge case (sessionToEnd null) is skipped below since
-  // there is no employmentSessionId to key the release on.
+  // at all (same-day-lifecycle.ts's STARTED_THEN_LEFT branch was the ONLY path that did). This is
+  // now the SINGLE canonical injection point for both: same-day-lifecycle.ts's STARTED_THEN_LEFT
+  // branch also calls finalizeResignationEffect() (it reuses this exact function so Quit-counting
+  // KPI never has a second counting path — see that file's own docblock) and passes
+  // `codeReleaseOptions` so the release is tagged with the MORE SPECIFIC "STARTED_THEN_LEFT" reason
+  // instead of the generic "EMPLOYMENT_ENDED" a normal resignation approval uses. Both
+  // releaseDwCode()/releaseItCode() are idempotent no-ops when nothing is active — safe to call
+  // even when sessionToEnd is null is skipped below since there is no employmentSessionId to key
+  // the release on.
+  let dwCodeReleased = false;
+  let itCodeReleased = false;
   if (sessionToEnd) {
-    await releaseDwCode({ employmentSessionId: sessionToEnd.id, releasedBy: actorUsername, releaseReason: "EMPLOYMENT_ENDED", note: `Nghỉ việc có hiệu lực (movement ${movement.id})` }, tx);
+    const reason = codeReleaseOptions?.releaseReason ?? "EMPLOYMENT_ENDED";
+    const note = codeReleaseOptions?.note ?? `Nghỉ việc có hiệu lực (movement ${movement.id})`;
+    const dwResult = await releaseDwCode({ employmentSessionId: sessionToEnd.id, releasedBy: actorUsername, releaseReason: reason, note }, tx);
+    dwCodeReleased = dwResult.released;
 
     if (sessionToEnd.dailyApplicationId) {
       const [app] = await tx
@@ -172,22 +181,23 @@ export async function finalizeResignationEffect(
         .from(dailyApplications)
         .where(eq(dailyApplications.id, sessionToEnd.dailyApplicationId))
         .limit(1);
-      await releaseItCode(
+      const itResult = await releaseItCode(
         {
           employmentSessionId: sessionToEnd.id,
           dailyApplicationId: sessionToEnd.dailyApplicationId,
           workerId: movement.workerId,
           dwDataId: app?.dwId ?? null,
           releasedBy: actorUsername,
-          releaseReason: "EMPLOYMENT_ENDED",
-          note: `Nghỉ việc có hiệu lực (movement ${movement.id})`,
+          releaseReason: reason,
+          note,
         },
         tx,
       );
+      itCodeReleased = itResult.released;
     }
   }
 
-  return { employmentSessionId: sessionToEnd?.id ?? null };
+  return { employmentSessionId: sessionToEnd?.id ?? null, dwCodeReleased, itCodeReleased };
 }
 
 /**

@@ -102,6 +102,12 @@ async function loadWith(store: ReturnType<typeof makeStore>) {
       "@/lib/workforce-movements": {
         finalizeResignationEffect: async () => {
           store.calls.finalizeResignation += 1;
+          // MISSION F2 section 9 — finalizeResignationEffect() is now the SINGLE canonical
+          // code-release injection point: it releases DW/IT codes itself and returns whether it
+          // did, so same-day-lifecycle.ts's STARTED_THEN_LEFT branch never calls
+          // releaseDwCode()/releaseItCode() a second time (that would silently no-op, since the
+          // codes are already released, corrupting the release reason and these result flags).
+          return { employmentSessionId: SESSION.id, dwCodeReleased: true, itCodeReleased: true };
         },
       },
       "@/lib/workforce-request": {
@@ -211,8 +217,17 @@ test("STARTED_THEN_LEFT creates a real resignation movement and reuses finalizeR
   const values = movementInsert!.values as Record<string, unknown>;
   assert.equal(values.movementType, "resignation");
   assert.equal(values.source, "SAME_DAY_REPORT");
-  assert.equal(store.calls.releaseDw, 1);
-  assert.equal(store.calls.releaseIt, 1);
+  // MISSION F2 section 9 — STARTED_THEN_LEFT's code release now happens INSIDE
+  // finalizeResignationEffect() (stubbed above), so the standalone releaseDwCode()/releaseItCode()
+  // must NOT be called a second time here — a double call would be an idempotent no-op against a
+  // real db, but would silently overwrite the correct dwCodeReleased/itCodeReleased result with
+  // `false` and lose the more specific "STARTED_THEN_LEFT" release reason.
+  assert.equal(store.calls.releaseDw, 0, "must not call releaseDwCode directly — finalizeResignationEffect already released it");
+  assert.equal(store.calls.releaseIt, 0, "must not call releaseItCode directly — finalizeResignationEffect already released it");
+  if (result.ok) {
+    assert.equal(result.dwCodeReleased, true, "the result must reflect finalizeResignationEffect's own release outcome");
+    assert.equal(result.itCodeReleased, true);
+  }
 });
 
 test("double-submit is idempotent — replays the previously computed result, no new writes", async () => {

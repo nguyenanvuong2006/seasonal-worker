@@ -142,6 +142,8 @@ export async function applySameDayLifecycleEvent(input: ApplySameDayLifecycleEve
     const reasonText = input.reason?.trim() || `${outcomeLabel(input.outcome)} (báo cáo trong ngày)`;
     let movementId: string | null = null;
     let affectedRequestIds: string[] = [];
+    let dwCodeReleased: boolean;
+    let itCodeReleased: boolean;
 
     if (input.outcome === "STARTED_THEN_LEFT") {
       const [movement] = await tx
@@ -173,10 +175,16 @@ export async function applySameDayLifecycleEvent(input: ApplySameDayLifecycleEve
         lifecycleAppliedAt: movement.lifecycleAppliedAt,
         employmentSessionId: movement.employmentSessionId,
       };
-      await finalizeResignationEffect(tx, movementForFinalize, input.session.username);
+      // Reuses finalizeResignationEffect() as the SINGLE canonical code-release injection point
+      // (see workforce-movements.ts's own docblock) — pass codeReleaseOptions so the release is
+      // tagged with the more specific "STARTED_THEN_LEFT" reason, never the generic
+      // "EMPLOYMENT_ENDED" a normal resignation approval uses, and never released a second time.
+      const finalizeResult = await finalizeResignationEffect(tx, movementForFinalize, input.session.username, { releaseReason: input.outcome, note: reasonText });
       await tx.update(workforceMovements).set({ lifecycleAppliedAt: new Date(), employmentSessionId: session.id }).where(eq(workforceMovements.id, movement.id));
       movementId = movement.id;
       affectedRequestIds = [];
+      dwCodeReleased = finalizeResult.dwCodeReleased;
+      itCodeReleased = finalizeResult.itCodeReleased;
     } else {
       await tx
         .update(employmentSessions)
@@ -199,24 +207,26 @@ export async function applySameDayLifecycleEvent(input: ApplySameDayLifecycleEve
       for (const requestId of affectedRequestIds) {
         await recomputeStoredRecruitmentBalance(tx, requestId);
       }
-    }
 
-    const dwResult = await releaseDwCode(
-      { employmentSessionId: session.id, releasedBy: input.session.username, releaseReason: input.outcome, note: reasonText },
-      tx,
-    );
-    const itResult = await releaseItCode(
-      {
-        employmentSessionId: session.id,
-        dailyApplicationId: session.dailyApplicationId,
-        workerId: input.workerId,
-        dwDataId: app.dwId,
-        releasedBy: input.session.username,
-        releaseReason: input.outcome,
-        note: reasonText,
-      },
-      tx,
-    );
+      const dwResult = await releaseDwCode(
+        { employmentSessionId: session.id, releasedBy: input.session.username, releaseReason: input.outcome, note: reasonText },
+        tx,
+      );
+      const itResult = await releaseItCode(
+        {
+          employmentSessionId: session.id,
+          dailyApplicationId: session.dailyApplicationId,
+          workerId: input.workerId,
+          dwDataId: app.dwId,
+          releasedBy: input.session.username,
+          releaseReason: input.outcome,
+          note: reasonText,
+        },
+        tx,
+      );
+      dwCodeReleased = dwResult.released;
+      itCodeReleased = itResult.released;
+    }
 
     const mealResult = await excludeFromMeal(
       { dailyApplicationId: app.id, excludeDate: app.regDate, reason: input.outcome, excludedBy: input.session.username },
@@ -235,8 +245,8 @@ export async function applySameDayLifecycleEvent(input: ApplySameDayLifecycleEve
         reason: input.reason ?? null,
         reportedBy: input.session.username,
         mealAction: mealResult.outcome,
-        dwCodeReleased: dwResult.released,
-        itCodeReleased: itResult.released,
+        dwCodeReleased,
+        itCodeReleased,
         requestAllocationEnded: affectedRequestIds.length > 0 || input.outcome === "STARTED_THEN_LEFT",
         planningAllocationEnded: affectedRequestIds.length > 0 || input.outcome === "STARTED_THEN_LEFT",
         movementId,
@@ -248,8 +258,8 @@ export async function applySameDayLifecycleEvent(input: ApplySameDayLifecycleEve
       alreadyApplied: false,
       eventId: event.id,
       mealAction: mealResult.outcome,
-      dwCodeReleased: dwResult.released,
-      itCodeReleased: itResult.released,
+      dwCodeReleased,
+      itCodeReleased,
     };
   });
 
