@@ -269,11 +269,19 @@ export async function applySameDayLifecycleEvent(input: ApplySameDayLifecycleEve
         },
       });
 
-      if (disposition === "RELEASE_CURRENT_ENGAGEMENT_CODES") {
+      // Per-code independent release: each code gets its own RELEASE/PRESERVE
+      // decision — never all-or-nothing.
+      if (disposition.dwCode === "RELEASE") {
         const dwResult = await releaseDwCode(
           { employmentSessionId: session.id, releasedBy: input.session.username, releaseReason: input.outcome, note: reasonText },
           tx,
         );
+        dwCodeReleased = dwResult.released;
+      } else {
+        dwCodeReleased = false;
+      }
+
+      if (disposition.itCode === "RELEASE") {
         const itResult = await releaseItCode(
           {
             employmentSessionId: session.id,
@@ -286,12 +294,8 @@ export async function applySameDayLifecycleEvent(input: ApplySameDayLifecycleEve
           },
           tx,
         );
-        dwCodeReleased = dwResult.released;
         itCodeReleased = itResult.released;
       } else {
-        // PRESERVE_EXISTING_CODES — skip release calls completely.
-        // Never release-and-restore.
-        dwCodeReleased = false;
         itCodeReleased = false;
       }
     }

@@ -755,3 +755,109 @@ test("11. Preserving codes must not leave Request/Planning/meal state incorrectl
   assert.equal(store.calls.audit, 1, "audit must still be written");
   assert.equal(store.calls.notify, 1, "notification must still be queued");
 });
+
+// ════════════════════════════════════════════════════════════════════════════
+// MANDATORY PER-CODE DISCRIMINATION TESTS (PR #217 review fix)
+// ════════════════════════════════════════════════════════════════════════════
+
+test("12. NEW + DW provenance true + IT provenance false → DW released, IT preserved", async () => {
+  const store = makeStore({
+    activeSession: SESSION,
+    priorSessions: [], // NEW worker
+    activeDwAssignment: { id: "dw-assign-1" }, // DW provenance proven
+    activeItAssignment: null, // IT provenance uncertain
+  });
+  const mod = await loadWith(store);
+
+  const result = await mod.applySameDayLifecycleEvent({
+    workerId: "worker-1",
+    outcome: "NO_SHOW",
+    eventAt: new Date("2026-09-13T02:00:00Z"),
+    session: ACTOR,
+    scope: null,
+  });
+
+  assert.equal(result.ok, true);
+  if (!result.ok) return;
+  assert.equal(store.calls.releaseDw, 1, "DW code must be released when DW provenance is proven");
+  assert.equal(store.calls.releaseIt, 0, "IT code must NOT be released when IT provenance is uncertain");
+  assert.equal(result.dwCodeReleased, true);
+  assert.equal(result.itCodeReleased, false);
+});
+
+test("13. NEW + DW provenance false + IT provenance true → DW preserved, IT released", async () => {
+  const store = makeStore({
+    activeSession: SESSION,
+    priorSessions: [], // NEW worker
+    activeDwAssignment: null, // DW provenance uncertain
+    activeItAssignment: { id: "it-assign-1" }, // IT provenance proven
+  });
+  const mod = await loadWith(store);
+
+  const result = await mod.applySameDayLifecycleEvent({
+    workerId: "worker-1",
+    outcome: "NO_SHOW",
+    eventAt: new Date("2026-09-13T02:00:00Z"),
+    session: ACTOR,
+    scope: null,
+  });
+
+  assert.equal(result.ok, true);
+  if (!result.ok) return;
+  assert.equal(store.calls.releaseDw, 0, "DW code must NOT be released when DW provenance is uncertain");
+  assert.equal(store.calls.releaseIt, 1, "IT code must be released when IT provenance is proven");
+  assert.equal(result.dwCodeReleased, false);
+  assert.equal(result.itCodeReleased, true);
+});
+
+test("14. RETURNING + both provenance true → neither released (RETURNING master guard)", async () => {
+  const store = makeStore({
+    activeSession: SESSION,
+    priorSessions: [{ id: "sess-old" }], // RETURNING
+    activeDwAssignment: { id: "dw-assign-1" }, // provenance proven — but irrelevant
+    activeItAssignment: { id: "it-assign-1" }, // provenance proven — but irrelevant
+  });
+  const mod = await loadWith(store);
+
+  const result = await mod.applySameDayLifecycleEvent({
+    workerId: "worker-1",
+    outcome: "DECLINED_AT_START",
+    eventAt: new Date("2026-09-13T02:00:00Z"),
+    session: ACTOR,
+    scope: null,
+  });
+
+  assert.equal(result.ok, true);
+  if (!result.ok) return;
+  assert.equal(store.calls.releaseDw, 0, "RETURNING master guard must prevent DW release even with proven provenance");
+  assert.equal(store.calls.releaseIt, 0, "RETURNING master guard must prevent IT release even with proven provenance");
+  assert.equal(result.dwCodeReleased, false);
+  assert.equal(result.itCodeReleased, false);
+});
+
+test("15. NEW + uncertain legacy provenance for both → corresponding codes preserved", async () => {
+  // Same as test 8 but re-stated explicitly for the per-code discrimination matrix.
+  const store = makeStore({
+    activeSession: SESSION,
+    priorSessions: [], // NEW worker
+    activeDwAssignment: null, // no DW provenance
+    activeItAssignment: null, // no IT provenance
+  });
+  const mod = await loadWith(store);
+
+  const result = await mod.applySameDayLifecycleEvent({
+    workerId: "worker-1",
+    outcome: "DECLINED_AT_START",
+    eventAt: new Date("2026-09-13T02:00:00Z"),
+    session: ACTOR,
+    scope: null,
+  });
+
+  assert.equal(result.ok, true);
+  if (!result.ok) return;
+  assert.equal(store.calls.releaseDw, 0, "uncertain DW provenance → DW preserved");
+  assert.equal(store.calls.releaseIt, 0, "uncertain IT provenance → IT preserved");
+  assert.equal(result.dwCodeReleased, false);
+  assert.equal(result.itCodeReleased, false);
+});
+
