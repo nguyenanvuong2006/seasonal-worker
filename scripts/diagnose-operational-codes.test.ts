@@ -51,6 +51,14 @@ test("assertSelectOnlySql: TARGETED_DIAGNOSTIC_SQL passes validation", () => {
   });
 });
 
+test("TARGETED_DIAGNOSTIC_SQL schema parity: uses real request_allocations.request_id and never nonexistent recruitment_request_id", () => {
+  // Must NOT reference the nonexistent column that failed in Production
+  assert.doesNotMatch(TARGETED_DIAGNOSTIC_SQL, /recruitment_request_id/);
+  // Must reference the canonical column confirmed from src/db/schema.ts and migrations
+  assert.match(TARGETED_DIAGNOSTIC_SQL, /\bra\.request_id\b/);
+  assert.match(TARGETED_DIAGNOSTIC_SQL, /JOIN\s+recruitment_requests\s+rr\s+ON\s+rr\.id\s+=\s+ra\.request_id/i);
+});
+
 test("assertSelectOnlySql: rejects mutating SQL statements", () => {
   for (const kw of FORBIDDEN_SQL_KEYWORDS) {
     assert.throws(

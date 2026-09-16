@@ -63,9 +63,9 @@ LEFT JOIN LATERAL (
 LEFT JOIN departments dept
   ON dept.id = es.dept_id
 LEFT JOIN LATERAL (
-  SELECT ra.recruitment_request_id AS request_id
+  SELECT ra.request_id AS request_id
   FROM request_allocations ra
-  JOIN recruitment_requests rr ON rr.id = ra.recruitment_request_id
+  JOIN recruitment_requests rr ON rr.id = ra.request_id
   WHERE ra.employment_session_id = es.id
     AND rr.status NOT IN ('CANCELLED', 'REJECTED', 'CLOSED')
   LIMIT 1
