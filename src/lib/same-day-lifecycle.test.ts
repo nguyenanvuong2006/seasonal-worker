@@ -11,9 +11,13 @@ import { loadModule, serverOnlyStub } from "./test-support/load-module.ts";
  * test can assert exactly what the orchestration does/does not touch, per outcome:
  *   - NO_SHOW / DECLINED_AT_START: ends the session directly, NEVER creates a
  *     workforce_movements row, NEVER calls finalizeResignationEffect (must not count as Quit).
+ *     Release of operational codes follows the disposition policy (returning-worker fix):
+ *       - RETURNING worker → PRESERVE.
+ *       - NEW worker + provenance proven → RELEASE.
+ *       - Provenance uncertain → PRESERVE (fail-safe).
  *   - STARTED_THEN_LEFT: creates a real resignation workforce_movements row and reuses
  *     the canonical finalizeResignationEffect() — same Quit-counting engine as normal HR
- *     resignation approval.
+ *     resignation approval. Code release semantics are UNCHANGED.
  *   - idempotent double-submit: second call against an already-ended session with an
  *     existing same_day_lifecycle_events row replays the previous result, no new writes.
  *   - OUT_OF_SCOPE / NO_ACTIVE_SESSION guard rails.
@@ -23,7 +27,9 @@ const employmentSessions = makeTable("employment_sessions");
 const dailyApplications = makeTable("daily_applications");
 const sameDayLifecycleEvents = makeTable("same_day_lifecycle_events");
 const workforceMovements = makeTable("workforce_movements");
-const schemaStub = { employmentSessions, dailyApplications, sameDayLifecycleEvents, workforceMovements };
+const dwCodeAssignments = makeTable("dw_code_assignments");
+const itCodeAssignments = makeTable("it_code_assignments");
+const schemaStub = { employmentSessions, dailyApplications, sameDayLifecycleEvents, workforceMovements, dwCodeAssignments, itCodeAssignments };
 
 const TODAY = "2026-09-13";
 const SESSION = {
@@ -36,12 +42,36 @@ const SESSION = {
   regDate: "2026-09-13",
   createdAt: new Date("2026-09-13T00:00:00Z"),
 };
-const APP = { id: "app-1", regDate: "2026-09-13" };
+const APP = { id: "app-1", regDate: "2026-09-13", dwId: "dw-1" };
 
-function makeStore(opts: { activeSession: typeof SESSION | null; mostRecentSession?: typeof SESSION | null; existingEvent?: Record<string, unknown> | null }) {
+type StoreOpts = {
+  activeSession: typeof SESSION | null;
+  mostRecentSession?: typeof SESSION | null;
+  existingEvent?: Record<string, unknown> | null;
+  /**
+   * Prior employment_sessions rows for this worker (other than current session).
+   * Non-empty → RETURNING worker. Empty/absent → NEW worker.
+   */
+  priorSessions?: { id: string }[];
+  /**
+   * Active DW code assignment for the current session.
+   * Present → provenance proven. Absent → provenance unknown.
+   */
+  activeDwAssignment?: { id: string } | null;
+  /**
+   * Active IT code assignment for the current session.
+   * Present → provenance proven. Absent → provenance unknown.
+   */
+  activeItAssignment?: { id: string } | null;
+};
+
+function makeStore(opts: StoreOpts) {
   const writes: { table: string; patch: unknown }[] = [];
   const inserted: { table: string; values: unknown }[] = [];
   const calls = { finalizeResignation: 0, endAllocations: 0, recompute: 0, releaseDw: 0, releaseIt: 0, excludeMeal: 0, notify: 0, audit: 0 };
+
+  /** Track how many employment_sessions SELECTs with ne(id) we've seen — those are the "prior session" lookups. */
+  let esSelectCount = 0;
 
   const respond = (call: QueryCall): unknown => {
     if (call.table === "employment_sessions") {
@@ -50,6 +80,29 @@ function makeStore(opts: { activeSession: typeof SESSION | null; mostRecentSessi
         if (statusEq === "APPROVED") {
           // True ACTIVE-session lookup.
           return opts.activeSession ? [opts.activeSession] : [];
+        }
+        // Check if this is the "prior sessions" query — it uses ne(id) which
+        // appears as a "ne" condition in the fake drizzle. We detect this by
+        // looking for an eqValue on workerId paired with lack of status filter.
+        const workerEq = eqValue(call, "employment_sessions.workerId");
+        if (workerEq && !statusEq) {
+          esSelectCount += 1;
+          // The SECOND select without status is the prior-session lookup (first
+          // is the idempotency fallback which routes through mostRecentSession).
+          // Actually, the prior-session query uses ne(id, session.id) AND
+          // eq(workerId, ...), no status filter. The "most recent" fallback also
+          // has eq(workerId) with no status filter. We differentiate by counting:
+          // the prior-session query is the one that runs DURING the active flow,
+          // after the session update. When activeSession is set (not idempotent
+          // path), the "most recent" code path is never reached. So any
+          // employment_sessions SELECT with workerEq and no statusEq in the
+          // active flow is the prior-session lookup.
+          if (opts.activeSession) {
+            // Active flow — this is the prior-session lookup.
+            return opts.priorSessions ?? [];
+          }
+          // Idempotent path — "most recent session" fallback.
+          return opts.mostRecentSession ? [opts.mostRecentSession] : opts.activeSession ? [opts.activeSession] : [];
         }
         // Fallback "most recent session" lookup (no status filter).
         return opts.mostRecentSession ? [opts.mostRecentSession] : opts.activeSession ? [opts.activeSession] : [];
@@ -85,6 +138,13 @@ function makeStore(opts: { activeSession: typeof SESSION | null; mostRecentSessi
         return [{}];
       }
     }
+    // Code provenance queries.
+    if (call.table === "dw_code_assignments" && call.root === "select") {
+      return opts.activeDwAssignment ? [opts.activeDwAssignment] : [];
+    }
+    if (call.table === "it_code_assignments" && call.root === "select") {
+      return opts.activeItAssignment ? [opts.activeItAssignment] : [];
+    }
     return undefined;
   };
 
@@ -99,6 +159,7 @@ async function loadWith(store: ReturnType<typeof makeStore>) {
       "drizzle-orm": drizzleStub,
       "@/db": { db: store.db },
       "@/db/schema": schemaStub,
+      "@/lib/operational-code-disposition": await import("./operational-code-disposition.ts"),
       "@/lib/workforce-movements": {
         finalizeResignationEffect: async () => {
           store.calls.finalizeResignation += 1;
@@ -170,8 +231,18 @@ async function loadWith(store: ReturnType<typeof makeStore>) {
 
 const ACTOR = { username: "manager1", id: "u1", role: "DEPT_MANAGER" };
 
+// ════════════════════════════════════════════════════════════════════════════
+// EXISTING TESTS (updated for disposition policy)
+// ════════════════════════════════════════════════════════════════════════════
+
 test("NO_SHOW ends the session directly, never touches workforce_movements, never counts as Quit", async () => {
-  const store = makeStore({ activeSession: SESSION });
+  // NEW worker (no priorSessions) with provenance proven → RELEASE.
+  const store = makeStore({
+    activeSession: SESSION,
+    priorSessions: [],
+    activeDwAssignment: { id: "dw-assign-1" },
+    activeItAssignment: { id: "it-assign-1" },
+  });
   const mod = await loadWith(store);
 
   const result = await mod.applySameDayLifecycleEvent({
@@ -359,3 +430,434 @@ test("STARTED_THEN_LEFT still requires a real ACTIVE session — same NO_ACTIVE_
   assert.equal(result.error, "NO_ACTIVE_SESSION");
   assert.equal(store.calls.finalizeResignation, 0, "must never fabricate a resignation/Quit event for a worker who was never active");
 });
+
+// ════════════════════════════════════════════════════════════════════════════
+// MANDATORY REGRESSION TESTS — RETURNING WORKER CODE PRESERVATION
+// ════════════════════════════════════════════════════════════════════════════
+
+test("1. NEW + NO_SHOW + DW code assigned to current session → DW released", async () => {
+  const store = makeStore({
+    activeSession: SESSION,
+    priorSessions: [], // NEW
+    activeDwAssignment: { id: "dw-assign-1" },
+    activeItAssignment: { id: "it-assign-1" },
+  });
+  const mod = await loadWith(store);
+
+  const result = await mod.applySameDayLifecycleEvent({
+    workerId: "worker-1",
+    outcome: "NO_SHOW",
+    eventAt: new Date("2026-09-13T02:00:00Z"),
+    session: ACTOR,
+    scope: null,
+  });
+
+  assert.equal(result.ok, true);
+  if (!result.ok) return;
+  assert.equal(store.calls.releaseDw, 1, "DW code must be released for NEW worker with provenance");
+  assert.equal(result.dwCodeReleased, true);
+});
+
+test("2. NEW + NO_SHOW + IT code assigned to current session → IT released", async () => {
+  const store = makeStore({
+    activeSession: SESSION,
+    priorSessions: [], // NEW
+    activeDwAssignment: { id: "dw-assign-1" },
+    activeItAssignment: { id: "it-assign-1" },
+  });
+  const mod = await loadWith(store);
+
+  const result = await mod.applySameDayLifecycleEvent({
+    workerId: "worker-1",
+    outcome: "NO_SHOW",
+    eventAt: new Date("2026-09-13T02:00:00Z"),
+    session: ACTOR,
+    scope: null,
+  });
+
+  assert.equal(result.ok, true);
+  if (!result.ok) return;
+  assert.equal(store.calls.releaseIt, 1, "IT code must be released for NEW worker with provenance");
+  assert.equal(result.itCodeReleased, true);
+});
+
+test("3. NEW + DECLINED_AT_START + current-engagement codes → released", async () => {
+  const store = makeStore({
+    activeSession: SESSION,
+    priorSessions: [], // NEW
+    activeDwAssignment: { id: "dw-assign-1" },
+    activeItAssignment: { id: "it-assign-1" },
+  });
+  const mod = await loadWith(store);
+
+  const result = await mod.applySameDayLifecycleEvent({
+    workerId: "worker-1",
+    outcome: "DECLINED_AT_START",
+    eventAt: new Date("2026-09-13T02:00:00Z"),
+    session: ACTOR,
+    scope: null,
+  });
+
+  assert.equal(result.ok, true);
+  if (!result.ok) return;
+  assert.equal(store.calls.releaseDw, 1, "DW code released for NEW + DECLINED_AT_START");
+  assert.equal(store.calls.releaseIt, 1, "IT code released for NEW + DECLINED_AT_START");
+  assert.equal(result.dwCodeReleased, true);
+  assert.equal(result.itCodeReleased, true);
+});
+
+test("4. RETURNING + NO_SHOW + existing DW code → preserved", async () => {
+  const store = makeStore({
+    activeSession: SESSION,
+    priorSessions: [{ id: "sess-old" }], // RETURNING
+    activeDwAssignment: { id: "dw-assign-1" },
+    activeItAssignment: { id: "it-assign-1" },
+  });
+  const mod = await loadWith(store);
+
+  const result = await mod.applySameDayLifecycleEvent({
+    workerId: "worker-1",
+    outcome: "NO_SHOW",
+    eventAt: new Date("2026-09-13T02:00:00Z"),
+    session: ACTOR,
+    scope: null,
+  });
+
+  assert.equal(result.ok, true);
+  if (!result.ok) return;
+  assert.equal(store.calls.releaseDw, 0, "RETURNING worker's DW code must NOT be released on NO_SHOW");
+  assert.equal(result.dwCodeReleased, false);
+  // Session must still be ended:
+  const sessionUpdate = store.writes.find((w) => w.table === "employment_sessions");
+  assert.equal((sessionUpdate?.patch as Record<string, unknown>)?.status, "ENDED");
+  // Allocations must still be ended:
+  assert.equal(store.calls.endAllocations, 1);
+  // Meal must still be excluded:
+  assert.equal(store.calls.excludeMeal, 1);
+});
+
+test("5. RETURNING + NO_SHOW + existing IT code → preserved", async () => {
+  const store = makeStore({
+    activeSession: SESSION,
+    priorSessions: [{ id: "sess-old" }], // RETURNING
+    activeDwAssignment: { id: "dw-assign-1" },
+    activeItAssignment: { id: "it-assign-1" },
+  });
+  const mod = await loadWith(store);
+
+  const result = await mod.applySameDayLifecycleEvent({
+    workerId: "worker-1",
+    outcome: "NO_SHOW",
+    eventAt: new Date("2026-09-13T02:00:00Z"),
+    session: ACTOR,
+    scope: null,
+  });
+
+  assert.equal(result.ok, true);
+  if (!result.ok) return;
+  assert.equal(store.calls.releaseIt, 0, "RETURNING worker's IT code must NOT be released on NO_SHOW");
+  assert.equal(result.itCodeReleased, false);
+});
+
+test("6. RETURNING + DECLINED_AT_START → both preserved", async () => {
+  const store = makeStore({
+    activeSession: SESSION,
+    priorSessions: [{ id: "sess-old" }], // RETURNING
+    activeDwAssignment: { id: "dw-assign-1" },
+    activeItAssignment: { id: "it-assign-1" },
+  });
+  const mod = await loadWith(store);
+
+  const result = await mod.applySameDayLifecycleEvent({
+    workerId: "worker-1",
+    outcome: "DECLINED_AT_START",
+    eventAt: new Date("2026-09-13T02:30:00Z"),
+    session: ACTOR,
+    scope: null,
+  });
+
+  assert.equal(result.ok, true);
+  if (!result.ok) return;
+  assert.equal(store.calls.releaseDw, 0, "RETURNING + DECLINED_AT_START must preserve DW code");
+  assert.equal(store.calls.releaseIt, 0, "RETURNING + DECLINED_AT_START must preserve IT code");
+  assert.equal(result.dwCodeReleased, false);
+  assert.equal(result.itCodeReleased, false);
+  // Employment session must still be ended correctly:
+  assert.equal(store.calls.endAllocations, 1);
+  assert.equal(store.calls.excludeMeal, 1);
+});
+
+test("7. RETURNING even when current registration is new today → prior Employment history wins; preserve", async () => {
+  // Worker registered TODAY for a new position, but has prior employment history.
+  // The prior session may be from months ago but its existence makes them RETURNING.
+  const store = makeStore({
+    activeSession: SESSION, // today's session
+    priorSessions: [{ id: "sess-2024-06" }], // old session from months ago
+    activeDwAssignment: { id: "dw-assign-1" }, // provenance proven for THIS session
+    activeItAssignment: { id: "it-assign-1" }, // provenance proven for THIS session
+  });
+  const mod = await loadWith(store);
+
+  const result = await mod.applySameDayLifecycleEvent({
+    workerId: "worker-1",
+    outcome: "NO_SHOW",
+    eventAt: new Date("2026-09-13T02:00:00Z"),
+    session: ACTOR,
+    scope: null,
+  });
+
+  assert.equal(result.ok, true);
+  if (!result.ok) return;
+  // Even though provenance is proven AND the registration is brand new today,
+  // the existence of prior Employment history means RETURNING → PRESERVE.
+  assert.equal(store.calls.releaseDw, 0, "prior employment history wins — must preserve");
+  assert.equal(store.calls.releaseIt, 0, "prior employment history wins — must preserve");
+  assert.equal(result.dwCodeReleased, false);
+  assert.equal(result.itCodeReleased, false);
+});
+
+test("8. Legacy mirror exists but no trustworthy assignment provenance → preserve", async () => {
+  // NEW worker — no prior sessions. But code assignments don't belong to current
+  // session (legacy mirror only, no it_code_assignments/dw_code_assignments row
+  // for this session). Fail-safe: PRESERVE.
+  const store = makeStore({
+    activeSession: SESSION,
+    priorSessions: [], // NEW worker
+    activeDwAssignment: null, // no provenance — legacy mirror only
+    activeItAssignment: null, // no provenance — legacy mirror only
+  });
+  const mod = await loadWith(store);
+
+  const result = await mod.applySameDayLifecycleEvent({
+    workerId: "worker-1",
+    outcome: "NO_SHOW",
+    eventAt: new Date("2026-09-13T02:00:00Z"),
+    session: ACTOR,
+    scope: null,
+  });
+
+  assert.equal(result.ok, true);
+  if (!result.ok) return;
+  assert.equal(store.calls.releaseDw, 0, "no trustworthy provenance — must preserve (fail-safe)");
+  assert.equal(store.calls.releaseIt, 0, "no trustworthy provenance — must preserve (fail-safe)");
+  assert.equal(result.dwCodeReleased, false);
+  assert.equal(result.itCodeReleased, false);
+});
+
+test("9. STARTED_THEN_LEFT → existing release/resignation behavior unchanged (disposition not applied)", async () => {
+  // STARTED_THEN_LEFT must NOT consult the disposition policy.
+  // Even for a RETURNING worker, STARTED_THEN_LEFT uses finalizeResignationEffect().
+  const store = makeStore({
+    activeSession: SESSION,
+    priorSessions: [{ id: "sess-old" }], // RETURNING — but irrelevant for STARTED_THEN_LEFT
+  });
+  const mod = await loadWith(store);
+
+  const result = await mod.applySameDayLifecycleEvent({
+    workerId: "worker-1",
+    outcome: "STARTED_THEN_LEFT",
+    eventAt: new Date("2026-09-13T05:00:00Z"),
+    reason: "Bỏ về giữa ca",
+    session: ACTOR,
+    scope: null,
+  });
+
+  assert.equal(result.ok, true);
+  if (!result.ok) return;
+  assert.equal(store.calls.finalizeResignation, 1, "must use canonical resignation effect");
+  assert.equal(result.dwCodeReleased, true, "finalizeResignationEffect releases codes");
+  assert.equal(result.itCodeReleased, true);
+  // Must NOT call standalone release functions:
+  assert.equal(store.calls.releaseDw, 0);
+  assert.equal(store.calls.releaseIt, 0);
+});
+
+test("10. Double submit remains idempotent (with disposition)", async () => {
+  const existingEvent = {
+    id: "event-old",
+    employmentSessionId: "sess-1",
+    mealAction: "CANCELLED_BEFORE_CUTOFF",
+    dwCodeReleased: false, // was preserved in first call
+    itCodeReleased: false,
+  };
+  const endedSession = { ...SESSION, status: "ENDED", endDate: TODAY };
+  const store = makeStore({ activeSession: null, mostRecentSession: endedSession, existingEvent });
+  const mod = await loadWith(store);
+
+  const result = await mod.applySameDayLifecycleEvent({
+    workerId: "worker-1",
+    outcome: "NO_SHOW",
+    eventAt: new Date(),
+    session: ACTOR,
+    scope: null,
+  });
+
+  assert.equal(result.ok, true);
+  if (!result.ok) return;
+  assert.equal(result.alreadyApplied, true);
+  assert.equal(result.eventId, "event-old");
+  assert.equal(result.dwCodeReleased, false, "replayed result reflects original preserve decision");
+  assert.equal(result.itCodeReleased, false);
+  assert.equal(store.calls.releaseDw, 0, "idempotent replay must not release codes");
+  assert.equal(store.calls.releaseIt, 0);
+  assert.equal(store.calls.endAllocations, 0, "idempotent replay must not re-end allocations");
+  assert.equal(store.inserted.length, 0, "idempotent replay must not insert new rows");
+});
+
+test("11. Preserving codes must not leave Request/Planning/meal state incorrectly active", async () => {
+  // RETURNING + NO_SHOW → codes preserved, but all other state MUST still be ended/excluded.
+  const store = makeStore({
+    activeSession: SESSION,
+    priorSessions: [{ id: "sess-old" }], // RETURNING → preserve codes
+    activeDwAssignment: { id: "dw-assign-1" },
+    activeItAssignment: { id: "it-assign-1" },
+  });
+  const mod = await loadWith(store);
+
+  const result = await mod.applySameDayLifecycleEvent({
+    workerId: "worker-1",
+    outcome: "NO_SHOW",
+    eventAt: new Date("2026-09-13T02:00:00Z"),
+    session: ACTOR,
+    scope: null,
+  });
+
+  assert.equal(result.ok, true);
+  if (!result.ok) return;
+
+  // Codes preserved:
+  assert.equal(store.calls.releaseDw, 0);
+  assert.equal(store.calls.releaseIt, 0);
+
+  // But everything else must still happen:
+  // 1. Employment session ended:
+  const sessionUpdate = store.writes.find((w) => w.table === "employment_sessions");
+  assert.ok(sessionUpdate, "employment session must still be ended");
+  assert.equal((sessionUpdate?.patch as Record<string, unknown>)?.status, "ENDED");
+
+  // 2. Request allocations ended:
+  assert.equal(store.calls.endAllocations, 1, "request/planning allocations must still be ended");
+
+  // 3. Recruitment KPI recomputed:
+  assert.equal(store.calls.recompute, 1, "recruitment KPI must still be recomputed");
+
+  // 4. Meal excluded:
+  assert.equal(store.calls.excludeMeal, 1, "meal exclusion must still happen");
+
+  // 5. Event recorded:
+  const eventInsert = store.inserted.find((i) => i.table === "same_day_lifecycle_events");
+  assert.ok(eventInsert, "same_day_lifecycle_events row must still be created");
+  const eventValues = eventInsert?.values as Record<string, unknown>;
+  assert.equal(eventValues.dwCodeReleased, false, "event must record that codes were preserved");
+  assert.equal(eventValues.itCodeReleased, false);
+
+  // 6. Audit + notification:
+  assert.equal(store.calls.audit, 1, "audit must still be written");
+  assert.equal(store.calls.notify, 1, "notification must still be queued");
+});
+
+// ════════════════════════════════════════════════════════════════════════════
+// MANDATORY PER-CODE DISCRIMINATION TESTS (PR #217 review fix)
+// ════════════════════════════════════════════════════════════════════════════
+
+test("12. NEW + DW provenance true + IT provenance false → DW released, IT preserved", async () => {
+  const store = makeStore({
+    activeSession: SESSION,
+    priorSessions: [], // NEW worker
+    activeDwAssignment: { id: "dw-assign-1" }, // DW provenance proven
+    activeItAssignment: null, // IT provenance uncertain
+  });
+  const mod = await loadWith(store);
+
+  const result = await mod.applySameDayLifecycleEvent({
+    workerId: "worker-1",
+    outcome: "NO_SHOW",
+    eventAt: new Date("2026-09-13T02:00:00Z"),
+    session: ACTOR,
+    scope: null,
+  });
+
+  assert.equal(result.ok, true);
+  if (!result.ok) return;
+  assert.equal(store.calls.releaseDw, 1, "DW code must be released when DW provenance is proven");
+  assert.equal(store.calls.releaseIt, 0, "IT code must NOT be released when IT provenance is uncertain");
+  assert.equal(result.dwCodeReleased, true);
+  assert.equal(result.itCodeReleased, false);
+});
+
+test("13. NEW + DW provenance false + IT provenance true → DW preserved, IT released", async () => {
+  const store = makeStore({
+    activeSession: SESSION,
+    priorSessions: [], // NEW worker
+    activeDwAssignment: null, // DW provenance uncertain
+    activeItAssignment: { id: "it-assign-1" }, // IT provenance proven
+  });
+  const mod = await loadWith(store);
+
+  const result = await mod.applySameDayLifecycleEvent({
+    workerId: "worker-1",
+    outcome: "NO_SHOW",
+    eventAt: new Date("2026-09-13T02:00:00Z"),
+    session: ACTOR,
+    scope: null,
+  });
+
+  assert.equal(result.ok, true);
+  if (!result.ok) return;
+  assert.equal(store.calls.releaseDw, 0, "DW code must NOT be released when DW provenance is uncertain");
+  assert.equal(store.calls.releaseIt, 1, "IT code must be released when IT provenance is proven");
+  assert.equal(result.dwCodeReleased, false);
+  assert.equal(result.itCodeReleased, true);
+});
+
+test("14. RETURNING + both provenance true → neither released (RETURNING master guard)", async () => {
+  const store = makeStore({
+    activeSession: SESSION,
+    priorSessions: [{ id: "sess-old" }], // RETURNING
+    activeDwAssignment: { id: "dw-assign-1" }, // provenance proven — but irrelevant
+    activeItAssignment: { id: "it-assign-1" }, // provenance proven — but irrelevant
+  });
+  const mod = await loadWith(store);
+
+  const result = await mod.applySameDayLifecycleEvent({
+    workerId: "worker-1",
+    outcome: "DECLINED_AT_START",
+    eventAt: new Date("2026-09-13T02:00:00Z"),
+    session: ACTOR,
+    scope: null,
+  });
+
+  assert.equal(result.ok, true);
+  if (!result.ok) return;
+  assert.equal(store.calls.releaseDw, 0, "RETURNING master guard must prevent DW release even with proven provenance");
+  assert.equal(store.calls.releaseIt, 0, "RETURNING master guard must prevent IT release even with proven provenance");
+  assert.equal(result.dwCodeReleased, false);
+  assert.equal(result.itCodeReleased, false);
+});
+
+test("15. NEW + uncertain legacy provenance for both → corresponding codes preserved", async () => {
+  // Same as test 8 but re-stated explicitly for the per-code discrimination matrix.
+  const store = makeStore({
+    activeSession: SESSION,
+    priorSessions: [], // NEW worker
+    activeDwAssignment: null, // no DW provenance
+    activeItAssignment: null, // no IT provenance
+  });
+  const mod = await loadWith(store);
+
+  const result = await mod.applySameDayLifecycleEvent({
+    workerId: "worker-1",
+    outcome: "DECLINED_AT_START",
+    eventAt: new Date("2026-09-13T02:00:00Z"),
+    session: ACTOR,
+    scope: null,
+  });
+
+  assert.equal(result.ok, true);
+  if (!result.ok) return;
+  assert.equal(store.calls.releaseDw, 0, "uncertain DW provenance → DW preserved");
+  assert.equal(store.calls.releaseIt, 0, "uncertain IT provenance → IT preserved");
+  assert.equal(result.dwCodeReleased, false);
+  assert.equal(result.itCodeReleased, false);
+});
+
