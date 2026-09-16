@@ -1,7 +1,8 @@
 import "server-only";
-import { and, desc, eq, isNull } from "drizzle-orm";
+import { and, desc, eq, isNull, ne } from "drizzle-orm";
 import { db } from "@/db";
-import { dailyApplications, employmentSessions, sameDayLifecycleEvents, workforceMovements } from "@/db/schema";
+import { dailyApplications, dwCodeAssignments, employmentSessions, itCodeAssignments, sameDayLifecycleEvents, workforceMovements } from "@/db/schema";
+import { decideSameDayOperationalCodeDisposition } from "@/lib/operational-code-disposition";
 import { finalizeResignationEffect, type MovementForFinalize } from "@/lib/workforce-movements";
 import { endActiveRequestAllocationsForWorker } from "@/lib/workforce-request";
 import { recomputeStoredRecruitmentBalance } from "@/lib/recruitment-kpi";
@@ -34,9 +35,19 @@ import { writeAudit, type Session } from "@/lib/auth";
  *     same endActiveRequestAllocationsForWorker() primitive Resignation
  *     uses (Current/Balance must not stay wrong just because this wasn't
  *     a "real" resignation).
- * Both branches release DW Code + IT Code (independent lifecycles) and
- * apply the exact meal-cutoff effect (see meal-cutoff.ts) — never claim a
- * meal was cancelled after the configured cutoff.
+ *
+ *   OPERATIONAL CODE DISPOSITION (returning-worker fix):
+ *     NO_SHOW / DECLINED_AT_START use decideSameDayOperationalCodeDisposition()
+ *     to decide whether to release or preserve DW Code + IT Code:
+ *       - RETURNING worker (prior Employment history) → always PRESERVE.
+ *       - NEW worker + current-engagement provenance proven → RELEASE.
+ *       - Provenance uncertain → PRESERVE (fail-safe).
+ *     STARTED_THEN_LEFT is unaffected — it uses finalizeResignationEffect().
+ * STARTED_THEN_LEFT releases DW Code + IT Code via finalizeResignationEffect();
+ * NO_SHOW / DECLINED_AT_START release only when the disposition policy
+ * returns RELEASE_CURRENT_ENGAGEMENT_CODES (see operational-code-disposition.ts).
+ * Both branches apply the exact meal-cutoff effect (see meal-cutoff.ts) — never
+ * claim a meal was cancelled after the configured cutoff.
  */
 
 export type SameDayOutcome = "NO_SHOW" | "DECLINED_AT_START" | "STARTED_THEN_LEFT";
@@ -208,24 +219,81 @@ export async function applySameDayLifecycleEvent(input: ApplySameDayLifecycleEve
         await recomputeStoredRecruitmentBalance(tx, requestId);
       }
 
-      const dwResult = await releaseDwCode(
-        { employmentSessionId: session.id, releasedBy: input.session.username, releaseReason: input.outcome, note: reasonText },
-        tx,
-      );
-      const itResult = await releaseItCode(
-        {
-          employmentSessionId: session.id,
-          dailyApplicationId: session.dailyApplicationId,
-          workerId: input.workerId,
-          dwDataId: app.dwId,
-          releasedBy: input.session.username,
-          releaseReason: input.outcome,
-          note: reasonText,
+      // ── OPERATIONAL CODE DISPOSITION (returning-worker fix) ──────────
+      // Determine if the worker is RETURNING (prior real Employment history)
+      // and if the active code assignments belong to the CURRENT session
+      // (provenance). The shared policy helper then decides RELEASE vs PRESERVE.
+
+      // Guard 1: RETURNING = any prior employment_sessions row for this worker
+      // OTHER than the current session. Determined STRICTLY from employment
+      // history — never from worker_profiles, dw_data, code presence, department,
+      // code prefix, or same-day registration alone.
+      const [priorSession] = await tx
+        .select({ id: employmentSessions.id })
+        .from(employmentSessions)
+        .where(and(
+          eq(employmentSessions.workerId, input.workerId),
+          ne(employmentSessions.id, session.id),
+        ))
+        .limit(1);
+      const isReturningWorker = !!priorSession;
+
+      // Guard 2: Code provenance — positively prove each active assignment
+      // belongs to the current session by checking assignment.employmentSessionId
+      // === currentSessionId. If no active assignment exists for this session
+      // (legacy mirror only, or belongs to a different session), provenance is
+      // false → fail-safe to PRESERVE.
+      const [activeDwAssignment] = await tx
+        .select({ id: dwCodeAssignments.id })
+        .from(dwCodeAssignments)
+        .where(and(
+          eq(dwCodeAssignments.employmentSessionId, session.id),
+          isNull(dwCodeAssignments.releasedAt),
+        ))
+        .limit(1);
+      const [activeItAssignment] = await tx
+        .select({ id: itCodeAssignments.id })
+        .from(itCodeAssignments)
+        .where(and(
+          eq(itCodeAssignments.employmentSessionId, session.id),
+          isNull(itCodeAssignments.releasedAt),
+        ))
+        .limit(1);
+
+      const disposition = decideSameDayOperationalCodeDisposition({
+        outcome: input.outcome,
+        isReturningWorker,
+        codeProvenance: {
+          dwCodeBelongsToCurrentSession: !!activeDwAssignment,
+          itCodeBelongsToCurrentSession: !!activeItAssignment,
         },
-        tx,
-      );
-      dwCodeReleased = dwResult.released;
-      itCodeReleased = itResult.released;
+      });
+
+      if (disposition === "RELEASE_CURRENT_ENGAGEMENT_CODES") {
+        const dwResult = await releaseDwCode(
+          { employmentSessionId: session.id, releasedBy: input.session.username, releaseReason: input.outcome, note: reasonText },
+          tx,
+        );
+        const itResult = await releaseItCode(
+          {
+            employmentSessionId: session.id,
+            dailyApplicationId: session.dailyApplicationId,
+            workerId: input.workerId,
+            dwDataId: app.dwId,
+            releasedBy: input.session.username,
+            releaseReason: input.outcome,
+            note: reasonText,
+          },
+          tx,
+        );
+        dwCodeReleased = dwResult.released;
+        itCodeReleased = itResult.released;
+      } else {
+        // PRESERVE_EXISTING_CODES — skip release calls completely.
+        // Never release-and-restore.
+        dwCodeReleased = false;
+        itCodeReleased = false;
+      }
     }
 
     const mealResult = await excludeFromMeal(
