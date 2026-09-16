@@ -11,7 +11,13 @@ name: Diagnose Operational Codes — PRODUCTION (READ-ONLY)
 # worker_profiles.id references, operational codes, and aggregate counts.
 
 on:
-  workflow_dispatch: {}
+  workflow_dispatch:
+    inputs:
+      target_code:
+        description: "Mã DW cần chẩn đoán chi tiết (VD: DR23685-D). Mặc định là DR23685-D."
+        required: false
+        type: string
+        default: "DR23685-D"
 
 permissions:
   contents: read
@@ -57,6 +63,7 @@ jobs:
       - name: Legacy DW/IT Code inventory (read-only)
         env:
           DATABASE_URL: ${{ secrets.PROD_DATABASE_URL }}
+          TARGET_DW_CODE: ${{ github.event.inputs.target_code || 'DR23685-D' }}
         run: node scripts/diagnose-operational-codes.mjs
 
       - name: Dry-run activation plan (read-only, no adoption/activation)
