@@ -115,6 +115,28 @@ function computeChecksum(planWithoutChecksum: Omit<ActivationPlan, "checksum">):
 }
 
 /**
+ * Content-only checksum — omits `generatedAt` and `sourceCommitSha` (volatile metadata
+ * that changes every run) so the hash represents WHAT the plan decided, not WHEN. Used by
+ * `applyOperationalCodeActivation` to detect data-state changes between the reviewed dry-run
+ * and the moment of activation, without being defeated by the passage of time.
+ *
+ * Stable fields: version, locationReadiness, dwAdoptions, dwProtectedCodes, itAdoptions,
+ * conflicts, readiness (the fields that determine WHAT would be written — mission section 26).
+ */
+export function computePlanContentChecksum(plan: ActivationPlan): string {
+  const stable = {
+    version: plan.version,
+    locationReadiness: plan.locationReadiness,
+    dwAdoptions: plan.dwAdoptions,
+    dwProtectedCodes: plan.dwProtectedCodes,
+    itAdoptions: plan.itAdoptions,
+    conflicts: plan.conflicts,
+    readiness: plan.readiness,
+  };
+  return createHash("sha256").update(JSON.stringify(stable)).digest("hex");
+}
+
+/**
  * Pure plan assembly — takes already-fetched rows (never touches the DB itself) so it can be
  * exhaustively unit-tested AND run from a standalone CLI script. `prepareOperationalCodeActivation()`
  * (operational-code-activation.ts) is the Next.js/Drizzle DB-fetching wrapper around this;
