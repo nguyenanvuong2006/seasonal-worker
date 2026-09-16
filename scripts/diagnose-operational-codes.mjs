@@ -24,6 +24,12 @@
  */
 import { config } from "dotenv";
 import pg from "pg";
+import {
+  TARGETED_DIAGNOSTIC_SQL,
+  assertSelectOnlySql,
+  classifyDuplicateDwCode,
+  formatDiagnosticSummary,
+} from "./lib/duplicate-dw-code-diagnostic.mjs";
 
 config({ path: ".env.local" });
 config();
@@ -264,6 +270,18 @@ async function main() {
   console.log(`it_code_assignments (history rows): ${itAssignmentsCount.rows[0].n}`);
   if (dwAssignmentsCount.rows[0].n > 0 || itAssignmentsCount.rows[0].n > 0) {
     console.log("ℹ️  Đã có lịch sử gán trong bảng canonical — điều này BÌNH THƯỜNG nếu đã có transfer/same-day-report chạy qua production kể từ khi Mission E deploy; script adoption phải xử lý các worker ĐÃ có active assignment như một trường hợp riêng (không gán đè).");
+  }
+
+  /* ============================================================
+     TARGETED DRILL-DOWN (khi có TARGET_DW_CODE hoặc argv[2])
+     ============================================================ */
+  const targetCode = (process.env.TARGET_DW_CODE || process.argv[2] || "").trim().toUpperCase();
+  if (targetCode) {
+    await section(`CHẨN ĐOÁN MỤC TIÊU — MÃ DW CỤ THỂ: "${targetCode}"`);
+    assertSelectOnlySql(TARGETED_DIAGNOSTIC_SQL);
+    const targetResult = await client.query(TARGETED_DIAGNOSTIC_SQL, [targetCode]);
+    const classification = classifyDuplicateDwCode(targetResult.rows, targetCode);
+    console.log(formatDiagnosticSummary(classification));
   }
 
   console.log("\n=== KẾT LUẬN ===");
