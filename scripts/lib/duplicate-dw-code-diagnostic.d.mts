@@ -9,7 +9,8 @@ export type StrongIdentityBasis =
   | "NONE"
   | "SAME_NORMALIZED_CCCD"
   | "SAME_WORKER_PROFILE"
-  | "SAME_CCCD_AND_WORKER_PROFILE";
+  | "SAME_CCCD_AND_WORKER_PROFILE"
+  | "CONFLICTING_CCCD_AND_WORKER_PROFILE";
 
 export interface DuplicateDwRowSummary {
   dwRowOpaqueId: string;

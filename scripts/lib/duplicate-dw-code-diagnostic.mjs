@@ -205,6 +205,19 @@ export function classifyDuplicateDwCode(rows, targetCode) {
   const wpIdA = rowA.worker_profile_id ? String(rowA.worker_profile_id).trim() : null;
   const wpIdB = rowB.worker_profile_id ? String(rowB.worker_profile_id).trim() : null;
 
+  // Conflict Check: identical CCCD linked to contradictory worker profiles
+  if (normCccdA && normCccdB && normCccdA === normCccdB && wpIdA && wpIdB && wpIdA !== wpIdB) {
+    return {
+      targetCode: targetCode || rowA.dw_code || "UNKNOWN",
+      rowCount: 2,
+      classification: "UNRESOLVED",
+      samePersonByStrongIdentity: false,
+      strongIdentityBasis: "CONFLICTING_CCCD_AND_WORKER_PROFILE",
+      failClosedReason: "Identity evidence conflicts: matching CCCD resolves to different worker profiles",
+      rowSummaries,
+    };
+  }
+
   const sameCccd = Boolean(normCccdA && normCccdB && normCccdA === normCccdB);
   const sameWorkerProfile = Boolean(wpIdA && wpIdB && wpIdA === wpIdB);
   const samePersonByStrongIdentity = sameCccd || sameWorkerProfile;
@@ -221,19 +234,35 @@ export function classifyDuplicateDwCode(rows, targetCode) {
   if (samePersonByStrongIdentity) {
     classification = "SAME_PERSON_DUPLICATE_REFERENCE";
   } else {
-    // Distinct or non-identical persons
-    const activeA = summaryA.hasActiveEmployment;
-    const activeB = summaryB.hasActiveEmployment;
+    // Both rows must have sufficient strong evidence to establish two distinct identifiable persons.
+    const hasStrongIdA = Boolean(normCccdA || wpIdA);
+    const hasStrongIdB = Boolean(normCccdB || wpIdB);
 
-    if (activeA && activeB) {
-      classification = "DIFFERENT_ACTIVE_WORKERS";
-    } else if ((activeA && !activeB) || (!activeA && activeB)) {
-      classification = "ACTIVE_VS_HISTORICAL";
-    } else if (!activeA && !activeB) {
-      classification = "HISTORICAL_VS_HISTORICAL";
-    } else {
+    if (!hasStrongIdA || !hasStrongIdB) {
       classification = "UNRESOLVED";
-      failClosedReason = "Ambiguous employment session resolution across duplicate rows";
+      failClosedReason = "One or both dw_data rows lack strong identity evidence (no usable CCCD and no worker_profile)";
+    } else {
+      const distinctByCccd = Boolean(normCccdA && normCccdB && normCccdA !== normCccdB);
+      const distinctByWorkerProfile = Boolean(wpIdA && wpIdB && wpIdA !== wpIdB);
+
+      if (!distinctByCccd && !distinctByWorkerProfile) {
+        classification = "UNRESOLVED";
+        failClosedReason = "Linkage ambiguity: cannot definitively establish distinct persons without common identity dimension";
+      } else {
+        const activeA = summaryA.hasActiveEmployment;
+        const activeB = summaryB.hasActiveEmployment;
+
+        if (activeA && activeB) {
+          classification = "DIFFERENT_ACTIVE_WORKERS";
+        } else if ((activeA && !activeB) || (!activeA && activeB)) {
+          classification = "ACTIVE_VS_HISTORICAL";
+        } else if (!activeA && !activeB) {
+          classification = "HISTORICAL_VS_HISTORICAL";
+        } else {
+          classification = "UNRESOLVED";
+          failClosedReason = "Ambiguous employment session resolution across duplicate rows";
+        }
+      }
     }
   }
 

@@ -287,8 +287,163 @@ test("classifyDuplicateDwCode: HISTORICAL_VS_HISTORICAL when both have ended or 
 });
 
 /* ============================================================
-   4. FAIL-CLOSED BEHAVIOR (Requirement 5)
+   4. FAIL-CLOSED BEHAVIOR & IDENTITY EVIDENCE (Review Blocker Fix)
    ============================================================ */
+test("A. 2 rows, no CCCD, no worker_profile, neither active => UNRESOLVED", () => {
+  const rows = [
+    {
+      dw_data_id: "1",
+      dw_code: "DR23685-D",
+      raw_cccd: null,
+      worker_profile_id: null,
+      current_session_status: null,
+      session_end_date: null,
+    },
+    {
+      dw_data_id: "2",
+      dw_code: "DR23685-D",
+      raw_cccd: "",
+      worker_profile_id: null,
+      current_session_status: null,
+      session_end_date: null,
+    },
+  ];
+
+  const result = classifyDuplicateDwCode(rows, "DR23685-D");
+  assert.equal(result.classification, "UNRESOLVED");
+  assert.match(result.failClosedReason || "", /lack strong identity evidence/);
+});
+
+test("B. one identifiable row + one identity-less row => UNRESOLVED", () => {
+  const rows = [
+    {
+      dw_data_id: "1",
+      dw_code: "DR23685-D",
+      raw_cccd: "079111111111",
+      worker_profile_id: "wp-uuid-1",
+      current_session_status: "APPROVED",
+      session_end_date: null,
+    },
+    {
+      dw_data_id: "2",
+      dw_code: "DR23685-D",
+      raw_cccd: null,
+      worker_profile_id: null,
+      current_session_status: null,
+      session_end_date: null,
+    },
+  ];
+
+  const result = classifyDuplicateDwCode(rows, "DR23685-D");
+  assert.equal(result.classification, "UNRESOLVED");
+  assert.match(result.failClosedReason || "", /lack strong identity evidence/);
+});
+
+test("C. two distinct valid strong identities + neither active => HISTORICAL_VS_HISTORICAL", () => {
+  const rows = [
+    {
+      dw_data_id: "1",
+      dw_code: "DR23685-D",
+      raw_cccd: "079111111111",
+      worker_profile_id: "wp-uuid-1",
+      current_session_status: "APPROVED",
+      session_end_date: "2025-12-31", // ended
+    },
+    {
+      dw_data_id: "2",
+      dw_code: "DR23685-D",
+      raw_cccd: "079222222222",
+      worker_profile_id: "wp-uuid-2",
+      current_session_status: "APPROVED",
+      session_end_date: "2026-01-15", // ended
+    },
+  ];
+
+  const result = classifyDuplicateDwCode(rows, "DR23685-D");
+  assert.equal(result.classification, "HISTORICAL_VS_HISTORICAL");
+  assert.equal(result.samePersonByStrongIdentity, false);
+  assert.equal(result.rowSummaries[0].hasActiveEmployment, false);
+  assert.equal(result.rowSummaries[1].hasActiveEmployment, false);
+});
+
+test("D. two distinct valid strong identities + one active => ACTIVE_VS_HISTORICAL", () => {
+  const rows = [
+    {
+      dw_data_id: "1",
+      dw_code: "DR23685-D",
+      raw_cccd: "079111111111",
+      worker_profile_id: "wp-uuid-active",
+      current_session_status: "APPROVED",
+      session_end_date: null, // active
+    },
+    {
+      dw_data_id: "2",
+      dw_code: "DR23685-D",
+      raw_cccd: "079222222222",
+      worker_profile_id: "wp-uuid-historical",
+      current_session_status: "APPROVED",
+      session_end_date: "2026-02-28", // ended
+    },
+  ];
+
+  const result = classifyDuplicateDwCode(rows, "DR23685-D");
+  assert.equal(result.classification, "ACTIVE_VS_HISTORICAL");
+  assert.equal(result.samePersonByStrongIdentity, false);
+  assert.equal(result.rowSummaries[0].hasActiveEmployment, true);
+  assert.equal(result.rowSummaries[1].hasActiveEmployment, false);
+});
+
+test("E. same strong identity still => SAME_PERSON_DUPLICATE_REFERENCE", () => {
+  const rows = [
+    {
+      dw_data_id: "1",
+      dw_code: "DR23685-D",
+      raw_cccd: "079111111111",
+      worker_profile_id: "wp-uuid-same",
+      current_session_status: "APPROVED",
+      session_end_date: null,
+    },
+    {
+      dw_data_id: "2",
+      dw_code: "DR23685-D",
+      raw_cccd: "079111111111",
+      worker_profile_id: "wp-uuid-same",
+      current_session_status: null,
+      session_end_date: null,
+    },
+  ];
+
+  const result = classifyDuplicateDwCode(rows, "DR23685-D");
+  assert.equal(result.classification, "SAME_PERSON_DUPLICATE_REFERENCE");
+  assert.equal(result.samePersonByStrongIdentity, true);
+  assert.equal(result.strongIdentityBasis, "SAME_CCCD_AND_WORKER_PROFILE");
+});
+
+test("classifyDuplicateDwCode: fails closed to UNRESOLVED when identity evidence conflicts", () => {
+  const rows = [
+    {
+      dw_data_id: "1",
+      dw_code: "DR23685-D",
+      raw_cccd: "079111111111",
+      worker_profile_id: "wp-uuid-X",
+      current_session_status: "APPROVED",
+      session_end_date: null,
+    },
+    {
+      dw_data_id: "2",
+      dw_code: "DR23685-D",
+      raw_cccd: "079111111111", // same CCCD
+      worker_profile_id: "wp-uuid-Y", // conflicting worker profile!
+      current_session_status: "APPROVED",
+      session_end_date: null,
+    },
+  ];
+
+  const result = classifyDuplicateDwCode(rows, "DR23685-D");
+  assert.equal(result.classification, "UNRESOLVED");
+  assert.match(result.failClosedReason || "", /Identity evidence conflicts/);
+});
+
 test("classifyDuplicateDwCode: fails closed to UNRESOLVED when row count is not 2", () => {
   const empty = classifyDuplicateDwCode([], "DR23685-D");
   assert.equal(empty.classification, "UNRESOLVED");
