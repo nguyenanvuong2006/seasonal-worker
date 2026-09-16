@@ -2,6 +2,7 @@ import "server-only";
 import { sql } from "drizzle-orm";
 import { db } from "@/db";
 import { buildActivationPlan, computePlanContentChecksum, type ActivationPlan, type LocationRow, type DwLegacyRow, type ItMirrorRow } from "@/lib/operational-code-activation-plan";
+import { DATA_MANAGEMENT_ADVISORY_LOCK_KEY } from "@/lib/data-management/reset-service";
 
 export * from "@/lib/operational-code-activation-plan";
 
@@ -105,29 +106,32 @@ export async function prepareOperationalCodeActivation(options: { dryRun: true }
 }
 
 // ---------------------------------------------------------------------------
-// ADVISORY LOCK
+// ADVISORY LOCKS & CROSS-DOMAIN MUTUAL EXCLUSION
 // ---------------------------------------------------------------------------
-// A NEW key, deliberately distinct from DATA_MANAGEMENT_ADVISORY_LOCK_KEY
-// (847_291_003 in reset-service.ts). Activation and data-reset are different
-// risk domains and must NEVER serialize on the same lock — an activation
-// running concurrently with a reset would be catastrophic regardless of which
-// one "wins", so we want them to see each other as separate risk domains and
-// fail independently, not to silently queue behind each other.
+// To prevent concurrent activations AND exclude destructive data resets:
+//   1. OPERATIONAL_CODE_ACTIVATION_ADVISORY_LOCK_KEY (847_291_004):
+//      Dedicated activation lock to serialize activations across requests.
+//   2. SHARED_MAINTENANCE_EXCLUSION_ADVISORY_LOCK_KEY (847_291_003):
+//      Shared with reset-service.ts (DATA_MANAGEMENT_ADVISORY_LOCK_KEY).
 //
-// We use pg_try_advisory_xact_lock (transaction-level) instead of the
-// session-level lock in reset-service.ts because:
-//   1. The entire write is a single transaction — automatic release on
-//      commit or rollback, no try/finally needed.
-//   2. Transaction-level advisory locks cannot be taken more than once per
-//      transaction (any second call is a NOOP from Postgres's perspective
-//      for xact locks), which is the correct idempotency behaviour here.
+// In Postgres, advisory locks share the same key namespace regardless of
+// whether acquired via session-level (pg_try_advisory_lock) or transaction-level
+// (pg_try_advisory_xact_lock) calls. By acquiring BOTH locks inside the activation
+// transaction:
+//   - If a destructive data reset is running (holding 847_291_003), activation
+//     fails closed immediately with ACTIVATION_LOCKED (never queues).
+//   - While activation runs, any reset attempt calling tryAcquireDataManagementLock()
+//     will fail with DATA_MANAGEMENT_BUSY.
+//   - Zero mutations to operational-code tables can occur concurrently with reset.
 export const OPERATIONAL_CODE_ACTIVATION_ADVISORY_LOCK_KEY = 847_291_004;
+export const SHARED_MAINTENANCE_EXCLUSION_ADVISORY_LOCK_KEY = DATA_MANAGEMENT_ADVISORY_LOCK_KEY;
 
 // ---------------------------------------------------------------------------
 // RESULT TYPE
 // ---------------------------------------------------------------------------
 export type ApplyActivationResult = {
   ok: true;
+  activationContentChecksum: string;
   checksum: string;
   protectedDwCount: number;
   adoptedDwCount: number;
@@ -143,26 +147,28 @@ export type ApplyActivationResult = {
  * Applies the operational code go-live plan produced by
  * `prepareOperationalCodeActivation({ dryRun: true })`.
  *
- * CONTRACT (mission section 26 / previously documented as NOT IMPLEMENTED):
+ * CONTRACT (mission section 26 / PR #220 review blocker fixes):
  *
- *   1. Recomputes a fresh dry-run plan and verifies its checksum matches
- *      `planChecksum`. If not → throws ACTIVATION_PLAN_STALE (zero writes).
+ *   1. Recomputes a fresh dry-run plan and verifies its activationContentChecksum
+ *      matches `activationContentChecksum`. If not → throws ACTIVATION_PLAN_STALE (zero writes).
  *   2. Rejects if the fresh plan has conflicts or any non-READY/INACTIVE
  *      location — throws ACTIVATION_PLAN_NOT_READY (zero writes).
- *   3. Acquires a DEDICATED transaction-level advisory lock
- *      (OPERATIONAL_CODE_ACTIVATION_ADVISORY_LOCK_KEY). Fails immediately
- *      if the lock is already held — throws ACTIVATION_LOCKED (zero writes).
+ *   3. Acquires BOTH the dedicated transaction-level advisory lock
+ *      (OPERATIONAL_CODE_ACTIVATION_ADVISORY_LOCK_KEY = 847_291_004) AND the
+ *      shared destructive-operation exclusion lock
+ *      (SHARED_MAINTENANCE_EXCLUSION_ADVISORY_LOCK_KEY = 847_291_003). Fails
+ *      immediately if either lock is held — throws ACTIVATION_LOCKED (zero writes).
  *   4. Performs ONE atomic transaction in the following exact order:
  *      A. Protected legacy DW codes → INSERT INTO dw_codes … status='RETIRED'
  *         ON CONFLICT (code) DO UPDATE SET status='RETIRED'
- *         WHERE dw_codes.status <> 'ASSIGNED'
- *         (idempotent; never downgrades ASSIGNED → RETIRED).
+ *         WHERE dw_codes.status = 'AVAILABLE'
+ *         (idempotent; protected codes that are not adoption candidates remain RETIRED).
  *      B. Location nextSequence → UPDATE dw_code_locations SET
  *         next_sequence = GREATEST(next_sequence, safeValue).
- *      C. DW active adoption → upsert dw_codes as ASSIGNED + insert one
- *         dw_code_assignments history row (idempotent: skip if exact active
- *         assignment already exists; reject if code or worker already actively
- *         owned by another worker/session).
+ *      C. DW active adoption → inspect existing dw_codes row and active ownership BEFORE mutation.
+ *         Exact active assignment => safe skip; conflicting ownership => reject;
+ *         valid adoption => ensure dw_codes.status = 'ASSIGNED' + insert dw_code_assignments
+ *         (never leaves an active assignment attached to AVAILABLE or RETIRED).
  *      D. IT active adoption → insert one it_code_assignments history row
  *         (idempotent: skip if exact active assignment exists; reject if
  *         conflicting active ownership).
@@ -176,7 +182,7 @@ export type ApplyActivationResult = {
  * button, no server action in this PR).
  */
 export async function applyOperationalCodeActivation(
-  planChecksum: string,
+  activationContentChecksum: string,
   /** Override the db executor — used by tests to inject a fake transaction runner. */
   _executor?: {
     transaction: (fn: (tx: TransactionHandle) => Promise<ApplyActivationResult>) => Promise<ApplyActivationResult>;
@@ -186,17 +192,16 @@ export async function applyOperationalCodeActivation(
   const executor = _executor ?? (db as unknown as typeof _executor)!;
 
   // ---- Step 1: Recompute fresh plan and check content checksum ----
-  // We compare the CONTENT checksum (computePlanContentChecksum), not the full plan checksum —
+  // We compare the CONTENT checksum (activationContentChecksum), not the full diagnostic plan checksum —
   // because the full checksum includes `generatedAt` (which changes on every call), making the
-  // freshness check impossible to satisfy across two separate calls. The content checksum covers
-  // only the fields that determine what the activation would write (locationReadiness, dwAdoptions,
-  // dwProtectedCodes, itAdoptions, conflicts, readiness), which is the correct staleness signal.
+  // freshness check impossible to satisfy across two separate calls. The activationContentChecksum covers
+  // only the write-determining fields (version, locationReadiness, dwAdoptions, dwProtectedCodes,
+  // itAdoptions, conflicts, readiness), which is the stable staleness signal.
   const freshPlan = await prepareOperationalCodeActivation({ dryRun: true }, executor as SelectExecutor);
-  const freshContentChecksum = computePlanContentChecksum(freshPlan);
 
-  if (freshContentChecksum !== planChecksum) {
+  if (freshPlan.activationContentChecksum !== activationContentChecksum) {
     throw new Error(
-      `ACTIVATION_PLAN_STALE: supplied checksum ${planChecksum} does not match freshly-computed plan content checksum ${freshContentChecksum}. Re-run the dry-run to obtain the current content checksum.`,
+      `ACTIVATION_PLAN_STALE: supplied activationContentChecksum ${activationContentChecksum} does not match freshly-computed activationContentChecksum ${freshPlan.activationContentChecksum}. Re-run the dry-run to obtain the current activationContentChecksum.`,
     );
   }
 
@@ -231,19 +236,34 @@ export async function applyOperationalCodeActivation(
 
   // ---- Steps 3–5: Advisory lock + atomic transaction ----
   return await executor.transaction!(async (tx: TransactionHandle) => {
-    // Step 3: Acquire transaction-level advisory lock (auto-releases on commit/rollback)
-    const lockResult = await tx.execute<{ locked: boolean }>(
-      sql`SELECT pg_try_advisory_xact_lock(${OPERATIONAL_CODE_ACTIVATION_ADVISORY_LOCK_KEY}) AS locked`,
+    // Step 3: Acquire BOTH the dedicated activation lock AND the shared destructive-operation exclusion lock.
+    // 1. Dedicated lock: OPERATIONAL_CODE_ACTIVATION_ADVISORY_LOCK_KEY (847_291_004) serializes activation runs.
+    // 2. Shared maintenance lock: SHARED_MAINTENANCE_EXCLUSION_ADVISORY_LOCK_KEY (847_291_003) mutually excludes
+    //    destructive data-management operations (reset/import in reset-service.ts).
+    // Both are transaction-level (pg_try_advisory_xact_lock) — auto-released on commit or rollback, fail-closed
+    // immediately (never queue).
+    const lockResult = await tx.execute<{
+      activation_locked?: boolean;
+      maintenance_locked?: boolean;
+      locked?: boolean;
+    }>(
+      sql`SELECT
+            pg_try_advisory_xact_lock(${OPERATIONAL_CODE_ACTIVATION_ADVISORY_LOCK_KEY}) AS activation_locked,
+            pg_try_advisory_xact_lock(${SHARED_MAINTENANCE_EXCLUSION_ADVISORY_LOCK_KEY}) AS maintenance_locked`,
     );
-    const locked = (lockResult as { rows: { locked: boolean }[] }).rows[0]?.locked === true;
-    if (!locked) {
+    const lockRow = (lockResult as { rows: { activation_locked?: boolean; maintenance_locked?: boolean; locked?: boolean }[] }).rows[0];
+    const actLocked = lockRow?.activation_locked ?? lockRow?.locked === true;
+    if (!actLocked) {
       throw new Error("ACTIVATION_LOCKED: another operational code activation is already in progress. Try again later.");
+    }
+    const maintLocked = lockRow?.maintenance_locked ?? lockRow?.locked === true;
+    if (!maintLocked) {
+      throw new Error("ACTIVATION_LOCKED: a destructive data-management or reset operation is currently in progress. Try again later.");
     }
 
     // ---- Step 4A: Protected legacy DW codes → RETIRED ----
-    // ON CONFLICT (code): update to RETIRED only if the row is not already ASSIGNED
-    // (an ASSIGNED row means a previous adoption run already handled this code —
-    // never downgrade ASSIGNED → RETIRED, which would break the active assignment).
+    // ON CONFLICT (code): update to RETIRED only if the row is AVAILABLE.
+    // (Protected codes that are not adoption candidates remain RETIRED).
     // Protected codes must NEVER become AVAILABLE.
     let protectedDwCount = 0;
     for (const prot of freshPlan.dwProtectedCodes) {
@@ -278,78 +298,99 @@ export async function applyOperationalCodeActivation(
     let skippedDwCount = 0;
 
     for (const adoption of freshPlan.dwAdoptions) {
-      // Upsert the dw_codes row (insert as ASSIGNED; if row exists with AVAILABLE set ASSIGNED;
-      // if already ASSIGNED/RETIRED leave it alone — the assignment check below will handle skipping).
-      await tx.execute(sql`
-        INSERT INTO dw_codes (location_id, sequence_number, code, status)
-        VALUES (${adoption.locationId}, ${adoption.sequenceNumber}, ${adoption.code}, 'ASSIGNED')
-        ON CONFLICT (code) DO UPDATE
-          SET status = 'ASSIGNED'
-          WHERE dw_codes.status = 'AVAILABLE'
-      `);
-
-      // Retrieve the dw_codes.id for this code (needed for assignment FK).
+      // 1. Inspect existing dw_codes row BEFORE final state mutation
       const codeRowResult = await tx.execute<{ id: string; status: string }>(
         sql`SELECT id, status FROM dw_codes WHERE code = ${adoption.code} LIMIT 1`,
       );
       const codeRow = (codeRowResult as { rows: { id: string; status: string }[] }).rows[0];
-      if (!codeRow) throw new Error(`ACTIVATION_INTERNAL: dw_codes row for code "${adoption.code}" not found after upsert.`);
 
-      // Check active assignment for this code.
-      const existingByCodeResult = await tx.execute<{
-        id: string;
-        worker_id: string;
-        employment_session_id: string;
-      }>(
-        sql`SELECT id, worker_id, employment_session_id FROM dw_code_assignments
-            WHERE code_id = ${codeRow.id} AND released_at IS NULL
-            LIMIT 1`,
-      );
-      const existingByCode = (existingByCodeResult as { rows: { id: string; worker_id: string; employment_session_id: string }[] }).rows[0];
+      // 2. Inspect active ownership BEFORE final state mutation
+      let existingByCode: { id: string; worker_id: string; employment_session_id: string } | undefined;
+      if (codeRow) {
+        const existingByCodeResult = await tx.execute<{
+          id: string;
+          worker_id: string;
+          employment_session_id: string;
+        }>(
+          sql`SELECT id, worker_id, employment_session_id FROM dw_code_assignments
+              WHERE code_id = ${codeRow.id} AND released_at IS NULL
+              LIMIT 1`,
+        );
+        existingByCode = (existingByCodeResult as { rows: { id: string; worker_id: string; employment_session_id: string }[] }).rows[0];
+      }
 
-      // Check active assignment for this worker.
       const existingByWorkerResult = await tx.execute<{
         id: string;
+        code_id: string;
         worker_id: string;
         employment_session_id: string;
       }>(
-        sql`SELECT id, worker_id, employment_session_id FROM dw_code_assignments
+        sql`SELECT id, code_id, worker_id, employment_session_id FROM dw_code_assignments
             WHERE worker_id = ${adoption.workerRef} AND released_at IS NULL
             LIMIT 1`,
       );
-      const existingByWorker = (existingByWorkerResult as { rows: { id: string; worker_id: string; employment_session_id: string }[] }).rows[0];
+      const existingByWorker = (existingByWorkerResult as { rows: { id: string; code_id: string; worker_id: string; employment_session_id: string }[] }).rows[0];
 
-      // Idempotency: if the EXACT active assignment already exists for this
-      // code + worker + session, skip safely.
+      // 3. Exact already-active assignment => safe skip
       if (
         existingByCode &&
         existingByCode.worker_id === adoption.workerRef &&
         existingByCode.employment_session_id === adoption.employmentSessionId
       ) {
+        // Invariant: never leave an active assignment attached to AVAILABLE or RETIRED
+        if (codeRow && codeRow.status !== "ASSIGNED") {
+          await tx.execute(sql`
+            UPDATE dw_codes
+            SET status = 'ASSIGNED', updated_at = now()
+            WHERE id = ${codeRow.id}
+          `);
+        }
         skippedDwCount++;
         continue;
       }
 
-      // Reject conflicting active ownership on code.
+      // 4. Conflicting ownership => reject (fail closed)
       if (existingByCode) {
         throw new Error(
           `ACTIVATION_CONFLICT: DW Code "${adoption.code}" already has an active assignment to a different worker/session. Cannot reassign.`,
         );
       }
 
-      // Reject conflicting active ownership on worker.
-      if (existingByWorker) {
+      if (existingByWorker && (!codeRow || existingByWorker.code_id !== codeRow.id)) {
         throw new Error(
           `ACTIVATION_CONFLICT: Worker "${adoption.workerRef}" already has an active DW Code assignment. Cannot create a second one.`,
         );
       }
 
-      // Insert the assignment history row.
+      // 5. Valid adoption => ensure dw_codes row exists and ends with status = ASSIGNED
+      let codeId = codeRow?.id;
+      if (!codeRow) {
+        await tx.execute(sql`
+          INSERT INTO dw_codes (location_id, sequence_number, code, status)
+          VALUES (${adoption.locationId}, ${adoption.sequenceNumber}, ${adoption.code}, 'ASSIGNED')
+          ON CONFLICT (code) DO UPDATE
+            SET status = 'ASSIGNED', updated_at = now()
+        `);
+        const fetchRes = await tx.execute<{ id: string; status: string }>(
+          sql`SELECT id, status FROM dw_codes WHERE code = ${adoption.code} LIMIT 1`,
+        );
+        const fetched = (fetchRes as { rows: { id: string; status: string }[] }).rows[0];
+        if (!fetched) throw new Error(`ACTIVATION_INTERNAL: dw_codes row for code "${adoption.code}" not found after insert.`);
+        codeId = fetched.id;
+      } else {
+        await tx.execute(sql`
+          UPDATE dw_codes
+          SET status = 'ASSIGNED', updated_at = now()
+          WHERE id = ${codeId}
+        `);
+      }
+
+      // 6. Insert active assignment attached to ASSIGNED code
       await tx.execute(sql`
         INSERT INTO dw_code_assignments
           (code_id, worker_id, employment_session_id, dw_data_id, assigned_by)
         VALUES
-          (${codeRow.id}, ${adoption.workerRef}, ${adoption.employmentSessionId}, ${adoption.dwDataId}, 'SYSTEM_ACTIVATION')
+          (${codeId}, ${adoption.workerRef}, ${adoption.employmentSessionId}, ${adoption.dwDataId}, 'SYSTEM_ACTIVATION')
       `);
       adoptedDwCount++;
     }
@@ -425,7 +466,7 @@ export async function applyOperationalCodeActivation(
         'OPERATIONAL_CODE',
         'SYSTEM',
         ${JSON.stringify({
-          activationChecksum: planChecksum,
+          activationContentChecksum,
           protectedDwCount,
           adoptedDwCount,
           adoptedItCount,
@@ -437,7 +478,8 @@ export async function applyOperationalCodeActivation(
 
     return {
       ok: true,
-      checksum: planChecksum,
+      activationContentChecksum,
+      checksum: activationContentChecksum,
       protectedDwCount,
       adoptedDwCount,
       adoptedItCount,
