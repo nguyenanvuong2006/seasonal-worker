@@ -30,8 +30,8 @@ on:
         required: true
         type: string
       expected_source_commit_sha:
-        description: "Optional main commit SHA reviewed before activation"
-        required: false
+        description: "Exact 40-character main commit SHA reviewed before activation"
+        required: true
         type: string
 
 permissions:
@@ -89,24 +89,24 @@ jobs:
           fi
           echo "✅ Checksum format valid: ${CHECKSUM}"
 
-      # ---- Guardrail D: expected_source_commit_sha match (if provided) ----
-      - name: "Guardrail D — expected_source_commit_sha check (if provided)"
+      # ---- Guardrail D: expected_source_commit_sha match (mandatory) ----
+      - name: "Guardrail D — expected_source_commit_sha match"
         run: |
           set -euo pipefail
           EXPECTED_SHA="${{ github.event.inputs.expected_source_commit_sha }}"
-          if [ -n "${EXPECTED_SHA}" ]; then
-            HEAD_SHA=$(git rev-parse HEAD)
-            if [ "${EXPECTED_SHA}" != "${HEAD_SHA}" ] && [ "${EXPECTED_SHA}" != "${{ github.sha }}" ]; then
-              echo "❌ expected_source_commit_sha (${EXPECTED_SHA}) does not match HEAD (${HEAD_SHA})." >&2
-              exit 1
-            fi
-            echo "✅ Commit SHA matches expected (${EXPECTED_SHA})"
-          else
-            echo "ℹ️ expected_source_commit_sha not provided, skipping SHA comparison."
+          if ! echo "${EXPECTED_SHA}" | grep -qE '^[a-f0-9]{40}$'; then
+            echo "❌ expected_source_commit_sha must be exactly 40 lowercase hexadecimal characters." >&2
+            exit 1
           fi
+          HEAD_SHA=$(git rev-parse HEAD)
+          if [ "${EXPECTED_SHA}" != "${HEAD_SHA}" ]; then
+            echo "❌ expected_source_commit_sha (${EXPECTED_SHA}) does not match checked-out HEAD (${HEAD_SHA})." >&2
+            exit 1
+          fi
+          echo "✅ Commit SHA matches HEAD exactly (${EXPECTED_SHA})"
 
-      # ---- Guardrail E: Hostname guardrail against staging ----
-      - name: "Guardrail E — hostname PROD_DATABASE_URL không được khớp staging đã biết"
+      # ---- Guardrail E: Hostname positive allowlist & staging exclusion ----
+      - name: "Guardrail E — hostname PROD_DATABASE_URL must match PRODUCTION_DATABASE_HOSTNAME"
         env:
           DATABASE_URL: ${{ secrets.PROD_DATABASE_URL }}
         run: |
@@ -116,7 +116,20 @@ jobs:
             echo "❌ Không parse được hostname từ PROD_DATABASE_URL." >&2
             exit 1
           fi
-          echo "✅ Production DB host: ${HOST}"
+          echo "✅ Parsed DB host: ${HOST}"
+
+          PROD_ALLOWLIST="${{ vars.PRODUCTION_DATABASE_HOSTNAME }}"
+          if [ -z "${PROD_ALLOWLIST}" ]; then
+            echo "❌ Biến PRODUCTION_DATABASE_HOSTNAME chưa được thiết lập trong repository/environment variables." >&2
+            exit 1
+          fi
+
+          if [ "${HOST}" != "${PROD_ALLOWLIST}" ]; then
+            echo "❌ Hostname '${HOST}' không khớp PRODUCTION_DATABASE_HOSTNAME '${PROD_ALLOWLIST}' — dừng lại ngay." >&2
+            exit 1
+          fi
+          echo "✅ Production DB hostname khớp allowlist: ${HOST}"
+
           KNOWN_STAGING_HOST="${{ vars.STAGING_DATABASE_HOSTNAME }}"
           if [ -n "${KNOWN_STAGING_HOST}" ] && [ "${HOST}" == "${KNOWN_STAGING_HOST}" ]; then
             echo "❌ PROD_DATABASE_URL trỏ ĐÚNG hostname staging — dừng lại ngay." >&2
