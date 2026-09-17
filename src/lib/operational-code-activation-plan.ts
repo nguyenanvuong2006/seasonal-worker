@@ -106,12 +106,45 @@ export type ActivationPlan = {
   conflicts: ActivationConflict[];
   readiness: "READY_FOR_OPERATIONAL_CODE_ACTIVATION" | "BLOCKED";
   checksum: string;
+  activationContentChecksum: string;
 };
 
 /** Deterministic JSON — array/object key order is fixed by how this file always constructs the
  * plan, so the checksum is stable across runs against identical underlying data (mission section 24). */
 function computeChecksum(planWithoutChecksum: Omit<ActivationPlan, "checksum">): string {
   return createHash("sha256").update(JSON.stringify(planWithoutChecksum)).digest("hex");
+}
+
+export type PlanContentFields = {
+  version: 1;
+  locationReadiness: LocationReadiness[];
+  dwAdoptions: DwAdoptionCandidate[];
+  dwProtectedCodes: DwProtectedCode[];
+  itAdoptions: ItAdoptionCandidate[];
+  conflicts: ActivationConflict[];
+  readiness: "READY_FOR_OPERATIONAL_CODE_ACTIVATION" | "BLOCKED";
+};
+
+/**
+ * Content-only checksum — omits `generatedAt` and `sourceCommitSha` (volatile metadata
+ * that changes every run) so the hash represents WHAT the plan decided, not WHEN. Used by
+ * `applyOperationalCodeActivation` to detect data-state changes between the reviewed dry-run
+ * and the moment of activation, without being defeated by the passage of time.
+ *
+ * Stable fields: version, locationReadiness, dwAdoptions, dwProtectedCodes, itAdoptions,
+ * conflicts, readiness (the fields that determine WHAT would be written — mission section 26).
+ */
+export function computePlanContentChecksum(plan: PlanContentFields): string {
+  const stable = {
+    version: plan.version,
+    locationReadiness: plan.locationReadiness,
+    dwAdoptions: plan.dwAdoptions,
+    dwProtectedCodes: plan.dwProtectedCodes,
+    itAdoptions: plan.itAdoptions,
+    conflicts: plan.conflicts,
+    readiness: plan.readiness,
+  };
+  return createHash("sha256").update(JSON.stringify(stable)).digest("hex");
 }
 
 /**
@@ -242,8 +275,8 @@ export function buildActivationPlan(input: {
 
   const readiness: ActivationPlan["readiness"] = conflicts.length === 0 && locationReadiness.every((r) => r.state === "READY" || r.state === "INACTIVE") ? "READY_FOR_OPERATIONAL_CODE_ACTIVATION" : "BLOCKED";
 
-  const withoutChecksum: Omit<ActivationPlan, "checksum"> = {
-    version: 1,
+  const withoutChecksums = {
+    version: 1 as const,
     generatedAt: input.generatedAt,
     sourceCommitSha: input.sourceCommitSha,
     locationReadiness,
@@ -253,5 +286,10 @@ export function buildActivationPlan(input: {
     conflicts,
     readiness,
   };
-  return { ...withoutChecksum, checksum: computeChecksum(withoutChecksum) };
+  const activationContentChecksum = computePlanContentChecksum(withoutChecksums);
+  const planWithoutChecksum = {
+    ...withoutChecksums,
+    activationContentChecksum,
+  };
+  return { ...planWithoutChecksum, checksum: computeChecksum(planWithoutChecksum) };
 }

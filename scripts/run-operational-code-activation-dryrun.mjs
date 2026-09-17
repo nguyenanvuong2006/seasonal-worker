@@ -91,6 +91,7 @@ async function main() {
   console.log(`generatedAt: ${plan.generatedAt}`);
   console.log(`sourceCommitSha: ${plan.sourceCommitSha ?? "(not set)"}`);
   console.log(`checksum: ${plan.checksum}`);
+  console.log(`activationContentChecksum: ${plan.activationContentChecksum}`);
   console.log(`readiness: ${plan.readiness}\n`);
 
   console.log(`Location readiness (${plan.locationReadiness.length} configured location(s)):`);

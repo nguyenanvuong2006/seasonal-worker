@@ -1,7 +1,8 @@
 import "server-only";
 import { sql } from "drizzle-orm";
 import { db } from "@/db";
-import { buildActivationPlan, type ActivationPlan, type LocationRow, type DwLegacyRow, type ItMirrorRow } from "@/lib/operational-code-activation-plan";
+import { buildActivationPlan, computePlanContentChecksum, type ActivationPlan, type LocationRow, type DwLegacyRow, type ItMirrorRow } from "@/lib/operational-code-activation-plan";
+import { DATA_MANAGEMENT_ADVISORY_LOCK_KEY } from "@/lib/data-management/reset-service";
 
 export * from "@/lib/operational-code-activation-plan";
 
@@ -19,17 +20,7 @@ export * from "@/lib/operational-code-activation-plan";
  * file's own docblock for why "server-only" cannot be imported outside a
  * Next.js server bundle).
  *
- * `applyOperationalCodeActivation()` is DELIBERATELY NOT IMPLEMENTED in this
- * mission (section 25: "Design but DO NOT execute" / "ACTIVATION WRITE MUST
- * BE SEPARATE") — it always throws. Its required contract (advisory lock,
- * planChecksum freshness check, re-check conflicts, staged transaction,
- * idempotent, audit) is documented on the function below so a FUTURE,
- * explicitly-authorized mission can implement it against this same plan
- * shape without re-deriving the contract. This mission's own ABSOLUTE
- * SAFETY section forbids any Production DW/IT code assignment or release —
- * an unreachable-but-designed function is the correct scope, not a
- * real-but-never-called one (nothing in this codebase wires it to any
- * route/button, so it cannot be triggered even accidentally).
+ * `applyOperationalCodeActivation()` is the writer — see its own docblock.
  *
  * BOOTSTRAP SAFETY (section 3, the P1 this whole planner exists for): the
  * canonical pool (dw_codes/dw_code_assignments) starts EMPTY. Every DW Code
@@ -45,13 +36,21 @@ export * from "@/lib/operational-code-activation-plan";
  * prevent that, not merely report it.
  */
 
-type Executor = typeof db;
+// ---- Executor types ----
+// The dry-run wrapper only needs SELECT (execute). The writer needs a full
+// transaction handle — we accept both via a duck-typed interface so tests
+// can substitute a fake without importing Drizzle internals.
+// Note: the real db.execute() accepts SQLWrapper | string; we use `unknown` here for
+// test-fake compatibility, and cast `db` at the call site.
+type SelectExecutor = { execute: <T>(query: unknown) => Promise<{ rows: T[] }> };
+type TransactionHandle = SelectExecutor & { execute: <T>(query: unknown) => Promise<{ rows: T[] } | { rowCount?: number }> };
+type DbExecutor = SelectExecutor & { transaction?: <T>(fn: (tx: TransactionHandle) => Promise<T>) => Promise<T> };
 
 /** dryRun is required and must be true — this function performs ONLY SELECT statements
  * regardless, but the flag is kept explicit in the call site per mission section 9/23
  * ("prepareOperationalCodeActivation({ dryRun: true })") so no future edit can silently
  * turn this into a writer without a visible signature change. */
-export async function prepareOperationalCodeActivation(options: { dryRun: true }, executor: Executor = db): Promise<ActivationPlan> {
+export async function prepareOperationalCodeActivation(options: { dryRun: true }, executor: SelectExecutor = db as unknown as SelectExecutor): Promise<ActivationPlan> {
   if (!options.dryRun) throw new Error("prepareOperationalCodeActivation: dryRun must be true — this function never writes.");
 
   const locationsResult = await executor.execute<{ location_id: string; prefix: string; name: string; is_active: boolean; next_sequence: number }>(
@@ -106,44 +105,388 @@ export async function prepareOperationalCodeActivation(options: { dryRun: true }
   });
 }
 
+// ---------------------------------------------------------------------------
+// ADVISORY LOCKS & CROSS-DOMAIN MUTUAL EXCLUSION
+// ---------------------------------------------------------------------------
+// To prevent concurrent activations AND exclude destructive data resets:
+//   1. OPERATIONAL_CODE_ACTIVATION_ADVISORY_LOCK_KEY (847_291_004):
+//      Dedicated activation lock to serialize activations across requests.
+//   2. SHARED_MAINTENANCE_EXCLUSION_ADVISORY_LOCK_KEY (847_291_003):
+//      Shared with reset-service.ts (DATA_MANAGEMENT_ADVISORY_LOCK_KEY).
+//
+// In Postgres, advisory locks share the same key namespace regardless of
+// whether acquired via session-level (pg_try_advisory_lock) or transaction-level
+// (pg_try_advisory_xact_lock) calls. By acquiring BOTH locks inside the activation
+// transaction:
+//   - If a destructive data reset is running (holding 847_291_003), activation
+//     fails closed immediately with ACTIVATION_LOCKED (never queues).
+//   - While activation runs, any reset attempt calling tryAcquireDataManagementLock()
+//     will fail with DATA_MANAGEMENT_BUSY.
+//   - Zero mutations to operational-code tables can occur concurrently with reset.
+export const OPERATIONAL_CODE_ACTIVATION_ADVISORY_LOCK_KEY = 847_291_004;
+export const SHARED_MAINTENANCE_EXCLUSION_ADVISORY_LOCK_KEY = DATA_MANAGEMENT_ADVISORY_LOCK_KEY;
+
+// ---------------------------------------------------------------------------
+// RESULT TYPE
+// ---------------------------------------------------------------------------
+export type ApplyActivationResult = {
+  ok: true;
+  activationContentChecksum: string;
+  checksum: string;
+  protectedDwCount: number;
+  adoptedDwCount: number;
+  adoptedItCount: number;
+  skippedDwCount: number;
+  skippedItCount: number;
+};
+
+// ---------------------------------------------------------------------------
+// WRITER
+// ---------------------------------------------------------------------------
 /**
- * NOT IMPLEMENTED (mission section 25 — "Design but DO NOT execute"). Documented contract for a
- * FUTURE, separately-authorized mission:
+ * Applies the operational code go-live plan produced by
+ * `prepareOperationalCodeActivation({ dryRun: true })`.
  *
- *   1. Recompute prepareOperationalCodeActivation({ dryRun: true }) fresh and compare its
- *      `.checksum` to `planChecksum` — mismatch => reject ACTIVATION_PLAN_STALE, do nothing.
- *   2. Reject if the fresh plan has any `conflicts[]` (section 11 — "Do not automatically fix
- *      Production conflicts") or any non-READY/INACTIVE `locationReadiness[]` entry.
- *   3. Take a DEDICATED Postgres advisory lock (a new key, never reused from
- *      DATA_MANAGEMENT_ADVISORY_LOCK_KEY in reset-service.ts — activation and reset are
- *      different risk domains and must never serialize on each other's lock).
- *   4. In one transaction, in the exact order from section 26: (a) INSERT the protected legacy
- *      codes as `dw_codes` rows with status='RETIRED' (ON CONFLICT (code) DO NOTHING — idempotent);
- *      (b) UPDATE each touched `dw_code_locations.next_sequence` to at least
- *      computeSafeNextSequence(legacyObservedMaxSequence); (c) for each `dwAdoptions[]` entry,
- *      INSERT a `dw_codes` ASSIGNED row + a `dw_code_assignments` row (never touch the
- *      `dw_data.code` mirror — it is already correct, this is adoption of EXISTING state, not
- *      reassignment); (d) for each `itAdoptions[]` entry, INSERT an `it_code_assignments` row
- *      (same non-mutation-of-mirrors principle).
- *   5. Release the lock, write ONE audit row summarizing counts (never raw CCCD/phone).
- *   6. Idempotent: re-running with the SAME already-applied plan checksum after a first
- *      successful apply should be a safe no-op (the ON CONFLICT / already-exists checks in step 4
- *      make every sub-operation individually idempotent).
+ * CONTRACT (mission section 26 / PR #220 review blocker fixes / zero-TOCTOU):
  *
- * This function intentionally throws so it can exist in the codebase (satisfying "code changes"
- * from the mission's ABSOLUTE SAFETY allow-list) without being callable — there is also no
- * route/UI button anywhere in this PR that invokes it.
+ *   1. Begins ONE atomic transaction BEFORE any recomputation, checksum comparison,
+ *      or readiness validation.
+ *   2. Acquires BOTH transaction-level advisory locks non-blocking inside the transaction:
+ *      - Dedicated activation lock: OPERATIONAL_CODE_ACTIVATION_ADVISORY_LOCK_KEY (847_291_004)
+ *      - Shared maintenance lock: SHARED_MAINTENANCE_EXCLUSION_ADVISORY_LOCK_KEY (847_291_003)
+ *      Fails closed immediately if either lock is held — throws ACTIVATION_LOCKED (zero writes).
+ *   3. While both locks are held, calls `prepareOperationalCodeActivation({ dryRun: true }, tx)`
+ *      using the SAME transaction executor (`tx`) that performs any subsequent writes.
+ *   4. Compares supplied `activationContentChecksum` with `freshPlan.activationContentChecksum`
+ *      INSIDE the locked transaction. If mismatch → throws ACTIVATION_PLAN_STALE (zero writes).
+ *   5. Validates readiness, conflict count (0), location states (READY/INACTIVE),
+ *      and adoption field completeness INSIDE the locked transaction.
+ *      If invalid → throws ACTIVATION_PLAN_NOT_READY (zero writes).
+ *   6. Performs atomic activation writes in the following exact order:
+ *      A. Protected legacy DW codes → INSERT INTO dw_codes … status='RETIRED'
+ *         ON CONFLICT (code) DO UPDATE SET status='RETIRED' WHERE dw_codes.status = 'AVAILABLE'
+ *         (idempotent; protected codes that are not adoption candidates remain RETIRED).
+ *      B. Location nextSequence → UPDATE dw_code_locations SET
+ *         next_sequence = GREATEST(next_sequence, safeValue).
+ *      C. DW active adoption → inspect existing dw_codes row and active ownership BEFORE mutation.
+ *         Exact active assignment => safe skip; conflicting ownership => reject;
+ *         valid adoption => ensure dw_codes.status = 'ASSIGNED' + insert dw_code_assignments
+ *         (never leaves an active assignment attached to AVAILABLE or RETIRED).
+ *      D. IT active adoption → insert one it_code_assignments history row
+ *         (idempotent: skip if exact active assignment exists; reject if
+ *         conflicting active ownership).
+ *      E. ONE aggregate audit_logs row (no CCCD, phone, name in payload).
+ *   7. Idempotent: re-running with the same already-applied plan is a safe
+ *      NOOP — duplicate assignment history rows are never created.
+ *   8. Any failure inside the transaction rolls everything back.
  *
- * ACTIVATION STATE (mission section 20-22/253) — DISABLED, never SHADOW or ACTIVE. This is not a
- * runtime flag that could be flipped by mistake — there IS no mode variable, because there is no
- * callable path at all: `grep -r "applyOperationalCodeActivation\|prepareOperationalCodeActivation"
- * src/app` returns zero matches (2026-09-13) — no API route, no server action, no admin UI button
- * anywhere in the application surface calls either function. `applyOperationalCodeActivation()`
- * itself always throws regardless. Fail-closed is structural, not configurable: there is nothing
- * to disable because nothing was ever wired to be enabled.
+ * NOT wired to any API route or UI — must remain unrouted until a separate,
+ * explicitly-authorized mission enables it (mission constraint: no route, no
+ * button, no server action in this PR).
  */
-export async function applyOperationalCodeActivation(_planChecksum: string): Promise<never> {
-  throw new Error(
-    "applyOperationalCodeActivation: NOT IMPLEMENTED in this mission. Production DW/IT code assignment is not authorized here — see this function's docblock for the required contract for a future, separately-authorized rollout.",
-  );
+export async function applyOperationalCodeActivation(
+  activationContentChecksum: string,
+  /** Override the db executor — used by tests to inject a fake transaction runner. */
+  _executor?: {
+    transaction: (fn: (tx: TransactionHandle) => Promise<ApplyActivationResult>) => Promise<ApplyActivationResult>;
+    execute: <T>(query: unknown) => Promise<{ rows: T[] }>;
+  },
+): Promise<ApplyActivationResult> {
+  const executor = _executor ?? (db as unknown as typeof _executor)!;
+
+  // ---- Atomic Transaction with Locked Freshness Validation (Zero-TOCTOU) ----
+  // Freshness and readiness MUST be recomputed INSIDE the transaction, AFTER both
+  // advisory locks have been acquired, using the SAME transaction executor (tx)
+  // that executes any subsequent writes.
+  return await executor.transaction!(async (tx: TransactionHandle) => {
+    // Step 1: Acquire BOTH the dedicated activation lock AND the shared destructive-operation exclusion lock.
+    // 1. Dedicated lock: OPERATIONAL_CODE_ACTIVATION_ADVISORY_LOCK_KEY (847_291_004) serializes activation runs.
+    // 2. Shared maintenance lock: SHARED_MAINTENANCE_EXCLUSION_ADVISORY_LOCK_KEY (847_291_003) mutually excludes
+    //    destructive data-management operations (reset/import in reset-service.ts).
+    // Both are transaction-level (pg_try_advisory_xact_lock) — auto-released on commit or rollback, fail-closed
+    // immediately (never queue).
+    const lockResult = await tx.execute<{
+      activation_locked?: boolean;
+      maintenance_locked?: boolean;
+      locked?: boolean;
+    }>(
+      sql`SELECT
+            pg_try_advisory_xact_lock(${OPERATIONAL_CODE_ACTIVATION_ADVISORY_LOCK_KEY}) AS activation_locked,
+            pg_try_advisory_xact_lock(${SHARED_MAINTENANCE_EXCLUSION_ADVISORY_LOCK_KEY}) AS maintenance_locked`,
+    );
+    const lockRow = (lockResult as { rows: { activation_locked?: boolean; maintenance_locked?: boolean; locked?: boolean }[] }).rows[0];
+    const actLocked = lockRow?.activation_locked ?? lockRow?.locked === true;
+    if (!actLocked) {
+      throw new Error("ACTIVATION_LOCKED: another operational code activation is already in progress. Try again later.");
+    }
+    const maintLocked = lockRow?.maintenance_locked ?? lockRow?.locked === true;
+    if (!maintLocked) {
+      throw new Error("ACTIVATION_LOCKED: a destructive data-management or reset operation is currently in progress. Try again later.");
+    }
+
+    // Step 2: Recompute fresh plan INSIDE the locked transaction using tx executor
+    const freshPlan = await prepareOperationalCodeActivation({ dryRun: true }, tx as SelectExecutor);
+
+    // Step 3: Compare supplied activationContentChecksum with fresh plan inside transaction
+    if (freshPlan.activationContentChecksum !== activationContentChecksum) {
+      throw new Error(
+        `ACTIVATION_PLAN_STALE: supplied activationContentChecksum ${activationContentChecksum} does not match freshly-computed activationContentChecksum ${freshPlan.activationContentChecksum}. Re-run the dry-run to obtain the current activationContentChecksum.`,
+      );
+    }
+
+    // Step 4: Validate readiness inside transaction
+    if (freshPlan.readiness !== "READY_FOR_OPERATIONAL_CODE_ACTIVATION") {
+      throw new Error(
+        `ACTIVATION_PLAN_NOT_READY: fresh plan readiness is "${freshPlan.readiness}". Resolve all conflicts and location issues before applying.`,
+      );
+    }
+    if (freshPlan.conflicts.length > 0) {
+      throw new Error(
+        `ACTIVATION_PLAN_NOT_READY: fresh plan has ${freshPlan.conflicts.length} conflict(s). Resolve before applying.`,
+      );
+    }
+    const nonReadyLocation = freshPlan.locationReadiness.find((r) => r.state !== "READY" && r.state !== "INACTIVE");
+    if (nonReadyLocation) {
+      throw new Error(
+        `ACTIVATION_PLAN_NOT_READY: location "${nonReadyLocation.name}" (${nonReadyLocation.prefix}) has state "${nonReadyLocation.state}". All locations must be READY or INACTIVE.`,
+      );
+    }
+    // Validate no adoption row is ambiguous (all required fields present)
+    for (const adoption of freshPlan.dwAdoptions) {
+      if (!adoption.workerRef || !adoption.employmentSessionId || !adoption.dwDataId || !adoption.code || !adoption.locationId) {
+        throw new Error(`ACTIVATION_PLAN_NOT_READY: DW adoption candidate for code "${adoption.code}" is incomplete.`);
+      }
+    }
+    for (const adoption of freshPlan.itAdoptions) {
+      if (!adoption.workerRef || !adoption.employmentSessionId || !adoption.dwDataId || !adoption.itCode) {
+        throw new Error(`ACTIVATION_PLAN_NOT_READY: IT adoption candidate for worker "${adoption.workerRef}" is incomplete.`);
+      }
+    }
+
+    // ---- Step 4A: Protected legacy DW codes → RETIRED ----
+    // ON CONFLICT (code): update to RETIRED only if the row is AVAILABLE.
+    // (Protected codes that are not adoption candidates remain RETIRED).
+    // Protected codes must NEVER become AVAILABLE.
+    let protectedDwCount = 0;
+    for (const prot of freshPlan.dwProtectedCodes) {
+      await tx.execute(sql`
+        INSERT INTO dw_codes (location_id, sequence_number, code, status)
+        VALUES (${prot.locationId}, ${prot.sequenceNumber}, ${prot.code}, 'RETIRED')
+        ON CONFLICT (code) DO UPDATE
+          SET status = 'RETIRED'
+          WHERE dw_codes.status = 'AVAILABLE'
+      `);
+      protectedDwCount++;
+    }
+
+    // ---- Step 4B: Location nextSequence — never decrease ----
+    // For each location that has any legacy rows, bump next_sequence to at
+    // least (legacyObservedMaxSequence + 1). GREATEST() guarantees monotonic.
+    for (const locReadiness of freshPlan.locationReadiness) {
+      if (locReadiness.state !== "READY" && locReadiness.state !== "INACTIVE") continue;
+      const safeNext =
+        locReadiness.legacyObservedMaxSequence !== null ? locReadiness.legacyObservedMaxSequence + 1 : locReadiness.nextSequence;
+      if (safeNext <= locReadiness.nextSequence) continue; // already safe, no-op
+      await tx.execute(sql`
+        UPDATE dw_code_locations
+        SET next_sequence = GREATEST(next_sequence, ${safeNext}),
+            updated_at = now()
+        WHERE id = ${locReadiness.locationId}
+      `);
+    }
+
+    // ---- Step 4C: DW active adoption ----
+    let adoptedDwCount = 0;
+    let skippedDwCount = 0;
+
+    for (const adoption of freshPlan.dwAdoptions) {
+      // 1. Inspect existing dw_codes row BEFORE final state mutation
+      const codeRowResult = await tx.execute<{ id: string; status: string }>(
+        sql`SELECT id, status FROM dw_codes WHERE code = ${adoption.code} LIMIT 1`,
+      );
+      const codeRow = (codeRowResult as { rows: { id: string; status: string }[] }).rows[0];
+
+      // 2. Inspect active ownership BEFORE final state mutation
+      let existingByCode: { id: string; worker_id: string; employment_session_id: string } | undefined;
+      if (codeRow) {
+        const existingByCodeResult = await tx.execute<{
+          id: string;
+          worker_id: string;
+          employment_session_id: string;
+        }>(
+          sql`SELECT id, worker_id, employment_session_id FROM dw_code_assignments
+              WHERE code_id = ${codeRow.id} AND released_at IS NULL
+              LIMIT 1`,
+        );
+        existingByCode = (existingByCodeResult as { rows: { id: string; worker_id: string; employment_session_id: string }[] }).rows[0];
+      }
+
+      const existingByWorkerResult = await tx.execute<{
+        id: string;
+        code_id: string;
+        worker_id: string;
+        employment_session_id: string;
+      }>(
+        sql`SELECT id, code_id, worker_id, employment_session_id FROM dw_code_assignments
+            WHERE worker_id = ${adoption.workerRef} AND released_at IS NULL
+            LIMIT 1`,
+      );
+      const existingByWorker = (existingByWorkerResult as { rows: { id: string; code_id: string; worker_id: string; employment_session_id: string }[] }).rows[0];
+
+      // 3. Exact already-active assignment => safe skip
+      if (
+        existingByCode &&
+        existingByCode.worker_id === adoption.workerRef &&
+        existingByCode.employment_session_id === adoption.employmentSessionId
+      ) {
+        // Invariant: never leave an active assignment attached to AVAILABLE or RETIRED
+        if (codeRow && codeRow.status !== "ASSIGNED") {
+          await tx.execute(sql`
+            UPDATE dw_codes
+            SET status = 'ASSIGNED', updated_at = now()
+            WHERE id = ${codeRow.id}
+          `);
+        }
+        skippedDwCount++;
+        continue;
+      }
+
+      // 4. Conflicting ownership => reject (fail closed)
+      if (existingByCode) {
+        throw new Error(
+          `ACTIVATION_CONFLICT: DW Code "${adoption.code}" already has an active assignment to a different worker/session. Cannot reassign.`,
+        );
+      }
+
+      if (existingByWorker && (!codeRow || existingByWorker.code_id !== codeRow.id)) {
+        throw new Error(
+          `ACTIVATION_CONFLICT: Worker "${adoption.workerRef}" already has an active DW Code assignment. Cannot create a second one.`,
+        );
+      }
+
+      // 5. Valid adoption => ensure dw_codes row exists and ends with status = ASSIGNED
+      let codeId = codeRow?.id;
+      if (!codeRow) {
+        await tx.execute(sql`
+          INSERT INTO dw_codes (location_id, sequence_number, code, status)
+          VALUES (${adoption.locationId}, ${adoption.sequenceNumber}, ${adoption.code}, 'ASSIGNED')
+          ON CONFLICT (code) DO UPDATE
+            SET status = 'ASSIGNED', updated_at = now()
+        `);
+        const fetchRes = await tx.execute<{ id: string; status: string }>(
+          sql`SELECT id, status FROM dw_codes WHERE code = ${adoption.code} LIMIT 1`,
+        );
+        const fetched = (fetchRes as { rows: { id: string; status: string }[] }).rows[0];
+        if (!fetched) throw new Error(`ACTIVATION_INTERNAL: dw_codes row for code "${adoption.code}" not found after insert.`);
+        codeId = fetched.id;
+      } else {
+        await tx.execute(sql`
+          UPDATE dw_codes
+          SET status = 'ASSIGNED', updated_at = now()
+          WHERE id = ${codeId}
+        `);
+      }
+
+      // 6. Insert active assignment attached to ASSIGNED code
+      await tx.execute(sql`
+        INSERT INTO dw_code_assignments
+          (code_id, worker_id, employment_session_id, dw_data_id, assigned_by)
+        VALUES
+          (${codeId}, ${adoption.workerRef}, ${adoption.employmentSessionId}, ${adoption.dwDataId}, 'SYSTEM_ACTIVATION')
+      `);
+      adoptedDwCount++;
+    }
+
+    // ---- Step 4D: IT active adoption ----
+    let adoptedItCount = 0;
+    let skippedItCount = 0;
+
+    for (const adoption of freshPlan.itAdoptions) {
+      // Check active assignment for this IT code.
+      const existingByItCodeResult = await tx.execute<{
+        id: string;
+        worker_id: string;
+        employment_session_id: string;
+      }>(
+        sql`SELECT id, worker_id, employment_session_id FROM it_code_assignments
+            WHERE it_code = ${adoption.itCode} AND released_at IS NULL
+            LIMIT 1`,
+      );
+      const existingByItCode = (existingByItCodeResult as { rows: { id: string; worker_id: string; employment_session_id: string }[] }).rows[0];
+
+      // Check active assignment for this worker.
+      const existingItByWorkerResult = await tx.execute<{
+        id: string;
+        worker_id: string;
+        employment_session_id: string;
+      }>(
+        sql`SELECT id, worker_id, employment_session_id FROM it_code_assignments
+            WHERE worker_id = ${adoption.workerRef} AND released_at IS NULL
+            LIMIT 1`,
+      );
+      const existingItByWorker = (existingItByWorkerResult as { rows: { id: string; worker_id: string; employment_session_id: string }[] }).rows[0];
+
+      // Idempotency: exact active assignment already exists — skip safely.
+      if (
+        existingByItCode &&
+        existingByItCode.worker_id === adoption.workerRef &&
+        existingByItCode.employment_session_id === adoption.employmentSessionId
+      ) {
+        skippedItCount++;
+        continue;
+      }
+
+      // Reject conflicting active ownership on IT code.
+      if (existingByItCode) {
+        throw new Error(
+          `ACTIVATION_CONFLICT: IT Code "${adoption.itCode}" already has an active assignment to a different worker/session.`,
+        );
+      }
+
+      // Reject conflicting active ownership on worker.
+      if (existingItByWorker) {
+        throw new Error(
+          `ACTIVATION_CONFLICT: Worker "${adoption.workerRef}" already has an active IT Code assignment. Cannot create a second one.`,
+        );
+      }
+
+      // Insert the IT assignment history row.
+      await tx.execute(sql`
+        INSERT INTO it_code_assignments
+          (it_code, worker_id, employment_session_id, dw_data_id, assigned_by)
+        VALUES
+          (${adoption.itCode}, ${adoption.workerRef}, ${adoption.employmentSessionId}, ${adoption.dwDataId}, 'SYSTEM_ACTIVATION')
+      `);
+      adoptedItCount++;
+    }
+
+    // ---- Step 4E: Aggregate audit log (no CCCD, phone, names, raw worker IDs) ----
+    await tx.execute(sql`
+      INSERT INTO audit_logs (action, target_type, category, details)
+      VALUES (
+        'OPERATIONAL_CODE_ACTIVATION',
+        'OPERATIONAL_CODE',
+        'SYSTEM',
+        ${JSON.stringify({
+          activationContentChecksum,
+          protectedDwCount,
+          adoptedDwCount,
+          adoptedItCount,
+          skippedDwCount,
+          skippedItCount,
+        })}::jsonb
+      )
+    `);
+
+    return {
+      ok: true,
+      activationContentChecksum,
+      checksum: activationContentChecksum,
+      protectedDwCount,
+      adoptedDwCount,
+      adoptedItCount,
+      skippedDwCount,
+      skippedItCount,
+    };
+  });
 }
