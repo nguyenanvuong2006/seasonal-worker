@@ -152,7 +152,7 @@ function makeSelectResponder(fixture = FIXTURE) {
  * function and returns rows per label. */
 function makeFakeDb(
   fixture = FIXTURE,
-  txExecute?: (q: unknown, label: string) => Promise<{ rows: unknown[] }>,
+  txExecute?: (q: unknown, label: string) => Promise<{ rows: unknown[] } | undefined>,
 ): {
   execute: (q: unknown) => Promise<{ rows: unknown[] }>;
   transaction: (fn: (tx: unknown) => Promise<unknown>) => Promise<unknown>;
@@ -164,9 +164,17 @@ function makeFakeDb(
       return fn({
         execute: async (q: unknown) => {
           const label = queryLabel(q);
-          if (txExecute) return txExecute(q, label);
-          // Default: advisory lock succeeds; everything else is empty.
-          if (label === "advisory_lock") return { rows: [{ locked: true }] };
+          // The 3 plan-recomputation queries inside tx must always resolve through selectResponder
+          // using the test's fixture, so freshPlan recomputation inside tx reflects the same fixture.
+          if (label === "select_locations" || label === "select_dw_data" || label === "select_worker_profiles") {
+            return selectResponder(q);
+          }
+          if (txExecute) {
+            const custom = await txExecute(q, label);
+            if (custom !== undefined) return custom;
+          }
+          // Default: advisory lock succeeds
+          if (label === "advisory_lock") return { rows: [{ activation_locked: true, maintenance_locked: true, locked: true }] };
           if (label === "select_dw_code_by_code") return { rows: [{ id: "code-id-1", status: "ASSIGNED" }] };
           return { rows: [] };
         },
@@ -439,25 +447,29 @@ test("ADVISORY LOCK KEYS — dedicated activation lock (847_291_004) and shared 
 
 /**
  * TEST B1: Stale activationContentChecksum => ACTIVATION_PLAN_STALE, zero writes.
- * We supply a deliberately wrong checksum; applyOperationalCodeActivation must reject
- * before entering the transaction, with message specifically naming activationContentChecksum.
+ * Transaction begins, advisory locks acquired, plan recomputed inside transaction,
+ * stale activationContentChecksum rejected before any writes.
  */
-test("WRITER B1 — stale activationContentChecksum => throws ACTIVATION_PLAN_STALE, zero writes", async () => {
+test("WRITER B1 — stale activationContentChecksum after locks => throws ACTIVATION_PLAN_STALE, zero writes", async () => {
   const mod = await loadMod();
 
   let txCalled = false;
-  const fakeDb = makeFakeDb(FIXTURE, async () => {
+  let tableMutations = 0;
+  const fakeDb = makeFakeDb(FIXTURE, async (q, label) => {
     txCalled = true;
-    return { rows: [] };
+    const raw = extractSql(q);
+    if (/insert into|update /i.test(raw)) {
+      tableMutations++;
+    }
+    return undefined;
   });
-  // Override transaction to assert it is NEVER called.
-  fakeDb.transaction = async () => { txCalled = true; throw new Error("transaction must NOT be called on stale checksum"); };
 
   await assert.rejects(
     () => mod.applyOperationalCodeActivation("WRONG_CHECKSUM_STALE_B1", fakeDb),
     /ACTIVATION_PLAN_STALE.*activationContentChecksum/,
   );
-  assert.equal(txCalled, false, "transaction must NOT be entered on stale checksum");
+  assert.equal(txCalled, true, "transaction MUST be entered to acquire locks and recompute plan");
+  assert.equal(tableMutations, 0, "zero table writes on stale checksum");
 });
 
 /**
@@ -481,7 +493,7 @@ test("BLOCKER 2 — activation fails closed when shared destructive-operation ex
       // Dedicated activation lock acquired, but shared maintenance/reset exclusion lock is held by reset
       return { rows: [{ activation_locked: true, maintenance_locked: false }] };
     }
-    return { rows: [] };
+    return undefined;
   });
 
   const checksum = await fetchLiveChecksum(mod, fakeDb);
@@ -497,11 +509,10 @@ test("BLOCKER 2 — activation fails closed when shared destructive-operation ex
 
 /**
  * TEST B2: Conflict in fresh plan => ACTIVATION_PLAN_NOT_READY, zero writes.
- * Return rows that make the fresh plan BLOCKED (duplicate active DW code on
- * the same code string). Pass the ACTUAL fresh checksum of that blocked plan
- * so checksum check passes but conflict check fires.
+ * Transaction begins, locks acquired, plan recomputed inside transaction,
+ * conflict detected, throws ACTIVATION_PLAN_NOT_READY with zero writes.
  */
-test("WRITER B2 — conflict in fresh plan => throws ACTIVATION_PLAN_NOT_READY, zero writes", async () => {
+test("WRITER B2 — conflict in fresh plan after locks => throws ACTIVATION_PLAN_NOT_READY, zero writes", async () => {
   const mod = await loadMod();
 
   // Fixture: two workers holding the same DW code → BLOCKED plan
@@ -515,8 +526,15 @@ test("WRITER B2 — conflict in fresh plan => throws ACTIVATION_PLAN_NOT_READY, 
   };
 
   let txCalled = false;
-  const fakeDb = makeFakeDb(conflictFixture as typeof FIXTURE);
-  fakeDb.transaction = async () => { txCalled = true; throw new Error("tx must NOT be called on conflicted plan"); };
+  let tableMutations = 0;
+  const fakeDb = makeFakeDb(conflictFixture as typeof FIXTURE, async (q) => {
+    txCalled = true;
+    const raw = extractSql(q);
+    if (/insert into|update /i.test(raw)) {
+      tableMutations++;
+    }
+    return undefined;
+  });
 
   // Get the live checksum of the BLOCKED plan through the same executor.
   const checksum = await fetchLiveChecksum(mod, fakeDb);
@@ -525,7 +543,99 @@ test("WRITER B2 — conflict in fresh plan => throws ACTIVATION_PLAN_NOT_READY, 
     () => mod.applyOperationalCodeActivation(checksum, fakeDb),
     /ACTIVATION_PLAN_NOT_READY/,
   );
-  assert.equal(txCalled, false, "transaction must NOT be entered on conflicted plan");
+  assert.equal(txCalled, true, "transaction MUST be entered to acquire locks and recompute plan");
+  assert.equal(tableMutations, 0, "zero table writes on conflicted plan");
+});
+
+/**
+ * REGRESSION TESTS A & B: Transaction begins before freshness plan recomputation,
+ * and both advisory locks are acquired before plan recomputation reads occur.
+ */
+test("REGRESSION A & B — transaction begins and locks are acquired BEFORE plan recomputation (zero-TOCTOU)", async () => {
+  const mod = await loadMod();
+
+  const eventSequence: string[] = [];
+  const fakeDb = {
+    execute: async (q: unknown) => {
+      eventSequence.push("outside_tx_execute:" + queryLabel(q));
+      return { rows: [] };
+    },
+    transaction: async (fn: (tx: unknown) => Promise<unknown>) => {
+      eventSequence.push("transaction_begin");
+      return fn({
+        execute: async (q: unknown) => {
+          const label = queryLabel(q);
+          eventSequence.push("tx:" + label);
+          if (label === "advisory_lock") return { rows: [{ activation_locked: true, maintenance_locked: true }] };
+          if (label === "select_locations") return { rows: FIXTURE.locations };
+          if (label === "select_dw_data") return { rows: FIXTURE.dwData };
+          if (label === "select_worker_profiles") return { rows: FIXTURE.itRows };
+          if (label === "select_dw_code_by_code") return { rows: [{ id: "code-id-1", status: "ASSIGNED" }] };
+          return { rows: [] };
+        },
+      });
+    },
+  };
+
+  const checksum = await fetchLiveChecksum(mod, makeFakeDb(FIXTURE));
+  const result = (await mod.applyOperationalCodeActivation(checksum, fakeDb)) as { ok: boolean };
+  assert.equal(result.ok, true);
+
+  // Assert exact chronological order:
+  // 1. Transaction begins FIRST
+  assert.equal(eventSequence[0], "transaction_begin", "transaction MUST begin before any queries");
+  // 2. Advisory locks acquired INSIDE transaction
+  assert.equal(eventSequence[1], "tx:advisory_lock", "advisory locks MUST be acquired inside transaction first");
+  // 3. Plan recomputation reads occur inside transaction AFTER locks
+  assert.equal(eventSequence[2], "tx:select_locations", "plan recomputation reads must occur inside transaction after locks");
+  assert.equal(eventSequence[3], "tx:select_dw_data", "dw data queried inside transaction");
+  assert.equal(eventSequence[4], "tx:select_worker_profiles", "worker profiles queried inside transaction");
+
+  // Zero queries executed outside transaction
+  const outsideQueries = eventSequence.filter((e) => e.startsWith("outside_tx_execute"));
+  assert.equal(outsideQueries.length, 0, "ZERO queries must be executed outside the locked transaction");
+});
+
+/**
+ * REGRESSION TEST F: Plan validation and all writes use the SAME transaction executor.
+ */
+test("REGRESSION F — plan validation and all writes use the SAME transaction executor", async () => {
+  const mod = await loadMod();
+
+  const txUniqueToken = { txId: "tx-session-" + Math.random() };
+  const executorsSeen: unknown[] = [];
+
+  const fakeDb = {
+    execute: async () => {
+      executorsSeen.push("root_executor");
+      return { rows: [] };
+    },
+    transaction: async (fn: (tx: unknown) => Promise<unknown>) => {
+      const txHandle = {
+        _token: txUniqueToken,
+        execute: async (q: unknown) => {
+          executorsSeen.push(txHandle._token);
+          const label = queryLabel(q);
+          if (label === "advisory_lock") return { rows: [{ activation_locked: true, maintenance_locked: true }] };
+          if (label === "select_locations") return { rows: FIXTURE.locations };
+          if (label === "select_dw_data") return { rows: FIXTURE.dwData };
+          if (label === "select_worker_profiles") return { rows: FIXTURE.itRows };
+          if (label === "select_dw_code_by_code") return { rows: [{ id: "code-id-1", status: "ASSIGNED" }] };
+          return { rows: [] };
+        },
+      };
+      return fn(txHandle);
+    },
+  };
+
+  const checksum = await fetchLiveChecksum(mod, makeFakeDb(FIXTURE));
+  const result = (await mod.applyOperationalCodeActivation(checksum, fakeDb)) as { ok: boolean };
+  assert.equal(result.ok, true);
+
+  // Every single query must have used txHandle (matching txUniqueToken)
+  assert.ok(executorsSeen.length > 5, "must have executed multiple queries inside transaction");
+  assert.ok(executorsSeen.every((t) => t === txUniqueToken), "all queries must use the exact same transaction executor");
+  assert.equal(executorsSeen.includes("root_executor"), false, "root executor must never be used during apply");
 });
 
 /**
@@ -660,20 +770,13 @@ test("WRITER B7 — rollback on mid-transaction failure => exception propagated,
   const mod = await loadMod();
 
   let txCallCount = 0;
-  const fakeDb = makeFakeDb(FIXTURE);
-  fakeDb.transaction = async (fn: (tx: unknown) => Promise<unknown>) => {
-    await fn({
-      execute: async (q: unknown) => {
-        txCallCount++;
-        const label = queryLabel(q);
-        if (label === "advisory_lock") return { rows: [{ locked: true }] };
-        // Throw mid-transaction on the first dw_codes lookup (after advisory lock + protected INSERT).
-        if (label === "select_dw_code_by_code") throw new Error("DB_ERROR_SIMULATED: mid-transaction failure");
-        return { rows: [] };
-      },
-    });
-    return {};
-  };
+  const fakeDb = makeFakeDb(FIXTURE, async (q, label) => {
+    txCallCount++;
+    if (label === "advisory_lock") return { rows: [{ locked: true }] };
+    // Throw mid-transaction on the first dw_codes lookup (after advisory lock + plan recomputation + protected INSERT).
+    if (label === "select_dw_code_by_code") throw new Error("DB_ERROR_SIMULATED: mid-transaction failure");
+    return undefined;
+  });
 
   const checksum = await fetchLiveChecksum(mod, fakeDb);
   await assert.rejects(

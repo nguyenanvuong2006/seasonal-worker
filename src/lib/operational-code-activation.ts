@@ -147,21 +147,24 @@ export type ApplyActivationResult = {
  * Applies the operational code go-live plan produced by
  * `prepareOperationalCodeActivation({ dryRun: true })`.
  *
- * CONTRACT (mission section 26 / PR #220 review blocker fixes):
+ * CONTRACT (mission section 26 / PR #220 review blocker fixes / zero-TOCTOU):
  *
- *   1. Recomputes a fresh dry-run plan and verifies its activationContentChecksum
- *      matches `activationContentChecksum`. If not → throws ACTIVATION_PLAN_STALE (zero writes).
- *   2. Rejects if the fresh plan has conflicts or any non-READY/INACTIVE
- *      location — throws ACTIVATION_PLAN_NOT_READY (zero writes).
- *   3. Acquires BOTH the dedicated transaction-level advisory lock
- *      (OPERATIONAL_CODE_ACTIVATION_ADVISORY_LOCK_KEY = 847_291_004) AND the
- *      shared destructive-operation exclusion lock
- *      (SHARED_MAINTENANCE_EXCLUSION_ADVISORY_LOCK_KEY = 847_291_003). Fails
- *      immediately if either lock is held — throws ACTIVATION_LOCKED (zero writes).
- *   4. Performs ONE atomic transaction in the following exact order:
+ *   1. Begins ONE atomic transaction BEFORE any recomputation, checksum comparison,
+ *      or readiness validation.
+ *   2. Acquires BOTH transaction-level advisory locks non-blocking inside the transaction:
+ *      - Dedicated activation lock: OPERATIONAL_CODE_ACTIVATION_ADVISORY_LOCK_KEY (847_291_004)
+ *      - Shared maintenance lock: SHARED_MAINTENANCE_EXCLUSION_ADVISORY_LOCK_KEY (847_291_003)
+ *      Fails closed immediately if either lock is held — throws ACTIVATION_LOCKED (zero writes).
+ *   3. While both locks are held, calls `prepareOperationalCodeActivation({ dryRun: true }, tx)`
+ *      using the SAME transaction executor (`tx`) that performs any subsequent writes.
+ *   4. Compares supplied `activationContentChecksum` with `freshPlan.activationContentChecksum`
+ *      INSIDE the locked transaction. If mismatch → throws ACTIVATION_PLAN_STALE (zero writes).
+ *   5. Validates readiness, conflict count (0), location states (READY/INACTIVE),
+ *      and adoption field completeness INSIDE the locked transaction.
+ *      If invalid → throws ACTIVATION_PLAN_NOT_READY (zero writes).
+ *   6. Performs atomic activation writes in the following exact order:
  *      A. Protected legacy DW codes → INSERT INTO dw_codes … status='RETIRED'
- *         ON CONFLICT (code) DO UPDATE SET status='RETIRED'
- *         WHERE dw_codes.status = 'AVAILABLE'
+ *         ON CONFLICT (code) DO UPDATE SET status='RETIRED' WHERE dw_codes.status = 'AVAILABLE'
  *         (idempotent; protected codes that are not adoption candidates remain RETIRED).
  *      B. Location nextSequence → UPDATE dw_code_locations SET
  *         next_sequence = GREATEST(next_sequence, safeValue).
@@ -173,9 +176,9 @@ export type ApplyActivationResult = {
  *         (idempotent: skip if exact active assignment exists; reject if
  *         conflicting active ownership).
  *      E. ONE aggregate audit_logs row (no CCCD, phone, name in payload).
- *   5. Idempotent: re-running with the same already-applied plan is a safe
+ *   7. Idempotent: re-running with the same already-applied plan is a safe
  *      NOOP — duplicate assignment history rows are never created.
- *   6. Any failure inside the transaction rolls everything back.
+ *   8. Any failure inside the transaction rolls everything back.
  *
  * NOT wired to any API route or UI — must remain unrouted until a separate,
  * explicitly-authorized mission enables it (mission constraint: no route, no
@@ -191,52 +194,12 @@ export async function applyOperationalCodeActivation(
 ): Promise<ApplyActivationResult> {
   const executor = _executor ?? (db as unknown as typeof _executor)!;
 
-  // ---- Step 1: Recompute fresh plan and check content checksum ----
-  // We compare the CONTENT checksum (activationContentChecksum), not the full diagnostic plan checksum —
-  // because the full checksum includes `generatedAt` (which changes on every call), making the
-  // freshness check impossible to satisfy across two separate calls. The activationContentChecksum covers
-  // only the write-determining fields (version, locationReadiness, dwAdoptions, dwProtectedCodes,
-  // itAdoptions, conflicts, readiness), which is the stable staleness signal.
-  const freshPlan = await prepareOperationalCodeActivation({ dryRun: true }, executor as SelectExecutor);
-
-  if (freshPlan.activationContentChecksum !== activationContentChecksum) {
-    throw new Error(
-      `ACTIVATION_PLAN_STALE: supplied activationContentChecksum ${activationContentChecksum} does not match freshly-computed activationContentChecksum ${freshPlan.activationContentChecksum}. Re-run the dry-run to obtain the current activationContentChecksum.`,
-    );
-  }
-
-  // ---- Step 2: Validate readiness ----
-  if (freshPlan.readiness !== "READY_FOR_OPERATIONAL_CODE_ACTIVATION") {
-    throw new Error(
-      `ACTIVATION_PLAN_NOT_READY: fresh plan readiness is "${freshPlan.readiness}". Resolve all conflicts and location issues before applying.`,
-    );
-  }
-  if (freshPlan.conflicts.length > 0) {
-    throw new Error(
-      `ACTIVATION_PLAN_NOT_READY: fresh plan has ${freshPlan.conflicts.length} conflict(s). Resolve before applying.`,
-    );
-  }
-  const nonReadyLocation = freshPlan.locationReadiness.find((r) => r.state !== "READY" && r.state !== "INACTIVE");
-  if (nonReadyLocation) {
-    throw new Error(
-      `ACTIVATION_PLAN_NOT_READY: location "${nonReadyLocation.name}" (${nonReadyLocation.prefix}) has state "${nonReadyLocation.state}". All locations must be READY or INACTIVE.`,
-    );
-  }
-  // Validate no adoption row is ambiguous (all required fields present)
-  for (const adoption of freshPlan.dwAdoptions) {
-    if (!adoption.workerRef || !adoption.employmentSessionId || !adoption.dwDataId || !adoption.code || !adoption.locationId) {
-      throw new Error(`ACTIVATION_PLAN_NOT_READY: DW adoption candidate for code "${adoption.code}" is incomplete.`);
-    }
-  }
-  for (const adoption of freshPlan.itAdoptions) {
-    if (!adoption.workerRef || !adoption.employmentSessionId || !adoption.dwDataId || !adoption.itCode) {
-      throw new Error(`ACTIVATION_PLAN_NOT_READY: IT adoption candidate for worker "${adoption.workerRef}" is incomplete.`);
-    }
-  }
-
-  // ---- Steps 3–5: Advisory lock + atomic transaction ----
+  // ---- Atomic Transaction with Locked Freshness Validation (Zero-TOCTOU) ----
+  // Freshness and readiness MUST be recomputed INSIDE the transaction, AFTER both
+  // advisory locks have been acquired, using the SAME transaction executor (tx)
+  // that executes any subsequent writes.
   return await executor.transaction!(async (tx: TransactionHandle) => {
-    // Step 3: Acquire BOTH the dedicated activation lock AND the shared destructive-operation exclusion lock.
+    // Step 1: Acquire BOTH the dedicated activation lock AND the shared destructive-operation exclusion lock.
     // 1. Dedicated lock: OPERATIONAL_CODE_ACTIVATION_ADVISORY_LOCK_KEY (847_291_004) serializes activation runs.
     // 2. Shared maintenance lock: SHARED_MAINTENANCE_EXCLUSION_ADVISORY_LOCK_KEY (847_291_003) mutually excludes
     //    destructive data-management operations (reset/import in reset-service.ts).
@@ -259,6 +222,45 @@ export async function applyOperationalCodeActivation(
     const maintLocked = lockRow?.maintenance_locked ?? lockRow?.locked === true;
     if (!maintLocked) {
       throw new Error("ACTIVATION_LOCKED: a destructive data-management or reset operation is currently in progress. Try again later.");
+    }
+
+    // Step 2: Recompute fresh plan INSIDE the locked transaction using tx executor
+    const freshPlan = await prepareOperationalCodeActivation({ dryRun: true }, tx as SelectExecutor);
+
+    // Step 3: Compare supplied activationContentChecksum with fresh plan inside transaction
+    if (freshPlan.activationContentChecksum !== activationContentChecksum) {
+      throw new Error(
+        `ACTIVATION_PLAN_STALE: supplied activationContentChecksum ${activationContentChecksum} does not match freshly-computed activationContentChecksum ${freshPlan.activationContentChecksum}. Re-run the dry-run to obtain the current activationContentChecksum.`,
+      );
+    }
+
+    // Step 4: Validate readiness inside transaction
+    if (freshPlan.readiness !== "READY_FOR_OPERATIONAL_CODE_ACTIVATION") {
+      throw new Error(
+        `ACTIVATION_PLAN_NOT_READY: fresh plan readiness is "${freshPlan.readiness}". Resolve all conflicts and location issues before applying.`,
+      );
+    }
+    if (freshPlan.conflicts.length > 0) {
+      throw new Error(
+        `ACTIVATION_PLAN_NOT_READY: fresh plan has ${freshPlan.conflicts.length} conflict(s). Resolve before applying.`,
+      );
+    }
+    const nonReadyLocation = freshPlan.locationReadiness.find((r) => r.state !== "READY" && r.state !== "INACTIVE");
+    if (nonReadyLocation) {
+      throw new Error(
+        `ACTIVATION_PLAN_NOT_READY: location "${nonReadyLocation.name}" (${nonReadyLocation.prefix}) has state "${nonReadyLocation.state}". All locations must be READY or INACTIVE.`,
+      );
+    }
+    // Validate no adoption row is ambiguous (all required fields present)
+    for (const adoption of freshPlan.dwAdoptions) {
+      if (!adoption.workerRef || !adoption.employmentSessionId || !adoption.dwDataId || !adoption.code || !adoption.locationId) {
+        throw new Error(`ACTIVATION_PLAN_NOT_READY: DW adoption candidate for code "${adoption.code}" is incomplete.`);
+      }
+    }
+    for (const adoption of freshPlan.itAdoptions) {
+      if (!adoption.workerRef || !adoption.employmentSessionId || !adoption.dwDataId || !adoption.itCode) {
+        throw new Error(`ACTIVATION_PLAN_NOT_READY: IT adoption candidate for worker "${adoption.workerRef}" is incomplete.`);
+      }
     }
 
     // ---- Step 4A: Protected legacy DW codes → RETIRED ----
