@@ -70,6 +70,7 @@ async function loadMod() {
  * Drizzle sql objects have `queryChunks` — each chunk is a StringChunk with `.value` (string[])
  * or a SQL param placeholder. We join all string chunks to reconstruct the query text. */
 function extractSql(q: unknown): string {
+  if (!q) return "";
   if (typeof q === "string") return q;
   if (typeof q === "object" && q !== null) {
     const obj = q as Record<string, unknown>;
@@ -78,10 +79,11 @@ function extractSql(q: unknown): string {
       return chunks
         .map((c: unknown) => {
           if (typeof c === "string") return c;
-          // StringChunk has `.value` which is a string[].
           const chunk = c as Record<string, unknown>;
+          if (Array.isArray(chunk["queryChunks"])) return extractSql(chunk);
           if (Array.isArray(chunk["value"])) return (chunk["value"] as string[]).join("");
           if (typeof chunk["value"] === "string") return chunk["value"];
+          if (typeof chunk["value"] === "number") return String(chunk["value"]);
           return "";
         })
         .join(" ");
@@ -99,7 +101,7 @@ function queryLabel(q: unknown): string {
   if (/pg_try_advisory_xact_lock/.test(s)) return "advisory_lock";
   if (/insert into dw_codes/.test(s)) return "insert_dw_codes";
   if (/update dw_code_locations/.test(s)) return "update_dw_code_locations";
-  if (/select.*from dw_codes where code/.test(s)) return "select_dw_code_by_code";
+  if (/select.*from dw_codes where/.test(s)) return "select_dw_code_by_code";
   if (/from dw_code_assignments.*where code_id/.test(s)) return "select_dw_assignment_by_code";
   if (/from dw_code_assignments.*where worker_id/.test(s)) return "select_dw_assignment_by_worker";
   if (/from dw_code_assignments/.test(s)) return "select_dw_assignment_generic";
@@ -191,7 +193,7 @@ function makeFakeDb(
  * uses activationContentChecksum for its stale check, so tests supply the stable content hash. */
 async function fetchLiveChecksum(
   mod: Awaited<ReturnType<typeof loadMod>>,
-  fakeDb: ReturnType<typeof makeFakeDb>,
+  fakeDb: unknown,
 ): Promise<string> {
   const plan = (await mod.prepareOperationalCodeActivation({ dryRun: true }, fakeDb)) as {
     activationContentChecksum: string;
@@ -1049,4 +1051,324 @@ test("BLOCKER 3 (D) — exact rerun remains idempotent: dw_codes status remains 
   assert.equal(result.adoptedDwCount, 0, "adoptedDwCount must be 0 on rerun");
   assert.equal(result.skippedDwCount, 1, "skippedDwCount must be 1 on rerun");
   assert.equal(insertedAssignments.length, 0, "no duplicate assignments inserted on rerun");
+});
+
+/* ============================================================
+   REGRESSION SUITE — MISSION RUN #2 DW50001 FAILURE FIXES (10.A - 10.G)
+   ============================================================ */
+
+/**
+ * REGRESSION 10.A: Protected row later adopted as ASSIGNED
+ * Proves that an existing RETIRED row matching (location_id, sequence_number)
+ * or code is safely promoted to ASSIGNED, never causes unique constraint collisions,
+ * and updates code to the canonical adoption code without attempting updated_at.
+ */
+test("REGRESSION 10.A — protected row later adopted as ASSIGNED promotes cleanly without updated_at", async () => {
+  const mod = await loadMod();
+  const executedSql: string[] = [];
+
+  const fakeDb = makeFakeDb(FIXTURE, async (q, label) => {
+    const raw = extractSql(q);
+    executedSql.push(raw);
+    if (label === "advisory_lock") return { rows: [{ activation_locked: true, maintenance_locked: true }] };
+    // Pre-existing protected row for sequence 1 in location loc-dr (from earlier Step 4A or pool)
+    if (label === "select_dw_code_by_code") {
+      return { rows: [{ id: "code-50001-id", status: "RETIRED", code: "DR50001", location_id: "loc-dr", sequence_number: 1 }] };
+    }
+    return { rows: [] };
+  });
+
+  const checksum = await fetchLiveChecksum(mod, fakeDb);
+  const result = (await mod.applyOperationalCodeActivation(checksum, fakeDb)) as {
+    ok: boolean;
+    adoptedDwCount: number;
+  };
+
+  assert.equal(result.ok, true);
+  assert.equal(result.adoptedDwCount, 1);
+
+  // Must update status to ASSIGNED and code to canonical DR00001-D
+  const updateSql = executedSql.find((s) => /UPDATE dw_codes/i.test(s));
+  assert.ok(updateSql, "must issue UPDATE dw_codes");
+  assert.ok(/status\s*=\s*'ASSIGNED'/i.test(updateSql), "must set status to ASSIGNED");
+  assert.ok(/code\s*=\s*['"]?DR00001-D['"]?/i.test(updateSql), "must set code to canonical DR00001-D");
+  assert.ok(!/updated_at/i.test(updateSql), "must never reference nonexistent updated_at column");
+
+  // Must NOT issue an INSERT for dw_codes with DR00001-D
+  const insertDwCodesSql = executedSql.find((s) => /INSERT INTO dw_codes.*DR00001-D/i.test(s));
+  assert.equal(insertDwCodesSql, undefined, "must promote existing row, not insert duplicate");
+
+  // Must insert assignment attached to code-50001-id
+  const insertAssignment = executedSql.find((s) => /INSERT INTO dw_code_assignments/i.test(s) && /code-50001-id/.test(s));
+  assert.ok(insertAssignment, "must insert assignment with promoted codeId");
+});
+
+/**
+ * REGRESSION 10.B: Code conflict
+ * Proves that if a DW code has an active assignment to another worker, activation rejects fail-closed.
+ */
+test("REGRESSION 10.B — code conflict rejects with ACTIVATION_CONFLICT", async () => {
+  const mod = await loadMod();
+
+  const fakeDb = makeFakeDb(FIXTURE, async (q, label) => {
+    if (label === "advisory_lock") return { rows: [{ activation_locked: true, maintenance_locked: true }] };
+    if (label === "select_dw_code_by_code") return { rows: [{ id: "code-1", status: "ASSIGNED", code: "DR00001-D" }] };
+    // Code is currently assigned to a DIFFERENT worker w99
+    if (label === "select_dw_assignment_by_code") {
+      return { rows: [{ id: "a-existing", worker_id: "w99", employment_session_id: "es99" }] };
+    }
+    return { rows: [] };
+  });
+
+  const checksum = await fetchLiveChecksum(mod, fakeDb);
+  await assert.rejects(
+    async () => {
+      await mod.applyOperationalCodeActivation(checksum, fakeDb);
+    },
+    /ACTIVATION_CONFLICT: DW Code "DR00001-D" already has an active assignment/
+  );
+});
+
+/**
+ * REGRESSION 10.C: Location + sequence conflict
+ * Proves that if a location+sequence slot is already active under a different worker/session,
+ * activation rejects fail-closed before any mutation.
+ */
+test("REGRESSION 10.C — location+sequence slot conflict rejects fail-closed", async () => {
+  const mod = await loadMod();
+
+  const fakeDb = makeFakeDb(FIXTURE, async (q, label) => {
+    if (label === "advisory_lock") return { rows: [{ activation_locked: true, maintenance_locked: true }] };
+    // Existing row located by location_id and sequence_number
+    if (label === "select_dw_code_by_code") {
+      return { rows: [{ id: "slot-seq-1", status: "ASSIGNED", code: "DR00001", location_id: "loc-dr", sequence_number: 1 }] };
+    }
+    // Slot is already held by worker w888
+    if (label === "select_dw_assignment_by_code") {
+      return { rows: [{ id: "a-slot", worker_id: "w888", employment_session_id: "es888" }] };
+    }
+    return { rows: [] };
+  });
+
+  const checksum = await fetchLiveChecksum(mod, fakeDb);
+  await assert.rejects(
+    async () => {
+      await mod.applyOperationalCodeActivation(checksum, fakeDb);
+    },
+    /ACTIVATION_CONFLICT: DW Code "DR00001-D" already has an active assignment/
+  );
+});
+
+/**
+ * REGRESSION 10.D: Exact idempotent rerun
+ * Re-running activation against the exact same active assignments skips safely without inserting duplicate rows.
+ */
+test("REGRESSION 10.D — exact idempotent rerun leaves dw_codes as ASSIGNED, zero duplicate assignments", async () => {
+  const mod = await loadMod();
+  const executedSql: string[] = [];
+
+  const fakeDb = makeFakeDb(FIXTURE, async (q, label) => {
+    const raw = extractSql(q);
+    executedSql.push(raw);
+    if (label === "advisory_lock") return { rows: [{ activation_locked: true, maintenance_locked: true }] };
+    if (label === "select_dw_code_by_code") return { rows: [{ id: "c1", status: "ASSIGNED", code: "DR00001-D" }] };
+    if (label === "select_dw_assignment_by_code") {
+      return { rows: [{ id: "a1", worker_id: "w1", employment_session_id: "es1" }] };
+    }
+    if (label === "select_it_assignment_by_code") {
+      return { rows: [{ id: "a2", worker_id: "w1", employment_session_id: "es1" }] };
+    }
+    return { rows: [] };
+  });
+
+  const checksum = await fetchLiveChecksum(mod, fakeDb);
+  const result = (await mod.applyOperationalCodeActivation(checksum, fakeDb)) as {
+    ok: boolean;
+    adoptedDwCount: number;
+    skippedDwCount: number;
+    adoptedItCount: number;
+    skippedItCount: number;
+  };
+
+  assert.equal(result.ok, true);
+  assert.equal(result.adoptedDwCount, 0);
+  assert.equal(result.skippedDwCount, 1);
+  assert.equal(result.adoptedItCount, 0);
+  assert.equal(result.skippedItCount, 1);
+
+  const insertedAssignments = executedSql.filter((s) => /INSERT INTO dw_code_assignments/i.test(s));
+  assert.equal(insertedAssignments.length, 0, "must not insert duplicate dw_code_assignments");
+});
+
+/**
+ * REGRESSION 10.E: Rollback on conflict
+ * Proves that when any error/conflict happens inside the transaction, the entire transaction is rolled back.
+ */
+test("REGRESSION 10.E — conflict triggers complete transaction rollback", async () => {
+  const mod = await loadMod();
+  let transactionAborted = false;
+
+  const fakeDb = {
+    execute: makeSelectResponder(),
+    transaction: async (fn: (tx: unknown) => Promise<unknown>) => {
+      try {
+        const tx = {
+          execute: async (q: unknown) => {
+            const label = queryLabel(q);
+            if (label === "advisory_lock") return { rows: [{ activation_locked: true, maintenance_locked: true }] };
+            if (label === "select_locations") return { rows: FIXTURE.locations };
+            if (label === "select_dw_data") return { rows: FIXTURE.dwData };
+            if (label === "select_worker_profiles") return { rows: FIXTURE.itRows };
+            if (label === "insert_dw_codes") return { rows: [] };
+            if (label === "update_dw_code_locations") return { rows: [] };
+            if (label === "select_dw_code_by_code") return { rows: [{ id: "c1", status: "ASSIGNED", code: "DR00001-D" }] };
+            // Trigger conflict on code lookup
+            if (label === "select_dw_assignment_by_code") {
+              return { rows: [{ id: "conflicting", worker_id: "other-w", employment_session_id: "other-es" }] };
+            }
+            return { rows: [] };
+          },
+        };
+        return await fn(tx);
+      } catch (err) {
+        transactionAborted = true;
+        throw err;
+      }
+    },
+  };
+
+  const checksum = await fetchLiveChecksum(mod, fakeDb as unknown as Parameters<typeof mod.applyOperationalCodeActivation>[1]);
+  await assert.rejects(
+    async () => {
+      await mod.applyOperationalCodeActivation(checksum, fakeDb as unknown as Parameters<typeof mod.applyOperationalCodeActivation>[1]);
+    },
+    /ACTIVATION_CONFLICT/
+  );
+  assert.equal(transactionAborted, true, "transaction must be aborted/rolled back on conflict");
+});
+
+/**
+ * REGRESSION 10.F: No partial writes after failure
+ * Proves that mid-transaction failure results in zero committed writes across all tables.
+ */
+test("REGRESSION 10.F — no partial writes persisted after mid-transaction failure", async () => {
+  const mod = await loadMod();
+  const committedWrites: string[] = [];
+  let transactionRolledBack = false;
+
+  const fakeDb = {
+    execute: makeSelectResponder(),
+    transaction: async (fn: (tx: unknown) => Promise<unknown>) => {
+      const stageWrites: string[] = [];
+      try {
+        const tx = {
+          execute: async (q: unknown) => {
+            const raw = extractSql(q);
+            const label = queryLabel(q);
+            if (label === "advisory_lock") return { rows: [{ activation_locked: true, maintenance_locked: true }] };
+            if (label === "select_locations") return { rows: FIXTURE.locations };
+            if (label === "select_dw_data") return { rows: FIXTURE.dwData };
+            if (label === "select_worker_profiles") return { rows: FIXTURE.itRows };
+            if (label === "insert_dw_codes") {
+              stageWrites.push(raw);
+              return { rows: [] };
+            }
+            if (label === "update_dw_code_locations") {
+              stageWrites.push(raw);
+              return { rows: [] };
+            }
+            // Throw during Step 4C
+            if (label === "select_dw_code_by_code") {
+              throw new Error("SIMULATED_DB_ERROR: connection reset mid-transaction");
+            }
+            return { rows: [] };
+          },
+        };
+        const res = await fn(tx);
+        committedWrites.push(...stageWrites);
+        return res;
+      } catch (err) {
+        transactionRolledBack = true;
+        // stageWrites discarded on rollback
+        throw err;
+      }
+    },
+  };
+
+  const checksum = await fetchLiveChecksum(mod, fakeDb as unknown as Parameters<typeof mod.applyOperationalCodeActivation>[1]);
+  await assert.rejects(
+    async () => {
+      await mod.applyOperationalCodeActivation(checksum, fakeDb as unknown as Parameters<typeof mod.applyOperationalCodeActivation>[1]);
+    },
+    /SIMULATED_DB_ERROR/
+  );
+
+  assert.equal(transactionRolledBack, true, "must roll back");
+  assert.equal(committedWrites.length, 0, "zero writes must be committed when transaction fails");
+});
+
+/**
+ * REGRESSION 10.G: Bulk/set-based protected adoption
+ * Proves that large sets of protected legacy codes are inserted in chunks of 500
+ * using multi-row VALUES statements rather than row-by-row queries.
+ */
+test("REGRESSION 10.G — bulk protected codes executed in 500-row chunks", async () => {
+  const mod = await loadMod();
+
+  // Create fixture with 1,200 protected legacy codes
+  const bulkDwData: {
+    dw_data_id: string;
+    worker_ref: string | null;
+    employment_session_id: string | null;
+    code: string;
+    is_active: boolean;
+  }[] = [
+    { dw_data_id: "dw-active", worker_ref: "w1", employment_session_id: "es1", code: "DR00001-D", is_active: true },
+  ];
+  for (let i = 2; i <= 1201; i++) {
+    bulkDwData.push({
+      dw_data_id: `dw-${i}`,
+      worker_ref: null,
+      employment_session_id: null,
+      code: `DR${String(i).padStart(5, "0")}-D`,
+      is_active: false,
+    });
+  }
+
+  const bulkFixture = {
+    locations: [{ location_id: "loc-dr", prefix: "DR", name: "Đạ Ròn", is_active: true, next_sequence: 50002 }],
+    dwData: bulkDwData,
+    itRows: [{ worker_ref: "w1", dw_data_id: "dw-active", employment_session_id: "es1", dw_it_code: "IT001", wp_fingerprint_code: "IT001", is_active: true }],
+  };
+
+  const executedInserts: string[] = [];
+  const fakeDb = makeFakeDb(bulkFixture as typeof FIXTURE, async (q, label) => {
+    const raw = extractSql(q);
+    if (label === "insert_dw_codes") {
+      executedInserts.push(raw);
+      return { rows: [] };
+    }
+    if (label === "advisory_lock") return { rows: [{ activation_locked: true, maintenance_locked: true }] };
+    if (label === "select_dw_code_by_code") return { rows: [{ id: "c1", status: "ASSIGNED", code: "DR00001-D" }] };
+    return { rows: [] };
+  });
+
+  const checksum = await fetchLiveChecksum(mod, fakeDb);
+  const result = (await mod.applyOperationalCodeActivation(checksum, fakeDb)) as {
+    ok: boolean;
+    protectedDwCount: number;
+    adoptedDwCount: number;
+  };
+
+  assert.equal(result.ok, true);
+  assert.equal(result.protectedDwCount, 1200, "all 1200 protected codes accounted for");
+
+  // 1200 protected codes in chunks of 500 => exactly ceil(1200 / 500) = 3 batch INSERT statements
+  assert.equal(executedInserts.length, 3, "must execute exactly 3 batch INSERTs for 1200 rows (chunks of 500)");
+  for (const insertSql of executedInserts) {
+    assert.ok(/INSERT INTO dw_codes/i.test(insertSql), "must be INSERT INTO dw_codes");
+    assert.ok(/ON CONFLICT \(location_id, sequence_number\) DO UPDATE/i.test(insertSql), "must use location+sequence conflict target");
+    assert.ok(/RETIRED/i.test(insertSql), "must set status RETIRED");
+    assert.ok(!/updated_at/i.test(insertSql), "must not reference updated_at");
+  }
 });

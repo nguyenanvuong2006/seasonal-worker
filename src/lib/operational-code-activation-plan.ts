@@ -226,6 +226,9 @@ export function buildActivationPlan(input: {
     }
   }
 
+  const adoptionLocSeqSet = new Set<string>();
+  const adoptionCodeSet = new Set<string>();
+
   for (const row of input.dwRows) {
     const parsed = parseDwCodeFormat(row.code);
     if (!parsed) continue; // already reported as DW_UNRECOGNIZED_FORMAT above
@@ -236,10 +239,43 @@ export function buildActivationPlan(input: {
       if (blockedWorkerRefs.has(row.workerRef)) continue;
       if (!location || readiness?.state !== "READY") continue; // reported via DW_LOCATION_NOT_READY / SEQUENCE_UNSAFE / INACTIVE already
       dwAdoptions.push({ workerRef: row.workerRef, employmentSessionId: row.employmentSessionId, dwDataId: row.dwDataId, code: row.code, locationId: location.locationId, sequenceNumber: parsed.sequence });
-    } else if (location) {
-      // LEGACY_OBSERVED, not provably active — protect, never AVAILABLE (mission section 8).
-      dwProtectedCodes.push({ code: row.code, prefix: parsed.prefix, locationId: location.locationId, sequenceNumber: parsed.sequence });
+      adoptionLocSeqSet.add(`${location.locationId}:${parsed.sequence}`);
+      adoptionCodeSet.add(row.code);
     }
+  }
+
+  // Deduplicate protected legacy codes:
+  // Invariant: one sequence number per location maps to exactly one canonical DW code.
+  // 1. Any code/sequence already adopted in dwAdoptions must NOT be protected as RETIRED.
+  // 2. Multiple legacy inactive codes sharing the same (locationId, sequenceNumber) (e.g. suffix differences)
+  //    are collapsed to one protected code per sequence slot, preferring standard format (e.g. suffix 'D').
+  const protectedByLocSeq = new Map<string, DwProtectedCode>();
+  for (const row of input.dwRows) {
+    const parsed = parseDwCodeFormat(row.code);
+    if (!parsed) continue;
+    const location = locationByPrefix.get(parsed.prefix);
+    if (!location) continue;
+
+    // Skip active adopted rows
+    if (row.isActive && row.workerRef && row.employmentSessionId && !blockedWorkerRefs.has(row.workerRef)) {
+      continue;
+    }
+
+    const locSeqKey = `${location.locationId}:${parsed.sequence}`;
+    if (adoptionLocSeqSet.has(locSeqKey) || adoptionCodeSet.has(row.code)) {
+      continue;
+    }
+
+    const existing = protectedByLocSeq.get(locSeqKey);
+    if (!existing) {
+      protectedByLocSeq.set(locSeqKey, { code: row.code, prefix: parsed.prefix, locationId: location.locationId, sequenceNumber: parsed.sequence });
+    } else if (parsed.suffix === "D" && !existing.code.endsWith("D")) {
+      protectedByLocSeq.set(locSeqKey, { code: row.code, prefix: parsed.prefix, locationId: location.locationId, sequenceNumber: parsed.sequence });
+    }
+  }
+
+  for (const prot of protectedByLocSeq.values()) {
+    dwProtectedCodes.push(prot);
   }
 
   // ---- IT Code adoption candidates ----
