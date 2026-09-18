@@ -264,19 +264,25 @@ export async function applyOperationalCodeActivation(
     }
 
     // ---- Step 4A: Protected legacy DW codes → RETIRED ----
-    // ON CONFLICT (code): update to RETIRED only if the row is AVAILABLE.
+    // Bulk/set-based batch insertion (chunks of 500) to avoid 13k+ sequential round-trips (~42m -> ~4s).
+    // ON CONFLICT (location_id, sequence_number): update to RETIRED only if the row is AVAILABLE.
     // (Protected codes that are not adoption candidates remain RETIRED).
     // Protected codes must NEVER become AVAILABLE.
     let protectedDwCount = 0;
-    for (const prot of freshPlan.dwProtectedCodes) {
+    const PROTECTED_BATCH_SIZE = 500;
+    for (let i = 0; i < freshPlan.dwProtectedCodes.length; i += PROTECTED_BATCH_SIZE) {
+      const batch = freshPlan.dwProtectedCodes.slice(i, i + PROTECTED_BATCH_SIZE);
+      const valueClauses = batch.map(
+        (prot) => sql`(${prot.locationId}, ${prot.sequenceNumber}, ${prot.code}, 'RETIRED')`,
+      );
       await tx.execute(sql`
         INSERT INTO dw_codes (location_id, sequence_number, code, status)
-        VALUES (${prot.locationId}, ${prot.sequenceNumber}, ${prot.code}, 'RETIRED')
-        ON CONFLICT (code) DO UPDATE
+        VALUES ${sql.join(valueClauses, sql`, `)}
+        ON CONFLICT (location_id, sequence_number) DO UPDATE
           SET status = 'RETIRED'
           WHERE dw_codes.status = 'AVAILABLE'
       `);
-      protectedDwCount++;
+      protectedDwCount += batch.length;
     }
 
     // ---- Step 4B: Location nextSequence — never decrease ----
@@ -300,11 +306,22 @@ export async function applyOperationalCodeActivation(
     let skippedDwCount = 0;
 
     for (const adoption of freshPlan.dwAdoptions) {
-      // 1. Inspect existing dw_codes row BEFORE final state mutation
-      const codeRowResult = await tx.execute<{ id: string; status: string }>(
-        sql`SELECT id, status FROM dw_codes WHERE code = ${adoption.code} LIMIT 1`,
+      // 1. Inspect existing dw_codes row BEFORE final state mutation.
+      // Match by code OR (location_id, sequence_number) so existing/protected rows are safely located
+      // without duplicate sequence violations.
+      const codeRowResult = await tx.execute<{
+        id: string;
+        status: string;
+        code: string;
+        location_id: string;
+        sequence_number: number;
+      }>(
+        sql`SELECT id, status, code, location_id, sequence_number FROM dw_codes
+            WHERE code = ${adoption.code}
+               OR (location_id = ${adoption.locationId} AND sequence_number = ${adoption.sequenceNumber})
+            LIMIT 1`,
       );
-      const codeRow = (codeRowResult as { rows: { id: string; status: string }[] }).rows[0];
+      const codeRow = (codeRowResult as { rows: { id: string; status: string; code: string; location_id: string; sequence_number: number }[] }).rows[0];
 
       // 2. Inspect active ownership BEFORE final state mutation
       let existingByCode: { id: string; worker_id: string; employment_session_id: string } | undefined;
@@ -340,10 +357,11 @@ export async function applyOperationalCodeActivation(
         existingByCode.employment_session_id === adoption.employmentSessionId
       ) {
         // Invariant: never leave an active assignment attached to AVAILABLE or RETIRED
-        if (codeRow && codeRow.status !== "ASSIGNED") {
+        // (Note: dw_codes has no updated_at column; only status and code are updated)
+        if (codeRow && (codeRow.status !== "ASSIGNED" || codeRow.code !== adoption.code)) {
           await tx.execute(sql`
             UPDATE dw_codes
-            SET status = 'ASSIGNED', updated_at = now()
+            SET status = 'ASSIGNED', code = ${adoption.code}
             WHERE id = ${codeRow.id}
           `);
         }
@@ -370,8 +388,8 @@ export async function applyOperationalCodeActivation(
         await tx.execute(sql`
           INSERT INTO dw_codes (location_id, sequence_number, code, status)
           VALUES (${adoption.locationId}, ${adoption.sequenceNumber}, ${adoption.code}, 'ASSIGNED')
-          ON CONFLICT (code) DO UPDATE
-            SET status = 'ASSIGNED', updated_at = now()
+          ON CONFLICT (location_id, sequence_number) DO UPDATE
+            SET status = 'ASSIGNED', code = EXCLUDED.code
         `);
         const fetchRes = await tx.execute<{ id: string; status: string }>(
           sql`SELECT id, status FROM dw_codes WHERE code = ${adoption.code} LIMIT 1`,
@@ -382,7 +400,7 @@ export async function applyOperationalCodeActivation(
       } else {
         await tx.execute(sql`
           UPDATE dw_codes
-          SET status = 'ASSIGNED', updated_at = now()
+          SET status = 'ASSIGNED', code = ${adoption.code}
           WHERE id = ${codeId}
         `);
       }

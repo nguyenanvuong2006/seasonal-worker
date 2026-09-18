@@ -90,6 +90,8 @@ export type ActivationConflictType =
   | "DW_WORKER_MULTIPLE_ACTIVE_CODES"
   | "DW_LOCATION_NOT_READY"
   | "DW_UNRECOGNIZED_FORMAT"
+  | "DW_SEQUENCE_COLLISION_DIFFERENT_WORKERS"
+  | "DW_SEQUENCE_COLLISION_UNRESOLVED"
   | "IT_CODE_DUPLICATE_ACTIVE_WORKERS"
   | "IT_MIRROR_CONFLICT";
 
@@ -226,20 +228,112 @@ export function buildActivationPlan(input: {
     }
   }
 
+  // Group DW rows by location + sequence number to evaluate sequence-level collisions
+  const rowsByLocSeq = new Map<string, { location: LocationRow; sequence: number; rows: DwLegacyRow[] }>();
   for (const row of input.dwRows) {
     const parsed = parseDwCodeFormat(row.code);
-    if (!parsed) continue; // already reported as DW_UNRECOGNIZED_FORMAT above
+    if (!parsed) continue;
     const location = locationByPrefix.get(parsed.prefix);
-    const readiness = location ? readinessByLocationId.get(location.locationId) : undefined;
+    if (!location) continue;
+    const locSeqKey = `${location.locationId}:${parsed.sequence}`;
+    const group = rowsByLocSeq.get(locSeqKey) ?? { location, sequence: parsed.sequence, rows: [] };
+    group.rows.push(row);
+    rowsByLocSeq.set(locSeqKey, group);
+  }
 
-    if (row.isActive && row.workerRef && row.employmentSessionId) {
-      if (blockedWorkerRefs.has(row.workerRef)) continue;
-      if (!location || readiness?.state !== "READY") continue; // reported via DW_LOCATION_NOT_READY / SEQUENCE_UNSAFE / INACTIVE already
-      dwAdoptions.push({ workerRef: row.workerRef, employmentSessionId: row.employmentSessionId, dwDataId: row.dwDataId, code: row.code, locationId: location.locationId, sequenceNumber: parsed.sequence });
-    } else if (location) {
-      // LEGACY_OBSERVED, not provably active — protect, never AVAILABLE (mission section 8).
-      dwProtectedCodes.push({ code: row.code, prefix: parsed.prefix, locationId: location.locationId, sequenceNumber: parsed.sequence });
+  const conflictedLocSeqKeys = new Set<string>();
+
+  for (const [locSeqKey, { location, sequence, rows }] of rowsByLocSeq) {
+    if (rows.length <= 1) continue;
+
+    const allWorkerRefs = new Set(rows.map((r) => r.workerRef).filter((w): w is string => Boolean(w)));
+    const uniqueCodes = new Set(rows.map((r) => r.code));
+    const activeRows = rows.filter((r) => r.isActive && r.workerRef);
+    const uniqueActiveWorkers = new Set(activeRows.map((r) => r.workerRef as string));
+
+    // 1. Multiple distinct ACTIVE workers claiming the same sequence number (even with different code suffixes)
+    if (uniqueActiveWorkers.size > 1) {
+      conflicts.push({
+        type: "DW_CODE_DUPLICATE_ACTIVE_WORKERS",
+        detail: `DW Sequence ${sequence} at location "${location.prefix}" is held by ${uniqueActiveWorkers.size} workers with an ACTIVE employment session simultaneously (${[...uniqueActiveWorkers].join(", ")}).`,
+        workerRefs: [...uniqueActiveWorkers],
+      });
+      for (const w of uniqueActiveWorkers) blockedWorkerRefs.add(w);
+      conflictedLocSeqKeys.add(locSeqKey);
+      continue;
     }
+
+    // 2. Multiple distinct workers referencing the same sequence number (e.g. w1 vs w2)
+    if (allWorkerRefs.size > 1) {
+      conflicts.push({
+        type: "DW_SEQUENCE_COLLISION_DIFFERENT_WORKERS",
+        detail: `DW Sequence ${sequence} at location "${location.prefix}" is referenced by multiple distinct workers (${[...allWorkerRefs].join(", ")} across codes: ${[...uniqueCodes].join(", ")}). Conflicting worker identities cannot be merged.`,
+        workerRefs: [...allWorkerRefs],
+      });
+      for (const w of allWorkerRefs) blockedWorkerRefs.add(w);
+      conflictedLocSeqKeys.add(locSeqKey);
+      continue;
+    }
+
+    // 3. Differing legacy codes for the same sequence with unresolved worker identity
+    // (e.g. DR0026-D vs DR0026-P where at least one row has workerRef: null)
+    if (uniqueCodes.size > 1 && (allWorkerRefs.size === 0 || rows.some((r) => !r.workerRef))) {
+      conflicts.push({
+        type: "DW_SEQUENCE_COLLISION_UNRESOLVED",
+        detail: `DW Sequence ${sequence} at location "${location.prefix}" has conflicting legacy codes (${[...uniqueCodes].join(", ")}) with unresolved worker identity. Cannot safely collapse without verification.`,
+        workerRefs: [...allWorkerRefs],
+      });
+      for (const w of allWorkerRefs) blockedWorkerRefs.add(w);
+      conflictedLocSeqKeys.add(locSeqKey);
+      continue;
+    }
+  }
+
+  const adoptionLocSeqSet = new Set<string>();
+  const adoptionCodeSet = new Set<string>();
+
+  // DW Adoptions: evaluate safe sequence slots with active workers
+  for (const [locSeqKey, { location, sequence, rows }] of rowsByLocSeq) {
+    if (conflictedLocSeqKeys.has(locSeqKey)) continue;
+
+    const activeRows = rows.filter((r) => r.isActive && r.workerRef && r.employmentSessionId);
+    if (activeRows.length === 0) continue;
+
+    const activeRow = activeRows[0];
+    if (blockedWorkerRefs.has(activeRow.workerRef as string)) continue;
+
+    const readiness = readinessByLocationId.get(location.locationId);
+    if (readiness?.state !== "READY") continue;
+
+    // Prefer canonical suffix (-D) if multiple representations exist for this same worker
+    const canonicalRow = rows.find((r) => parseDwCodeFormat(r.code)?.suffix === "D") ?? activeRow;
+
+    dwAdoptions.push({
+      workerRef: activeRow.workerRef as string,
+      employmentSessionId: activeRow.employmentSessionId as string,
+      dwDataId: canonicalRow.dwDataId,
+      code: canonicalRow.code,
+      locationId: location.locationId,
+      sequenceNumber: sequence,
+    });
+    adoptionLocSeqSet.add(locSeqKey);
+    adoptionCodeSet.add(canonicalRow.code);
+  }
+
+  // DW Protected Codes: evaluate non-adopted safe sequence slots
+  for (const [locSeqKey, { location, sequence, rows }] of rowsByLocSeq) {
+    if (conflictedLocSeqKeys.has(locSeqKey)) continue;
+    if (adoptionLocSeqSet.has(locSeqKey)) continue;
+
+    // Prefer canonical suffix (-D)
+    const canonicalRow = rows.find((r) => parseDwCodeFormat(r.code)?.suffix === "D") ?? rows[0];
+
+    dwProtectedCodes.push({
+      code: canonicalRow.code,
+      prefix: location.prefix,
+      locationId: location.locationId,
+      sequenceNumber: sequence,
+    });
   }
 
   // ---- IT Code adoption candidates ----
