@@ -1372,3 +1372,131 @@ test("REGRESSION 10.G — bulk protected codes executed in 500-row chunks", asyn
     assert.ok(!/updated_at/i.test(insertSql), "must not reference updated_at");
   }
 });
+
+/**
+ * REGRESSION 10.H: Same-person duplicate suffix collision
+ * Proves that when multiple legacy rows with different suffixes (e.g. -D vs -P)
+ * belong to the SAME worker, they collapse safely to one canonical protected code (-D)
+ * without raising a conflict.
+ */
+test("REGRESSION 10.H — same-person duplicate suffix collision canonicalizes safely to -D", async () => {
+  const mod = await loadMod();
+  const plan = mod.buildActivationPlan({
+    generatedAt: "2026-01-01T00:00:00Z",
+    sourceCommitSha: null,
+    locations: [{ locationId: "loc-dr", prefix: "DR", name: "Đạ Ròn", isActive: true, nextSequence: 100 }],
+    dwRows: [
+      { dwDataId: "dw1", workerRef: "w1", employmentSessionId: null, code: "DR0026-D", isActive: false },
+      { dwDataId: "dw2", workerRef: "w1", employmentSessionId: null, code: "DR0026-P", isActive: false },
+    ],
+    itRows: [],
+  });
+
+  assert.equal(plan.readiness, "READY_FOR_OPERATIONAL_CODE_ACTIVATION");
+  assert.equal(plan.conflicts.length, 0);
+  assert.equal(plan.dwProtectedCodes.length, 1);
+  assert.equal(plan.dwProtectedCodes[0].code, "DR0026-D", "must collapse to canonical -D suffix without conflict");
+  assert.equal(plan.dwProtectedCodes[0].sequenceNumber, 26);
+});
+
+/**
+ * REGRESSION 10.I: Different-worker same sequence collision
+ * Proves that when multiple legacy rows for the same sequence number belong to
+ * DIFFERENT workers, the planner fails closed with DW_SEQUENCE_COLLISION_DIFFERENT_WORKERS
+ * and refuses to silently pick a winner into protected codes.
+ */
+test("REGRESSION 10.I — different-worker same sequence collision fails closed with DW_SEQUENCE_COLLISION_DIFFERENT_WORKERS", async () => {
+  const mod = await loadMod();
+  const plan = mod.buildActivationPlan({
+    generatedAt: "2026-01-01T00:00:00Z",
+    sourceCommitSha: null,
+    locations: [{ locationId: "loc-dr", prefix: "DR", name: "Đạ Ròn", isActive: true, nextSequence: 100 }],
+    dwRows: [
+      { dwDataId: "dw1", workerRef: "w1", employmentSessionId: null, code: "DR0026-D", isActive: false },
+      { dwDataId: "dw2", workerRef: "w2", employmentSessionId: null, code: "DR0026-P", isActive: false },
+    ],
+    itRows: [],
+  });
+
+  assert.equal(plan.readiness, "BLOCKED");
+  const conflict = plan.conflicts.find((c) => c.type === "DW_SEQUENCE_COLLISION_DIFFERENT_WORKERS");
+  assert.ok(conflict, "must record DW_SEQUENCE_COLLISION_DIFFERENT_WORKERS");
+  assert.deepEqual(new Set(conflict?.workerRefs), new Set(["w1", "w2"]));
+  assert.equal(plan.dwProtectedCodes.length, 0, "must NOT silently pick a winner into protected codes");
+});
+
+/**
+ * REGRESSION 10.J: Unresolved same-sequence collision
+ * Proves that when differing legacy codes share a sequence number and worker identity
+ * is unproven (missing workerRef), the planner fails closed with DW_SEQUENCE_COLLISION_UNRESOLVED
+ * rather than guessing or silently picking -D.
+ */
+test("REGRESSION 10.J — unresolved same-sequence collision fails closed with DW_SEQUENCE_COLLISION_UNRESOLVED", async () => {
+  const mod = await loadMod();
+  const plan = mod.buildActivationPlan({
+    generatedAt: "2026-01-01T00:00:00Z",
+    sourceCommitSha: null,
+    locations: [{ locationId: "loc-dr", prefix: "DR", name: "Đạ Ròn", isActive: true, nextSequence: 100 }],
+    dwRows: [
+      { dwDataId: "dw1", workerRef: null, employmentSessionId: null, code: "DR0026-D", isActive: false },
+      { dwDataId: "dw2", workerRef: "w2", employmentSessionId: null, code: "DR0026-P", isActive: false },
+    ],
+    itRows: [],
+  });
+
+  assert.equal(plan.readiness, "BLOCKED");
+  const conflict = plan.conflicts.find((c) => c.type === "DW_SEQUENCE_COLLISION_UNRESOLVED");
+  assert.ok(conflict, "must record DW_SEQUENCE_COLLISION_UNRESOLVED");
+  assert.equal(plan.dwProtectedCodes.length, 0, "must NOT silently pick a winner into protected codes");
+});
+
+/**
+ * REGRESSION 10.K: Active adoption vs protected historical variant (different workers)
+ * Proves that an active worker cannot adopt a sequence that collides with a historical
+ * variant of a different worker. Fails closed.
+ */
+test("REGRESSION 10.K — active adoption vs protected historical variant fails closed when workers differ", async () => {
+  const mod = await loadMod();
+  const plan = mod.buildActivationPlan({
+    generatedAt: "2026-01-01T00:00:00Z",
+    sourceCommitSha: null,
+    locations: [{ locationId: "loc-dr", prefix: "DR", name: "Đạ Ròn", isActive: true, nextSequence: 100 }],
+    dwRows: [
+      { dwDataId: "dw1", workerRef: "w1", employmentSessionId: "es1", code: "DR0026-D", isActive: true },
+      { dwDataId: "dw2", workerRef: "w2", employmentSessionId: null, code: "DR0026-P", isActive: false },
+    ],
+    itRows: [],
+  });
+
+  assert.equal(plan.readiness, "BLOCKED");
+  const conflict = plan.conflicts.find((c) => c.type === "DW_SEQUENCE_COLLISION_DIFFERENT_WORKERS");
+  assert.ok(conflict, "must record conflict when active sequence collides with historical variant of different worker");
+  assert.equal(plan.dwAdoptions.length, 0, "must NOT allow active worker to steal historical sequence of another worker");
+  assert.equal(plan.dwProtectedCodes.length, 0, "must NOT emit protected code for conflicted sequence");
+});
+
+/**
+ * REGRESSION 10.L: Active adoption vs historical variant (same worker)
+ * Proves that when an active adoption and a historical variant belong to the SAME worker,
+ * the active worker adopts the canonical -D code cleanly without conflict.
+ */
+test("REGRESSION 10.L — active adoption vs historical variant succeeds when both belong to the same worker", async () => {
+  const mod = await loadMod();
+  const plan = mod.buildActivationPlan({
+    generatedAt: "2026-01-01T00:00:00Z",
+    sourceCommitSha: null,
+    locations: [{ locationId: "loc-dr", prefix: "DR", name: "Đạ Ròn", isActive: true, nextSequence: 100 }],
+    dwRows: [
+      { dwDataId: "dw1", workerRef: "w1", employmentSessionId: "es1", code: "DR0026-D", isActive: true },
+      { dwDataId: "dw2", workerRef: "w1", employmentSessionId: null, code: "DR0026-P", isActive: false },
+    ],
+    itRows: [],
+  });
+
+  assert.equal(plan.readiness, "READY_FOR_OPERATIONAL_CODE_ACTIVATION");
+  assert.equal(plan.conflicts.length, 0);
+  assert.equal(plan.dwAdoptions.length, 1);
+  assert.equal(plan.dwAdoptions[0].code, "DR0026-D");
+  assert.equal(plan.dwProtectedCodes.length, 0, "historical duplicate of same active worker must not be protected");
+});
+
