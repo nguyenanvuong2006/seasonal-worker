@@ -1,13 +1,14 @@
 import { NextResponse } from "next/server";
-import { eq, inArray } from "drizzle-orm";
+import { and, eq, inArray, isNull } from "drizzle-orm";
 import { db } from "@/db";
-import { dailyApplications, dwData } from "@/db/schema";
+import { dailyApplications, dwCodeAssignments, dwCodes, dwData, employmentSessions } from "@/db/schema";
 import { getUserScope, hasPermission, requirePermission, writeAudit } from "@/lib/auth";
 import { scopeAllowsDepartment } from "@/lib/data-scope";
 import { normalizePersonName } from "@/lib/person-name";
 import { maskCccd } from "@/lib/daily-intake-workflow";
 import { getDailyCodeRows, type DailyCodeStatusFilter } from "@/lib/daily-code-list";
 import { parseOperationalDateRange } from "@/lib/date-range";
+import { allocateDwCode, releaseDwCode } from "@/lib/dw-code-pool";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -16,7 +17,7 @@ export const dynamic = "force-dynamic";
  * ADMINISTRATION — "Nhập mã công nhật" (mục VI).
  * Hàng chờ = lao động ĐÃ được Recruiter đưa vào DW Data (dw_imported_at IS NOT
  * NULL) trong ngày đang chọn. Mã số công nhật = dw_data.code (giữ nguyên
- * semantics đã audit — cột này đã được dùng làm mã định danh DW từ trước).
+ * semantics đã audit — cột này đã được dùng làm mã định danh DW từ trước).\
  * Hỗ trợ from/to (range) + deptId + q + status — CÙNG bộ filter với GET
  * /api/administration/daily-code/export để danh sách hiển thị và file xuất
  * luôn khớp nhau (theo đúng mẫu lib/meal-list.ts). Legacy `date=` vẫn được
@@ -55,26 +56,48 @@ export async function GET(req: Request) {
 }
 
 type SubmitItem = { dailyApplicationId: string; dwDataId: string; code: string };
-type RowResult = { dailyApplicationId: string; ok: boolean; reason: string };
+
+/** Classification of each per-item write outcome for the caller (UI + audit). */
+type RowResult = {
+  dailyApplicationId: string;
+  ok: boolean;
+  reason: string;
+  /** true  = dw_codes + dw_code_assignments + dw_data.code all updated atomically.
+   *  false = only dw_data.code mirror updated (code not yet in canonical pool). */
+  canonical: boolean;
+  /** LEGACY_CODE_NOT_IN_POOL — code typed is valid but has no dw_codes row yet;
+   *  mirror written, no canonical row. Caller should not treat as an error. */
+  warning?: string;
+};
 
 /**
- * MISSION F2 section 5/249 — NOT CANONICALIZED, DOCUMENTED BLOCKER (not silently skipped).
- * This is the PRIMARY writer of the legacy free-text `dw_data.code` field — the 2026-09-13
- * read-only Production diagnostic found 13,486 non-null values here, almost entirely produced
- * through this exact route. Canonicalizing it onto dw-code-pool.ts's allocateDwCode()/
- * dw_codes/dw_code_assignments is a STRUCTURAL impossibility right now, not a scope choice:
- * `dw_codes.location_id` is NOT NULL (schema.ts) — every dw_codes row requires a
- * dw_code_locations row to exist first, and the same diagnostic found ZERO dw_code_locations
- * rows configured in Production. Creating one is explicitly NOT AUTHORIZED under this mission's
- * ABSOLUTE SAFETY ("no location-config write"). Writing a dw_codes row for the "DR" prefix
- * (the one prefix actually observed) would either throw a hard FK violation or require the very
- * location-config bootstrap this mission is forbidden from performing.
+ * POST-GO-LIVE CANONICAL DW CODE WRITER (replaces the legacy free-text writer).
+ * -------------------------------------------------------------------------------
+ * MISSION: PATCH /api/administration/daily-code — canonicalized after Activation #3.
  *
- * This route also does not match allocateDwCode()'s semantics anyway — staff type an arbitrary
- * free-text code here (matching whatever is printed on the physical badge that day), never an
- * auto-generated next-sequence value.
+ * BUSINESS CONTEXT: Administration staff type the EXACT string from a physical badge
+ * (not an auto-generated sequence). The canonical pool (dw_codes) now contains 412
+ * ASSIGNED rows plus released AVAILABLE rows for the DR location. Codes typed here
+ * may be:
+ *   A. Already ASSIGNED to THIS worker (idempotent noop).
+ *   B. AVAILABLE in the pool (claim it via allocateDwCode(specificCodeId)).
+ *   C. RETIRED (reject — protected legacy code, never reusable).
+ *   D. ASSIGNED to ANOTHER worker (reject — split-brain / duplicate active assignment).
+ *   E. Not in the pool at all (13,074 legacy-only codes) — legacy mirror write only,
+ *      flagged with warning: "LEGACY_CODE_NOT_IN_POOL".
+ *   F. Blank / empty string — release the worker's canonical assignment (if any) and
+ *      clear the legacy mirror.
  *
- * Submit hàng loạt (mục VI) — idempotent (UPDATE theo id, không tạo bản ghi mới).
+ * INVARIANTS ENFORCED (mission section 3):
+ *   A. One worker may have at most one active DW assignment.
+ *   B. One canonical DW code may have at most one active worker.
+ *   C. AVAILABLE code never simultaneously has an active assignment.
+ *   D. Protected historical codes (RETIRED) are never made AVAILABLE.
+ *   G. Normal writes must not mutate dw_data.code independently from canonical state
+ *      — enforced via the per-item pool lookup + fail-closed guards before every write.
+ *
+ * Submit hàng loạt (mục VI) — idempotent (UPDATE theo id, không tạo bản ghi mới
+ * trừ khi pool row được claimed).
  */
 export async function PATCH(req: Request) {
   const guard = await requirePermission(["ADMIN", "ADMINISTRATION"], "administration.daily_code.submit");
@@ -96,49 +119,184 @@ export async function PATCH(req: Request) {
 
     const results: RowResult[] = [];
     let updated = 0;
+    let canonical = 0;
+    let legacy = 0;
 
     await db.transaction(async (tx) => {
       for (const item of items) {
         const app = appById.get(item.dailyApplicationId);
+
+        // ── Pre-flight guards (unchanged from legacy implementation) ────────
         if (!app || app.deletedAt) {
-          results.push({ dailyApplicationId: item.dailyApplicationId, ok: false, reason: "Không tìm thấy hồ sơ." });
+          results.push({ dailyApplicationId: item.dailyApplicationId, ok: false, canonical: false, reason: "Không tìm thấy hồ sơ." });
           continue;
         }
         if (!scopeAllowsDepartment(scope, app.deptId)) {
-          results.push({ dailyApplicationId: item.dailyApplicationId, ok: false, reason: "Ngoài phạm vi dữ liệu được cấp." });
+          results.push({ dailyApplicationId: item.dailyApplicationId, ok: false, canonical: false, reason: "Ngoài phạm vi dữ liệu được cấp." });
           continue;
         }
-        // BLOCKER #1 — KHÔNG được tin theo dwDataId do client gửi lên (hoặc theo
-        // việc GET đã lọc sẵn): PATCH phải tự kiểm tra lại "đã Nhập vào DW Data"
-        // ở SERVER, vì dwId có thể đã tồn tại từ lúc đăng ký (người DW cũ khớp
-        // CCCD) MÀ CHƯA từng qua hành động "Nhập vào DW Data" tường minh
-        // (dwImportedAt vẫn NULL) — mục IV, VI.
+        // BLOCKER #1 — must re-verify dwImportedAt at SERVER (never trust client-sent dwDataId alone)
         if (!app.dwImportedAt) {
-          results.push({ dailyApplicationId: item.dailyApplicationId, ok: false, reason: "Chưa được Recruiter nhập vào DW Data." });
+          results.push({ dailyApplicationId: item.dailyApplicationId, ok: false, canonical: false, reason: "Chưa được Recruiter nhập vào DW Data." });
           continue;
         }
         if (app.dwId !== item.dwDataId) {
-          results.push({ dailyApplicationId: item.dailyApplicationId, ok: false, reason: "Bản ghi DW Data không khớp — tải lại trang." });
+          results.push({ dailyApplicationId: item.dailyApplicationId, ok: false, canonical: false, reason: "Bản ghi DW Data không khớp — tải lại trang." });
           continue;
         }
-        const code = item.code.trim() || null;
+
+        const submittedCode = item.code.trim();
+
+        // ── CLEAR / RELEASE path ────────────────────────────────────────────
+        if (!submittedCode) {
+          // Find the worker's active employment session to key the canonical release on.
+          const [activeSession] = await tx
+            .select({ id: employmentSessions.id })
+            .from(employmentSessions)
+            .where(and(eq(employmentSessions.dailyApplicationId, app.id), isNull(employmentSessions.endDate)))
+            .limit(1);
+
+          if (activeSession) {
+            // Canonical release — clears dw_code_assignments + dw_codes status + dw_data.code mirror.
+            await releaseDwCode(
+              { employmentSessionId: activeSession.id, releasedBy: guard.session.username, releaseReason: "MANUAL_CORRECTION", note: "Xoá mã qua màn hình Nhập mã công nhật" },
+              tx,
+            );
+          } else {
+            // No active session (legacy-only worker): clear mirror only.
+            await tx
+              .update(dwData)
+              .set({ code: null, dailyCodeUpdatedAt: new Date(), dailyCodeUpdatedBy: guard.session.username })
+              .where(eq(dwData.id, item.dwDataId));
+          }
+          updated += 1;
+          results.push({ dailyApplicationId: item.dailyApplicationId, ok: true, canonical: !!activeSession, reason: "Đã xoá Mã số công nhật." });
+          continue;
+        }
+
+        // ── Canonical pool lookup for the submitted code string ─────────────
+        const [poolRow] = await tx
+          .select()
+          .from(dwCodes)
+          .where(eq(dwCodes.code, submittedCode))
+          .limit(1);
+
+        if (poolRow) {
+          // ── Code IS in the canonical pool ───────────────────────────────
+
+          if (poolRow.status === "RETIRED") {
+            // Invariant D — RETIRED codes are permanently protected.
+            results.push({ dailyApplicationId: item.dailyApplicationId, ok: false, canonical: false, reason: "Mã số công nhật này đã bị thu hồi vĩnh viễn (RETIRED) và không thể tái sử dụng." });
+            continue;
+          }
+
+          if (poolRow.status === "ASSIGNED") {
+            // Look up whose assignment this is.
+            const [activeAssignment] = await tx
+              .select({ dwDataId: dwCodeAssignments.dwDataId })
+              .from(dwCodeAssignments)
+              .where(and(eq(dwCodeAssignments.codeId, poolRow.id), isNull(dwCodeAssignments.releasedAt)))
+              .limit(1);
+
+            if (activeAssignment && activeAssignment.dwDataId === item.dwDataId) {
+              // Invariants A+B — idempotent: already assigned to THIS worker. No-op.
+              results.push({ dailyApplicationId: item.dailyApplicationId, ok: true, canonical: true, reason: "Mã số công nhật đã được gán (không thay đổi)." });
+              continue;
+            }
+            // Invariant B — code is actively held by a DIFFERENT worker. Reject.
+            results.push({ dailyApplicationId: item.dailyApplicationId, ok: false, canonical: false, reason: "Mã số công nhật này đang được gán cho lao động khác — không thể gán trùng (409 CONFLICT)." });
+            continue;
+          }
+
+          // poolRow.status === "AVAILABLE" — attempt canonical claim.
+          // First: ensure this worker does not already hold a different active code (Invariant A).
+          const [existingWorkerAssignment] = await tx
+            .select({ id: dwCodeAssignments.id })
+            .from(dwCodeAssignments)
+            .where(and(eq(dwCodeAssignments.dwDataId, item.dwDataId), isNull(dwCodeAssignments.releasedAt)))
+            .limit(1);
+
+          if (existingWorkerAssignment) {
+            results.push({ dailyApplicationId: item.dailyApplicationId, ok: false, canonical: false, reason: "Lao động này đã có mã công nhật đang hoạt động — phải xoá mã cũ trước khi gán mã mới (409 CONFLICT)." });
+            continue;
+          }
+
+          // Find the worker's active employment session to attach the assignment to.
+          const [activeSession] = await tx
+            .select({ id: employmentSessions.id, workerId: employmentSessions.workerId })
+            .from(employmentSessions)
+            .where(and(eq(employmentSessions.dailyApplicationId, app.id), isNull(employmentSessions.endDate)))
+            .limit(1);
+
+          if (!activeSession) {
+            // Worker has no active session — cannot create a canonical assignment row.
+            // Fall through to legacy-mirror path below.
+          } else {
+            const allocResult = await allocateDwCode(
+              {
+                locationId: poolRow.locationId,
+                workerId: activeSession.workerId,
+                employmentSessionId: activeSession.id,
+                dwDataId: item.dwDataId,
+                assignedBy: guard.session.username,
+                specificCodeId: poolRow.id,
+              },
+              tx,
+            );
+
+            if (!allocResult.ok) {
+              // allocateDwCode re-validates under lock — surface the error.
+              const errorMsg: Record<string, string> = {
+                WORKER_ALREADY_HAS_ACTIVE_CODE: "Lao động đã có mã khác đang hoạt động (phát hiện bởi canonical lock) — tải lại trang.",
+                CODE_NOT_AVAILABLE: "Mã số công nhật vừa bị gán cho lao động khác (race condition) — tải lại trang.",
+                CODE_NOT_FOUND: "Mã số công nhật không tồn tại trong pool — tải lại trang.",
+                CODE_WRONG_LOCATION: "Mã số công nhật không thuộc địa điểm này — tải lại trang.",
+                LOCATION_NOT_FOUND: "Cấu hình địa điểm không tìm thấy — liên hệ Admin.",
+                LOCATION_INACTIVE: "Địa điểm này đang tạm ngưng cấp mã — liên hệ Admin.",
+              };
+              results.push({ dailyApplicationId: item.dailyApplicationId, ok: false, canonical: false, reason: errorMsg[allocResult.error] ?? `Lỗi canonical: ${allocResult.error}` });
+              continue;
+            }
+
+            updated += 1;
+            canonical += 1;
+            results.push({ dailyApplicationId: item.dailyApplicationId, ok: true, canonical: true, reason: "Đã cập nhật Mã số công nhật (canonical)." });
+            continue;
+          }
+        }
+
+        // ── LEGACY FALLBACK PATH ────────────────────────────────────────────
+        // Code is not in the pool at all (13,074 legacy-only codes transition period)
+        // OR the worker has no active session to attach a canonical assignment to.
+        // Write dw_data.code mirror only — fail-closed contract preserved by the
+        // checks above (RETIRED / ASSIGNED-to-other already rejected before reaching here).
         await tx
           .update(dwData)
-          .set({ code, dailyCodeUpdatedAt: new Date(), dailyCodeUpdatedBy: guard.session.username })
+          .set({ code: submittedCode, dailyCodeUpdatedAt: new Date(), dailyCodeUpdatedBy: guard.session.username })
           .where(eq(dwData.id, item.dwDataId));
         updated += 1;
-        results.push({ dailyApplicationId: item.dailyApplicationId, ok: true, reason: "Đã cập nhật Mã số công nhật." });
+        legacy += 1;
+        results.push({
+          dailyApplicationId: item.dailyApplicationId,
+          ok: true,
+          canonical: false,
+          warning: "LEGACY_CODE_NOT_IN_POOL",
+          reason: "Đã cập nhật Mã số công nhật (mirror only — mã chưa có trong pool).",
+        });
       }
     });
 
     await writeAudit(guard.session, "SUBMIT_DAILY_CODE", "dw_data", {
       updated,
+      canonical,
+      legacy,
       skipped: results.filter((r) => !r.ok).length,
       dailyApplicationIds: results.filter((r) => r.ok).map((r) => r.dailyApplicationId),
     });
 
-    return NextResponse.json({ success: true, updated, skipped: results.filter((r) => !r.ok).length, results });
+    return NextResponse.json({ success: true, updated, canonical, legacy, skipped: results.filter((r) => !r.ok).length, results });
   } catch (error) {
     return NextResponse.json({ error: "Lỗi hệ thống: " + (error as Error).message }, { status: 500 });
   }
 }
+
