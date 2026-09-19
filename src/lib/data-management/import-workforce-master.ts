@@ -208,18 +208,43 @@ export async function createWorkforceMasterBatch(input: CreateBatchInput): Promi
 export type MergeChunkResult = { processed: number; inserted: number; updated: number; invalid: number; done: boolean };
 
 /**
- * MISSION F2 section 6/250 — NOT CANONICALIZED, DOCUMENTED BLOCKER (not silently skipped).
- * This bulk importer writes `dw_data.code`/`dw_data.it_code` directly (below). Canonicalizing the
- * DW code side onto dw-code-pool.ts is the SAME structural impossibility documented on PATCH
- * /api/administration/daily-code/route.ts: `dw_codes.location_id` is NOT NULL and Production has
- * zero `dw_code_locations` rows — writing a `dw_codes` row here would need the location-config
- * bootstrap this mission's ABSOLUTE SAFETY forbids. The IT code side has a DIFFERENT blocker:
- * assignItCode() (it-code-assignment.ts) requires an `employmentSessionId`/`dailyApplicationId` to
- * attach an assignment-history row to, but bulk import runs BEFORE any employment session exists
- * for the imported workers — there is no engagement context to canonicalize onto at this stage of
- * the pipeline.
+ * POST-GO-LIVE CANONICAL DW CODE SAFETY CONTRACT (fix/workforce-master-canonical-dw-import)
+ * ─────────────────────────────────────────────────────────────────────────────────────────
+ * After Operational Code Activation #3, `dw_data.code` is the READ MIRROR of the canonical
+ * assignment recorded in `dw_code_assignments`. Overwriting it from a spreadsheet import would:
  *
- * One bounded chunk per call (mission section 38) — the caller (route) loops until done=true. Never one giant transaction for the whole file.
+ *   1. Destroy an active canonical assignment's mirror for an existing worker.
+ *   2. Write a code not present in the `dw_codes` pool (unknown arbitrary code).
+ *   3. Silently reactivate a RETIRED code.
+ *   4. Assign a code already canonically owned by another worker.
+ *   5. Give a worker a second active DW assignment with no pool record.
+ *
+ * IMPORT SEMANTICS — TWO DISTINCT CASES:
+ *
+ *   A. INSERT (brand-new CCCD, no dw_data row yet):
+ *      The spreadsheet's `code` column is written as the initial historical/source evidence value.
+ *      No canonical assignment exists for this worker yet (they have not gone through the
+ *      operational flow), so this is safe. The code is treated as legacy provenance — it will
+ *      become a proper canonical assignment when the worker first goes through daily-code route.
+ *
+ *   B. UPDATE (existing CCCD already has a dw_data row):
+ *      The canonical mirror MUST be preserved. The spreadsheet code is historical/source evidence
+ *      only. The SQL uses `COALESCE(dw_data.code, EXCLUDED.code)`: if the worker already has a
+ *      canonical code (mirror is non-NULL), it is KEPT; if the mirror is currently NULL (worker
+ *      was never assigned a code operationally), the import fills it in as source provenance.
+ *      This is FAIL CLOSED: any active canonical assignment is never silently displaced.
+ *
+ * IT CODE: The COALESCE logic for it_code is unchanged (always preferred existing over NULL from
+ * the file). No modification to that column's contract.
+ *
+ * One bounded chunk per call (mission section 38) — the caller (route) loops until done=true.
+ * Never one giant transaction for the whole file.
+ *
+ * REMAINING STRUCTURAL LIMITATION (still documented, not silently skipped):
+ * Full canonical allocation (creating a dw_codes pool row + dw_code_assignments row) is still
+ * not possible here — `dw_codes.location_id` is NOT NULL and this import has no location context.
+ * The IT code canonical path (assignItCode) requires an employmentSessionId that does not exist
+ * at import time. The COALESCE contract above is the correct post-go-live safety measure.
  */
 export async function mergeWorkforceMasterChunk(batchId: string): Promise<MergeChunkResult> {
   const defs = await getFieldDefinitions("dw_data");
@@ -252,11 +277,20 @@ export async function mergeWorkforceMasterChunk(batchId: string): Promise<MergeC
         continue;
       }
       const res = await client.query(
+        // POST-GO-LIVE CANONICAL SAFETY: on UPDATE (existing worker), `code` uses
+        // COALESCE(dw_data.code, EXCLUDED.code) — preserves the active canonical mirror
+        // if already set; fills in from spreadsheet only when the mirror is NULL (worker
+        // never operationally assigned). On INSERT (new worker), EXCLUDED.code is used
+        // directly as initial historical/source evidence (no canonical assignment exists yet).
+        // This is FAIL CLOSED: no active canonical assignment is ever silently displaced.
+        // it_code: identical COALESCE guard (prefer existing over NULL from file) — unchanged.
         `INSERT INTO dw_data (code, it_code, old_dw_code, id_vlookup, full_name, gender, bod, profile, dktn,
            cccd, date_of_issue, place_of_issue, permanent_address, residential_address, phone)
          VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15)
          ON CONFLICT (cccd) WHERE deleted_at IS NULL DO UPDATE SET
-           code = EXCLUDED.code, it_code = COALESCE(EXCLUDED.it_code, dw_data.it_code), old_dw_code = EXCLUDED.old_dw_code,
+           code = COALESCE(dw_data.code, EXCLUDED.code),
+           it_code = COALESCE(dw_data.it_code, EXCLUDED.it_code),
+           old_dw_code = EXCLUDED.old_dw_code,
            id_vlookup = EXCLUDED.id_vlookup, full_name = EXCLUDED.full_name, gender = EXCLUDED.gender, bod = EXCLUDED.bod,
            profile = EXCLUDED.profile, dktn = EXCLUDED.dktn, date_of_issue = EXCLUDED.date_of_issue,
            place_of_issue = EXCLUDED.place_of_issue, permanent_address = EXCLUDED.permanent_address,
