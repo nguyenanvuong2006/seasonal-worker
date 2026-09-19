@@ -2,18 +2,24 @@
  * WORKFORCE DATA MANAGEMENT — import-workforce-master.ts tests
  *
  * Test matrix:
- *   W1-W9  (original): dry-run, UPSERT semantics, idempotency, checksum
- *   C1-C10 (new):      POST-GO-LIVE CANONICAL DW CODE SAFETY CONTRACT
+ *   W1/W9, W5  — dry run (zero writes, invalid rows, file-level deduplication)
+ *   W2         — new CCCD INSERT
+ *   W3/W4      — existing CCCD UPDATE; untouched worker left alone
+ *   CS1–CS10   — POST-GO-LIVE CANONICAL MIRROR ISOLATION REGRESSION SUITE
  *
- * Identity field: cccd (12-digit citizen ID), not a workerCode/DR0001-D
- * surrogate — see the module's own docblock and scopes.ts.
+ * CANONICAL MIRROR CONTRACT (verified by CS1–CS10):
+ *   INSERT (new CCCD): dw_data.code = NULL, dw_data.it_code = NULL — always.
+ *     The spreadsheet CODE/IT CODE values remain ONLY in the staged raw row.
+ *   UPDATE (existing CCCD): code = dw_data.code, it_code = dw_data.it_code.
+ *     Pure no-ops — neither mirror is ever touched by this importer.
  *
  * FAKE POOL SEMANTICS:
- *   The fake pg `client` mirrors the COALESCE SQL contract:
- *     - INSERT (new cccd): sets code = params[0]
- *     - UPDATE (existing cccd): code = existing ?? params[0]  (COALESCE)
- *   This lets the canonical-safety tests prove the contract without hitting
- *   a real database.
+ *   The INSERT INTO dw_data SQL now uses:
+ *     VALUES (NULL, NULL, $1, $2, ... $13)
+ *   So params[0] = oldDwCode, params[1] = idVlookup, params[2] = fullName,
+ *   params[7] = cccd.  code and it_code are NOT in params.
+ *
+ *   The fake client's INSERT handler mirrors this exactly.
  */
 import test from "node:test";
 import assert from "node:assert/strict";
@@ -27,11 +33,25 @@ const workforceDataImportRows = makeTable("workforce_data_import_rows");
 type DwRow = { cccd: string; code: string | null; full_name: string; it_code: string | null };
 
 /**
- * makeFakePool — mirrors the COALESCE contract of the production SQL.
+ * makeFakePool — mirrors the FINAL canonical mirror isolation SQL contract.
  *
- * INSERT path  (new cccd):   code = params[0]                      (from spreadsheet)
- * UPDATE path  (existing):   code = existing_code ?? params[0]     (COALESCE: preserve canonical mirror if set)
- *              it_code:      existing_it_code ?? params[1]          (same guard)
+ * Param positions after the fix (code/it_code removed from params; SQL uses NULL literals):
+ *   $1  = oldDwCode   (params[0])
+ *   $2  = idVlookup   (params[1])
+ *   $3  = fullName    (params[2])
+ *   $4  = gender      (params[3])
+ *   $5  = bod         (params[4])
+ *   $6  = profile     (params[5])
+ *   $7  = dktn        (params[6])
+ *   $8  = cccd        (params[7])
+ *   $9  = dateOfIssue (params[8])
+ *   $10 = placeOfIssue (params[9])
+ *   $11 = permanentAddress (params[10])
+ *   $12 = residentialAddress (params[11])
+ *   $13 = phone       (params[12])
+ *
+ * INSERT: code = NULL, it_code = NULL — always (SQL literal, not from params).
+ * UPDATE: code = existing code, it_code = existing it_code — pure no-ops.
  */
 function makeFakePool(initialDwData: DwRow[]) {
   const dwData = new Map(initialDwData.map((r) => [r.cccd, { ...r }]));
@@ -47,22 +67,19 @@ function makeFakePool(initialDwData: DwRow[]) {
         return { rows };
       }
       if (text.includes("INSERT INTO dw_data")) {
-        // Params order: $1=code, $2=it_code, $3=old_dw_code, $4=id_vlookup, $5=full_name, ... $10=cccd
-        const cccd = params[9] as string;
+        // Params: $1=oldDwCode, $2=idVlookup, $3=fullName, ..., $8=cccd
+        const cccd = params[7] as string;
         const existed = dwData.has(cccd);
         const existing = existed ? dwData.get(cccd)! : null;
 
-        // Mirror the COALESCE SQL contract:
-        // - code: preserve existing (non-null) canonical mirror; fill from file only if NULL
-        // - it_code: same guard
-        const newCode = existed ? (existing!.code ?? (params[0] as string | null)) : (params[0] as string | null);
-        const newItCode = existed ? (existing!.it_code ?? (params[1] as string | null)) : (params[1] as string | null);
-
+        // Mirror the SQL contract:
+        // INSERT: code = NULL, it_code = NULL (SQL literals — NOT from params)
+        // UPDATE: code = existing.code, it_code = existing.it_code (no-ops)
         dwData.set(cccd, {
           cccd,
-          code: newCode,
-          it_code: newItCode,
-          full_name: params[4] as string,
+          code: existed ? existing!.code : null,         // INSERT→NULL, UPDATE→preserve
+          it_code: existed ? existing!.it_code : null,   // INSERT→NULL, UPDATE→preserve
+          full_name: params[2] as string,
         });
         return { rows: [{ inserted: !existed }] };
       }
@@ -115,7 +132,7 @@ function row(cccd: string, fullName: string, extra: Record<string, string> = {})
   return { CCCD: cccd, "HỌ TÊN": fullName, ...extra };
 }
 
-/* ── ORIGINAL W-SERIES TESTS ─────────────────────────────────────────────── */
+/* ── ORIGINAL W-SERIES ──────────────────────────────────────────────────── */
 
 test("W1/W9 — dry run: zero writes (pure SELECT only), invalid rows reported with reasons", async () => {
   const pool = makeFakePool([]);
@@ -137,29 +154,27 @@ test("W1/W9 — dry run: zero writes (pure SELECT only), invalid rows reported w
   assert.ok(pool.queries.every((q) => q.text.trim().toUpperCase().startsWith("SELECT")), "dry run must never write");
 });
 
-test("W5 — dry run: duplicate CCCD within the same file is counted, both rows still individually valid", async () => {
+test("W5 — dry run: duplicate CCCD within same file counted; both rows still individually valid", async () => {
   const pool = makeFakePool([]);
   const db = createFakeDb();
   const mod = await loadModuleUnderTest(pool, db);
 
   const result = await mod.dryRunWorkforceMaster([row("123456789012", "Person A v1"), row("123456789012", "Person A v2 (later wins)")]);
-
   assert.equal(result.valid, 2);
   assert.equal(result.duplicatesInFile, 1);
 });
 
-test("dry run: existing vs new classification against real DB state", async () => {
+test("dry run: existing vs new classification against DB state", async () => {
   const pool = makeFakePool([{ cccd: "111111111111", code: "C1", full_name: "Existing Person", it_code: null }]);
   const db = createFakeDb();
   const mod = await loadModuleUnderTest(pool, db);
 
   const result = await mod.dryRunWorkforceMaster([row("111111111111", "Existing Person Updated"), row("222222222222", "Brand New Person")]);
-
   assert.equal(result.newCount, 1);
   assert.equal(result.existingCount, 1);
 });
 
-test("W2 — merge chunk: new cccd is INSERTED", async () => {
+test("W2 — merge chunk: new CCCD is INSERTED", async () => {
   const pool = makeFakePool([]);
   const db = createFakeDb({
     respond: (call: QueryCall) => {
@@ -179,17 +194,15 @@ test("W2 — merge chunk: new cccd is INSERTED", async () => {
   assert.equal(pool.dwData.get("333333333333")?.full_name, "New Worker");
 });
 
-test("W3/W4 — merge chunk: existing cccd gets master field update; canonical code mirror is PRESERVED (not overwritten); untouched worker left alone", async () => {
+test("W3/W4 — merge chunk: existing CCCD gets master field updates; untouched worker left alone", async () => {
   const pool = makeFakePool([
-    // This worker has an active canonical code "OLD-CODE" — the canonical mirror.
-    // The spreadsheet tries to write "NEW-CODE" — must be rejected by COALESCE.
-    { cccd: "111111111111", code: "OLD-CODE", full_name: "Old Name", it_code: "ALREADY-ASSIGNED" },
+    { cccd: "111111111111", code: "DR00412-D", full_name: "Old Name", it_code: "IT-001" },
     { cccd: "999999999999", code: "UNRELATED", full_name: "Never In This File", it_code: null },
   ]);
   const db = createFakeDb({
     respond: (call: QueryCall) => {
       if (call.root === "select" && call.table === "workforce_data_import_rows") {
-        return [{ id: "row-1", batchId: "batch-1", rowNumber: 1, rawData: row("111111111111", "New Corrected Name", { CODE: "NEW-CODE" }), status: "PENDING", message: null }];
+        return [{ id: "row-1", batchId: "batch-1", rowNumber: 1, rawData: row("111111111111", "New Corrected Name", { CODE: "ATTEMPT-OVERWRITE" }), status: "PENDING", message: null }];
       }
       if (call.root === "select") return [{ c: 0 }];
       return undefined;
@@ -200,17 +213,17 @@ test("W3/W4 — merge chunk: existing cccd gets master field update; canonical c
   const result = await mod.mergeWorkforceMasterChunk("batch-1");
   assert.equal(result.inserted, 0);
   assert.equal(result.updated, 1);
-  // Non-code master fields are correctly updated:
-  assert.equal(pool.dwData.get("111111111111")?.full_name, "New Corrected Name");
-  // CANONICAL SAFETY: existing code "OLD-CODE" must be PRESERVED — not overwritten by "NEW-CODE":
-  assert.equal(pool.dwData.get("111111111111")?.code, "OLD-CODE", "canonical mirror must NOT be overwritten by spreadsheet import");
-  // W4: worker absent from the file must never be touched:
+  assert.equal(pool.dwData.get("111111111111")?.full_name, "New Corrected Name", "full_name must update");
+  // Both mirrors untouched:
+  assert.equal(pool.dwData.get("111111111111")?.code, "DR00412-D", "code mirror must be untouched");
+  assert.equal(pool.dwData.get("111111111111")?.it_code, "IT-001", "it_code mirror must be untouched");
+  // W4:
   const untouched = pool.dwData.get("999999999999");
-  assert.ok(untouched, "worker absent from the file must still exist");
+  assert.ok(untouched, "absent worker must still exist");
   assert.equal(untouched?.full_name, "Never In This File");
 });
 
-test("computeFileChecksum is deterministic (same content -> same checksum, used for import idempotency)", async () => {
+test("computeFileChecksum is deterministic", async () => {
   const pool = makeFakePool([]);
   const db = createFakeDb();
   const mod = await loadModuleUnderTest(pool, db);
@@ -218,22 +231,19 @@ test("computeFileChecksum is deterministic (same content -> same checksum, used 
   assert.notEqual(mod.computeFileChecksum("hello"), mod.computeFileChecksum("world"));
 });
 
-/* ── CANONICAL SAFETY REGRESSION TESTS (C1–C10) ─────────────────────────── */
+/* ── CANONICAL MIRROR ISOLATION REGRESSION SUITE (CS1–CS10) ─────────────── */
 
 /**
- * C1 — Import cannot overwrite mirror while active canonical assignment disagrees.
+ * CS1 — INSERT new CCCD with spreadsheet code → dw_data.code is NULL.
  *
- * Proves: COALESCE(dw_data.code, EXCLUDED.code) keeps the canonical mirror
- * when the worker already has a non-NULL code set by the canonical pool route.
+ * The spreadsheet CODE column must not populate the current operational mirror.
  */
-test("C1 — import cannot overwrite dw_data.code when active canonical assignment exists (COALESCE preserves mirror)", async () => {
-  const CANONICAL_CODE = "DR00412-D";
-  const SPREADSHEET_CODE = "DR-LEGACY-001";
-  const pool = makeFakePool([{ cccd: "100000000001", code: CANONICAL_CODE, full_name: "Worker One", it_code: null }]);
+test("CS1 — INSERT new CCCD with spreadsheet code: dw_data.code is NULL (not populated from spreadsheet)", async () => {
+  const pool = makeFakePool([]);
   const db = createFakeDb({
     respond: (call: QueryCall) => {
       if (call.root === "select" && call.table === "workforce_data_import_rows") {
-        return [{ id: "r1", batchId: "b1", rowNumber: 1, rawData: row("100000000001", "Worker One Updated", { CODE: SPREADSHEET_CODE }), status: "PENDING", message: null }];
+        return [{ id: "r1", batchId: "b1", rowNumber: 1, rawData: row("100000000001", "New Worker", { CODE: "DR00001-D" }), status: "PENDING", message: null }];
       }
       if (call.root === "select") return [{ c: 0 }];
       return undefined;
@@ -241,32 +251,25 @@ test("C1 — import cannot overwrite dw_data.code when active canonical assignme
   });
   const mod = await loadModuleUnderTest(pool, db);
 
-  await mod.mergeWorkforceMasterChunk("b1");
+  const result = await mod.mergeWorkforceMasterChunk("b1");
 
+  assert.equal(result.inserted, 1, "must be INSERT");
   const after = pool.dwData.get("100000000001");
-  assert.equal(after?.code, CANONICAL_CODE, "canonical mirror DR00412-D must be preserved");
-  assert.notEqual(after?.code, SPREADSHEET_CODE, "spreadsheet code must not displace canonical mirror");
+  assert.ok(after, "row must exist after insert");
+  assert.equal(after?.code, null, "dw_data.code must be NULL — never populated from spreadsheet on INSERT");
 });
 
 /**
- * C2 — Import cannot assign a code actively owned by another worker.
+ * CS2 — INSERT new CCCD with arbitrary/unknown code → current mirror remains NULL.
  *
- * Each worker preserves their own canonical mirror independently. Worker A's
- * import does not disturb Worker B's mirror.
+ * Arbitrary codes (not in dw_codes pool) must never enter dw_data.code.
  */
-test("C2 — import preserves each worker's own canonical code; cannot silently reassign code between workers", async () => {
-  const pool = makeFakePool([
-    { cccd: "200000000001", code: "DR00100-D", full_name: "Worker A", it_code: null },
-    { cccd: "200000000002", code: "DR00101-D", full_name: "Worker B", it_code: null },
-  ]);
+test("CS2 — INSERT new CCCD with arbitrary unknown code: current mirror remains NULL", async () => {
+  const pool = makeFakePool([]);
   const db = createFakeDb({
     respond: (call: QueryCall) => {
       if (call.root === "select" && call.table === "workforce_data_import_rows") {
-        // Both workers imported; spreadsheet gives Worker A the code that B owns.
-        return [
-          { id: "r1", batchId: "b2", rowNumber: 1, rawData: row("200000000001", "Worker A", { CODE: "DR00101-D" }), status: "PENDING", message: null },
-          { id: "r2", batchId: "b2", rowNumber: 2, rawData: row("200000000002", "Worker B", { CODE: "DR00100-D" }), status: "PENDING", message: null },
-        ];
+        return [{ id: "r1", batchId: "b2", rowNumber: 1, rawData: row("200000000001", "New Worker", { CODE: "ARBITRARY-FREE-TEXT-99" }), status: "PENDING", message: null }];
       }
       if (call.root === "select") return [{ c: 0 }];
       return undefined;
@@ -276,27 +279,22 @@ test("C2 — import preserves each worker's own canonical code; cannot silently 
 
   await mod.mergeWorkforceMasterChunk("b2");
 
-  // Each worker's canonical mirror is unchanged:
-  assert.equal(pool.dwData.get("200000000001")?.code, "DR00100-D", "Worker A keeps own canonical code");
-  assert.equal(pool.dwData.get("200000000002")?.code, "DR00101-D", "Worker B keeps own canonical code");
+  assert.equal(pool.dwData.get("200000000001")?.code, null, "arbitrary code must not enter dw_data.code");
 });
 
 /**
- * C3 — Import cannot reactivate a RETIRED code.
+ * CS3 — INSERT new CCCD with RETIRED-looking code → current mirror remains NULL.
  *
- * After activation, existing workers whose code was set as a RETIRED canonical
- * code still have that code in dw_data.code as their mirror. A subsequent
- * import with any code value must not change the mirror on update.
- * (COALESCE preserves it whether RETIRED or ASSIGNED — the import cannot
- * distinguish pool status, which is precisely why it must never overwrite.)
+ * Even if the spreadsheet contains a code that looks like a canonical code
+ * (correct format, exists in dw_codes as RETIRED), it must not populate the mirror.
  */
-test("C3 — import of existing worker with any code value never overwrites the canonical mirror (RETIRED or otherwise)", async () => {
-  const EXISTING_MIRROR = "DR00050-D"; // this code is RETIRED in dw_codes, but mirror reflects historical assignment
-  const pool = makeFakePool([{ cccd: "300000000001", code: EXISTING_MIRROR, full_name: "Old Worker", it_code: null }]);
+test("CS3 — INSERT new CCCD with RETIRED-looking canonical code: current mirror remains NULL", async () => {
+  const pool = makeFakePool([]);
   const db = createFakeDb({
     respond: (call: QueryCall) => {
       if (call.root === "select" && call.table === "workforce_data_import_rows") {
-        return [{ id: "r1", batchId: "b3", rowNumber: 1, rawData: row("300000000001", "Old Worker Updated", { CODE: "DR99999-D" }), status: "PENDING", message: null }];
+        // DR13074-D would be a RETIRED code in the canonical pool after activation
+        return [{ id: "r1", batchId: "b3", rowNumber: 1, rawData: row("300000000001", "New Worker", { CODE: "DR13074-D" }), status: "PENDING", message: null }];
       }
       if (call.root === "select") return [{ c: 0 }];
       return undefined;
@@ -306,22 +304,21 @@ test("C3 — import of existing worker with any code value never overwrites the 
 
   await mod.mergeWorkforceMasterChunk("b3");
 
-  assert.equal(pool.dwData.get("300000000001")?.code, EXISTING_MIRROR, "mirror must not be overwritten regardless of spreadsheet value");
+  assert.equal(pool.dwData.get("300000000001")?.code, null, "RETIRED-looking code must not enter dw_data.code on INSERT");
 });
 
 /**
- * C4 — Import cannot introduce unknown arbitrary canonical code.
+ * CS4 — UPDATE existing CCCD with non-NULL dw_data.code → existing code preserved exactly.
  *
- * A brand-new worker (INSERT path) receives the spreadsheet code as initial
- * historical/source evidence. This is the only allowed write path. But for
- * existing workers, the COALESCE guard prevents any unknown code from entering.
+ * Active canonical mirror must be completely unchanged regardless of spreadsheet value.
  */
-test("C4 — unknown arbitrary code from spreadsheet never enters dw_data.code for existing workers", async () => {
-  const pool = makeFakePool([{ cccd: "400000000001", code: "DR00200-D", full_name: "Existing Worker", it_code: null }]);
+test("CS4 — UPDATE existing CCCD with non-NULL canonical mirror: existing code preserved exactly", async () => {
+  const CANONICAL = "DR00412-D";
+  const pool = makeFakePool([{ cccd: "400000000001", code: CANONICAL, full_name: "Worker", it_code: null }]);
   const db = createFakeDb({
     respond: (call: QueryCall) => {
       if (call.root === "select" && call.table === "workforce_data_import_rows") {
-        return [{ id: "r1", batchId: "b4", rowNumber: 1, rawData: row("400000000001", "Existing Worker", { CODE: "ARBITRARY-FREE-TEXT-99" }), status: "PENDING", message: null }];
+        return [{ id: "r1", batchId: "b4", rowNumber: 1, rawData: row("400000000001", "Worker Updated Name", { CODE: "DIFFERENT-CODE" }), status: "PENDING", message: null }];
       }
       if (call.root === "select") return [{ c: 0 }];
       return undefined;
@@ -331,22 +328,21 @@ test("C4 — unknown arbitrary code from spreadsheet never enters dw_data.code f
 
   await mod.mergeWorkforceMasterChunk("b4");
 
-  assert.equal(pool.dwData.get("400000000001")?.code, "DR00200-D", "arbitrary free-text code must not enter dw_data.code for existing worker");
+  assert.equal(pool.dwData.get("400000000001")?.code, CANONICAL, "existing canonical mirror must be preserved exactly");
 });
 
 /**
- * C5 — Existing matching canonical ownership is idempotent.
+ * CS5 — UPDATE existing CCCD with NULL dw_data.code + spreadsheet code → remains NULL.
  *
- * If the spreadsheet's code MATCHES the current canonical mirror, the result
- * is the same (no change, no error). Proves idempotency.
+ * Even when the current mirror is NULL (worker never operationally assigned),
+ * the spreadsheet code must NOT fill it. NULL must stay NULL.
  */
-test("C5 — import is idempotent when spreadsheet code matches current canonical mirror", async () => {
-  const CODE = "DR00412-D";
-  const pool = makeFakePool([{ cccd: "500000000001", code: CODE, full_name: "Worker", it_code: null }]);
+test("CS5 — UPDATE existing CCCD with NULL dw_data.code + spreadsheet code: mirror remains NULL", async () => {
+  const pool = makeFakePool([{ cccd: "500000000001", code: null, full_name: "Never Assigned", it_code: null }]);
   const db = createFakeDb({
     respond: (call: QueryCall) => {
       if (call.root === "select" && call.table === "workforce_data_import_rows") {
-        return [{ id: "r1", batchId: "b5", rowNumber: 1, rawData: row("500000000001", "Worker", { CODE }), status: "PENDING", message: null }];
+        return [{ id: "r1", batchId: "b5", rowNumber: 1, rawData: row("500000000001", "Never Assigned Updated", { CODE: "DR-HIST-FILL-ATTEMPT" }), status: "PENDING", message: null }];
       }
       if (call.root === "select") return [{ c: 0 }];
       return undefined;
@@ -354,111 +350,26 @@ test("C5 — import is idempotent when spreadsheet code matches current canonica
   });
   const mod = await loadModuleUnderTest(pool, db);
 
-  const result = await mod.mergeWorkforceMasterChunk("b5");
+  await mod.mergeWorkforceMasterChunk("b5");
 
-  assert.equal(result.updated, 1);
-  assert.equal(pool.dwData.get("500000000001")?.code, CODE, "idempotent: same code stays");
+  assert.equal(pool.dwData.get("500000000001")?.code, null, "NULL mirror must remain NULL — spreadsheet code must not fill it");
 });
 
 /**
- * C6 — Historical/source code fills the mirror only when mirror is currently NULL.
+ * CS6 — UPDATE cannot introduce a second/current code.
  *
- * A new worker (INSERT) or an existing worker with no code yet (NULL mirror)
- * receives the spreadsheet code as initial source evidence. This is the ONLY
- * scenario where the spreadsheet code enters dw_data.code on UPDATE.
+ * Re-importing the same CCCD multiple times never changes the code mirror.
  */
-test("C6 — historical source code from spreadsheet fills dw_data.code only when mirror is currently NULL (never-assigned worker)", async () => {
-  const INITIAL_CODE = "DR-LEGACY-HIST";
-  const pool = makeFakePool([{ cccd: "600000000001", code: null, full_name: "Never Assigned Worker", it_code: null }]);
+test("CS6 — UPDATE cannot introduce a second/current code; multiple imports are idempotent on code mirror", async () => {
+  const CANONICAL = "DR00100-D";
+  const pool = makeFakePool([{ cccd: "600000000001", code: CANONICAL, full_name: "Worker", it_code: null }]);
   const db = createFakeDb({
     respond: (call: QueryCall) => {
       if (call.root === "select" && call.table === "workforce_data_import_rows") {
-        return [{ id: "r1", batchId: "b6", rowNumber: 1, rawData: row("600000000001", "Never Assigned Worker", { CODE: INITIAL_CODE }), status: "PENDING", message: null }];
-      }
-      if (call.root === "select") return [{ c: 0 }];
-      return undefined;
-    },
-  });
-  const mod = await loadModuleUnderTest(pool, db);
-
-  await mod.mergeWorkforceMasterChunk("b6");
-
-  assert.equal(pool.dwData.get("600000000001")?.code, INITIAL_CODE, "source evidence fills NULL mirror");
-});
-
-/**
- * C7 — Canonical conflict causes zero partial writes: chunk-level atomicity.
- *
- * The pool client raises an error mid-chunk. The entire chunk must ROLLBACK.
- * No rows from that chunk are committed. (Simulated by throwing from the pool client.)
- */
-test("C7 — pool client error mid-chunk causes ROLLBACK; batch status set to FAILED; no partial writes committed", async () => {
-  let queryCount = 0;
-  const fakeBrokenPool = {
-    connect: async () => ({
-      query: async (text: string) => {
-        if (text.startsWith("BEGIN") || text.startsWith("ROLLBACK")) return { rows: [] };
-        if (text.includes("UPDATE workforce_data_import_rows") && text.includes("INVALID")) return { rows: [] };
-        queryCount++;
-        if (queryCount >= 2) throw new Error("Simulated DB failure mid-chunk");
-        return { rows: [{ inserted: false }] };
-      },
-      release: () => {},
-    }),
-    query: async () => ({ rows: [] }),
-  };
-
-  const db = createFakeDb({
-    respond: (call: QueryCall) => {
-      if (call.root === "select" && call.table === "workforce_data_import_rows") {
+        // Two rows for same CCCD in one chunk, different codes
         return [
-          { id: "r1", batchId: "b7", rowNumber: 1, rawData: row("700000000001", "Worker One"), status: "PENDING", message: null },
-          { id: "r2", batchId: "b7", rowNumber: 2, rawData: row("700000000002", "Worker Two"), status: "PENDING", message: null },
-        ];
-      }
-      return undefined;
-    },
-  });
-
-  const mod = loadModule(new URL("./import-workforce-master.ts", import.meta.url), {
-    stubs: {
-      "server-only": serverOnlyStub,
-      crypto: await import("node:crypto"),
-      "drizzle-orm": await import("drizzle-orm"),
-      "@/db": { db, pool: fakeBrokenPool },
-      "@/db/schema": { workforceDataImportBatches, workforceDataImportRows },
-      "@/lib/metadata": { getFieldDefinitions: async () => [], makeFieldPicker: fakeMakeFieldPicker },
-      "@/lib/person-name": await import("../person-name.ts"),
-      "@/lib/validators": await import("../validators.ts"),
-    },
-  }) as unknown as { mergeWorkforceMasterChunk: (id: string) => Promise<unknown> };
-
-  await assert.rejects(() => mod.mergeWorkforceMasterChunk("b7"), /Simulated DB failure/, "must propagate error");
-  // Batch must be marked FAILED:
-  const failWrite = db.writesTo("workforce_data_import_batches").find((c) => {
-    const ops = c.ops;
-    return ops.some((o) => o.fn === "set" && JSON.stringify(o.args).includes("FAILED"));
-  });
-  assert.ok(failWrite, "batch must be set to FAILED after error");
-});
-
-/**
- * C8 — Worker cannot receive second active DW assignment via import.
- *
- * The import UPSERT is on (cccd WHERE deleted_at IS NULL). If a worker already
- * has an active dw_data row (and thus a canonical mirror), re-importing the same
- * CCCD is an UPDATE, not an INSERT. The canonical mirror is preserved.
- * This ensures the worker cannot end up with two concurrent code values.
- */
-test("C8 — re-importing same CCCD is always UPDATE (not duplicate INSERT); canonical mirror not duplicated", async () => {
-  const pool = makeFakePool([{ cccd: "800000000001", code: "DR00300-D", full_name: "Worker", it_code: null }]);
-  const db = createFakeDb({
-    respond: (call: QueryCall) => {
-      if (call.root === "select" && call.table === "workforce_data_import_rows") {
-        // Two rows for the same CCCD in the same chunk — last one wins (file-order)
-        return [
-          { id: "r1", batchId: "b8", rowNumber: 1, rawData: row("800000000001", "Worker v1", { CODE: "DR-ATTEMPT-1" }), status: "PENDING", message: null },
-          { id: "r2", batchId: "b8", rowNumber: 2, rawData: row("800000000001", "Worker v2", { CODE: "DR-ATTEMPT-2" }), status: "PENDING", message: null },
+          { id: "r1", batchId: "b6", rowNumber: 1, rawData: row("600000000001", "Worker v1", { CODE: "DR-ATTEMPT-1" }), status: "PENDING", message: null },
+          { id: "r2", batchId: "b6", rowNumber: 2, rawData: row("600000000001", "Worker v2", { CODE: "DR-ATTEMPT-2" }), status: "PENDING", message: null },
         ];
       }
       if (call.root === "select") return [{ c: 0 }];
@@ -467,27 +378,31 @@ test("C8 — re-importing same CCCD is always UPDATE (not duplicate INSERT); can
   });
   const mod = await loadModuleUnderTest(pool, db);
 
-  const result = await mod.mergeWorkforceMasterChunk("b8");
-
-  // Both are updates (existing worker); zero inserts:
-  assert.equal(result.inserted, 0, "must be updates, not inserts");
+  const result = await mod.mergeWorkforceMasterChunk("b6");
   assert.equal(result.updated, 2, "both rows are updates");
-  // Canonical mirror preserved through both updates:
-  assert.equal(pool.dwData.get("800000000001")?.code, "DR00300-D", "canonical mirror preserved after both updates");
+  assert.equal(result.inserted, 0, "must not be inserts");
+  assert.equal(pool.dwData.get("600000000001")?.code, CANONICAL, "canonical mirror unchanged through multiple updates");
 });
 
 /**
- * C9 — Existing import behavior unrelated to DW Code remains unchanged.
+ * CS7 — Existing active canonical mirror remains unchanged across entire chunk.
  *
- * Non-code master fields (full_name, gender, profile, phone, etc.) are still
- * correctly updated on conflict. The safety fix only protects `code`/`it_code`.
+ * Multiple workers in same chunk — each preserves their own canonical mirror independently.
  */
-test("C9 — non-code master fields (full_name, gender, etc.) still update correctly; only code/it_code are COALESCE-protected", async () => {
-  const pool = makeFakePool([{ cccd: "900000000001", code: "DR00500-D", full_name: "Old Name", it_code: "IT-001" }]);
+test("CS7 — existing active canonical mirrors for all workers in chunk remain unchanged", async () => {
+  const pool = makeFakePool([
+    { cccd: "701000000001", code: "DR00200-D", full_name: "Worker A", it_code: null },
+    { cccd: "701000000002", code: "DR00201-D", full_name: "Worker B", it_code: "IT-B-001" },
+    { cccd: "701000000003", code: null, full_name: "Worker C (no code)", it_code: null },
+  ]);
   const db = createFakeDb({
     respond: (call: QueryCall) => {
       if (call.root === "select" && call.table === "workforce_data_import_rows") {
-        return [{ id: "r1", batchId: "b9", rowNumber: 1, rawData: row("900000000001", "Updated Full Name"), status: "PENDING", message: null }];
+        return [
+          { id: "r1", batchId: "b7", rowNumber: 1, rawData: row("701000000001", "Worker A Updated", { CODE: "DR00201-D" }), status: "PENDING", message: null },
+          { id: "r2", batchId: "b7", rowNumber: 2, rawData: row("701000000002", "Worker B Updated", { CODE: "DR00200-D" }), status: "PENDING", message: null },
+          { id: "r3", batchId: "b7", rowNumber: 3, rawData: row("701000000003", "Worker C Updated", { CODE: "DR-NEW-FILL-ATTEMPT" }), status: "PENDING", message: null },
+        ];
       }
       if (call.root === "select") return [{ c: 0 }];
       return undefined;
@@ -495,29 +410,27 @@ test("C9 — non-code master fields (full_name, gender, etc.) still update corre
   });
   const mod = await loadModuleUnderTest(pool, db);
 
-  await mod.mergeWorkforceMasterChunk("b9");
+  await mod.mergeWorkforceMasterChunk("b7");
 
-  const after = pool.dwData.get("900000000001");
-  // Non-code fields updated:
-  assert.equal(after?.full_name, "Updated Full Name", "full_name must be updated");
-  // Code/it_code preserved:
-  assert.equal(after?.code, "DR00500-D", "code must not be disturbed");
-  assert.equal(after?.it_code, "IT-001", "it_code must not be disturbed");
+  assert.equal(pool.dwData.get("701000000001")?.code, "DR00200-D", "Worker A canonical mirror preserved");
+  assert.equal(pool.dwData.get("701000000002")?.code, "DR00201-D", "Worker B canonical mirror preserved");
+  assert.equal(pool.dwData.get("701000000003")?.code, null, "Worker C NULL mirror stays NULL");
 });
 
 /**
- * C10 — No PII added to logs/errors. Invalid rows carry only structural reasons.
+ * CS8 — Spreadsheet code remains only as staged/source evidence, not in current mirror.
  *
- * Proves that the invalidReason string on a row-level error does not contain
- * the worker's CCCD or full name (would be PII in a log).
+ * The INSERT SQL query must NOT include the spreadsheet code or it_code as params.
+ * Proves that params[0] is oldDwCode, not code.
  */
-test("C10 — invalid row reasons contain no PII (no CCCD, no full name in error strings)", async () => {
+test("CS8 — INSERT SQL params do not contain spreadsheet code or it_code; code/it_code are SQL NULL literals", async () => {
+  const SPREADSHEET_CODE = "DR-SPREADSHEET-CODE";
+  const SPREADSHEET_IT_CODE = "IT-SPREADSHEET-001";
   const pool = makeFakePool([]);
   const db = createFakeDb({
     respond: (call: QueryCall) => {
       if (call.root === "select" && call.table === "workforce_data_import_rows") {
-        // Row with an invalid CCCD (structural error)
-        return [{ id: "r1", batchId: "b10", rowNumber: 1, rawData: { CCCD: "SHORT", "HỌ TÊN": "Nguyen Van A" }, status: "PENDING", message: null }];
+        return [{ id: "r1", batchId: "b8", rowNumber: 1, rawData: row("800000000001", "New Worker", { CODE: SPREADSHEET_CODE, "IT CODE": SPREADSHEET_IT_CODE }), status: "PENDING", message: null }];
       }
       if (call.root === "select") return [{ c: 0 }];
       return undefined;
@@ -525,26 +438,38 @@ test("C10 — invalid row reasons contain no PII (no CCCD, no full name in error
   });
   const mod = await loadModuleUnderTest(pool, db);
 
-  const result = await mod.mergeWorkforceMasterChunk("b10");
+  await mod.mergeWorkforceMasterChunk("b8");
 
-  assert.equal(result.invalid, 1);
-  // Verify the row's message was written (via UPDATE workforce_data_import_rows)
-  const updateQ = pool.queries.find((q) => q.text.includes("UPDATE workforce_data_import_rows") && q.text.includes("INVALID"));
-  assert.ok(updateQ, "invalid row must be marked INVALID via UPDATE");
-  const errorMessage = updateQ!.params[1] as string;
-  // Error must not contain the worker's CCCD value ("SHORT") or full name
-  assert.ok(!errorMessage.includes("Nguyen Van A"), "error message must not contain full name (PII)");
-  // The reason should be a structural validation message, not a raw data dump
-  assert.ok(typeof errorMessage === "string" && errorMessage.length > 0, "error message must be non-empty");
+  // Find the INSERT INTO dw_data query
+  const insertQ = pool.queries.find((q) => q.text.includes("INSERT INTO dw_data"));
+  assert.ok(insertQ, "INSERT INTO dw_data must be issued");
+
+  // The params array must NOT contain the spreadsheet code or it_code values:
+  const paramsStr = JSON.stringify(insertQ!.params);
+  assert.ok(!paramsStr.includes(SPREADSHEET_CODE), "spreadsheet code must not appear in SQL params");
+  assert.ok(!paramsStr.includes(SPREADSHEET_IT_CODE), "spreadsheet it_code must not appear in SQL params");
+
+  // The SQL text must use NULL literals for code/it_code, not params:
+  assert.ok(insertQ!.text.includes("VALUES (NULL, NULL,"), "SQL must use NULL literals for code and it_code, not params");
+
+  // The current mirror must be NULL:
+  assert.equal(pool.dwData.get("800000000001")?.code, null, "dw_data.code must be NULL");
+  assert.equal(pool.dwData.get("800000000001")?.it_code, null, "dw_data.it_code must be NULL");
 });
 
-test("INSERT path: new worker (no existing dw_data row) receives spreadsheet code as initial source evidence", async () => {
-  const HISTORICAL_CODE = "DR-HIST-0042";
-  const pool = makeFakePool([]); // no existing rows
+/**
+ * CS9a — it_code mirror: INSERT new CCCD with spreadsheet IT CODE → it_code is NULL.
+ * CS9b — it_code mirror: UPDATE existing CCCD with non-NULL it_code → it_code preserved.
+ * CS9c — it_code mirror: UPDATE existing CCCD with NULL it_code + spreadsheet IT CODE → remains NULL.
+ *
+ * Identical semantics to code mirror: never populated or modified by import.
+ */
+test("CS9a — it_code: INSERT new CCCD with spreadsheet IT CODE: dw_data.it_code is NULL", async () => {
+  const pool = makeFakePool([]);
   const db = createFakeDb({
     respond: (call: QueryCall) => {
       if (call.root === "select" && call.table === "workforce_data_import_rows") {
-        return [{ id: "r1", batchId: "bi", rowNumber: 1, rawData: row("111222333444", "Brand New Worker", { CODE: HISTORICAL_CODE }), status: "PENDING", message: null }];
+        return [{ id: "r1", batchId: "b9a", rowNumber: 1, rawData: row("900000000001", "New Worker", { "IT CODE": "IT-SPREADSHEET-FILL" }), status: "PENDING", message: null }];
       }
       if (call.root === "select") return [{ c: 0 }];
       return undefined;
@@ -552,9 +477,77 @@ test("INSERT path: new worker (no existing dw_data row) receives spreadsheet cod
   });
   const mod = await loadModuleUnderTest(pool, db);
 
-  const result = await mod.mergeWorkforceMasterChunk("bi");
+  await mod.mergeWorkforceMasterChunk("b9a");
 
-  assert.equal(result.inserted, 1, "new worker must be inserted");
-  assert.equal(pool.dwData.get("111222333444")?.code, HISTORICAL_CODE, "historical code written as initial source evidence for new worker");
+  assert.equal(pool.dwData.get("900000000001")?.it_code, null, "dw_data.it_code must be NULL on INSERT — never from spreadsheet");
 });
 
+test("CS9b — it_code: UPDATE existing CCCD with non-NULL it_code: it_code mirror preserved exactly", async () => {
+  const CANONICAL_IT = "IT-CANONICAL-001";
+  const pool = makeFakePool([{ cccd: "900000000002", code: null, full_name: "Worker", it_code: CANONICAL_IT }]);
+  const db = createFakeDb({
+    respond: (call: QueryCall) => {
+      if (call.root === "select" && call.table === "workforce_data_import_rows") {
+        return [{ id: "r1", batchId: "b9b", rowNumber: 1, rawData: row("900000000002", "Worker Updated", { "IT CODE": "IT-DIFFERENT" }), status: "PENDING", message: null }];
+      }
+      if (call.root === "select") return [{ c: 0 }];
+      return undefined;
+    },
+  });
+  const mod = await loadModuleUnderTest(pool, db);
+
+  await mod.mergeWorkforceMasterChunk("b9b");
+
+  assert.equal(pool.dwData.get("900000000002")?.it_code, CANONICAL_IT, "canonical it_code mirror must be preserved");
+});
+
+test("CS9c — it_code: UPDATE existing CCCD with NULL it_code + spreadsheet IT CODE: remains NULL", async () => {
+  const pool = makeFakePool([{ cccd: "900000000003", code: null, full_name: "Worker", it_code: null }]);
+  const db = createFakeDb({
+    respond: (call: QueryCall) => {
+      if (call.root === "select" && call.table === "workforce_data_import_rows") {
+        return [{ id: "r1", batchId: "b9c", rowNumber: 1, rawData: row("900000000003", "Worker Updated", { "IT CODE": "IT-FILL-ATTEMPT" }), status: "PENDING", message: null }];
+      }
+      if (call.root === "select") return [{ c: 0 }];
+      return undefined;
+    },
+  });
+  const mod = await loadModuleUnderTest(pool, db);
+
+  await mod.mergeWorkforceMasterChunk("b9c");
+
+  assert.equal(pool.dwData.get("900000000003")?.it_code, null, "NULL it_code must remain NULL — spreadsheet IT CODE must not fill it");
+});
+
+/**
+ * CS10 — Non-code master fields update correctly; code/it_code untouched.
+ *
+ * Verifies that only the canonical mirror columns are isolated;
+ * all other master fields (full_name, gender, etc.) still update as expected.
+ */
+test("CS10 — non-code master fields (full_name, gender, etc.) still update correctly; code and it_code mirrors unchanged", async () => {
+  const pool = makeFakePool([{ cccd: "101000000001", code: "DR00300-D", full_name: "Old Name", it_code: "IT-CANON-OLD" }]);
+  const db = createFakeDb({
+    respond: (call: QueryCall) => {
+      if (call.root === "select" && call.table === "workforce_data_import_rows") {
+        return [{
+          id: "r1", batchId: "b10", rowNumber: 1,
+          rawData: row("101000000001", "Updated Full Name", { CODE: "DR-SHOULD-NOT-WRITE", "IT CODE": "IT-SHOULD-NOT-WRITE" }),
+          status: "PENDING", message: null,
+        }];
+      }
+      if (call.root === "select") return [{ c: 0 }];
+      return undefined;
+    },
+  });
+  const mod = await loadModuleUnderTest(pool, db);
+
+  await mod.mergeWorkforceMasterChunk("b10");
+
+  const after = pool.dwData.get("101000000001");
+  // Non-code field updated:
+  assert.equal(after?.full_name, "Updated Full Name", "full_name must update");
+  // Both code mirrors completely untouched:
+  assert.equal(after?.code, "DR00300-D", "code mirror must be unchanged");
+  assert.equal(after?.it_code, "IT-CANON-OLD", "it_code mirror must be unchanged");
+});
