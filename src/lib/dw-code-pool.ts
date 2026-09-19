@@ -73,11 +73,22 @@ export type AllocateDwCodeInput = {
   employmentSessionId: string;
   dwDataId: string;
   assignedBy: string;
+  /**
+   * CANONICAL-FIRST PATCH ROUTE ONLY — when the caller has already looked up
+   * a specific `dw_codes` row (e.g. the code typed on a physical badge is
+   * already AVAILABLE in the pool), pass that row's `id` here so allocateDwCode
+   * claims it directly instead of re-running the AVAILABLE-lowest-sequence
+   * query. The row MUST be AVAILABLE and MUST belong to `locationId` — the
+   * function validates both and returns CODE_NOT_FOUND / CODE_NOT_AVAILABLE /
+   * CODE_WRONG_LOCATION if the preconditions are violated. Never use this
+   * outside the administration/daily-code PATCH handler.
+   */
+  specificCodeId?: string;
 };
 
 export type AllocateDwCodeResult =
   | { ok: true; code: string; codeId: string; reused: boolean }
-  | { ok: false; error: "LOCATION_NOT_FOUND" | "LOCATION_INACTIVE" | "WORKER_ALREADY_HAS_ACTIVE_CODE" };
+  | { ok: false; error: "LOCATION_NOT_FOUND" | "LOCATION_INACTIVE" | "WORKER_ALREADY_HAS_ACTIVE_CODE" | "CODE_NOT_FOUND" | "CODE_NOT_AVAILABLE" | "CODE_WRONG_LOCATION" };
 
 /**
  * Assigns a DW Code to a worker's employment session, reusing a released
@@ -111,36 +122,57 @@ export async function allocateDwCode(input: AllocateDwCodeInput, executor: Execu
       suffix: location.suffix,
     };
 
-    const [reusable] = await tx
-      .select()
-      .from(dwCodes)
-      .where(and(eq(dwCodes.locationId, input.locationId), eq(dwCodes.status, "AVAILABLE")))
-      .orderBy(asc(dwCodes.sequenceNumber))
-      .limit(1)
-      .for("update", { skipLocked: true });
-
     let codeId: string;
     let code: string;
     let reused: boolean;
 
-    if (reusable) {
-      await tx.update(dwCodes).set({ status: "ASSIGNED" }).where(eq(dwCodes.id, reusable.id));
-      codeId = reusable.id;
-      code = reusable.code;
-      reused = true;
+    if (input.specificCodeId) {
+      // ── SPECIFIC-CODE CLAIM PATH (physical-badge PATCH route) ──────────────
+      // Caller already knows the exact dw_codes row to claim (looked it up
+      // before calling us). We still validate ownership + status under a
+      // FOR UPDATE lock so no concurrent allocateDwCode() can race us.
+      const [specific] = await tx
+        .select()
+        .from(dwCodes)
+        .where(eq(dwCodes.id, input.specificCodeId))
+        .limit(1)
+        .for("update");
+      if (!specific) return { ok: false, error: "CODE_NOT_FOUND" as const };
+      if (specific.locationId !== input.locationId) return { ok: false, error: "CODE_WRONG_LOCATION" as const };
+      if (specific.status !== "AVAILABLE") return { ok: false, error: "CODE_NOT_AVAILABLE" as const };
+      await tx.update(dwCodes).set({ status: "ASSIGNED" }).where(eq(dwCodes.id, specific.id));
+      codeId = specific.id;
+      code = specific.code;
+      reused = true; // it was AVAILABLE → treated as reuse; nextSequence is untouched
     } else {
-      const [{ usedSequence }] = await tx
-        .update(dwCodeLocations)
-        .set({ nextSequence: sql`${dwCodeLocations.nextSequence} + 1`, updatedAt: new Date() })
-        .where(eq(dwCodeLocations.id, input.locationId))
-        .returning({ usedSequence: sql<number>`${dwCodeLocations.nextSequence} - 1` });
-      code = formatDwCode(config, usedSequence);
-      const [created] = await tx
-        .insert(dwCodes)
-        .values({ locationId: input.locationId, sequenceNumber: usedSequence, code, status: "ASSIGNED" })
-        .returning({ id: dwCodes.id });
-      codeId = created.id;
-      reused = false;
+      // ── STANDARD REUSE-OR-NEW-SEQUENCE PATH ────────────────────────────────
+      const [reusable] = await tx
+        .select()
+        .from(dwCodes)
+        .where(and(eq(dwCodes.locationId, input.locationId), eq(dwCodes.status, "AVAILABLE")))
+        .orderBy(asc(dwCodes.sequenceNumber))
+        .limit(1)
+        .for("update", { skipLocked: true });
+
+      if (reusable) {
+        await tx.update(dwCodes).set({ status: "ASSIGNED" }).where(eq(dwCodes.id, reusable.id));
+        codeId = reusable.id;
+        code = reusable.code;
+        reused = true;
+      } else {
+        const [{ usedSequence }] = await tx
+          .update(dwCodeLocations)
+          .set({ nextSequence: sql`${dwCodeLocations.nextSequence} + 1`, updatedAt: new Date() })
+          .where(eq(dwCodeLocations.id, input.locationId))
+          .returning({ usedSequence: sql<number>`${dwCodeLocations.nextSequence} - 1` });
+        code = formatDwCode(config, usedSequence);
+        const [created] = await tx
+          .insert(dwCodes)
+          .values({ locationId: input.locationId, sequenceNumber: usedSequence, code, status: "ASSIGNED" })
+          .returning({ id: dwCodes.id });
+        codeId = created.id;
+        reused = false;
+      }
     }
 
     await tx.insert(dwCodeAssignments).values({
