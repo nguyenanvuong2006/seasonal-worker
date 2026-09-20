@@ -13,13 +13,16 @@ import type { DataManagementEnvironment } from "./environment";
  * assignment code string (dw_data.it_code, varchar(40)) a FINGERPRINT_STAFF
  * operator types in one row at a time today via PATCH /api/fingerprint/it-code
  * (route/UI path names are legacy and intentionally left as-is — renaming a
- * live route is a separate, out-of-scope change). This module adds the
- * missing BULK path (an exported file from the attendance/IT-Code device),
- * reusing the EXACT SAME source-of-truth/mirror contract that route already
- * enforces — dw_data.it_code is the source of truth, mirrored to
- * worker_profiles.fingerprint_code/fingerprint_status and
- * daily_applications.it_code (mirror only) — so results are identical
- * whether an operator types one row or imports a file of thousands.
+ * live route is a separate, out-of-scope change).
+ *
+ * POST-GO-LIVE CANONICAL CONTRACT:
+ * Following canonical operational code activation, it_code_assignments is the
+ * authoritative source of truth for active IT Code assignments. dw_data.it_code
+ * is a CURRENT READ MIRROR of an active canonical assignment, keyed by an
+ * active employment session. This bulk importer lacks operational session
+ * context, so it MUST NOT directly populate or mutate dw_data.it_code or its
+ * secondary mirrors. The imported IT Code values remain safely stored in
+ * workforce_data_import_rows.raw_data as staging and reconciliation evidence.
  *
  * IDENTITY CONTRACT (locked): CCCD is the person identity used to resolve
  * WHO an IT Code row belongs to. IT Code itself is never identity — it is
@@ -210,12 +213,13 @@ export async function createFingerprintBatch(input: CreateFingerprintBatchInput)
 export type MergeChunkResult = { processed: number; matched: number; unmatched: number; duplicate: number; done: boolean };
 
 /**
- * MISSION F2 section 7/250 — NOT CANONICALIZED, DOCUMENTED BLOCKER. Writes `dw_data.it_code`
- * directly (see below). Same blocker as import-workforce-master.ts's mergeWorkforceMasterChunk():
- * assignItCode() (it-code-assignment.ts) requires an employmentSessionId/dailyApplicationId to
- * attach an it_code_assignments history row to, but bulk import runs before any employment
- * session exists for the imported workers — there is no engagement context here to canonicalize
- * onto.
+ * POST-GO-LIVE CANONICAL CONTRACT (Option A — Evidence Only):
+ * Fingerprint import provides biometric raw staging evidence (CCCD, IT Code) from physical
+ * time clocks or fingerprint capture sheets, but lacks operational active employment-session context.
+ * Therefore, it MUST NOT directly mutate dw_data.it_code or its secondary mirrors.
+ * The imported IT Code value remains safely preserved in workforce_data_import_rows.raw_data
+ * for audit and reconciliation evidence, while canonical assignment is managed exclusively
+ * through the canonical assignItCode() workflow.
  */
 export async function mergeFingerprintChunk(batchId: string, actor: string): Promise<MergeChunkResult> {
   const pending = await db
@@ -256,12 +260,12 @@ export async function mergeFingerprintChunk(batchId: string, actor: string): Pro
         continue;
       }
 
-      // SAME source-of-truth/mirror contract as PATCH /api/fingerprint/it-code — dw_data is
-      // the write source, worker_profiles/daily_applications only ever mirror it.
-      await client.query(`UPDATE dw_data SET it_code = $2, it_code_updated_at = now(), it_code_updated_by = $3 WHERE id = $1`, [dw.id, itCode, actor]);
-      await client.query(`UPDATE worker_profiles SET fingerprint_code = $2, fingerprint_status = 'DA_CAP', updated_at = now() WHERE cccd = $1 AND deleted_at IS NULL`, [cccd, itCode]);
-      await client.query(`UPDATE daily_applications SET it_code = $2, updated_at = now() WHERE cccd = $1 AND deleted_at IS NULL`, [cccd, itCode]);
-
+      // POST-GO-LIVE CANONICAL CONTRACT:
+      // dw_data.it_code is a CURRENT READ MIRROR of an active canonical assignment
+      // (it_code_assignments). This bulk importer lacks operational active-session
+      // context, so it MUST NOT populate or modify dw_data.it_code or its secondary
+      // mirrors. The imported IT Code value remains safely preserved in
+      // workforce_data_import_rows.raw_data as staging/reconciliation evidence.
       await client.query(`UPDATE workforce_data_import_rows SET status = 'MATCHED' WHERE id = $1`, [row.id]);
       matched++;
     }

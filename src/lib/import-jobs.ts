@@ -381,10 +381,14 @@ async function runMergingChunk(jobId: string, jobType: JobType, fromRow: number,
   }
 
   if (jobType === "dw_data") {
+    // POST-GO-LIVE CANONICAL CONTRACT:
+    // dw_data.code and dw_data.it_code are CURRENT READ MIRRORS of canonical assignments.
+    // Spreadsheet imports MUST NOT populate or modify them (code = NULL, it_code = NULL).
+    // The spreadsheet CODE/IT CODE remain safely in staging_dw_data.
     const res = await pool.query(
       `INSERT INTO dw_data (code, it_code, old_dw_code, id_vlookup, full_name, gender, bod, profile, dktn,
          cccd, date_of_issue, place_of_issue, permanent_address, residential_address, phone)
-       SELECT code, it_code, old_dw_code, id_vlookup, full_name, gender, bod, profile, dktn,
+       SELECT NULL, NULL, old_dw_code, id_vlookup, full_name, gender, bod, profile, dktn,
               cccd, date_of_issue, place_of_issue, permanent_address, residential_address, phone
        FROM staging_dw_data
        WHERE job_id = $1 AND valid = true AND row_number BETWEEN $2 AND $3

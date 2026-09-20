@@ -164,12 +164,10 @@ export async function mergeNextChunk(batchId: string, importType: Group, mapping
             const res = await client.query(
               `INSERT INTO dw_data (code, it_code, old_dw_code, id_vlookup, full_name, gender, bod, profile, dktn,
                  cccd, date_of_issue, place_of_issue, permanent_address, residential_address, phone)
-               VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15)
+               VALUES (NULL, NULL, $1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13)
                ON CONFLICT (cccd) WHERE deleted_at IS NULL DO NOTHING
                RETURNING id`,
               [
-                clean(pick("dw_code", ["CODE"])),
-                clean(pick("dw_it_code", ["IT CODE"])),
                 clean(pick("dw_old_code", ["OldDW_VLOOKUP"])),
                 clean(pick("dw_id_vlookup", ["ID_VLOOKUP"])),
                 normalizedFullName,
