@@ -33,6 +33,7 @@ const schemaStub = {
 
 type Context = {
   GET: (req: Request) => Promise<{ status: number; body: string }>;
+  PATCH: (req: Request) => Promise<{ status: number; body: string }>;
   db: FakeDb;
 };
 
@@ -51,6 +52,11 @@ function makeContext(opts: {
         const selectOp = call.ops.find((o) => o.fn === "select");
         const isCount = Boolean(selectOp && selectOp.args.length > 0);
         return isCount ? [{ total: dwRows.length }] : dwRows;
+      }
+      if (call.root === "update" && call.table === "dw_data") {
+        const setOp = call.ops.find((o) => o.fn === "set");
+        const patch = (setOp?.args[0] as Record<string, unknown>) ?? {};
+        return [{ id: "w1", ...patch }];
       }
       return undefined;
     },
@@ -111,7 +117,11 @@ function makeContext(opts: {
     RegExp,
   });
   vm.runInContext(jsSource, context);
-  return { GET: (moduleObj.exports as { GET: Context["GET"] }).GET, db };
+  return {
+    GET: (moduleObj.exports as { GET: Context["GET"] }).GET,
+    PATCH: (moduleObj.exports as { PATCH: Context["PATCH"] }).PATCH,
+    db,
+  };
 }
 
 test("RBAC role-rename: dw.view granted (requirePermission ok) + unrestricted scope (null) -> DW Data returns 200, real rows", async () => {
@@ -197,4 +207,102 @@ test("Phase 7 — GLOBAL user with ZERO DW rows still gets 200 + empty rows, nev
   assert.deepEqual(body.rows, []);
   assert.equal(body.total, 0);
   assert.ok(!("error" in body));
+});
+
+/* ------------------------------------------------------------------ *
+ * PHASE 1 — SEAL PATCH /api/workers against dw_data.code / it_code   *
+ * ------------------------------------------------------------------ */
+
+test("Phase 1: ordinary worker fields still editable via PATCH /api/workers", async () => {
+  const ctx = makeContext({
+    guardResult: { ok: true, session: { id: "u1", username: "admin", fullName: "Admin", role: "ADMIN", deptId: null } },
+    scope: null,
+    dwRows: [{ id: "w1", fullName: "Nguyễn Văn A", phone: "0901111111", code: "DR00001-D" }],
+  });
+  const req = new Request("http://localhost/api/workers", {
+    method: "PATCH",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ id: "w1", fullName: "Nguyễn Văn Đã Sửa", phone: "0909999999" }),
+  });
+  const res = await ctx.PATCH(req);
+  assert.equal(res.status, 200, res.body);
+  const body = JSON.parse(res.body);
+  assert.equal(body.success, true);
+  const updateCall = ctx.db.calls.find((c) => c.root === "update" && c.table === "dw_data");
+  assert.ok(updateCall, "must issue db.update(dwData)");
+  const setOp = updateCall.ops.find((o) => o.fn === "set");
+  const patch = (setOp?.args[0] as Record<string, unknown>) ?? {};
+  assert.equal(patch.fullName, "Nguyễn Văn Đã Sửa");
+  assert.equal(patch.phone, "0909999999");
+  assert.equal(patch.code, undefined, "code must NOT be present in update patch");
+});
+
+test("Phase 1: PATCH containing code fails closed with 400 and clear business error", async () => {
+  const ctx = makeContext({
+    guardResult: { ok: true, session: { id: "u1", username: "admin", fullName: "Admin", role: "ADMIN", deptId: null } },
+    scope: null,
+    dwRows: [{ id: "w1", fullName: "Nguyễn Văn A", code: "DR00001-D" }],
+  });
+  const req = new Request("http://localhost/api/workers", {
+    method: "PATCH",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ id: "w1", code: "DR99999-D" }),
+  });
+  const res = await ctx.PATCH(req);
+  assert.equal(res.status, 400);
+  const body = JSON.parse(res.body);
+  assert.match(body.error, /Mã số công nhật \(DW Code\) không thể chỉnh sửa tại đây/);
+  assert.equal(ctx.db.calls.filter((c) => c.root === "update").length, 0, "zero updates must be issued");
+});
+
+test("Phase 1: code + other fields must not sneak code into update (fails closed)", async () => {
+  const ctx = makeContext({
+    guardResult: { ok: true, session: { id: "u1", username: "admin", fullName: "Admin", role: "ADMIN", deptId: null } },
+    scope: null,
+    dwRows: [{ id: "w1", fullName: "Nguyễn Văn A", code: "DR00001-D" }],
+  });
+  const req = new Request("http://localhost/api/workers", {
+    method: "PATCH",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ id: "w1", fullName: "Nguyễn Văn Hacker", code: "DR88888-D" }),
+  });
+  const res = await ctx.PATCH(req);
+  assert.equal(res.status, 400);
+  const body = JSON.parse(res.body);
+  assert.match(body.error, /Mã số công nhật \(DW Code\) không thể chỉnh sửa tại đây/);
+  assert.equal(ctx.db.calls.filter((c) => c.root === "update").length, 0, "zero updates must be issued");
+});
+
+test("Phase 1: PATCH containing itCode / it_code fails closed with 400", async () => {
+  const ctx = makeContext({
+    guardResult: { ok: true, session: { id: "u1", username: "admin", fullName: "Admin", role: "ADMIN", deptId: null } },
+    scope: null,
+    dwRows: [{ id: "w1", fullName: "Nguyễn Văn A" }],
+  });
+  const req = new Request("http://localhost/api/workers", {
+    method: "PATCH",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ id: "w1", itCode: "IT-999" }),
+  });
+  const res = await ctx.PATCH(req);
+  assert.equal(res.status, 400);
+  const body = JSON.parse(res.body);
+  assert.match(body.error, /Mã IT Code không thể chỉnh sửa tại đây/);
+  assert.equal(ctx.db.calls.filter((c) => c.root === "update").length, 0, "zero updates must be issued");
+});
+
+test("Phase 1: unauthorized role fails closed with 403", async () => {
+  const ctx = makeContext({
+    guardResult: { ok: false, status: 403, error: "Tài khoản của bạn không có quyền thực hiện thao tác này." },
+    scope: null,
+  });
+  const req = new Request("http://localhost/api/workers", {
+    method: "PATCH",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ id: "w1", fullName: "Tên Mới" }),
+  });
+  const res = await ctx.PATCH(req);
+  assert.equal(res.status, 403);
+  const body = JSON.parse(res.body);
+  assert.equal(body.error, "Tài khoản của bạn không có quyền thực hiện thao tác này.");
 });

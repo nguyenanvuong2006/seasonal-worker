@@ -98,9 +98,27 @@ export async function PATCH(req: Request) {
 
   const [before] = await db.select().from(dwData).where(eq(dwData.id, body.id));
 
+  if ("code" in body) {
+    return NextResponse.json(
+      {
+        error:
+          "Mã số công nhật (DW Code) không thể chỉnh sửa tại đây. Vui lòng sử dụng màn hình Nhập mã công nhật (Administration Daily Code) để quản lý mã theo quy trình chuẩn.",
+      },
+      { status: 400 },
+    );
+  }
+  if ("it_code" in body || "itCode" in body) {
+    return NextResponse.json(
+      {
+        error:
+          "Mã IT Code không thể chỉnh sửa tại đây. Vui lòng sử dụng màn hình Cấp mã IT / Vân tay để quản lý mã theo quy trình chuẩn.",
+      },
+      { status: 400 },
+    );
+  }
+
   const patch: Record<string, unknown> = {};
   for (const k of [
-    "code",
     "fullName",
     "gender",
     "bod",

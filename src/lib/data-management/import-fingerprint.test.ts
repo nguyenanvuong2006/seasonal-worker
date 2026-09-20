@@ -14,43 +14,52 @@ const workforceDataImportRows = makeTable("workforce_data_import_rows");
 
 type DwRow = { id: string; cccd: string; code: string | null; it_code: string | null };
 
-function makeFakePool(initialDwData: DwRow[]) {
+function makeFakePool(
+  initialDwData: DwRow[],
+  interceptor?: (text: string, params: unknown[]) => Promise<{ rows: any[] } | void>
+) {
   const dwData = new Map(initialDwData.map((r) => [r.cccd, { ...r }]));
   const workerProfileUpdates: { cccd: string; itCode: string }[] = [];
   const queries: { text: string; params: unknown[] }[] = [];
 
-  const client = {
-    query: async (text: string, params: unknown[] = []) => {
-      queries.push({ text, params });
-      if (text.startsWith("BEGIN") || text.startsWith("COMMIT") || text.startsWith("ROLLBACK")) return { rows: [] };
-      if (text.includes("SELECT cccd, code, it_code FROM dw_data") && text.includes("= ANY")) {
-        const requested = new Set(params[0] as string[]);
-        const rows = [...dwData.values()].filter((r) => requested.has(r.cccd));
-        return { rows };
+  const handleQuery = async (text: string, params: unknown[] = []) => {
+    queries.push({ text, params });
+    if (interceptor) {
+      const intercepted = await interceptor(text, params);
+      if (intercepted) return intercepted;
+    }
+    if (text.startsWith("BEGIN") || text.startsWith("COMMIT") || text.startsWith("ROLLBACK")) return { rows: [] };
+    if (text.includes("SELECT cccd, code, it_code FROM dw_data") && text.includes("= ANY")) {
+      const requested = new Set(params[0] as string[]);
+      const rows = [...dwData.values()].filter((r) => requested.has(r.cccd));
+      return { rows };
+    }
+    if (text.includes("SELECT id, code, it_code FROM dw_data WHERE cccd")) {
+      const row = dwData.get(params[0] as string);
+      return { rows: row ? [row] : [] };
+    }
+    if (text.includes("UPDATE dw_data SET it_code")) {
+      const [id, itCode] = params as [string, string, string];
+      for (const [cccd, row] of dwData) {
+        if (row.id === id) dwData.set(cccd, { ...row, it_code: itCode });
       }
-      if (text.includes("SELECT id, code, it_code FROM dw_data WHERE cccd")) {
-        const row = dwData.get(params[0] as string);
-        return { rows: row ? [row] : [] };
-      }
-      if (text.includes("UPDATE dw_data SET it_code")) {
-        const [id, itCode] = params as [string, string, string];
-        for (const [cccd, row] of dwData) {
-          if (row.id === id) dwData.set(cccd, { ...row, it_code: itCode });
-        }
-        return { rows: [] };
-      }
-      if (text.includes("UPDATE worker_profiles SET fingerprint_code")) {
-        const [cccd, itCode] = params as [string, string];
-        workerProfileUpdates.push({ cccd, itCode });
-        return { rows: [] };
-      }
-      if (text.includes("UPDATE daily_applications SET it_code")) return { rows: [] };
-      if (text.includes("UPDATE workforce_data_import_rows") || text.includes("UPDATE workforce_data_import_batches")) return { rows: [] };
       return { rows: [] };
-    },
+    }
+    if (text.includes("UPDATE worker_profiles SET fingerprint_code")) {
+      const [cccd, itCode] = params as [string, string];
+      workerProfileUpdates.push({ cccd, itCode });
+      return { rows: [] };
+    }
+    if (text.includes("UPDATE daily_applications SET it_code")) return { rows: [] };
+    if (text.includes("UPDATE workforce_data_import_rows") || text.includes("UPDATE workforce_data_import_batches")) return { rows: [] };
+    return { rows: [] };
+  };
+
+  const client = {
+    query: handleQuery,
     release: () => {},
   };
-  return { connect: async () => client, dwData, workerProfileUpdates, queries, query: (text: string, params?: unknown[]) => client.query(text, params ?? []) };
+  return { connect: async () => client, dwData, workerProfileUpdates, queries, query: handleQuery };
 }
 
 async function loadModuleUnderTest(pool: ReturnType<typeof makeFakePool>, db: FakeDb) {
@@ -141,7 +150,7 @@ test("F5b — DUPLICATE_FINGERPRINT: file's IT Code conflicts with a DIFFERENT c
   assert.equal(result.duplicateFingerprint, 1);
 });
 
-test("merge: MATCHED row mirrors dw_data.it_code -> worker_profiles.fingerprint_code (same source-of-truth contract as the manual PATCH route), never touches daily_applications' worker existence or employment_sessions", async () => {
+test("merge: MATCHED row is isolated from dw_data.it_code — preserves current mirror and raw staging evidence only", async () => {
   const pool = makeFakePool([{ id: "dw-1", cccd: "111111111111", code: "DC001", it_code: null }]);
   const db = createFakeDb({
     respond: (call: QueryCall) => {
@@ -156,9 +165,68 @@ test("merge: MATCHED row mirrors dw_data.it_code -> worker_profiles.fingerprint_
 
   const result = await mod.mergeFingerprintChunk("batch-1", "fp_staff_1");
   assert.equal(result.matched, 1);
-  assert.equal(pool.dwData.get("111111111111")?.it_code, "NEW-IT-CODE");
-  assert.deepEqual(Array.from(pool.workerProfileUpdates), [{ cccd: "111111111111", itCode: "NEW-IT-CODE" }]);
+  // Current mirror in dw_data MUST NOT be populated from fingerprint import (Option A: evidence only)
+  assert.equal(pool.dwData.get("111111111111")?.it_code, null, "dw_data.it_code must remain untouched");
+  assert.equal(pool.workerProfileUpdates.length, 0, "worker_profiles.fingerprint_code must not be directly updated");
 
+  // No raw UPDATE dw_data SET it_code in executed queries
+  assert.ok(
+    pool.queries.every((q) => !q.text.includes("UPDATE dw_data SET it_code")),
+    "must never execute raw UPDATE dw_data SET it_code"
+  );
   // F8 — fingerprint import must never create/reference Employment.
   assert.ok(pool.queries.every((q) => !q.text.includes("employment_sessions")), "fingerprint merge must never touch employment_sessions");
 });
+
+test("merge: conflicting IT code fails closed as DUPLICATE and preserves current mirror", async () => {
+  const pool = makeFakePool([{ id: "dw-1", cccd: "111111111111", code: "DC001", it_code: "EXISTING-IT-CODE" }]);
+  const rowUpdates: { id: string; status: string; message?: string }[] = [];
+  const db = createFakeDb({
+    respond: (call: QueryCall) => {
+      if (call.root === "select" && call.table === "workforce_data_import_rows") {
+        return [{ id: "row-1", batchId: "batch-1", rowNumber: 1, rawData: row("111111111111", "DIFFERENT-IT-CODE"), status: "PENDING", message: null }];
+      }
+      if (call.root === "select") return [{ c: 0 }];
+      return undefined;
+    },
+  });
+  const mod = await loadModuleUnderTest(pool, db);
+
+  const result = await mod.mergeFingerprintChunk("batch-1", "fp_staff_1");
+  assert.equal(result.duplicate, 1);
+  assert.equal(result.matched, 0);
+  assert.equal(pool.dwData.get("111111111111")?.it_code, "EXISTING-IT-CODE", "existing IT code is untouched");
+});
+
+test("merge: database error rolls back transaction and marks batch FAILED", async () => {
+  const pool = makeFakePool(
+    [{ id: "dw-1", cccd: "111111111111", code: "DC001", it_code: null }],
+    async (text: string) => {
+      if (text.includes("UPDATE workforce_data_import_rows SET status = 'MATCHED'")) {
+        throw new Error("DB Connection Lost");
+      }
+    }
+  );
+
+  const batchUpdates: any[] = [];
+  const db = createFakeDb({
+    respond: (call: QueryCall) => {
+      if (call.root === "select" && call.table === "workforce_data_import_rows") {
+        return [{ id: "row-1", batchId: "batch-1", rowNumber: 1, rawData: row("111111111111", "NEW-IT-CODE"), status: "PENDING", message: null }];
+      }
+      if (call.root === "update" && call.table === "workforce_data_import_batches") {
+        batchUpdates.push(call);
+        return [{ id: "batch-1" }];
+      }
+      return undefined;
+    },
+  });
+  const mod = await loadModuleUnderTest(pool, db);
+
+  await assert.rejects(
+    () => mod.mergeFingerprintChunk("batch-1", "fp_staff_1"),
+    /DB Connection Lost/
+  );
+  assert.ok(pool.queries.some((q) => q.text.includes("ROLLBACK")), "must execute ROLLBACK on error");
+});
+

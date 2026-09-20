@@ -86,11 +86,12 @@ export default function DwDataPage() {
       return;
     }
     try {
+      const { code: _c, itCode: _it, ...payload } = form;
       const res = await fetch("/api/workers", {
         method: "PATCH",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          ...form,
+          ...payload,
           oldCccd,
           cascadeCccd: form.cccd !== oldCccd,
         }),
@@ -261,10 +262,14 @@ export default function DwDataPage() {
               <div>
                 <Label>Mã CODE</Label>
                 <Input
-                  value={form.code ?? ""}
-                  onChange={(e) => setForm({ ...form, code: e.target.value })}
-                  className="h-11 rounded-xl font-mono"
+                  value={form.code || "—"}
+                  disabled
+                  readOnly
+                  className="h-11 rounded-xl font-mono bg-muted/50 cursor-not-allowed text-fg-secondary"
                 />
+                <p className="mt-1 text-[11px] text-fg-muted">
+                  Mã số công nhật được quản lý qua màn hình Nhập mã công nhật
+                </p>
               </div>
               <div>
                 <Label>Họ và tên *</Label>
