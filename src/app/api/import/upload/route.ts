@@ -8,6 +8,7 @@ import { createJob, isImportEngineJobType, stageRows, triggerWorker } from "@/li
 import { parseImportFile } from "@/lib/file-parser";
 import { getFieldDefinitions, normalizeHeader } from "@/lib/metadata";
 import { getAcceptedColumnNames } from "@/lib/import-engine";
+import { validateUploadFile } from "@/lib/data-management/file-safety";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -21,6 +22,9 @@ export const maxDuration = 60;
  *
  * Nếu file có trường bắt buộc chưa tự nhận diện được cột (Map Columns), trả về
  * `needsMapping: true` KHÔNG tạo job — client gửi lại đúng file này kèm `mapping` (JSON).
+ *
+ * P2-2 hardening — validateUploadFile() kiểm tra extension + kích thước TRƯỚC khi
+ * đọc buffer vào bộ nhớ, reuse helper đã có ở data-management import (file-safety.ts).
  */
 export async function POST(req: Request) {
   const guard = await requireRoleAndPermission(["ADMIN"], "import.run");
@@ -36,6 +40,10 @@ export async function POST(req: Request) {
   if (!isImportEngineJobType(jobType)) {
     return NextResponse.json({ error: "jobType không hợp lệ." }, { status: 400 });
   }
+
+  // P2-2 hardening: validate before any buffer allocation or DB mutation.
+  const safety = validateUploadFile(file);
+  if (!safety.ok) return NextResponse.json({ error: "INVALID_ARGS", message: safety.message }, { status: 400 });
 
   const buf = Buffer.from(await file.arrayBuffer());
   const checksum = crypto.createHash("sha256").update(buf).digest("hex");
