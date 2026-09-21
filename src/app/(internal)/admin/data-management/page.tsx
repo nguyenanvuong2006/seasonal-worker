@@ -203,6 +203,11 @@ function ImportTab({ kind }: { kind: "workforce" | "fingerprint" }) {
           setError(data.message ?? data.error);
           return;
         }
+        if (data.skipped) {
+          // Another worker/watchdog is processing this batch — wait briefly before requesting next chunk
+          await new Promise((r) => setTimeout(r, 1000));
+          continue;
+        }
         setProgress((prev) => ({ processed: (prev?.processed ?? 0) + data.processed, done: data.done }));
       }
       toast({ title: "✅ Import hoàn tất." });

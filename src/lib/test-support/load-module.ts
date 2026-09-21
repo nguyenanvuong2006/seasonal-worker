@@ -45,6 +45,7 @@ export function loadModule(url: URL, options: LoadOptions): Record<string, unkno
   const requireShim = (specifier: string): unknown => {
     if (specifier in options.stubs) return options.stubs[specifier];
     if (specifier === "crypto" || specifier === "node:crypto") return nodeRequire("node:crypto");
+    if (specifier === "@/lib/scheduler-utils") return nodeRequire("../scheduler-utils.ts");
     if (options.fallback) return options.fallback(specifier);
     throw new Error(`Unexpected require("${specifier}") — hãy khai báo stub cho module này.`);
   };
