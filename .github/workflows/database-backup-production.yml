@@ -1,0 +1,221 @@
+name: Database Backup — PRODUCTION
+
+# EXPLICITLY AUTHORIZED PRODUCTION DATABASE BACKUP WORKFLOW (DR PHASE 2A)
+# ----------------------------------------------------------------------
+# This workflow performs an isolated, guarded, logical pg_dump of the
+# Production database (Neon Postgres) and uploads the result as a private
+# GitHub Actions artifact with SHA-256 checksum and sanitized manifest.
+#
+# STRICT PRODUCTION GUARDRAILS:
+# 1. Manual trigger ONLY (workflow_dispatch) — no push, pull_request, or schedule/cron.
+# 2. Ref MUST be refs/heads/main.
+# 3. Confirmation input must equal exactly "BACKUP_PRODUCTION_DATABASE".
+# 4. expected_source_commit_sha must be exactly 40 lowercase hex characters matching HEAD.
+# 5. Dedicated concurrency group (database-production-backup, cancel-in-progress: false).
+# 6. Hostname guard verifies PROD_DATABASE_URL matches PRODUCTION_DATABASE_HOSTNAME.
+# 7. Hostname guard rejects PROD_DATABASE_URL if pointing to STAGING_DATABASE_HOSTNAME.
+# 8. Uses pg_dump custom format (--format=custom --compress=9 --no-owner --no-privileges).
+# 9. Dumps directly to file, NOT stdout.
+# 10. Structural verification via `pg_restore --list` (NO data restore).
+# 11. Sidecar SHA-256 and sanitized manifest JSON generated without credentials.
+# 12. Artifact uploaded with 7-day retention limit (Layer 2A temporary store).
+
+on:
+  workflow_dispatch:
+    inputs:
+      confirmation:
+        description: "Type exactly BACKUP_PRODUCTION_DATABASE"
+        required: true
+        type: string
+      expected_source_commit_sha:
+        description: "Exact 40-character main commit SHA reviewed before backup"
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: database-production-backup
+  cancel-in-progress: false
+
+jobs:
+  backup:
+    runs-on: ubuntu-latest
+    environment: production
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci --no-audit --no-fund
+
+      # ---- Guardrail A: Branch must be refs/heads/main ----
+      - name: "Guardrail A — branch must be main"
+        run: |
+          set -euo pipefail
+          if [ "${{ github.ref }}" != "refs/heads/main" ]; then
+            echo "❌ Workflow must be run on refs/heads/main (current ref: ${{ github.ref }})." >&2
+            exit 1
+          fi
+          echo "✅ Branch is refs/heads/main"
+
+      # ---- Guardrail B: Exact confirmation phrase ----
+      - name: "Guardrail B — confirmation must match exactly"
+        run: |
+          set -euo pipefail
+          if [ "${{ github.event.inputs.confirmation }}" != "BACKUP_PRODUCTION_DATABASE" ]; then
+            echo "❌ Confirmation does not match 'BACKUP_PRODUCTION_DATABASE'." >&2
+            exit 1
+          fi
+          echo "✅ Confirmation matches BACKUP_PRODUCTION_DATABASE"
+
+      # ---- Guardrail C: expected_source_commit_sha match (mandatory) ----
+      - name: "Guardrail C — expected_source_commit_sha match"
+        run: |
+          set -euo pipefail
+          EXPECTED_SHA="${{ github.event.inputs.expected_source_commit_sha }}"
+          if ! echo "${EXPECTED_SHA}" | grep -qE '^[a-f0-9]{40}$'; then
+            echo "❌ expected_source_commit_sha must be exactly 40 lowercase hexadecimal characters." >&2
+            exit 1
+          fi
+          HEAD_SHA=$(git rev-parse HEAD)
+          if [ "${EXPECTED_SHA}" != "${HEAD_SHA}" ]; then
+            echo "❌ expected_source_commit_sha (${EXPECTED_SHA}) does not match checked-out HEAD (${HEAD_SHA})." >&2
+            exit 1
+          fi
+          echo "✅ Commit SHA matches HEAD exactly (${EXPECTED_SHA})"
+
+      # ---- Guardrail D: Hostname positive allowlist & staging exclusion ----
+      - name: "Guardrail D — hostname PROD_DATABASE_URL must match PRODUCTION_DATABASE_HOSTNAME"
+        id: parse_hostname
+        env:
+          DATABASE_URL: ${{ secrets.PROD_DATABASE_URL }}
+        run: |
+          set -euo pipefail
+          if [ -z "${DATABASE_URL:-}" ]; then
+            echo "❌ Bí mật PROD_DATABASE_URL chưa được thiết lập trong repository/environment secrets." >&2
+            exit 1
+          fi
+
+          HOST=$(node -e "try { console.log(new URL(process.env.DATABASE_URL).hostname); } catch { console.log(''); }")
+          if [ -z "${HOST}" ]; then
+            echo "❌ Không parse được hostname từ PROD_DATABASE_URL." >&2
+            exit 1
+          fi
+          echo "✅ Parsed DB host: ${HOST}"
+
+          PROD_ALLOWLIST="${{ vars.PRODUCTION_DATABASE_HOSTNAME }}"
+          if [ -z "${PROD_ALLOWLIST}" ]; then
+            echo "❌ Biến PRODUCTION_DATABASE_HOSTNAME chưa được thiết lập trong repository/environment variables." >&2
+            exit 1
+          fi
+
+          if [ "${HOST}" != "${PROD_ALLOWLIST}" ]; then
+            echo "❌ Hostname '${HOST}' không khớp PRODUCTION_DATABASE_HOSTNAME '${PROD_ALLOWLIST}' — dừng lại ngay." >&2
+            exit 1
+          fi
+          echo "✅ Production DB hostname khớp allowlist: ${HOST}"
+
+          KNOWN_STAGING_HOST="${{ vars.STAGING_DATABASE_HOSTNAME }}"
+          if [ -n "${KNOWN_STAGING_HOST}" ] && [ "${HOST}" == "${KNOWN_STAGING_HOST}" ]; then
+            echo "❌ PROD_DATABASE_URL trỏ ĐÚNG hostname staging — dừng lại ngay." >&2
+            exit 1
+          fi
+
+          echo "db_hostname=${HOST}" >> "$GITHUB_OUTPUT"
+
+      # ---- Step 5: PostgreSQL Client Tooling ----
+      - name: Verify PostgreSQL client tooling
+        run: |
+          set -euo pipefail
+          if ! command -v pg_dump >/dev/null 2>&1 || ! command -v pg_restore >/dev/null 2>&1; then
+            echo "Installing PostgreSQL client tooling..."
+            sudo apt-get update -y
+            sudo apt-get install -y postgresql-client-16 || sudo apt-get install -y postgresql-client
+          fi
+          echo "Checking client versions:"
+          pg_dump --version
+          pg_restore --version
+
+      # ---- Step 6: Execute Guarded pg_dump ----
+      - name: Execute Guarded Logical Backup (pg_dump)
+        env:
+          PROD_DATABASE_URL: ${{ secrets.PROD_DATABASE_URL }}
+        run: |
+          set -euo pipefail
+          mkdir -p backup_output
+          TIMESTAMP=$(date -u +"%Y%m%dT%H%M%SZ")
+          BACKUP_FILENAME="seasonal-worker-prod-${TIMESTAMP}.dump"
+          BACKUP_FILE="backup_output/${BACKUP_FILENAME}"
+
+          echo "BACKUP_FILENAME=${BACKUP_FILENAME}" >> "$GITHUB_ENV"
+          echo "BACKUP_FILE=${BACKUP_FILE}" >> "$GITHUB_ENV"
+          echo "TIMESTAMP=${TIMESTAMP}" >> "$GITHUB_ENV"
+
+          echo "Starting guarded pg_dump to ${BACKUP_FILE}..."
+          pg_dump "${PROD_DATABASE_URL}" \
+            --format=custom \
+            --compress=9 \
+            --no-owner \
+            --no-privileges \
+            --file="${BACKUP_FILE}"
+
+          echo "✅ pg_dump finished successfully."
+          ls -lh "${BACKUP_FILE}"
+
+      # ---- Step 7: Structural Verification (pg_restore --list) ----
+      - name: Structural verification of backup archive
+        run: |
+          set -euo pipefail
+          echo "Running pg_restore --list structural verification..."
+          pg_restore --list "${BACKUP_FILE}" > backup_output/toc.list
+          echo "✅ pg_restore --list succeeded"
+
+          TOTAL_ENTRIES=$(grep -v '^[;[:space:]]' backup_output/toc.list | wc -l | tr -d ' ')
+          TABLE_COUNT=$(grep -E ' TABLE ' backup_output/toc.list | grep -v ' TABLE DATA ' | wc -l | tr -d ' ' || echo "0")
+          TABLE_DATA_COUNT=$(grep -E ' TABLE DATA ' backup_output/toc.list | wc -l | tr -d ' ' || echo "0")
+          echo "✅ Structural summary: ${TOTAL_ENTRIES} total entries, ${TABLE_COUNT} tables, ${TABLE_DATA_COUNT} table data segments."
+
+      # ---- Step 8: Build Sidecar Checksum & Manifest ----
+      - name: Build sidecar checksum and manifest
+        run: |
+          set -euo pipefail
+          node scripts/dr/build-backup-manifest.mjs \
+            --backup-file="${BACKUP_FILE}" \
+            --source-commit-sha="${{ github.event.inputs.expected_source_commit_sha }}" \
+            --database-hostname="${{ steps.parse_hostname.outputs.db_hostname }}" \
+            --repository="${{ github.repository }}" \
+            --postgres-version="$(pg_dump --version)" \
+            --toc-file="backup_output/toc.list" \
+            --sha256-file="${BACKUP_FILE}.sha256" \
+            --output="backup_output/manifest.json"
+
+          rm -f backup_output/toc.list
+
+      # ---- Step 9: Validate Backup Artifact Package ----
+      - name: Validate backup artifact package
+        run: |
+          set -euo pipefail
+          node scripts/dr/validate-backup-manifest.mjs \
+            --manifest="backup_output/manifest.json" \
+            --backup-file="${BACKUP_FILE}" \
+            --sha256-file="${BACKUP_FILE}.sha256"
+
+      # ---- Step 10: Upload Backup Artifact Package ----
+      - name: Upload backup artifact package
+        uses: actions/upload-artifact@v4
+        with:
+          name: seasonal-worker-prod-logical-backup-${{ env.TIMESTAMP }}
+          path: |
+            backup_output/*.dump
+            backup_output/*.dump.sha256
+            backup_output/manifest.json
+          retention-days: 7
+          if-no-files-found: error
