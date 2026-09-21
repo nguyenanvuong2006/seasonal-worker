@@ -78,7 +78,34 @@ export async function GET() {
       `)
     ).rows[0];
     const scheduler = await client.query(
-      `SELECT job_key, label, is_active, last_run_at, last_status FROM scheduled_jobs ORDER BY job_key`,
+      `SELECT
+         sj.job_key,
+         sj.label,
+         sj.schedule,
+         sj.is_active,
+         sj.last_run_at,
+         sj.last_status,
+         -- Staleness: hours since last successful run (NULL if never ran OK)
+         CASE
+           WHEN sj.last_status = 'OK' AND sj.last_run_at IS NOT NULL
+           THEN round(extract(epoch FROM (now() - sj.last_run_at)) / 3600, 1)
+           ELSE NULL
+         END AS hours_since_last_ok,
+         -- Last failure reason from audit_logs (NULL if never failed)
+         (SELECT al.details->>'error'
+          FROM audit_logs al
+          WHERE al.action = 'SCHEDULED_JOB_FAILED'
+            AND al.details->>'jobKey' = sj.job_key
+          ORDER BY al.created_at DESC LIMIT 1
+         ) AS last_failure_reason,
+         (SELECT al.created_at
+          FROM audit_logs al
+          WHERE al.action = 'SCHEDULED_JOB_FAILED'
+            AND al.details->>'jobKey' = sj.job_key
+          ORDER BY al.created_at DESC LIMIT 1
+         ) AS last_failed_at
+       FROM scheduled_jobs sj
+       ORDER BY sj.job_key`,
     );
 
     return NextResponse.json({

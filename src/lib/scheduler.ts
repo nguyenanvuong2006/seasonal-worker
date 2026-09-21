@@ -1,12 +1,14 @@
 import "server-only";
 import { eq } from "drizzle-orm";
 import { db, pool } from "@/db";
-import { scheduledJobs } from "@/db/schema";
+import { scheduledJobs, auditLogs } from "@/db/schema";
 import { processNotificationQueue } from "@/lib/notifications";
 import { findStalledJobs, runNextStep } from "@/lib/import-jobs";
 import { cleanupTerminalStaging } from "@/lib/import-staging-cleanup";
 import { recomputeRequestKpiCache } from "@/lib/workforce-request";
 import { scanExpiredRequestsAndCreateTasks } from "@/lib/planning-reallocation";
+import { sanitizeJobError } from "@/lib/scheduler-utils";
+export { sanitizeJobError } from "@/lib/scheduler-utils";
 
 /**
  * SCHEDULER FOUNDATION (nền tảng, #15)
@@ -136,6 +138,30 @@ export const DEFAULT_SCHEDULED_JOBS: { jobKey: string; label: string; schedule: 
   { jobKey: "apply_effective_workforce_movements", label: "Áp dụng hiệu lực Nghỉ việc/Thuyên chuyển đến ngày hiệu lực", schedule: "daily", handlerKey: "APPLY_EFFECTIVE_WORKFORCE_MOVEMENTS" },
 ];
 
+/**
+ * Write a structured audit_log row for a scheduled-job outcome.
+ * Fail-silent: an audit write failure must NEVER abort the cron invocation.
+ * The structured console output above provides a secondary visibility channel.
+ */
+async function writeJobAudit(
+  jobKey: string,
+  action: "SCHEDULED_JOB_OK" | "SCHEDULED_JOB_FAILED" | "SCHEDULED_JOB_NO_HANDLER",
+  details: Record<string, unknown>,
+): Promise<void> {
+  try {
+    await db.insert(auditLogs).values({
+      userId: null,
+      username: "system",
+      action,
+      targetType: "scheduled_jobs",
+      category: "SYSTEM",
+      details,
+    });
+  } catch {
+    // Audit write failure is non-fatal — structured console log above still provides visibility.
+  }
+}
+
 /** Chạy toàn bộ job đang Active — gọi từ /api/cron/run. */
 export async function runDueJobs() {
   const jobs = await db.select().from(scheduledJobs).where(eq(scheduledJobs.isActive, true));
@@ -143,22 +169,37 @@ export async function runDueJobs() {
   for (const job of jobs) {
     const handler = HANDLERS[job.handlerKey];
     if (!handler) {
+      console.warn(JSON.stringify({ event: "scheduled_job_no_handler", jobKey: job.jobKey, handlerKey: job.handlerKey }));
+      await writeJobAudit(job.jobKey, "SCHEDULED_JOB_NO_HANDLER", { jobKey: job.jobKey, handlerKey: job.handlerKey });
       results.push({ jobKey: job.jobKey, status: "NO_HANDLER" });
       continue;
     }
+    const startedAt = new Date();
+    console.log(JSON.stringify({ event: "scheduled_job_start", jobKey: job.jobKey, startedAt: startedAt.toISOString() }));
     try {
-      await handler();
+      const outcome = await handler();
+      const finishedAt = new Date();
+      const durationMs = finishedAt.getTime() - startedAt.getTime();
       await db
         .update(scheduledJobs)
-        .set({ lastRunAt: new Date(), lastStatus: "OK" })
+        .set({ lastRunAt: finishedAt, lastStatus: "OK" })
         .where(eq(scheduledJobs.id, job.id));
+      console.log(JSON.stringify({ event: "scheduled_job_ok", jobKey: job.jobKey, durationMs, outcome }));
+      await writeJobAudit(job.jobKey, "SCHEDULED_JOB_OK", { jobKey: job.jobKey, durationMs, outcome });
       results.push({ jobKey: job.jobKey, status: "OK" });
     } catch (e) {
+      const failedAt = new Date();
+      const durationMs = failedAt.getTime() - startedAt.getTime();
+      const errorMessage = sanitizeJobError(e);
       await db
         .update(scheduledJobs)
-        .set({ lastRunAt: new Date(), lastStatus: "FAILED" })
+        .set({ lastRunAt: failedAt, lastStatus: "FAILED" })
         .where(eq(scheduledJobs.id, job.id));
-      results.push({ jobKey: job.jobKey, status: "FAILED: " + (e as Error).message });
+      // Structured error log — parseable by Vercel Logs / log aggregators.
+      console.error(JSON.stringify({ event: "scheduled_job_failed", jobKey: job.jobKey, durationMs, error: errorMessage }));
+      // Persistent audit record — operators can query without reading raw platform logs.
+      await writeJobAudit(job.jobKey, "SCHEDULED_JOB_FAILED", { jobKey: job.jobKey, durationMs, error: errorMessage });
+      results.push({ jobKey: job.jobKey, status: "FAILED: " + errorMessage });
     }
   }
   return results;
