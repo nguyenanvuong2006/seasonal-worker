@@ -50,6 +50,10 @@ const HANDLERS: Record<string, () => Promise<Record<string, unknown>>> = {
       let done = false;
       while (!done && Date.now() < deadline) {
         const r = await runNextStep(job.id);
+        if (r.skipped) {
+          // Another worker holds the advisory lock on this job; skip spinning
+          break;
+        }
         done = r.done;
       }
       resumed++;

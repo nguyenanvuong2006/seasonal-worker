@@ -1,3 +1,4 @@
+import crypto from "crypto";
 import "server-only";
 import { and, eq, sql } from "drizzle-orm";
 import { after } from "next/server";
@@ -22,6 +23,25 @@ import { CCCD_PATTERN, NUMBER_PATTERN, VN_PHONE_PATTERN } from "@/lib/validators
 export const STAGE_CHUNK = 8000; // số dòng merge / 1 câu lệnh SQL — đủ nhỏ để không chạm giới hạn, đủ lớn để nhanh
 export const STALE_MS = 90_000; // job không có heartbeat > 90s coi là "treo", watchdog được phép resume
 
+/**
+ * F-02: PostgreSQL transaction-level advisory lock namespace for Import Engine single-worker ownership.
+ * Deterministic namespace: 847_291_010 (disjoint from maintenance 003 and activation 004).
+ */
+export const IMPORT_JOB_ADVISORY_NAMESPACE = 847_291_010;
+
+/**
+ * Derives a deterministic 32-bit signed integer key from jobId (UUID or string)
+ * for use in pg_try_advisory_xact_lock(classid, objid).
+ */
+export function deriveJobAdvisoryLockKey(jobId: string): number {
+  const hash = crypto.createHash("sha256").update(jobId).digest();
+  return hash.readInt32BE(0);
+}
+
+export type Queryable = {
+  query: (text: string, params?: unknown[]) => Promise<{ rows: any[]; rowCount?: number | null }>;
+};
+
 /** Nhóm dữ liệu dùng ĐƯỢC với Import Engine chung (staging + merge theo lô).
  *  `recruitment_request` KHÔNG nằm ở đây: yêu cầu tuyển dụng có đường import
  *  riêng (paste TSV + transaction, xem src/lib/recruitment-request.ts) vì cần
@@ -34,10 +54,34 @@ export function isImportEngineJobType(value: unknown): value is JobType {
   return typeof value === "string" && (IMPORT_ENGINE_JOB_TYPES as readonly string[]).includes(value);
 }
 
+export function getStagingTableName(jobType: JobType): string {
+  if (jobType === "department") return "staging_department";
+  if (jobType === "dw_data") return "staging_dw_data";
+  if (jobType === "daily_application") return "staging_daily_application";
+  throw new Error(`Loại dữ liệu không hợp lệ: ${jobType}`);
+}
+
+/**
+ * F-01: Proves repository-native staging completeness by counting actual staged rows.
+ */
+export async function getStagedRowCount(
+  jobId: string,
+  jobType: JobType,
+  runner: Queryable = pool,
+): Promise<number> {
+  const tableName = getStagingTableName(jobType);
+  const res = await runner.query(`SELECT count(*)::int AS c FROM ${tableName} WHERE job_id = $1`, [jobId]);
+  return res.rows?.[0]?.c ?? 0;
+}
+
+/**
+ * F-01: Job is initialized with status: "STAGING" (representing incomplete staging).
+ * Only after server proves staging completeness does status transition to "QUEUED".
+ */
 export async function createJob(jobType: JobType, fileName: string, checksum: string, createdBy: string, totalRows: number) {
   const [job] = await db
     .insert(importJobs)
-    .values({ jobType, fileName, checksum, createdBy, totalRows, status: "QUEUED", currentStage: "STAGING" })
+    .values({ jobType, fileName, checksum, createdBy, totalRows, status: "STAGING", currentStage: "STAGING" })
     .returning();
   return job;
 }
@@ -47,7 +91,8 @@ export async function createJob(jobType: JobType, fileName: string, checksum: st
  * hoạt sau stageRows nên tại thời điểm này không có tiến trình merge cạnh tranh.
  */
 export async function cleanupPartialImportJob(jobId: string) {
-  const client = await pool.connect();
+  const client: Queryable & { release?: () => void } =
+    typeof pool.connect === "function" ? await pool.connect() : pool;
   try {
     await client.query("BEGIN");
     await client.query("DELETE FROM import_job_errors WHERE job_id = $1", [jobId]);
@@ -57,26 +102,105 @@ export async function cleanupPartialImportJob(jobId: string) {
     await client.query("DELETE FROM import_jobs WHERE id = $1", [jobId]);
     await client.query("COMMIT");
   } catch (error) {
-    await client.query("ROLLBACK");
+    await client.query("ROLLBACK").catch(() => {});
     throw error;
   } finally {
-    client.release();
+    if (typeof client.release === "function") {
+      client.release();
+    }
   }
 }
 
-async function touch(jobId: string, patch: Record<string, unknown>) {
+export async function touch(jobId: string, patch: Record<string, unknown>) {
   await db
     .update(importJobs)
     .set({ ...patch, updatedAt: new Date() })
     .where(eq(importJobs.id, jobId));
 }
 
-async function logErrors(jobId: string, rows: { rowNumber: number; reason: string; data: Record<string, string>; severity?: "ERROR" | "WARNING" }[]) {
+/**
+ * Updates import_jobs on the given transaction client, ensuring atomic progress
+ * persistence alongside target mutations.
+ */
+export async function touchOnClient(client: Queryable, jobId: string, patch: Record<string, unknown>) {
+  const colMap: Record<string, string> = {
+    status: "status",
+    progress: "progress",
+    currentStage: "current_stage",
+    totalRows: "total_rows",
+    processedRows: "processed_rows",
+    insertedRows: "inserted_rows",
+    updatedRows: "updated_rows",
+    duplicateRows: "duplicate_rows",
+    warningRows: "warning_rows",
+    errorRows: "error_rows",
+    startedAt: "started_at",
+    finishedAt: "finished_at",
+    lastError: "last_error",
+    metadata: "metadata",
+  };
+  const setClauses: string[] = ["updated_at = now()"];
+  const values: unknown[] = [jobId];
+  let idx = 2;
+  for (const [k, v] of Object.entries(patch)) {
+    const col = colMap[k];
+    if (!col) continue;
+    if (k === "metadata") {
+      setClauses.push(`${col} = $${idx}::jsonb`);
+      values.push(typeof v === "string" ? v : JSON.stringify(v ?? {}));
+    } else {
+      setClauses.push(`${col} = $${idx}`);
+      values.push(v);
+    }
+    idx++;
+  }
+  await client.query(`UPDATE import_jobs SET ${setClauses.join(", ")} WHERE id = $1`, values);
+}
+
+export function mapJobRow(row: Record<string, any>): typeof importJobs.$inferSelect {
+  return {
+    id: row.id,
+    jobType: row.job_type ?? row.jobType,
+    fileName: row.file_name ?? row.fileName,
+    checksum: row.checksum ?? null,
+    status: row.status,
+    progress: Number(row.progress ?? 0),
+    currentStage: row.current_stage ?? row.currentStage ?? "STAGING",
+    totalRows: Number(row.total_rows ?? row.totalRows ?? 0),
+    processedRows: Number(row.processed_rows ?? row.processedRows ?? 0),
+    insertedRows: Number(row.inserted_rows ?? row.insertedRows ?? 0),
+    updatedRows: Number(row.updated_rows ?? row.updatedRows ?? 0),
+    duplicateRows: Number(row.duplicate_rows ?? row.duplicateRows ?? 0),
+    warningRows: Number(row.warning_rows ?? row.warningRows ?? 0),
+    errorRows: Number(row.error_rows ?? row.errorRows ?? 0),
+    startedAt: row.started_at ? new Date(row.started_at) : (row.startedAt ? new Date(row.startedAt) : null),
+    finishedAt: row.finished_at ? new Date(row.finished_at) : (row.finishedAt ? new Date(row.finishedAt) : null),
+    createdBy: row.created_by ?? row.createdBy,
+    resumeToken: row.resume_token ?? row.resumeToken,
+    lastError: row.last_error ?? row.lastError ?? null,
+    metadata: typeof row.metadata === "string" ? JSON.parse(row.metadata) : (row.metadata ?? {}),
+    createdAt: row.created_at ? new Date(row.created_at) : (row.createdAt ? new Date(row.createdAt) : new Date()),
+    updatedAt: row.updated_at ? new Date(row.updated_at) : (row.updatedAt ? new Date(row.updatedAt) : new Date()),
+  };
+}
+
+async function logErrors(
+  jobId: string,
+  rows: { rowNumber: number; reason: string; data: Record<string, string>; severity?: "ERROR" | "WARNING" }[],
+  runner: Queryable = pool,
+) {
   if (rows.length === 0) return;
   for (let i = 0; i < rows.length; i += 1000) {
     const chunk = rows.slice(i, i + 1000);
-    await db.insert(importJobErrors).values(
-      chunk.map((r) => ({ jobId, rowNumber: r.rowNumber, reason: r.reason, originalData: r.data, severity: r.severity ?? "ERROR" })),
+    const rowNums = chunk.map((r) => r.rowNumber);
+    const reasons = chunk.map((r) => r.reason);
+    const datas = chunk.map((r) => JSON.stringify(r.data));
+    const severities = chunk.map((r) => r.severity ?? "ERROR");
+    await runner.query(
+      `INSERT INTO import_job_errors (job_id, row_number, reason, original_data, severity)
+       SELECT $1::uuid, x.rn, x.rs, x.dt::jsonb, x.sv
+       FROM unnest($2::int[], $3::text[], $4::text[], $5::text[]) AS x(rn, rs, dt, sv)`,
+      [jobId, rowNums, reasons, datas, severities],
     );
   }
 }
@@ -249,45 +373,45 @@ function buildColumnPickers(defs: Awaited<ReturnType<typeof getFieldDefinitions>
    BƯỚC 2 — VALIDATING (SET-BASED): 1-2 câu UPDATE đánh dấu valid=false +
    invalid_reason cho TOÀN BỘ staging cùng lúc — không lặp từng dòng.
    ============================================================ */
-async function runValidating(jobId: string, jobType: JobType) {
+async function runValidating(jobId: string, jobType: JobType, runner: Queryable = pool) {
   if (jobType === "department") {
-    await pool.query(
+    await runner.query(
       `UPDATE staging_department SET valid = false, invalid_reason = 'Thiếu tên Bộ phận (Dept.)'
        WHERE job_id = $1 AND (dept_name IS NULL OR btrim(dept_name) = '')`,
       [jobId],
     );
   } else if (jobType === "dw_data") {
-    await pool.query(
+    await runner.query(
       `UPDATE staging_dw_data SET valid = false, invalid_reason = 'Thiếu Họ tên'
        WHERE job_id = $1 AND (full_name IS NULL OR btrim(full_name) = '')`,
       [jobId],
     );
-    await pool.query(
+    await runner.query(
       `UPDATE staging_dw_data SET valid = false,
          invalid_reason = 'CCCD là bắt buộc và phải gồm đúng 12 chữ số — giá trị: "' || coalesce(cccd, '(trống)') || '"'
        WHERE job_id = $1 AND valid = true AND (cccd IS NULL OR cccd !~ $2)`,
       [jobId, CCCD_PATTERN],
     );
   } else {
-    await pool.query(
+    await runner.query(
       `UPDATE staging_daily_application SET valid = false, invalid_reason = 'Thiếu CCCD / Họ tên / SĐT (bắt buộc)'
        WHERE job_id = $1 AND (cccd IS NULL OR full_name IS NULL OR btrim(full_name) = '' OR phone IS NULL)`,
       [jobId],
     );
-    await pool.query(
+    await runner.query(
       `UPDATE staging_daily_application SET valid = false,
          invalid_reason = 'CCCD là bắt buộc và phải gồm đúng 12 chữ số — giá trị: "' || coalesce(cccd, '(trống)') || '"'
        WHERE job_id = $1 AND valid = true AND cccd !~ $2`,
       [jobId, CCCD_PATTERN],
     );
-    await pool.query(
+    await runner.query(
       `UPDATE staging_daily_application SET valid = false,
          invalid_reason = 'Ngày đăng ký không đúng định dạng — giá trị: "' || coalesce(reg_date_raw, '(trống)') || '"'
        WHERE job_id = $1 AND valid = true AND reg_date_parsed IS NULL`,
       [jobId],
     );
     // Ngày bắt đầu (starting_date) không bắt buộc — sai định dạng chỉ CẢNH BÁO, không chặn dòng.
-    await pool.query(
+    await runner.query(
       `INSERT INTO import_job_errors (job_id, row_number, reason, original_data, severity)
        SELECT job_id, row_number,
               'Ngày bắt đầu không đúng định dạng — giá trị: "' || starting_date_raw || '" (bỏ qua trường này, các trường khác vẫn nhập)',
@@ -301,14 +425,14 @@ async function runValidating(jobId: string, jobType: JobType) {
 
   // Ghi các dòng invalid vào import_job_errors (set-based INSERT...SELECT, 1 câu lệnh).
   const table = jobType === "department" ? "staging_department" : jobType === "dw_data" ? "staging_dw_data" : "staging_daily_application";
-  await pool.query(
+  await runner.query(
     `INSERT INTO import_job_errors (job_id, row_number, reason, original_data, severity)
      SELECT job_id, row_number, invalid_reason, to_jsonb(t) - 'job_id' - 'id' - 'valid' - 'invalid_reason', 'ERROR'
      FROM ${table} t WHERE job_id = $1 AND valid = false`,
     [jobId],
   );
-  const errCount = await pool.query(`SELECT count(*)::int c FROM ${table} WHERE job_id = $1 AND valid = false`, [jobId]);
-  const warnCount = await pool.query(`SELECT count(*)::int c FROM import_job_errors WHERE job_id = $1 AND severity = 'WARNING'`, [jobId]);
+  const errCount = await runner.query(`SELECT count(*)::int c FROM ${table} WHERE job_id = $1 AND valid = false`, [jobId]);
+  const warnCount = await runner.query(`SELECT count(*)::int c FROM import_job_errors WHERE job_id = $1 AND severity = 'WARNING'`, [jobId]);
   return { errorRows: errCount.rows[0]?.c ?? 0, warningRows: warnCount.rows[0]?.c ?? 0 };
 }
 
@@ -317,20 +441,20 @@ async function runValidating(jobId: string, jobType: JobType) {
    JOIN toàn bộ staging với dw_data + departments 1 LẦN — thay vì
    "SELECT dw_data 15.774 lần" như kiến trúc cũ.
    ============================================================ */
-async function runMatching(jobId: string) {
-  await pool.query(
+async function runMatching(jobId: string, runner: Queryable = pool) {
+  await runner.query(
     `UPDATE staging_daily_application s SET
        resolved_dw_id = d.id, resolved_dw_code = d.code, resolved_dw_match = 'MATCHED'
      FROM dw_data d
      WHERE s.job_id = $1 AND s.valid = true AND d.cccd = s.cccd AND d.deleted_at IS NULL`,
     [jobId],
   );
-  await pool.query(
+  await runner.query(
     `UPDATE staging_daily_application SET resolved_dw_match = 'NEW'
      WHERE job_id = $1 AND valid = true AND resolved_dw_match IS NULL`,
     [jobId],
   );
-  await pool.query(
+  await runner.query(
     `UPDATE staging_daily_application s SET resolved_dept_id = dep.id
      FROM departments dep
      WHERE s.job_id = $1 AND s.valid = true AND dep.dept_name = s.dept_name
@@ -339,7 +463,7 @@ async function runMatching(jobId: string) {
   );
 
   // CCCD sai đã bị chặn ở VALIDATING. SĐT và tuổi bất thường vẫn là cảnh báo dữ liệu.
-  const warn = await pool.query(
+  const warn = await runner.query(
     `SELECT row_number, cccd, phone, age,
         CASE WHEN phone !~ $2 THEN 'SĐT "' || coalesce(phone,'') || '" có thể sai định dạng' END AS r1,
         CASE WHEN age ~ $3 AND (age::numeric < 15 OR age::numeric > 70) THEN 'Tuổi ' || age || ' bất thường (dưới 15 hoặc trên 70)' END AS r2
@@ -353,7 +477,7 @@ async function runMatching(jobId: string) {
       const reasons = [r.r1, r.r2].filter(Boolean) as string[];
       return reasons.length ? [{ rowNumber: r.row_number, reason: reasons.join("; "), data: { cccd: r.cccd, phone: r.phone, age: r.age }, severity: "WARNING" as const }] : [];
     });
-    await logErrors(jobId, errs);
+    await logErrors(jobId, errs, runner);
   }
   return { warningRows: warn.rows.length };
 }
@@ -363,9 +487,9 @@ async function runMatching(jobId: string) {
    resume thật): INSERT...SELECT...ON CONFLICT — 1 câu lệnh xử lý cả lô,
    KHÔNG mở transaction ứng dụng lồng nhau qua nhiều round-trip cho từng dòng.
    ============================================================ */
-async function runMergingChunk(jobId: string, jobType: JobType, fromRow: number, toRow: number) {
+async function runMergingChunk(jobId: string, jobType: JobType, fromRow: number, toRow: number, runner: Queryable = pool) {
   if (jobType === "department") {
-    const res = await pool.query(
+    const res = await runner.query(
       `INSERT INTO departments (stt, dept_name, group_name, vn_name, supervisor, supervisor_phone, sheet_link, daily_quota)
        SELECT dept_stt, dept_name, coalesce(group_name,''), vn_name, supervisor, supervisor_phone, note, 0
        FROM staging_department
@@ -385,7 +509,7 @@ async function runMergingChunk(jobId: string, jobType: JobType, fromRow: number,
     // dw_data.code and dw_data.it_code are CURRENT READ MIRRORS of canonical assignments.
     // Spreadsheet imports MUST NOT populate or modify them (code = NULL, it_code = NULL).
     // The spreadsheet CODE/IT CODE remain safely in staging_dw_data.
-    const res = await pool.query(
+    const res = await runner.query(
       `INSERT INTO dw_data (code, it_code, old_dw_code, id_vlookup, full_name, gender, bod, profile, dktn,
          cccd, date_of_issue, place_of_issue, permanent_address, residential_address, phone)
        SELECT NULL, NULL, old_dw_code, id_vlookup, full_name, gender, bod, profile, dktn,
@@ -396,7 +520,7 @@ async function runMergingChunk(jobId: string, jobType: JobType, fromRow: number,
        RETURNING id`,
       [jobId, fromRow, toRow],
     );
-    const attempted = await pool.query(
+    const attempted = await runner.query(
       `SELECT count(*)::int c FROM staging_dw_data WHERE job_id = $1 AND valid = true AND row_number BETWEEN $2 AND $3 AND cccd IS NOT NULL`,
       [jobId, fromRow, toRow],
     );
@@ -406,7 +530,7 @@ async function runMergingChunk(jobId: string, jobType: JobType, fromRow: number,
   }
 
   // daily_application
-  const res = await pool.query(
+  const res = await runner.query(
     `INSERT INTO daily_applications (submitted_at, reg_date, cccd, full_name, gender, dob, birth_year, age, phone,
        ethnicity, permanent_address, residential_address, declared_type, dw_match, dw_id, dw_code, it_code, work_duration,
        referral_channel, dept_id, status, starting_date, appointment_list, note_worker, vaccine, code_check,
@@ -426,7 +550,7 @@ async function runMergingChunk(jobId: string, jobType: JobType, fromRow: number,
      RETURNING id`,
     [jobId, fromRow, toRow],
   );
-  const attempted = await pool.query(
+  const attempted = await runner.query(
     `SELECT count(*)::int c FROM staging_daily_application WHERE job_id = $1 AND valid = true AND row_number BETWEEN $2 AND $3`,
     [jobId, fromRow, toRow],
   );
@@ -435,11 +559,11 @@ async function runMergingChunk(jobId: string, jobType: JobType, fromRow: number,
   return { inserted, updated: 0, duplicate };
 }
 
-async function runBuildingStats(jobId: string, jobType: JobType) {
+async function runBuildingStats(jobId: string, jobType: JobType, runner: Queryable = pool) {
   if (jobType === "department") return;
   // Đồng bộ dw_id/dw_code ngược lại cho các đơn vừa map vào dw_data mới insert cùng đợt (nếu có).
   if (jobType === "daily_application") {
-    await pool.query(
+    await runner.query(
       `UPDATE daily_applications a SET dw_id = d.id, dw_code = d.code, dw_match = 'MATCHED'
        FROM dw_data d
        WHERE a.dw_id IS NULL AND a.cccd = d.cccd AND d.deleted_at IS NULL
@@ -452,34 +576,140 @@ async function runBuildingStats(jobId: string, jobType: JobType) {
    ORCHESTRATOR — xử lý ĐÚNG 1 bước rồi trả về. Nơi gọi (worker route) tự
    quyết định có "chain" tiếp hay không (dựa vào done=false).
    ============================================================ */
-export async function runNextStep(jobId: string): Promise<{ done: boolean; stage: string; job: typeof importJobs.$inferSelect }> {
-  const [job] = await db.select().from(importJobs).where(eq(importJobs.id, jobId));
-  if (!job) throw new Error("Job không tồn tại.");
-  if (job.status === "CANCELLED" || job.status === "DONE") return { done: true, stage: job.currentStage, job };
-
-  await touch(jobId, { status: "RUNNING", startedAt: job.startedAt ?? new Date() });
-  const jobType = job.jobType as JobType;
+export async function runNextStep(jobId: string): Promise<{
+  done: boolean;
+  stage: string;
+  job: typeof importJobs.$inferSelect;
+  skipped?: boolean;
+  reason?: string;
+}> {
+  const client: Queryable & { release?: () => void } =
+    typeof pool.connect === "function" ? await pool.connect() : pool;
+  let txActive = false;
 
   try {
+    await client.query("BEGIN");
+    txActive = true;
+
+    // F-02: PostgreSQL transaction-level advisory lock per-job exclusion
+    const lockKey = deriveJobAdvisoryLockKey(jobId);
+    const lockRes = await client.query(
+      "SELECT pg_try_advisory_xact_lock($1::int, $2::int) AS locked",
+      [IMPORT_JOB_ADVISORY_NAMESPACE, lockKey],
+    );
+    const isLocked = lockRes.rows?.[0]?.locked !== false;
+    if (!isLocked) {
+      await client.query("ROLLBACK");
+      txActive = false;
+      const [currentJob] = await db.select().from(importJobs).where(eq(importJobs.id, jobId));
+      return {
+        done: false,
+        skipped: true,
+        reason: "ALREADY_PROCESSING",
+        stage: currentJob?.currentStage ?? "UNKNOWN",
+        job: currentJob!,
+      };
+    }
+
+    // Read job under lock
+    let [job] = await db.select().from(importJobs).where(eq(importJobs.id, jobId));
+    if (!job) {
+      const rawRes = await client.query("SELECT * FROM import_jobs WHERE id = $1 FOR UPDATE", [jobId]);
+      if (rawRes.rows && rawRes.rows.length > 0) {
+        job = mapJobRow(rawRes.rows[0]);
+      }
+    } else {
+      await client.query("SELECT id FROM import_jobs WHERE id = $1 FOR UPDATE", [jobId]);
+    }
+
+    if (!job) {
+      await client.query("ROLLBACK");
+      txActive = false;
+      throw new Error("Job không tồn tại.");
+    }
+    if (job.status === "CANCELLED" || job.status === "DONE") {
+      await client.query("ROLLBACK");
+      txActive = false;
+      return { done: true, stage: job.currentStage, job };
+    }
+
+    const jobType = job.jobType as JobType;
+
     if (job.currentStage === "STAGING") {
-      // Staging đã chạy xong ở bước upload (đồng bộ, vì thường đủ nhanh) — bước này chỉ là điểm nối,
-      // chuyển thẳng sang VALIDATING.
-      await touch(jobId, { currentStage: "VALIDATING", progress: 10 });
-      return { done: false, stage: "VALIDATING", job };
+      // F-01: Proactively verify that the complete expected staging dataset exists before transitioning to VALIDATING
+      const actualCount = await getStagedRowCount(jobId, jobType, client);
+      if (actualCount !== job.totalRows || actualCount === 0) {
+        const sanitizedError = `Dữ liệu nạp vào staging không hoàn chỉnh (thực tế: ${actualCount}/${job.totalRows} dòng). Job đã dừng để bảo đảm toàn vẹn dữ liệu.`;
+        await touchOnClient(client, jobId, {
+          status: "FAILED",
+          currentStage: "STAGING",
+          lastError: sanitizedError,
+        });
+        await client.query("COMMIT");
+        txActive = false;
+        return {
+          done: true,
+          stage: "FAILED",
+          job: { ...job, status: "FAILED", lastError: sanitizedError },
+        };
+      }
+
+      await touchOnClient(client, jobId, {
+        currentStage: "VALIDATING",
+        progress: 10,
+        status: "RUNNING",
+        startedAt: job.startedAt ?? new Date(),
+      });
+      await client.query("COMMIT");
+      txActive = false;
+      return {
+        done: false,
+        stage: "VALIDATING",
+        job: { ...job, currentStage: "VALIDATING", progress: 10, status: "RUNNING" },
+      };
     }
 
     if (job.currentStage === "VALIDATING") {
-      const { errorRows, warningRows } = await runValidating(jobId, jobType);
+      const { errorRows, warningRows } = await runValidating(jobId, jobType, client);
       const nextStage = jobType === "daily_application" ? "MATCHING" : "MERGING";
-      await touch(jobId, { currentStage: nextStage, progress: 25, errorRows, warningRows });
-      return { done: false, stage: nextStage, job };
+      await touchOnClient(client, jobId, {
+        currentStage: nextStage,
+        progress: 25,
+        errorRows,
+        warningRows,
+        status: "RUNNING",
+        startedAt: job.startedAt ?? new Date(),
+      });
+      await client.query("COMMIT");
+      txActive = false;
+      return {
+        done: false,
+        stage: nextStage,
+        job: { ...job, currentStage: nextStage, progress: 25, errorRows, warningRows, status: "RUNNING" },
+      };
     }
 
     if (job.currentStage === "MATCHING") {
-      await runMatching(jobId);
-      const totalWarnings = await pool.query(`SELECT count(*)::int c FROM import_job_errors WHERE job_id = $1 AND severity = 'WARNING'`, [jobId]);
-      await touch(jobId, { currentStage: "MERGING", progress: 40, warningRows: totalWarnings.rows[0]?.c ?? 0 });
-      return { done: false, stage: "MERGING", job };
+      await runMatching(jobId, client);
+      const totalWarnings = await client.query(
+        `SELECT count(*)::int c FROM import_job_errors WHERE job_id = $1 AND severity = 'WARNING'`,
+        [jobId],
+      );
+      const warningRows = totalWarnings.rows[0]?.c ?? 0;
+      await touchOnClient(client, jobId, {
+        currentStage: "MERGING",
+        progress: 40,
+        warningRows,
+        status: "RUNNING",
+        startedAt: job.startedAt ?? new Date(),
+      });
+      await client.query("COMMIT");
+      txActive = false;
+      return {
+        done: false,
+        stage: "MERGING",
+        job: { ...job, currentStage: "MERGING", progress: 40, warningRows, status: "RUNNING" },
+      };
     }
 
     if (job.currentStage === "MERGING") {
@@ -487,7 +717,7 @@ export async function runNextStep(jobId: string): Promise<{ done: boolean; stage
       const fromRow = cursor + 1;
       const toRow = cursor + STAGE_CHUNK;
       const chunkStartedAt = Date.now();
-      const { inserted, updated, duplicate } = await runMergingChunk(jobId, jobType, fromRow, toRow);
+      const { inserted, updated, duplicate } = await runMergingChunk(jobId, jobType, fromRow, toRow, client);
       const chunkMs = Date.now() - chunkStartedAt;
       const rowsThisChunk = Math.min(toRow, job.totalRows) - cursor;
 
@@ -520,7 +750,7 @@ export async function runNextStep(jobId: string): Promise<{ done: boolean; stage
         // "chain" nữa mới đánh dấu DONE — nếu lượt chain đó thất bại (after() fetch lỗi, cold
         // start, instance bị thu hồi...), job đứng mãi ở RUNNING 13.519/13.519 dù dữ liệu đã
         // vào đủ. Giờ chạy luôn BUILDING_STATS + DONE tại đây: hết cửa sổ lỗi đó hoàn toàn.
-        await touch(jobId, {
+        await touchOnClient(client, jobId, {
           processedRows: processedNow,
           insertedRows: job.insertedRows + inserted,
           updatedRows: job.updatedRows + updated,
@@ -528,36 +758,104 @@ export async function runNextStep(jobId: string): Promise<{ done: boolean; stage
           progress: 97,
           metadata: { ...(job.metadata as object), mergeCursor: toRow, lastChunkMs: chunkMs },
           currentStage: "BUILDING_STATS",
+          status: "RUNNING",
+          startedAt: job.startedAt ?? new Date(),
         });
-        await runBuildingStats(jobId, jobType);
-        await touch(jobId, { currentStage: "DONE", progress: 100, status: "DONE", finishedAt: new Date() });
-        return { done: true, stage: "DONE", job };
+        await runBuildingStats(jobId, jobType, client);
+        await touchOnClient(client, jobId, {
+          currentStage: "DONE",
+          progress: 100,
+          status: "DONE",
+          finishedAt: new Date(),
+        });
+        await client.query("COMMIT");
+        txActive = false;
+        const updatedJob = {
+          ...job,
+          processedRows: processedNow,
+          insertedRows: job.insertedRows + inserted,
+          updatedRows: job.updatedRows + updated,
+          duplicateRows: job.duplicateRows + duplicate,
+          currentStage: "DONE",
+          status: "DONE" as const,
+          progress: 100,
+          finishedAt: new Date(),
+        };
+        return { done: true, stage: "DONE", job: updatedJob };
       }
 
-      await touch(jobId, {
+      const nextProgress = Math.min(95, 40 + Math.round((processedNow / Math.max(1, job.totalRows)) * 55));
+      await touchOnClient(client, jobId, {
         processedRows: processedNow,
         insertedRows: job.insertedRows + inserted,
         updatedRows: job.updatedRows + updated,
         duplicateRows: job.duplicateRows + duplicate,
-        progress: Math.min(95, 40 + Math.round((processedNow / Math.max(1, job.totalRows)) * 55)),
+        progress: nextProgress,
         metadata: { ...(job.metadata as object), mergeCursor: toRow, lastChunkMs: chunkMs },
         currentStage: "MERGING",
+        status: "RUNNING",
+        startedAt: job.startedAt ?? new Date(),
       });
-      return { done: false, stage: "MERGING", job };
+      await client.query("COMMIT");
+      txActive = false;
+      const updatedJob = {
+        ...job,
+        processedRows: processedNow,
+        insertedRows: job.insertedRows + inserted,
+        updatedRows: job.updatedRows + updated,
+        duplicateRows: job.duplicateRows + duplicate,
+        currentStage: "MERGING",
+        status: "RUNNING" as const,
+        progress: nextProgress,
+        metadata: { ...(job.metadata as object), mergeCursor: toRow, lastChunkMs: chunkMs },
+      };
+      return { done: false, stage: "MERGING", job: updatedJob };
     }
 
     if (job.currentStage === "BUILDING_STATS") {
-      await runBuildingStats(jobId, jobType);
-      await touch(jobId, { currentStage: "DONE", progress: 100, status: "DONE", finishedAt: new Date() });
-      return { done: true, stage: "DONE", job };
+      await runBuildingStats(jobId, jobType, client);
+      await touchOnClient(client, jobId, {
+        currentStage: "DONE",
+        progress: 100,
+        status: "DONE",
+        finishedAt: new Date(),
+      });
+      await client.query("COMMIT");
+      txActive = false;
+      return { done: true, stage: "DONE", job: { ...job, currentStage: "DONE", progress: 100, status: "DONE", finishedAt: new Date() } };
     }
 
     // Trạng thái không xác định — coi như xong để tránh vòng lặp vô hạn.
-    await touch(jobId, { status: "DONE", currentStage: "DONE", progress: 100, finishedAt: new Date() });
-    return { done: true, stage: "DONE", job };
+    await touchOnClient(client, jobId, {
+      status: "DONE",
+      currentStage: "DONE",
+      progress: 100,
+      finishedAt: new Date(),
+    });
+    await client.query("COMMIT");
+    txActive = false;
+    return { done: true, stage: "DONE", job: { ...job, status: "DONE", currentStage: "DONE", progress: 100, finishedAt: new Date() } };
   } catch (error) {
-    await touch(jobId, { status: "FAILED", lastError: translateError(error as Error) });
-    return { done: true, stage: "FAILED", job };
+    if (txActive) {
+      await client.query("ROLLBACK").catch(() => {});
+      txActive = false;
+    }
+    const errText = translateError(error as Error);
+    try {
+      await touch(jobId, { status: "FAILED", lastError: errText });
+    } catch {
+      // Ignore secondary error
+    }
+    const [failedJob] = await db.select().from(importJobs).where(eq(importJobs.id, jobId)).catch(() => []);
+    return {
+      done: true,
+      stage: "FAILED",
+      job: failedJob ?? ({ id: jobId, status: "FAILED", lastError: errText } as any),
+    };
+  } finally {
+    if (typeof client.release === "function") {
+      client.release();
+    }
   }
 }
 

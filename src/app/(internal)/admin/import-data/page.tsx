@@ -45,7 +45,7 @@ type Job = {
   id: string;
   jobType: JobType;
   fileName: string;
-  status: "QUEUED" | "RUNNING" | "PAUSED" | "DONE" | "FAILED" | "CANCELLED";
+  status: "STAGING" | "QUEUED" | "RUNNING" | "PAUSED" | "DONE" | "FAILED" | "CANCELLED";
   progress: number;
   currentStage: string;
   totalRows: number;
@@ -131,6 +131,7 @@ function fmtEta(sec: number | null) {
 }
 
 const STATUS_BADGE: Record<string, string> = {
+  STAGING: "bg-purple-100 text-purple-700",
   QUEUED: "bg-surface-hover text-fg-secondary",
   RUNNING: "bg-blue-100 text-blue-700",
   PAUSED: "bg-amber-100 text-amber-700",
@@ -139,6 +140,7 @@ const STATUS_BADGE: Record<string, string> = {
   CANCELLED: "bg-surface-hover text-fg-secondary",
 };
 const STATUS_LABEL: Record<string, string> = {
+  STAGING: "Đang nạp dữ liệu",
   QUEUED: "Đang chờ",
   RUNNING: "Đang chạy",
   PAUSED: "Tạm dừng",
@@ -306,7 +308,7 @@ export default function ImportDataPage() {
 
   const job = jobStatus?.job;
   const stageIdx = job ? STAGES.indexOf(job.currentStage) : -1;
-  const activeIncomplete = useMemo(() => history.filter((j) => ["QUEUED", "RUNNING", "PAUSED", "FAILED"].includes(j.status)), [history]);
+  const activeIncomplete = useMemo(() => history.filter((j) => ["STAGING", "QUEUED", "RUNNING", "PAUSED", "FAILED"].includes(j.status)), [history]);
 
   return (
     <div className="mx-auto max-w-[1400px] space-y-6 pb-16">
@@ -314,7 +316,7 @@ export default function ImportDataPage() {
       <div className="hasfarm-hero animate-slide-up overflow-hidden rounded-[24px] p-6 text-white shadow-[0_20px_50px_rgba(8,50,27,0.35)] sm:p-8">
         <div className="flex flex-wrap items-center justify-between gap-4">
           <div className="flex items-center gap-4">
-            <div className="flex h-14 w-14 items-center justify-center rounded-2xl bg-surface/10 backdrop-blur-md ring-1 ring-white/20">
+            <div className="flex h-14 w-14 items-center justify-center rounded-2xl bg-surface/15 backdrop-blur-md ring-1 ring-white/20">
               <Sparkles className="h-7 w-7 text-gold-300" />
             </div>
             <div>
@@ -327,13 +329,13 @@ export default function ImportDataPage() {
               href="/help/import/IMPORT_GUIDE.md"
               target="_blank"
               rel="noreferrer"
-              className="flex items-center gap-2 rounded-full bg-surface/10 px-4 py-2.5 text-sm font-bold backdrop-blur-md ring-1 ring-white/20 transition hover:bg-surface/20"
+              className="flex items-center gap-2 rounded-full bg-surface/15 px-4 py-2.5 text-sm font-bold backdrop-blur-md ring-1 ring-white/20 transition hover:bg-surface/25"
             >
               <HelpCircle className="h-4 w-4" /> Hướng dẫn Import
             </a>
             <button
               onClick={() => setHistoryOpen((v) => !v)}
-              className="flex items-center gap-2 rounded-full bg-surface/10 px-4 py-2.5 text-sm font-bold backdrop-blur-md ring-1 ring-white/20 transition hover:bg-surface/20"
+              className="flex items-center gap-2 rounded-full bg-surface/15 px-4 py-2.5 text-sm font-bold backdrop-blur-md ring-1 ring-white/20 transition hover:bg-surface/25"
             >
               <History className="h-4 w-4" /> Job Queue
               {activeIncomplete.length > 0 && <span className="rounded-full bg-gold-400 px-2 py-0.5 text-[10px] font-black text-fg">{activeIncomplete.length} đang xử lý</span>}
@@ -359,7 +361,7 @@ export default function ImportDataPage() {
                   {isStalled(j, nowMs) ? "Chờ nối lại" : STATUS_LABEL[j.status]}
                 </span>
                 <div className="flex shrink-0 gap-1">
-                  {(j.status === "RUNNING" || j.status === "QUEUED") && (
+                  {(j.status === "RUNNING" || j.status === "QUEUED" || j.status === "STAGING") && (
                     <button onClick={() => setActiveJobId(j.id)} className="rounded-full bg-primary-tint px-3 py-1.5 text-[11px] font-bold text-primary hover:bg-primary/15">
                       Theo dõi
                     </button>
@@ -369,7 +371,7 @@ export default function ImportDataPage() {
                       <RotateCcw className="h-3 w-3" /> {j.status === "FAILED" ? "Retry" : "Resume"}
                     </button>
                   )}
-                  {(j.status === "RUNNING" || j.status === "QUEUED") && (
+                  {(j.status === "RUNNING" || j.status === "QUEUED" || j.status === "STAGING") && (
                     <button onClick={() => cancelJob(j.id)} className="flex items-center gap-1 rounded-full bg-red-50 px-3 py-1.5 text-[11px] font-bold text-red-600 hover:bg-red-100">
                       <XCircle className="h-3 w-3" /> Cancel
                     </button>
@@ -537,7 +539,7 @@ export default function ImportDataPage() {
                 <StatCard label="Lỗi" value={job.errorRows} tone="red" />
               </div>
 
-              {job.status === "RUNNING" || job.status === "QUEUED" ? (
+              {job.status === "RUNNING" || job.status === "QUEUED" || job.status === "STAGING" ? (
                 <div className="space-y-2">
                   {isStalled(job, nowMs) && (
                     <div className="space-y-2 rounded-xl bg-amber-50 p-3 ring-1 ring-amber-200">

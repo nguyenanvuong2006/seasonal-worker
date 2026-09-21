@@ -5,7 +5,7 @@ import { db } from "@/db";
 import { importJobs } from "@/db/schema";
 import { requireRoleAndPermission, writeAudit } from "@/lib/auth";
 import { getImportTemplate } from "@/lib/import-template";
-import { cleanupPartialImportJob, createJob, isImportEngineJobType, stageRows, triggerWorker } from "@/lib/import-jobs";
+import { cleanupPartialImportJob, createJob, getStagedRowCount, isImportEngineJobType, stageRows, triggerWorker } from "@/lib/import-jobs";
 
 
 export const runtime = "nodejs";
@@ -125,7 +125,11 @@ export async function POST(req: Request) {
     jobId = job.id;
     try {
       await stageRows(job.id, jobType, records);
-      await db.update(importJobs).set({ status: "QUEUED" }).where(eq(importJobs.id, job.id));
+      const actualStaged = await getStagedRowCount(job.id, jobType);
+      if (actualStaged !== records.length || actualStaged === 0) {
+        throw new Error(`Dữ liệu staging không đầy đủ: thực tế ${actualStaged}/${records.length} dòng.`);
+      }
+      await db.update(importJobs).set({ status: "QUEUED", updatedAt: new Date() }).where(eq(importJobs.id, job.id));
     } catch (stageError) {
       let cleaned = false;
       try {

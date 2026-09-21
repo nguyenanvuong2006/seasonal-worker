@@ -3,7 +3,7 @@ import { eq } from "drizzle-orm";
 import { db } from "@/db";
 import { importJobs } from "@/db/schema";
 import { requireRoleAndPermission, writeAudit } from "@/lib/auth";
-import { triggerWorker } from "@/lib/import-jobs";
+import { getStagedRowCount, isImportEngineJobType, triggerWorker } from "@/lib/import-jobs";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -27,6 +27,17 @@ export async function POST(req: Request, ctx: { params: Promise<{ id: string }> 
   // thời điểm đó sẽ chạy trên staging thiếu dữ liệu. Muốn nhập lại: tạo Job mới từ đầu.
   if (job.status === "CANCELLED") {
     return NextResponse.json({ error: "Job đã huỷ — không thể tiếp tục. Hãy tạo Job import mới." }, { status: 400 });
+  }
+
+  // F-01: Nếu Job bị đứt đoạn ngay từ giai đoạn STAGING, cấm Retry nếu dữ liệu staging không đầy đủ
+  if (job.currentStage === "STAGING" && isImportEngineJobType(job.jobType)) {
+    const actualStaged = await getStagedRowCount(id, job.jobType);
+    if (actualStaged !== job.totalRows || actualStaged === 0) {
+      return NextResponse.json(
+        { error: `Job chưa có đủ dữ liệu staging hoàn chỉnh (${actualStaged}/${job.totalRows} dòng) — không thể tiếp tục. Hãy tạo Job import mới.` },
+        { status: 400 },
+      );
+    }
   }
 
   await db.update(importJobs).set({ status: "QUEUED", lastError: null, updatedAt: new Date() }).where(eq(importJobs.id, id));
