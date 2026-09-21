@@ -2,7 +2,7 @@
 
 import { useCallback, useEffect, useState } from "react";
 import { Badge, Button, Card, CardContent, CardHeader, EmptyState, FormField, Input, Modal, toast } from "@/components/ui";
-import { Loader2, MapPin, Plus } from "lucide-react";
+import { Loader2, MapPin, Pencil, Plus } from "lucide-react";
 
 type OrgUnit = { id: string; name: string; unitType: string; isActive: boolean };
 
@@ -38,8 +38,21 @@ export default function DwCodeLocationsPage() {
   const [form, setForm] = useState(emptyForm);
   const [submitting, setSubmitting] = useState(false);
 
+  // Edit modal state
+  const [editingRow, setEditingRow] = useState<LocationRow | null>(null);
+  const [editLoading, setEditLoading] = useState(false);
+  const [editForm, setEditForm] = useState({
+    name: "",
+    isActive: true,
+    prefix: "",
+    sequenceDigits: 5,
+    separator: "-",
+    suffix: "D",
+    startNumber: 1,
+  });
+  const [editSubmitting, setEditSubmitting] = useState(false);
+
   const load = useCallback(async () => {
-    setLoading(true);
     try {
       const [locRes, orgRes] = await Promise.all([
         fetch("/api/administration/dw-code-locations"),
@@ -58,6 +71,7 @@ export default function DwCodeLocationsPage() {
   }, []);
 
   useEffect(() => {
+    // eslint-disable-next-line react-hooks/set-state-in-effect
     void load();
   }, [load]);
 
@@ -85,6 +99,65 @@ export default function DwCodeLocationsPage() {
     }
   };
 
+  const openEdit = async (row: LocationRow) => {
+    setEditingRow(row);
+    setEditLoading(true);
+    try {
+      const res = await fetch(`/api/administration/dw-code-locations/${row.id}`);
+      if (res.ok) {
+        const data = await res.json();
+        const loc: LocationRow = data.location;
+        setEditingRow(loc);
+        setEditForm({
+          name: loc.name,
+          isActive: loc.isActive,
+          prefix: loc.prefix,
+          sequenceDigits: loc.sequenceDigits,
+          separator: loc.separator,
+          suffix: loc.suffix,
+          startNumber: loc.startNumber,
+        });
+      } else {
+        toast({ title: "Không thể tải thông tin địa điểm", variant: "destructive" });
+        setEditingRow(null);
+      }
+    } catch {
+      toast({ title: "Lỗi kết nối khi tải địa điểm", variant: "destructive" });
+      setEditingRow(null);
+    } finally {
+      setEditLoading(false);
+    }
+  };
+
+  const submitEdit = async () => {
+    if (!editingRow) return;
+    setEditSubmitting(true);
+    try {
+      const hasIssuedCodes = editingRow.pool.available + editingRow.pool.assigned + editingRow.pool.retired > 0;
+      const body = hasIssuedCodes
+        ? { name: editForm.name, isActive: editForm.isActive }
+        : editForm;
+
+      const res = await fetch(`/api/administration/dw-code-locations/${editingRow.id}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(body),
+      });
+      const data = await res.json();
+      if (!res.ok) {
+        toast({ title: data.error ?? "Thất bại khi cập nhật", variant: "destructive" });
+        return;
+      }
+      toast({ title: "Đã cập nhật cấu hình địa điểm." });
+      setEditingRow(null);
+      await load();
+    } catch {
+      toast({ title: "Lỗi kết nối khi lưu", variant: "destructive" });
+    } finally {
+      setEditSubmitting(false);
+    }
+  };
+
   const toggleActive = async (row: LocationRow) => {
     const res = await fetch(`/api/administration/dw-code-locations/${row.id}`, {
       method: "PATCH",
@@ -98,6 +171,9 @@ export default function DwCodeLocationsPage() {
       toast({ title: "Thất bại", variant: "destructive" });
     }
   };
+
+  const hasIssuedCodes = editingRow ? (editingRow.pool.available + editingRow.pool.assigned + editingRow.pool.retired > 0) : false;
+  const editPreview = `${editForm.prefix.toUpperCase()}${String(editForm.startNumber).padStart(editForm.sequenceDigits, "0")}${editForm.separator}${editForm.suffix.toUpperCase()}`;
 
   return (
     <div className="space-y-5 pb-20">
@@ -138,6 +214,7 @@ export default function DwCodeLocationsPage() {
                     <th className="px-3 py-2.5 text-center text-[10.5px] uppercase">Assigned</th>
                     <th className="px-3 py-2.5 text-center text-[10.5px] uppercase">Retired</th>
                     <th className="px-3 py-2.5 text-center text-[10.5px] uppercase">Trạng thái</th>
+                    <th className="px-3 py-2.5 text-center text-[10.5px] uppercase">Thao tác</th>
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-border">
@@ -164,6 +241,17 @@ export default function DwCodeLocationsPage() {
                           </Badge>
                         </button>
                       </td>
+                      <td className="px-3 py-2.5 text-center">
+                        <Button
+                          variant="secondary"
+                          size="sm"
+                          onClick={() => openEdit(r)}
+                          className="h-7 gap-1 px-2.5 text-xs"
+                        >
+                          <Pencil className="h-3.5 w-3.5" />
+                          Sửa
+                        </Button>
+                      </td>
                     </tr>
                   ))}
                 </tbody>
@@ -173,6 +261,7 @@ export default function DwCodeLocationsPage() {
         </CardContent>
       </Card>
 
+      {/* Add Location Modal */}
       <Modal open={modalOpen} onClose={() => setModalOpen(false)} title="Thêm địa điểm Mã số công nhật">
         <div className="space-y-4">
           <FormField label="Địa điểm (Organization Unit)" required>
@@ -218,6 +307,139 @@ export default function DwCodeLocationsPage() {
           </Button>
         </div>
       </Modal>
+
+      {/* Edit Location Modal */}
+      <Modal open={!!editingRow} onClose={() => setEditingRow(null)} title={editingRow ? `Sửa cấu hình địa điểm: ${editingRow.name}` : "Sửa địa điểm"}>
+        {editLoading ? (
+          <div className="p-10 text-center">
+            <Loader2 className="mx-auto h-6 w-6 animate-spin text-primary" />
+            <p className="mt-2 text-xs text-fg-muted">Đang tải dữ liệu từ máy chủ...</p>
+          </div>
+        ) : editingRow ? (
+          <div className="space-y-4">
+            <div className="flex flex-wrap items-center justify-between gap-2 rounded-[8px] border border-border bg-surface-subtle p-3 text-xs">
+              <div>
+                <span className="font-semibold text-fg">{editingRow.name}</span>
+                <span className="ml-2 text-fg-muted">({editingRow.organizationUnitName ?? "—"})</span>
+              </div>
+              <div className="flex items-center gap-3 font-mono text-[11px]">
+                <span className="text-fg-secondary">Avail: <strong>{editingRow.pool.available}</strong></span>
+                <span className="text-fg-secondary">Assign: <strong>{editingRow.pool.assigned}</strong></span>
+                <span className="text-fg-secondary">Retire: <strong>{editingRow.pool.retired}</strong></span>
+              </div>
+            </div>
+
+            {hasIssuedCodes ? (
+              <div className="rounded-[8px] border border-amber-300 bg-amber-50 p-3 text-xs text-amber-900 dark:border-amber-700/50 dark:bg-amber-950/30 dark:text-amber-200">
+                <p className="font-semibold">Định dạng mã và số bắt đầu đã bị khóa</p>
+                <p className="mt-0.5 text-[11px] opacity-90">
+                  Địa điểm này đã phát hành {editingRow.pool.available + editingRow.pool.assigned + editingRow.pool.retired} mã trong hệ thống (Available: {editingRow.pool.available}, Assigned: {editingRow.pool.assigned}, Retired: {editingRow.pool.retired}). Không thể thay đổi định dạng sau khi đã cấp mã để bảo đảm tính toàn vẹn của dữ liệu lịch sử.
+                </p>
+              </div>
+            ) : (
+              <div className="rounded-[8px] border border-blue-300 bg-blue-50 p-3 text-xs text-blue-900 dark:border-blue-700/50 dark:bg-blue-950/30 dark:text-blue-200">
+                <p className="font-semibold">Địa điểm chưa phát hành mã</p>
+                <p className="mt-0.5 text-[11px] opacity-90">
+                  Địa điểm này chưa có mã nào trong pool. Bạn có thể chỉnh sửa định dạng và số bắt đầu an toàn trước khi cấp mã đầu tiên.
+                </p>
+              </div>
+            )}
+
+            <FormField label="Tên hiển thị" required>
+              <Input
+                value={editForm.name}
+                onChange={(e) => setEditForm((f) => ({ ...f, name: e.target.value }))}
+                placeholder="VD: Đạ Ròn"
+              />
+            </FormField>
+
+            <FormField label="Trạng thái hoạt động">
+              <select
+                value={editForm.isActive ? "active" : "paused"}
+                onChange={(e) => setEditForm((f) => ({ ...f, isActive: e.target.value === "active" }))}
+                className="h-10 w-full rounded-[10px] border border-border-strong bg-surface px-3 text-sm font-medium text-fg outline-none focus:border-primary"
+              >
+                <option value="active">Đang hoạt động</option>
+                <option value="paused">Tạm dừng (không cấp mã mới)</option>
+              </select>
+            </FormField>
+
+            <div className="grid grid-cols-2 gap-3">
+              <FormField label="Prefix" required>
+                <Input
+                  value={editForm.prefix}
+                  disabled={hasIssuedCodes}
+                  onChange={(e) => setEditForm((f) => ({ ...f, prefix: e.target.value.toUpperCase() }))}
+                  maxLength={8}
+                />
+              </FormField>
+              <FormField label="Số chữ số" required>
+                <Input
+                  type="number"
+                  min={1}
+                  max={10}
+                  value={editForm.sequenceDigits}
+                  disabled={hasIssuedCodes}
+                  onChange={(e) => setEditForm((f) => ({ ...f, sequenceDigits: Number(e.target.value) }))}
+                />
+              </FormField>
+              <FormField label="Separator">
+                <Input
+                  value={editForm.separator}
+                  disabled={hasIssuedCodes}
+                  onChange={(e) => setEditForm((f) => ({ ...f, separator: e.target.value }))}
+                  maxLength={4}
+                />
+              </FormField>
+              <FormField label="Suffix">
+                <Input
+                  value={editForm.suffix}
+                  disabled={hasIssuedCodes}
+                  onChange={(e) => setEditForm((f) => ({ ...f, suffix: e.target.value.toUpperCase() }))}
+                  maxLength={8}
+                />
+              </FormField>
+              <FormField label="Số bắt đầu" required>
+                <Input
+                  type="number"
+                  min={0}
+                  value={editForm.startNumber}
+                  disabled={hasIssuedCodes}
+                  onChange={(e) => setEditForm((f) => ({ ...f, startNumber: Number(e.target.value) }))}
+                />
+              </FormField>
+              <div className="flex flex-col justify-end">
+                <div className="rounded-[8px] bg-primary-tint p-2.5 text-center font-mono text-xs font-semibold text-primary">
+                  <div className="text-[10px] font-normal uppercase opacity-75">Mã kế tiếp (dự kiến)</div>
+                  {editingRow.preview}
+                </div>
+              </div>
+            </div>
+
+            {!hasIssuedCodes && (
+              <div className="rounded-[8px] bg-primary-tint p-2.5 text-center font-mono text-xs font-semibold text-primary">
+                <div className="text-[10px] font-normal uppercase opacity-75">Định dạng mới xem trước</div>
+                {editPreview}
+              </div>
+            )}
+
+            <div className="flex items-center justify-end gap-2 pt-2">
+              <Button variant="secondary" onClick={() => setEditingRow(null)}>
+                Hủy
+              </Button>
+              <Button
+                variant="primary"
+                loading={editSubmitting}
+                disabled={!editForm.name.trim()}
+                onClick={submitEdit}
+              >
+                Lưu thay đổi
+              </Button>
+            </div>
+          </div>
+        ) : null}
+      </Modal>
     </div>
   );
 }
+
