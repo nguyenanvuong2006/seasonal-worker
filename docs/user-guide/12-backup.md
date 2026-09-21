@@ -1,29 +1,44 @@
 [← Mục lục](./README.md)
 
-# 12. Backup
+# 12. Xuất dữ liệu nghiệp vụ (Business Data Export)
 
-**Ai dùng:** chỉ `ADMIN`. Vào **Control Center** (`/admin/system`) → mục **Backup**.
+**Ai dùng:** chỉ `ADMIN`. Vào **Control Center** (`/admin/system`) → mục **Dữ liệu nghiệp vụ**.
 
-## 12.1 Backup dùng để làm gì?
+## 12.1 Xuất dữ liệu nghiệp vụ dùng để làm gì?
 
-Nút **"Export Database (JSON)"** tải về **toàn bộ dữ liệu nghiệp vụ** của hệ thống dưới dạng 1 file JSON — dùng làm bản sao lưu thủ công, hoặc để đưa cho lập trình viên/AI viết script khôi phục khi cần.
+Nút **"Xuất dữ liệu nghiệp vụ (JSON)"** tải về dữ liệu của các bảng nghiệp vụ chính dưới dạng file JSON — phục vụ kiểm tra, tra cứu đối chiếu, phân tích offline hoặc cung cấp dữ liệu cho đội kỹ thuật phân tích sự cố.
 
-## 12.2 Phạm vi dữ liệu
+> **Cảnh báo an toàn:**
+> **Đây KHÔNG PHẢI là bản sao lưu toàn bộ cơ sở dữ liệu (Disaster Recovery Backup).**
+> File xuất này chỉ chứa một số bảng nghiệp vụ được chọn, không thể dùng độc lập để khôi phục toàn vẹn hệ thống.
 
-Bao gồm: Department, DW Data, Daily Application, Worker Profile, Employment Session, Planning (kế hoạch + phân bổ), Workforce Movement, Data Scope, Phân quyền chi tiết, Form Builder, Trường dữ liệu, Workflow, Rule Engine, Thông báo, Nhật ký hệ thống.
+## 12.2 Phạm vi dữ liệu được xuất
 
-> **Quan trọng:** File backup **KHÔNG bao gồm bảng tài khoản (`users`)** — vì bảng này chứa mật khẩu đã mã hoá (password hash). Đây là quyết định bảo mật có chủ đích, không phải thiếu sót. Nếu cần sao lưu danh sách tài khoản, ghi chú lại thủ công tại module Users.
+Bao gồm 17 bảng nghiệp vụ chính:
+- **Tổ chức & danh mục**: Department, Data Scope, Form Questions, Field Definitions, Workflow Stages, Rules, Phân quyền vai trò (Role Permissions).
+- **Hồ sơ & vận hành**: Worker Profiles, Employment Sessions, Daily Applications, Master DW Data, Workforce Movements (điều chuyển / nghỉ việc).
+- **Kế hoạch**: Planning Periods, Planning Targets, Planning Allocations.
+- **Theo dõi**: Thông báo (Notifications), Nhật ký hệ thống gần nhất (Audit Logs — giới hạn tối đa 10.000 bản ghi mới nhất để đảm bảo an toàn bộ nhớ).
 
-## 12.3 Đây KHÔNG phải tính năng Restore tự động
+### Các dữ liệu KHÔNG nằm trong file xuất:
+1. **Tài khoản người dùng (`users`)**: Không bao gồm tài khoản và mật khẩu mã hoá (password hash) nhằm bảo vệ an toàn danh tính và bảo mật hệ thống.
+2. **Mẫu tài liệu & chứng từ điện tử**: Mẫu hợp đồng/cam kết (`merge_templates`, phiên bản, trường) và xác nhận ký điện tử của người lao động.
+3. **Mã vận hành & Pool số**: Danh mục địa điểm mã DW, pool mã số (`dw_codes`), lịch sử cấp mã DW/IT.
+4. **Cấu hình hệ thống & Schema**: Lịch trình tác vụ (`scheduled_jobs`), cài đặt giao diện/thương hiệu, lịch sử di chuyển schema (`schema_migrations`).
 
-> **Quan trọng:** Hệ thống hiện **chưa có nút "Khôi phục" tự động** từ file backup này. Muốn khôi phục dữ liệu từ file JSON đã tải, cần đưa file cho lập trình viên/AI viết script import thủ công **một lần**.
+## 12.3 Không có tính năng Restore tự động từ file này
 
-Với nhu cầu sao lưu định kỳ thật sự / khôi phục về đúng một thời điểm trong quá khứ (point-in-time recovery), tài liệu chính thức khuyến nghị dùng **Neon Branches** (chức năng chụp nhanh cấp cơ sở dữ liệu của nhà cung cấp Neon, có link tắt ngay tại Control Center) — vì cách này chụp lại đầy đủ cả index/ràng buộc dữ liệu mà file JSON xuất từ đây không thay thế được.
+Hệ thống **không hỗ trợ và không có tính năng tự động khôi phục (Restore)** từ file JSON này. File JSON chỉ mang tính chất bản ghi dữ liệu nghiệp vụ offline (Business Data Export).
 
-## 12.4 Khi nào nên backup?
+Đối với công tác phòng chống và phục hồi thảm hoạ thật sự (Disaster Recovery):
+- Bắt buộc phải sử dụng các giải pháp sao lưu cấp cơ sở dữ liệu (database-level backup / point-in-time recovery / logical pg_dump).
+- Đảm bảo đầy đủ toàn bộ schema, bảng dữ liệu, ràng buộc khoá ngoại (foreign keys), chuỗi số (sequences), và index.
 
-- Trước khi thực hiện một đợt Import dữ liệu lớn.
-- Trước khi Admin thực hiện các thay đổi cấu hình lớn (đổi Workflow, xoá hàng loạt ở Recycle Bin...).
-- Định kỳ theo chu kỳ công ty quy định (ví dụ hàng tuần/hàng tháng) — xem gợi ý ở [Checklist vận hành](./22-checklists.md).
+## 12.4 Khi nào nên xuất dữ liệu nghiệp vụ?
+
+- Định kỳ hàng tháng hoặc trước các đợt cập nhật dữ liệu lớn để lưu trữ đối chiếu ngoại tuyến.
+- Khi cần đối chiếu số liệu tuyển dụng, phân bổ nhân sự, lịch sử điều chuyển trong mùa vụ.
+- Khi cần phục vụ công tác thanh kiểm tra, audit hoạt động vận hành.
 
 Tiếp theo: [13 — Tra cứu công khai](./13-public-lookup.md)
+

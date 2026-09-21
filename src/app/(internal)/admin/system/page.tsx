@@ -174,16 +174,17 @@ export default function SystemHealthPage() {
                 <p>Import gần nhất: <b>{fmt(stats.lastImport?.created_at)}</b></p>
                 <p>Export Excel gần nhất: <b>{fmt(stats.lastExport?.created_at)}</b></p>
                 <p>Đăng nhập gần nhất: <b>{fmt(stats.lastLogin?.created_at)}</b>{stats.lastLogin ? ` (${stats.lastLogin.username})` : ""}</p>
-                <p>Backup gần nhất: <b>{fmt(stats.lastBackup?.created_at)}</b>{stats.lastBackup ? ` (${stats.lastBackup.username})` : ""}</p>
+                <p>Xuất dữ liệu nghiệp vụ gần nhất: <b>{fmt(stats.lastBackup?.created_at)}</b>{stats.lastBackup ? ` (${stats.lastBackup.username})` : ""}</p>
                 <a href="/admin/audit" className="inline-block text-primary hover:underline">Xem toàn bộ nhật ký →</a>
               </CardContent>
             </Card>
 
             <Card>
-              <CardHeader title="Backup" />
+              <CardHeader title="Dữ liệu nghiệp vụ" />
               <CardContent className="space-y-2 text-sm text-fg-secondary">
-                <a href="/api/admin/backup" className="inline-flex h-10 items-center gap-2 rounded-full bg-primary px-4 text-sm font-bold text-white hover:bg-primary-hover"><Download className="h-4 w-4" /> Export Database (JSON)</a>
-                <p>Backup toàn bộ dữ liệu nghiệp vụ (không gồm tài khoản). Không có Restore tự động — cần khôi phục thì đưa file này cho AI/dev viết script 1 lần, hoặc dùng Neon → <b>Branches</b> để snapshot cấp database (khuyến nghị cho backup định kỳ thật sự).</p>
+                <a href="/api/admin/backup" className="inline-flex h-10 items-center gap-2 rounded-full bg-primary px-4 text-sm font-bold text-white hover:bg-primary-hover"><Download className="h-4 w-4" /> Xuất dữ liệu nghiệp vụ (JSON)</a>
+                <p>Xuất dữ liệu 17 bảng nghiệp vụ chính (hồ sơ, đăng ký, điều chuyển, kế hoạch, audit log gần nhất) phục vụ tra cứu, đối chiếu và phân tích offline.</p>
+                <p className="text-[12px] text-amber-700 dark:text-amber-400"><b>Lưu ý:</b> Đây <b>không phải</b> bản sao lưu toàn bộ cơ sở dữ liệu (Disaster Recovery Backup) và không thể dùng để khôi phục toàn bộ hệ thống. Khôi phục thảm hoạ yêu cầu sao lưu cấp cơ sở dữ liệu / PITR / logical backup chuyên dụng.</p>
               </CardContent>
             </Card>
           </div>
