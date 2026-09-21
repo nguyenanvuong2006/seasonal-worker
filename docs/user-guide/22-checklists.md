@@ -23,7 +23,7 @@
 
 ## Checklist hàng tháng (Admin)
 
-- [ ] Backup dữ liệu (Export Database JSON) hoặc dùng Neon Branches để chụp nhanh dữ liệu.
+- [ ] Xuất dữ liệu nghiệp vụ (Business Data JSON) phục vụ lưu trữ đối chiếu.
 - [ ] Rà soát danh sách tài khoản tại Users — khoá tài khoản của nhân viên đã nghỉ việc.
 - [ ] Xem lại Ma trận phân quyền chi tiết — có ô nào bị tắt không còn hợp lý nữa không.
 - [ ] Rà soát Thùng rác — dọn (xoá vĩnh viễn) những bản ghi chắc chắn không cần khôi phục nữa.
