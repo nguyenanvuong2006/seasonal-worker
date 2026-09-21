@@ -129,6 +129,14 @@ const HANDLERS: Record<string, () => Promise<Record<string, unknown>>> = {
     const { applyEffectiveWorkforceMovements } = await import("@/lib/workforce-movements");
     return applyEffectiveWorkforceMovements();
   },
+  RESUME_STALLED_WORKFORCE_IMPORT_BATCHES: async () => {
+    // WORKFORCE DATA MANAGEMENT (F-04) — WATCHDOG: workforce_data_import_batches
+    // import bị treo do client đóng trình duyệt/đứt mạng giữa chừng. Quét các batch
+    // chưa hoàn tất nhưng không có heartbeat > 90s, thực thi từng chunk an toàn
+    // dưới database-level advisory lock.
+    const { resumeStalledWorkforceImportBatches } = await import("@/lib/data-management/stalled-recovery");
+    return resumeStalledWorkforceImportBatches() as unknown as Promise<Record<string, unknown>>;
+  },
 };
 
 export const DEFAULT_SCHEDULED_JOBS: { jobKey: string; label: string; schedule: string; handlerKey: string }[] = [
@@ -140,6 +148,7 @@ export const DEFAULT_SCHEDULED_JOBS: { jobKey: string; label: string; schedule: 
   { jobKey: "recompute_request_kpi_cache", label: "Recompute KPI cache của Workforce Request", schedule: "hourly", handlerKey: "RECOMPUTE_REQUEST_KPI_CACHE" },
   { jobKey: "recover_stale_merge_jobs", label: "Watchdog: phục hồi Merge Job bị treo (GOOGLE_DOCS kẹt PROCESSING)", schedule: "daily", handlerKey: "RECOVER_STALE_MERGE_JOBS" },
   { jobKey: "apply_effective_workforce_movements", label: "Áp dụng hiệu lực Nghỉ việc/Thuyên chuyển đến ngày hiệu lực", schedule: "daily", handlerKey: "APPLY_EFFECTIVE_WORKFORCE_MOVEMENTS" },
+  { jobKey: "resume_stalled_workforce_import_batches", label: "Watchdog: phục hồi Workforce Data Import Batch bị treo", schedule: "daily", handlerKey: "RESUME_STALLED_WORKFORCE_IMPORT_BATCHES" },
 ];
 
 /**
@@ -168,6 +177,12 @@ async function writeJobAudit(
 
 /** Chạy toàn bộ job đang Active — gọi từ /api/cron/run. */
 export async function runDueJobs() {
+  try {
+    await db.insert(scheduledJobs).values(DEFAULT_SCHEDULED_JOBS).onConflictDoNothing();
+  } catch {
+    // Non-fatal if table not yet seeded or read-only
+  }
+
   const jobs = await db.select().from(scheduledJobs).where(eq(scheduledJobs.isActive, true));
   const results: { jobKey: string; status: string }[] = [];
   for (const job of jobs) {

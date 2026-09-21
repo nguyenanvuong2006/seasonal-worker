@@ -2,8 +2,16 @@ import "server-only";
 import { and, eq, sql } from "drizzle-orm";
 import { db, pool } from "@/db";
 import { workforceDataImportBatches, workforceDataImportRows } from "@/db/schema";
+import { createHash } from "crypto";
 import { CCCD_ERROR_MESSAGE, isValidCccd, normalizeCccd } from "@/lib/validators";
+import { sanitizeJobError } from "@/lib/scheduler-utils";
 import type { DataManagementEnvironment } from "./environment";
+
+export const WORKFORCE_IMPORT_BATCH_ADVISORY_NAMESPACE = 847_291_020;
+
+export function deriveBatchAdvisoryLockKey(batchId: string): number {
+  return createHash("sha256").update(batchId).digest().readInt32BE(0);
+}
 
 /**
  * WORKFORCE DATA MANAGEMENT — bulk IT Code (mã số công nhật) reconciliation
@@ -210,7 +218,15 @@ export async function createFingerprintBatch(input: CreateFingerprintBatchInput)
   }
 }
 
-export type MergeChunkResult = { processed: number; matched: number; unmatched: number; duplicate: number; done: boolean };
+export type MergeChunkResult = {
+  processed: number;
+  matched: number;
+  unmatched: number;
+  duplicate: number;
+  done: boolean;
+  skipped?: boolean;
+  reason?: string;
+};
 
 /**
  * POST-GO-LIVE CANONICAL CONTRACT (Option A — Evidence Only):
@@ -222,24 +238,54 @@ export type MergeChunkResult = { processed: number; matched: number; unmatched: 
  * through the canonical assignItCode() workflow.
  */
 export async function mergeFingerprintChunk(batchId: string, actor: string): Promise<MergeChunkResult> {
-  const pending = await db
-    .select()
-    .from(workforceDataImportRows)
-    .where(and(eq(workforceDataImportRows.batchId, batchId), eq(workforceDataImportRows.status, "PENDING")))
-    .limit(CHUNK_SIZE);
-
-  if (pending.length === 0) {
-    await db.update(workforceDataImportBatches).set({ status: "COMPLETED", completedAt: new Date() }).where(eq(workforceDataImportBatches.id, batchId));
-    return { processed: 0, matched: 0, unmatched: 0, duplicate: 0, done: true };
-  }
-
-  let matched = 0;
-  let unmatched = 0;
-  let duplicate = 0;
-
   const client = await pool.connect();
+  let txActive = false;
   try {
     await client.query("BEGIN");
+    txActive = true;
+
+    // 1. Transaction-level advisory lock for single-worker exclusion
+    const lockKey = deriveBatchAdvisoryLockKey(batchId);
+    const lockRes = await client.query<{ locked: boolean }>(
+      "SELECT pg_try_advisory_xact_lock($1, $2) AS locked",
+      [WORKFORCE_IMPORT_BATCH_ADVISORY_NAMESPACE, lockKey],
+    );
+    const isLocked = lockRes.rows?.[0]?.locked !== false;
+    if (!isLocked) {
+      await client.query("ROLLBACK");
+      txActive = false;
+      return { processed: 0, matched: 0, unmatched: 0, duplicate: 0, done: false, skipped: true, reason: "ALREADY_PROCESSING" };
+    }
+
+    // 2. Check batch state
+    const batchRes = await client.query<{ id: string; status: string }>(
+      "SELECT id, status FROM workforce_data_import_batches WHERE id = $1",
+      [batchId],
+    );
+    const batchRow = batchRes.rows[0];
+    if (batchRow && (batchRow.status === "COMPLETED" || batchRow.status === "FAILED" || batchRow.status === "REPLACED")) {
+      await client.query("ROLLBACK");
+      txActive = false;
+      return { processed: 0, matched: 0, unmatched: 0, duplicate: 0, done: true, skipped: true, reason: "TERMINAL" };
+    }
+
+    const pending = await db
+      .select()
+      .from(workforceDataImportRows)
+      .where(and(eq(workforceDataImportRows.batchId, batchId), eq(workforceDataImportRows.status, "PENDING")))
+      .limit(CHUNK_SIZE);
+
+    if (pending.length === 0) {
+      await db.update(workforceDataImportBatches).set({ status: "COMPLETED", completedAt: new Date() }).where(eq(workforceDataImportBatches.id, batchId));
+      await client.query("COMMIT");
+      txActive = false;
+      return { processed: 0, matched: 0, unmatched: 0, duplicate: 0, done: true };
+    }
+
+    let matched = 0;
+    let unmatched = 0;
+    let duplicate = 0;
+
     for (const row of pending) {
       const { cccd, itCode, invalidReason } = parseRow(row.rowNumber, row.rawData);
       if (invalidReason || !cccd || !itCode) {
@@ -271,26 +317,39 @@ export async function mergeFingerprintChunk(batchId: string, actor: string): Pro
     }
 
     await client.query(
-      `UPDATE workforce_data_import_batches SET processed_rows = processed_rows + $2, matched_rows = matched_rows + $3, unmatched_rows = unmatched_rows + $4, duplicate_rows = duplicate_rows + $5, validated_at = COALESCE(validated_at, now()) WHERE id = $1`,
+      `UPDATE workforce_data_import_batches SET processed_rows = processed_rows + $2, matched_rows = matched_rows + $3, unmatched_rows = unmatched_rows + $4, duplicate_rows = duplicate_rows + $5, validated_at = now() WHERE id = $1`,
       [batchId, pending.length, matched, unmatched, duplicate],
     );
     await client.query("COMMIT");
+    txActive = false;
+
+    const remaining = await db
+      .select({ c: sql<number>`count(*)` })
+      .from(workforceDataImportRows)
+      .where(and(eq(workforceDataImportRows.batchId, batchId), eq(workforceDataImportRows.status, "PENDING")));
+    const done = Number(remaining[0]?.c ?? 0) === 0;
+    if (done) {
+      await db.update(workforceDataImportBatches).set({ status: "COMPLETED", completedAt: new Date() }).where(eq(workforceDataImportBatches.id, batchId));
+    }
+
+    return { processed: pending.length, matched, unmatched, duplicate, done };
   } catch (error) {
-    await client.query("ROLLBACK");
-    await db.update(workforceDataImportBatches).set({ status: "FAILED", notes: (error as Error).message }).where(eq(workforceDataImportBatches.id, batchId));
+    if (txActive) {
+      try {
+        await client.query("ROLLBACK");
+      } catch {
+        // ignore
+      }
+      txActive = false;
+    }
+    const sanitized = sanitizeJobError(error);
+    try {
+      await db.update(workforceDataImportBatches).set({ status: "FAILED", notes: sanitized }).where(eq(workforceDataImportBatches.id, batchId));
+    } catch {
+      // ignore
+    }
     throw error;
   } finally {
     client.release();
   }
-
-  const remaining = await db
-    .select({ c: sql<number>`count(*)` })
-    .from(workforceDataImportRows)
-    .where(and(eq(workforceDataImportRows.batchId, batchId), eq(workforceDataImportRows.status, "PENDING")));
-  const done = Number(remaining[0]?.c ?? 0) === 0;
-  if (done) {
-    await db.update(workforceDataImportBatches).set({ status: "COMPLETED", completedAt: new Date() }).where(eq(workforceDataImportBatches.id, batchId));
-  }
-
-  return { processed: pending.length, matched, unmatched, duplicate, done };
 }
