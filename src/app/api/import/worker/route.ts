@@ -32,10 +32,16 @@ export async function POST(req: Request) {
 
   const result = await runNextStep(body.jobId);
 
-  if (!result.done) {
+  if (!result.done && !result.skipped) {
     const baseUrl = new URL(req.url).origin;
     triggerWorker(body.jobId, job.resumeToken, baseUrl);
   }
 
-  return NextResponse.json({ ok: true, stage: result.stage, done: result.done });
+  return NextResponse.json({
+    ok: true,
+    stage: result.stage,
+    done: result.done,
+    skipped: result.skipped ?? false,
+    reason: result.reason,
+  });
 }

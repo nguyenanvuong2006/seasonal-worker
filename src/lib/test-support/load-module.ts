@@ -13,8 +13,11 @@
    chép tay dễ lệch.
    ============================================================ */
 import { readFileSync } from "node:fs";
+import { createRequire } from "node:module";
 import vm from "node:vm";
 import ts from "typescript";
+
+const nodeRequire = createRequire(import.meta.url);
 
 export type LoadOptions = {
   /** Map từ specifier ("@/db", "drizzle-orm"...) sang module giả. */
@@ -41,6 +44,7 @@ export function loadModule(url: URL, options: LoadOptions): Record<string, unkno
   const moduleObj = { exports: {} as Record<string, unknown> };
   const requireShim = (specifier: string): unknown => {
     if (specifier in options.stubs) return options.stubs[specifier];
+    if (specifier === "crypto" || specifier === "node:crypto") return nodeRequire("node:crypto");
     if (options.fallback) return options.fallback(specifier);
     throw new Error(`Unexpected require("${specifier}") — hãy khai báo stub cho module này.`);
   };

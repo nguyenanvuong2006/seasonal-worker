@@ -1,4 +1,4 @@
-﻿import test from "node:test";
+import test from "node:test";
 import assert from "node:assert/strict";
 import { loadModule } from "../../../lib/test-support/load-module.ts";
 
@@ -97,6 +97,8 @@ function loadRoute(opts: LoadOpts): { mod: Record<string, unknown>; createJobCal
         },
         isImportEngineJobType: (t: unknown) => ["dw_data", "daily_application", "department"].includes(t as string),
         stageRows: async () => { stageRowsCalled.value = true; },
+        getStagedRowCount: async () => (opts.parseRows ?? [{ "Ho ten": "Nguyen A" }]).length,
+        cleanupPartialImportJob: async () => {},
         triggerWorker: () => {},
       },
       "@/lib/file-parser": {

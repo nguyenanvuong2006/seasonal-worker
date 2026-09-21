@@ -4,7 +4,7 @@ import { eq } from "drizzle-orm";
 import { db } from "@/db";
 import { importJobs } from "@/db/schema";
 import { requireRoleAndPermission, writeAudit } from "@/lib/auth";
-import { createJob, isImportEngineJobType, stageRows, triggerWorker } from "@/lib/import-jobs";
+import { cleanupPartialImportJob, createJob, getStagedRowCount, isImportEngineJobType, stageRows, triggerWorker } from "@/lib/import-jobs";
 import { parseImportFile } from "@/lib/file-parser";
 import { getFieldDefinitions, normalizeHeader } from "@/lib/metadata";
 import { getAcceptedColumnNames } from "@/lib/import-engine";
@@ -16,9 +16,10 @@ export const maxDuration = 60;
 
 /**
  * IMPORT ENGINE v3 — BƯỚC 1: upload nguyên file, server parse (xlsx đọc được cả CSV/XLSX/XLS),
- * tạo Job (QUEUED), bulk load vào staging RIÊNG LOẠI (UNNEST — xem lib/import-jobs.ts), rồi
- * KÍCH HOẠT worker tự "chain" (Next.js after()) và trả về ngay `jobId` — không giữ request mở
- * để chờ xử lý xong. Trình duyệt có thể đóng ngay sau khi nhận được jobId.
+ * tạo Job (STAGING), bulk load vào staging RIÊNG LOẠI (UNNEST — xem lib/import-jobs.ts),
+ * xác thực độ đầy đủ của staging trước khi chuyển QUEUED, rồi KÍCH HOẠT worker tự "chain"
+ * (Next.js after()) và trả về ngay `jobId` — không giữ request mở để chờ xử lý xong.
+ * Trình duyệt có thể đóng ngay sau khi nhận được jobId.
  *
  * Nếu file có trường bắt buộc chưa tự nhận diện được cột (Map Columns), trả về
  * `needsMapping: true` KHÔNG tạo job — client gửi lại đúng file này kèm `mapping` (JSON).
@@ -95,8 +96,40 @@ export async function POST(req: Request) {
   }
 
   const job = await createJob(jobType, file.name, checksum, guard.session.username, rows.length);
-  await stageRows(job.id, jobType, rows);
-  await db.update(importJobs).set({ status: "QUEUED" }).where(eq(importJobs.id, job.id));
+  try {
+    await stageRows(job.id, jobType, rows);
+    const actualStaged = await getStagedRowCount(job.id, jobType);
+    if (actualStaged !== rows.length || actualStaged === 0) {
+      throw new Error(`Dữ liệu staging không đầy đủ: thực tế ${actualStaged}/${rows.length} dòng.`);
+    }
+    await db.update(importJobs).set({ status: "QUEUED", updatedAt: new Date() }).where(eq(importJobs.id, job.id));
+  } catch (stageError) {
+    let cleaned = false;
+    try {
+      await cleanupPartialImportJob(job.id);
+      cleaned = true;
+    } catch (cleanupError) {
+      try {
+        await db.update(importJobs).set({
+          status: "CANCELLED",
+          lastError: "Staging chưa hoàn chỉnh; Job đã bị khóa để tránh xử lý dữ liệu thiếu.",
+          updatedAt: new Date(),
+        }).where(eq(importJobs.id, job.id));
+      } catch {
+        // DB connection completely down
+      }
+      console.error("Không thể dọn Job upload staging dở", { jobId: job.id, cleanupError });
+    }
+    console.error("Upload file staging thất bại", { jobId: job.id, stageError });
+    return NextResponse.json(
+      {
+        error: cleaned
+          ? "Không thể nạp dữ liệu vào staging. Job chưa hoàn chỉnh đã được dọn; bạn có thể thử lại an toàn."
+          : "Không thể nạp dữ liệu vào staging. Job lỗi đã bị khóa để không xử lý dữ liệu thiếu; vui lòng thử lại sau.",
+      },
+      { status: 500 },
+    );
+  }
 
   const baseUrl = new URL(req.url).origin;
   triggerWorker(job.id, job.resumeToken, baseUrl);
