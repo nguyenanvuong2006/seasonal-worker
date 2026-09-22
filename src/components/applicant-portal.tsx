@@ -144,11 +144,33 @@ function DynamicQuestionFields({
           </Label>
 
           {question.fieldType === "SELECT" && (question.options?.length ?? 0) > 0 ? (
-            <SearchableSelect
-              value={answers[question.fieldKey]}
-              onChange={(value) => onChange(question.fieldKey, value)}
-              options={(question.options ?? []).map((item) => ({ value: item, label: item }))}
-            />
+            <div className="space-y-4">
+              <SearchableSelect
+                value={answers[question.fieldKey]}
+                onChange={(value) => {
+                  onChange(question.fieldKey, value);
+                  if (value !== "Khác" && answers[`${question.fieldKey}__other`]) {
+                    onChange(`${question.fieldKey}__other`, "");
+                  }
+                }}
+                options={(question.options ?? []).map((item) => ({ value: item, label: item }))}
+              />
+              {question.options?.some((opt) => opt.trim().toLowerCase() === "khác") && answers[question.fieldKey] === "Khác" && (
+                <div className="mt-3 animate-in fade-in slide-in-from-top-2">
+                  <Label className="mb-2 block text-[14px] font-semibold text-fg">
+                    Vui lòng nhập {question.questionText.toLowerCase()} <span className="text-danger">*</span>
+                  </Label>
+                  <Input
+                    type="text"
+                    value={answers[`${question.fieldKey}__other`] || ""}
+                    onChange={(event) => onChange(`${question.fieldKey}__other`, event.target.value)}
+                    placeholder={`Nhập ${question.questionText.toLowerCase()} của anh/chị`}
+                    className="h-12 rounded-xl border-border bg-surface-raised px-4 text-[14px]"
+                    maxLength={150}
+                  />
+                </div>
+              )}
+            </div>
           ) : question.fieldType === "BOOLEAN" ? (
             <div className="grid grid-cols-2 gap-4">
               <Button
@@ -304,12 +326,19 @@ export default function ApplicantPortal({ questions }: { questions: FormQuestion
   };
 
   const validateAnswers = (applicableQuestions: FormQuestion[]) => {
-    const missing = applicableQuestions.find(
-      (question) => question.isRequired && !customAnswers[question.fieldKey]?.trim(),
-    );
-    if (missing) {
-      toast({ title: `Thiếu: ${missing.questionText}`, variant: "destructive" });
-      return false;
+    for (const question of applicableQuestions) {
+      if (question.isRequired && !customAnswers[question.fieldKey]?.trim()) {
+        toast({ title: `Thiếu: ${question.questionText}`, variant: "destructive" });
+        return false;
+      }
+      const hasOtherOption = question.fieldType === "SELECT" && question.options?.some((opt) => opt.trim().toLowerCase() === "khác");
+      const isOtherSelected = customAnswers[question.fieldKey] === "Khác";
+      if (hasOtherOption && isOtherSelected) {
+        if (!customAnswers[`${question.fieldKey}__other`]?.trim()) {
+          toast({ title: `Thiếu: Nội dung "Khác" cho ${question.questionText}`, variant: "destructive" });
+          return false;
+        }
+      }
     }
     return true;
   };
