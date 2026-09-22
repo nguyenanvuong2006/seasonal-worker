@@ -11,6 +11,21 @@ jobs:
   diagnose:
     runs-on: ubuntu-latest
     environment: production
+    services:
+      postgres:
+        image: postgres:15
+        env:
+          POSTGRES_USER: test
+          POSTGRES_PASSWORD: test
+          POSTGRES_DB: test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -24,10 +39,15 @@ jobs:
       - name: Install dependencies
         run: npm ci --no-audit --no-fund
 
-      - name: Run Diagnostic
+      - name: Run Local Migration Validation
+        env:
+          TEST_DATABASE_URL: postgres://test:test@localhost:5432/test
+        run: node scripts/validate-migration-local.mjs > output.txt
+
+      - name: Run Production Diagnostic
         env:
           DATABASE_URL: ${{ secrets.PROD_DATABASE_URL }}
-        run: node scripts/diagnose-pr234.mjs > output.txt
+        run: node scripts/diagnose-pr234.mjs >> output.txt
 
       - name: Post Comment
         env:
