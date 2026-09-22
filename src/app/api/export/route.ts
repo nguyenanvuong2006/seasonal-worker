@@ -241,7 +241,17 @@ export async function GET(req: Request) {
     const rowValues = [
       i + 1,
       ...coreCols.map((c) => resolvers[c.def.fieldKey]?.(r) ?? ""),
-      ...questions.map((q) => (r.customAnswers ?? {})[q.fieldKey] ?? ""),
+      ...questions.map((q) => {
+        const baseValue = (r.customAnswers ?? {})[q.fieldKey];
+        const hasOtherOption = q.fieldType === "SELECT" && Array.isArray(q.options) && q.options.some((opt: string) => opt.trim().toLowerCase() === "khác");
+        if (hasOtherOption && baseValue === "Khác") {
+          const otherValue = (r.customAnswers ?? {})[`${q.fieldKey}__other`];
+          if (otherValue) {
+            return `Khác (${otherValue})`;
+          }
+        }
+        return baseValue ?? "";
+      }),
     ];
     const row = ws.addRow(rowValues);
     row.height = 20;

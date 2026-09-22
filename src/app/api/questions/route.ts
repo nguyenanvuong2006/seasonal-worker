@@ -1,7 +1,7 @@
 import { NextResponse } from "next/server";
-import { asc, eq } from "drizzle-orm";
+import { asc, eq, isNotNull, sql } from "drizzle-orm";
 import { db } from "@/db";
-import { formQuestions } from "@/db/schema";
+import { dailyApplications, formQuestions } from "@/db/schema";
 import { requireRoleAndPermission, writeAudit } from "@/lib/auth";
 import { normalizeTargetAudience, TARGET_AUDIENCES } from "@/lib/form-targeting";
 
@@ -136,6 +136,42 @@ export async function PATCH(req: Request) {
       : null;
   }
 
+  // Enforce historical answer constraints
+  const [currentRow] = await db
+    .select()
+    .from(formQuestions)
+    .where(eq(formQuestions.id, String(body.id)));
+
+  if (!currentRow) return NextResponse.json({ error: "Không tìm thấy câu hỏi." }, { status: 404 });
+
+  if (patch.fieldType !== undefined && patch.fieldType !== currentRow.fieldType) {
+    const existing = await db
+      .select({ count: sql<number>`count(*)::int` })
+      .from(dailyApplications)
+      .where(isNotNull(sql`${dailyApplications.customAnswers}->>${currentRow.fieldKey}`))
+      .limit(1);
+    
+    if (existing[0] && existing[0].count > 0) {
+      return NextResponse.json({ error: "Không thể đổi loại trường do đã có dữ liệu lịch sử.", code: "HISTORICAL_ANSWERS_EXIST" }, { status: 400 });
+    }
+  }
+
+  if (patch.options !== undefined && Array.isArray(currentRow.options)) {
+    const removedOptions = currentRow.options.filter((opt: string) => !patch.options!.includes(opt));
+    if (removedOptions.length > 0) {
+      for (const opt of removedOptions) {
+        const existing = await db
+          .select({ count: sql<number>`count(*)::int` })
+          .from(dailyApplications)
+          .where(eq(sql`${dailyApplications.customAnswers}->>${currentRow.fieldKey}`, opt))
+          .limit(1);
+        if (existing[0] && existing[0].count > 0) {
+          return NextResponse.json({ error: `Lựa chọn "${opt}" đang được sử dụng trong dữ liệu lịch sử, không thể xoá.`, code: "OPTION_IN_USE" }, { status: 400 });
+        }
+      }
+    }
+  }
+
   try {
     const [row] = await db
       .update(formQuestions)
@@ -163,6 +199,23 @@ export async function DELETE(req: Request) {
 
   const id = new URL(req.url).searchParams.get("id");
   if (!id) return NextResponse.json({ error: "Thiếu ID." }, { status: 400 });
+
+  const [currentRow] = await db
+    .select()
+    .from(formQuestions)
+    .where(eq(formQuestions.id, id));
+
+  if (!currentRow) return NextResponse.json({ error: "Không tìm thấy câu hỏi." }, { status: 404 });
+
+  const existing = await db
+    .select({ count: sql<number>`count(*)::int` })
+    .from(dailyApplications)
+    .where(isNotNull(sql`${dailyApplications.customAnswers}->>${currentRow.fieldKey}`))
+    .limit(1);
+
+  if (existing[0] && existing[0].count > 0) {
+    return NextResponse.json({ error: "Không thể xoá câu hỏi này vì đã có ứng viên trả lời.", code: "HISTORICAL_ANSWERS_EXIST" }, { status: 400 });
+  }
 
   const [row] = await db.delete(formQuestions).where(eq(formQuestions.id, id)).returning({ id: formQuestions.id });
   if (!row) return NextResponse.json({ error: "Không tìm thấy câu hỏi." }, { status: 404 });

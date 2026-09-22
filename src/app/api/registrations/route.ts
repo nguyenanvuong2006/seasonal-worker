@@ -81,6 +81,26 @@ export async function POST(req: Request) {
           { status: 400 },
         );
       }
+      
+      const hasOtherOption = question.fieldType === "SELECT" && Array.isArray(question.options) && question.options.some((opt: string) => opt.trim().toLowerCase() === "khác");
+      if (hasOtherOption && answers[question.fieldKey] === "Khác") {
+        const otherKey = `${question.fieldKey}__other`;
+        const otherValue = rawAnswers[otherKey];
+        const trimmedOther = otherValue !== undefined && otherValue !== null ? String(otherValue).trim() : "";
+        if (!trimmedOther) {
+           return NextResponse.json(
+             { error: `Vui lòng nhập nội dung khác cho câu hỏi: "${question.questionText}"`, code: "OTHER_DETAIL_REQUIRED" },
+             { status: 400 }
+           );
+        }
+        if (trimmedOther.length > 150) {
+           return NextResponse.json(
+             { error: `Nội dung khác cho câu hỏi "${question.questionText}" quá dài.`, code: "INVALID_OTHER_DETAIL" },
+             { status: 400 }
+           );
+        }
+        answers[otherKey] = trimmedOther;
+      }
     }
 
     const dobStr = String(body.dob ?? "").trim() || null;

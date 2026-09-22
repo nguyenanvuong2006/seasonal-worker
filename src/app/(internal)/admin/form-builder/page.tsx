@@ -53,6 +53,7 @@ export default function FormBuilderPage() {
   const [rows, setRows] = useState<Question[]>([]);
   const [loading, setLoading] = useState(true);
   const [open, setOpen] = useState(false);
+  const [editId, setEditId] = useState<string | null>(null);
   const [form, setForm] = useState({
     fieldKey: "",
     questionText: "",
@@ -85,44 +86,49 @@ export default function FormBuilderPage() {
     void load();
   }, [load]);
 
-  const create = async () => {
-    const res = await fetch("/api/questions", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        ...form,
-        options: form.optionsRaw
-          .split("\n")
-          .map((s) => s.trim())
-          .filter(Boolean),
-        aliases: form.aliasesRaw
-          .split("\n")
-          .map((s) => s.trim())
-          .filter(Boolean),
-        exportColumnName: form.exportColumnName || undefined,
-      }),
-    });
-    const data = await res.json();
-    if (!res.ok) {
-      toast({ title: data.error ?? "Lỗi tạo câu hỏi", variant: "destructive" });
-      return;
+  const save = async () => {
+    const isEdit = editId !== null;
+    const body = {
+      ...form,
+      options: form.optionsRaw
+        .split("\n")
+        .map((s) => s.trim())
+        .filter(Boolean),
+      aliases: form.aliasesRaw
+        .split("\n")
+        .map((s) => s.trim())
+        .filter(Boolean),
+      exportColumnName: form.exportColumnName || undefined,
+    };
+
+    if (isEdit) {
+      const res = await fetch("/api/questions", {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ id: editId, ...body }),
+      });
+      const data = await res.json();
+      if (!res.ok) {
+        toast({ title: data.error ?? "Lỗi sửa câu hỏi", variant: "destructive" });
+        return;
+      }
+      toast({ title: "Đã sửa câu hỏi" });
+    } else {
+      const res = await fetch("/api/questions", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(body),
+      });
+      const data = await res.json();
+      if (!res.ok) {
+        toast({ title: data.error ?? "Lỗi tạo câu hỏi", variant: "destructive" });
+        return;
+      }
+      toast({ title: "Đã thêm câu hỏi" });
     }
-    toast({ title: "Đã thêm câu hỏi — form người xin việc sẽ tự hiển thị từ ngày áp dụng" });
+
     setOpen(false);
-    setForm({
-      fieldKey: "",
-      questionText: "",
-      fieldType: "TEXT",
-      optionsRaw: "",
-      isRequired: false,
-      sortOrder: 0,
-      visibleToApplicants: true,
-      targetAudience: "ALL",
-      skipForReturning: false,
-      applyFrom: "",
-      aliasesRaw: "",
-      exportColumnName: "",
-    });
+    setEditId(null);
     await load();
   };
 
@@ -163,7 +169,21 @@ export default function FormBuilderPage() {
           variant="gold"
           onClick={() => {
             const nextSortOrder = rows.length > 0 ? Math.max(...rows.map((r) => r.sortOrder)) + 1 : 1;
-            setForm((f) => ({ ...f, sortOrder: nextSortOrder }));
+            setEditId(null);
+            setForm({
+              fieldKey: "",
+              questionText: "",
+              fieldType: "TEXT",
+              optionsRaw: "",
+              isRequired: false,
+              sortOrder: nextSortOrder,
+              visibleToApplicants: true,
+              targetAudience: "ALL" as TargetAudience,
+              skipForReturning: false,
+              applyFrom: "",
+              aliasesRaw: "",
+              exportColumnName: "",
+            });
             setOpen(true);
           }}
         >
@@ -237,6 +257,29 @@ export default function FormBuilderPage() {
                     className="w-16 rounded border-2 border-border-strong px-2 py-1 text-sm"
                   />
                   <button
+                    onClick={() => {
+                      setEditId(q.id);
+                      setForm({
+                        fieldKey: q.fieldKey,
+                        questionText: q.questionText,
+                        fieldType: q.fieldType,
+                        optionsRaw: (q.options ?? []).join("\n"),
+                        isRequired: q.isRequired,
+                        sortOrder: q.sortOrder,
+                        visibleToApplicants: q.visibleToApplicants,
+                        targetAudience: q.targetAudience,
+                        skipForReturning: q.skipForReturning,
+                        applyFrom: q.applyFrom || "",
+                        aliasesRaw: (q.aliases ?? []).join("\n"),
+                        exportColumnName: q.exportColumnName || "",
+                      });
+                      setOpen(true);
+                    }}
+                    className="text-xs font-bold text-blue-600 hover:underline"
+                  >
+                    Sửa
+                  </button>
+                  <button
                     onClick={() => void remove(q.id)}
                     className="text-xs font-bold text-red-600 hover:underline"
                   >
@@ -249,7 +292,7 @@ export default function FormBuilderPage() {
         </CardContent>
       </Card>
 
-      <Modal open={open} onClose={() => setOpen(false)} title="Thêm câu hỏi động">
+      <Modal open={open} onClose={() => setOpen(false)} title={editId ? "Sửa câu hỏi động" : "Thêm câu hỏi động"}>
         <div className="space-y-3">
           <div>
             <Label>Mã trường (field key) *</Label>
@@ -258,6 +301,7 @@ export default function FormBuilderPage() {
               onChange={(e) => setForm({ ...form, fieldKey: e.target.value })}
               placeholder="vd: kinh_nghiem_hai_hoa"
               className="h-11 font-mono"
+              disabled={editId !== null}
             />
           </div>
           <div>
@@ -291,6 +335,9 @@ export default function FormBuilderPage() {
                 rows={5}
                 placeholder={"Xe máy\nXe đạp\nĐi bộ"}
               />
+              <p className="mt-1 text-[11px] text-fg-muted">
+                Lưu ý: Nếu thêm lựa chọn &quot;Khác&quot;, hệ thống sẽ tự động cung cấp trường nhập liệu để người xin việc điền lý do chi tiết.
+              </p>
             </div>
           )}
           <div>
@@ -378,7 +425,7 @@ export default function FormBuilderPage() {
               />
             </div>
           </div>
-          <Button variant="gold" size="lg" className="w-full" onClick={create}>
+          <Button variant="gold" size="lg" className="w-full" onClick={save}>
             Lưu câu hỏi
           </Button>
         </div>
