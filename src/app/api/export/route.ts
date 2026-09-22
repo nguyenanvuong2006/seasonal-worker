@@ -130,11 +130,25 @@ export async function GET(req: Request) {
      ============================================================ */
   const defs = await getFieldDefinitions("daily_application");
   const coreCols = exportColumns(defs);
-  const questions = await db
+  const allQuestions = await db
     .select()
     .from(formQuestions)
-    .where(eq(formQuestions.isActive, true))
     .orderBy(asc(formQuestions.sortOrder));
+  
+  // Lấy danh sách fieldKey unique để làm cột (dùng label của version mới nhất làm header)
+  const uniqueQuestionsMap = new Map<string, typeof formQuestions.$inferSelect>();
+  for (const q of allQuestions) {
+    if (!uniqueQuestionsMap.has(q.fieldKey)) {
+      uniqueQuestionsMap.set(q.fieldKey, q);
+    } else {
+      // Ưu tiên version mới hơn cho header
+      const existing = uniqueQuestionsMap.get(q.fieldKey)!;
+      if (q.applyFrom && (!existing.applyFrom || q.applyFrom > existing.applyFrom)) {
+        uniqueQuestionsMap.set(q.fieldKey, q);
+      }
+    }
+  }
+  const questions = Array.from(uniqueQuestionsMap.values());
 
   // WORKFLOW ENGINE (#5) — nhãn trạng thái đọc từ workflow_stages, dự phòng STATUS_META nếu trống.
   const stageRows = await db.select().from(workflowStages).where(eq(workflowStages.entityType, "daily_application"));
@@ -243,7 +257,20 @@ export async function GET(req: Request) {
       ...coreCols.map((c) => resolvers[c.def.fieldKey]?.(r) ?? ""),
       ...questions.map((q) => {
         const baseValue = (r.customAnswers ?? {})[q.fieldKey];
-        const hasOtherOption = q.fieldType === "SELECT" && Array.isArray(q.options) && q.options.some((opt: string) => opt.trim().toLowerCase() === "khác");
+        // Tìm version của câu hỏi áp dụng cho ngày đăng ký của ứng viên này
+        let effectiveQ = q;
+        for (const v of allQuestions) {
+          if (v.fieldKey === q.fieldKey) {
+            const applyFromMatch = !v.applyFrom || v.applyFrom <= r.regDate;
+            const effectiveToMatch = !v.effectiveTo || v.effectiveTo > r.regDate;
+            if (applyFromMatch && effectiveToMatch) {
+              effectiveQ = v;
+              break;
+            }
+          }
+        }
+        
+        const hasOtherOption = effectiveQ.fieldType === "SELECT" && Array.isArray(effectiveQ.options) && effectiveQ.options.some((opt: string) => opt.trim().toLowerCase() === "khác");
         if (hasOtherOption && baseValue === "Khác") {
           const otherValue = (r.customAnswers ?? {})[`${q.fieldKey}__other`];
           if (otherValue) {

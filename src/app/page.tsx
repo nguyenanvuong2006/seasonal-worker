@@ -1,12 +1,9 @@
 import Link from "next/link";
-import { and, asc, eq, sql } from "drizzle-orm";
-import { db } from "@/db";
-import { formQuestions } from "@/db/schema";
 import ApplicantPortal from "@/components/applicant-portal";
 import { BrandLogo } from "@/components/brand-logo";
 import { ensureSeed, tablesReady } from "@/lib/seed";
-import { todayStr } from "@/lib/helpers";
 import { getPublicBranding } from "@/lib/branding";
+import { getApplicantEffectiveQuestions } from "@/lib/dynamic-questions";
 import type { FormQuestion } from "@/db/schema";
 import { BusFront, Leaf, Phone, Search, ShieldCheck, Sprout } from "lucide-react";
 
@@ -35,17 +32,7 @@ export default async function ApplicantHomePage() {
   let questions: FormQuestion[] = [];
   if (await tablesReady()) {
     await ensureSeed();
-    questions = await db
-      .select()
-      .from(formQuestions)
-      .where(
-        and(
-          eq(formQuestions.isActive, true),
-          eq(formQuestions.visibleToApplicants, true),
-          sql`(${formQuestions.applyFrom} IS NULL OR ${formQuestions.applyFrom} <= ${todayStr()}::date)`,
-        ),
-      )
-      .orderBy(asc(formQuestions.sortOrder));
+    questions = await getApplicantEffectiveQuestions();
   }
 
   const branding = await getPublicBranding();

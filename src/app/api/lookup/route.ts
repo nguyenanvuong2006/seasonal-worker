@@ -1,11 +1,12 @@
 import { NextResponse } from "next/server";
-import { and, asc, desc, eq } from "drizzle-orm";
+import { desc, eq } from "drizzle-orm";
 import { db } from "@/db";
-import { dailyApplications, departments, formQuestions } from "@/db/schema";
+import { dailyApplications, departments } from "@/db/schema";
 import { normalizePersonName } from "@/lib/person-name";
 import { isQuestionForAudience } from "@/lib/form-targeting";
 import { LOOKUP_NOT_FOUND_MESSAGE, verifyLookupIdentity } from "@/lib/lookup-identity";
 import { resolveDocumentKind, resolveDwClassification } from "@/lib/document-merge/template-routing";
+import { getApplicantEffectiveQuestions } from "@/lib/dynamic-questions";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -77,11 +78,7 @@ export async function POST(req: Request) {
       ? "RETURNING"
       : "NEW";
 
-    const questions = await db
-      .select()
-      .from(formQuestions)
-      .where(and(eq(formQuestions.isActive, true), eq(formQuestions.visibleToApplicants, true)))
-      .orderBy(asc(formQuestions.sortOrder));
+    const questions = await getApplicantEffectiveQuestions();
 
     confirmationQuestions = questions
       .filter((question) => isQuestionForAudience(question, audience))

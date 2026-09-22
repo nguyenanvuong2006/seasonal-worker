@@ -403,6 +403,11 @@ export default function FormBuilderPage() {
             />
             <p className="mt-1 text-[11px] text-fg-muted">
               Bỏ trống = áp dụng ngay lập tức. Form của người xin việc tự hiển thị câu hỏi từ ngày này — không cần IT sửa code.
+              {editId !== null && (
+                <span className="mt-1 block text-amber-600">
+                  <strong>Lưu ý:</strong> Thay đổi "Kiểu trả lời" hoặc xoá "Lựa chọn" của câu hỏi đã có dữ liệu ứng viên sẽ yêu cầu bạn chọn một ngày áp dụng mới để tạo phiên bản câu hỏi mới. Dữ liệu cũ trước ngày đó vẫn giữ nguyên theo cấu hình cũ.
+                </span>
+              )}
             </p>
           </div>
           <div className="flex items-center gap-4">

@@ -11,6 +11,7 @@ import { persistRegistrationAtomically, type RegistrationTransactionRunner } fro
 import { findActiveSessionByCccd } from "@/lib/employment";
 import { normalizeSelfDeclaration } from "@/lib/employment-lifecycle";
 import { isQuestionForAudience } from "@/lib/form-targeting";
+import { getApplicantEffectiveQuestions } from "@/lib/dynamic-questions";
 import { CCCD_ERROR_MESSAGE, isValidCccd } from "@/lib/validators";
 
 export const runtime = "nodejs";
@@ -56,16 +57,7 @@ export async function POST(req: Request) {
 
     // Phân loại hoàn toàn từ dữ liệu server; không tin cờ `is_returning` do client gửi.
     const isReturning = match.status === "MATCHED" && match.confidence === "CCCD";
-    const activeQuestions = await db
-      .select()
-      .from(formQuestions)
-      .where(
-        and(
-          eq(formQuestions.isActive, true),
-          eq(formQuestions.visibleToApplicants, true),
-          sql`(${formQuestions.applyFrom} IS NULL OR ${formQuestions.applyFrom} <= ${today}::date)`,
-        ),
-      );
+    const activeQuestions = await getApplicantEffectiveQuestions(today);
     const applicableQuestions = activeQuestions.filter((question) =>
       isQuestionForAudience(question, isReturning ? "RETURNING" : "NEW"),
     );

@@ -67,7 +67,7 @@ export async function ensureSeed() {
         .insert(formQuestions)
         .values([
           {
-            fieldKey: "gioi_tinh",
+            applyFrom: "2020-01-01", fieldKey: "gioi_tinh",
             questionText: "Giới tính",
             fieldType: "SELECT",
             options: ["Nam", "Nữ"],
@@ -77,7 +77,7 @@ export async function ensureSeed() {
             exportColumnName: "Giới tính",
           },
           {
-            fieldKey: "dan_toc",
+            applyFrom: "2020-01-01", fieldKey: "dan_toc",
             questionText: "Dân tộc",
             fieldType: "SELECT",
             options: ["Kinh", "Cơ Ho", "Raglây", "Chăm", "Cill", "Tring", "Khác"],
@@ -87,7 +87,7 @@ export async function ensureSeed() {
             exportColumnName: "Dân tộc",
           },
           {
-            fieldKey: "thoi_gian_dang_ky",
+            applyFrom: "2020-01-01", fieldKey: "thoi_gian_dang_ky",
             questionText: "Anh/Chị đăng ký làm việc bao lâu?",
             fieldType: "SELECT",
             options: ["01 - 03 tháng", "03 - 06 tháng", "06 - 12 tháng", "Trên 12 tháng"],
@@ -97,7 +97,7 @@ export async function ensureSeed() {
             exportColumnName: "Thời gian đăng ký làm",
           },
           {
-            fieldKey: "kenh_gioi_thieu",
+            applyFrom: "2020-01-01", fieldKey: "kenh_gioi_thieu",
             questionText: "Anh/chị biết thông tin tuyển dụng từ đâu?",
             fieldType: "SELECT",
             options: [
@@ -115,7 +115,7 @@ export async function ensureSeed() {
             exportColumnName: "Kênh giới thiệu",
           },
           {
-            fieldKey: "cam_ket",
+            applyFrom: "2020-01-01", fieldKey: "cam_ket",
             questionText: "Tôi cam kết những thông tin trên là đầy đủ, chính xác",
             fieldType: "BOOLEAN",
             isRequired: true,
@@ -134,7 +134,7 @@ export async function ensureSeed() {
         .insert(fieldDefinitions)
         .values(
           DEFAULT_FIELD_DEFINITIONS.map((d, i) => ({
-            fieldKey: d.fieldKey,
+            applyFrom: "2020-01-01", fieldKey: d.fieldKey,
             groupName: d.groupName,
             displayName: d.displayName,
             databaseField: d.databaseField,

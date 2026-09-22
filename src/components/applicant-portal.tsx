@@ -407,6 +407,27 @@ export default function ApplicantPortal({ questions }: { questions: FormQuestion
         setStage("already_registered");
       } else if (data.status === "RETURNING_VERIFIED") {
         setWorkerInfo(data.worker);
+        
+        // Clean legacy values
+        const validAnswers: Record<string, string> = {};
+        const oldAnswers = data.worker.custom_answers || {};
+        for (const q of returningQuestions) {
+          if (oldAnswers[q.fieldKey]) {
+            const val = oldAnswers[q.fieldKey];
+            if (q.fieldType === "SELECT" && Array.isArray(q.options)) {
+              if (q.options.includes(val) || (val === "Khác" && q.options.some((opt: string) => opt.trim().toLowerCase() === "khác"))) {
+                validAnswers[q.fieldKey] = val;
+                if (val === "Khác" && oldAnswers[`${q.fieldKey}__other`]) {
+                  validAnswers[`${q.fieldKey}__other`] = oldAnswers[`${q.fieldKey}__other`];
+                }
+              }
+            } else {
+              validAnswers[q.fieldKey] = val;
+            }
+          }
+        }
+        setCustomAnswers(validAnswers);
+        
         setStage("returning_autofilled");
       } else {
         if (data.worker) {

@@ -2,7 +2,8 @@ import "server-only";
 
 import { asc } from "drizzle-orm";
 import { db } from "@/db";
-import { formQuestions, type FieldDefinition, type FormQuestion } from "@/db/schema";
+import { type FieldDefinition, type FormQuestion } from "@/db/schema";
+import { getActiveEffectiveQuestions } from "@/lib/dynamic-questions";
 import {
   acceptedColumnNames,
   getFieldDefinitions,
@@ -117,7 +118,7 @@ export async function getImportTemplate(group: Group): Promise<ImportTemplateCol
     })));
   }
 
-  const questions = await db.select().from(formQuestions).orderBy(asc(formQuestions.sortOrder));
+  const questions = await getActiveEffectiveQuestions();
   const publicActiveQuestions = questions.filter(
     (question) => question.isActive && question.visibleToApplicants,
   );
