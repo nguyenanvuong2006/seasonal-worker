@@ -8,7 +8,8 @@ import { NextResponse } from 'next/server';
 import { eq } from 'drizzle-orm';
 import { requirePermission } from '@/lib/auth';
 import { db } from '@/db';
-import { fieldDefinitions, formQuestions } from '@/db/schema';
+import { fieldDefinitions } from '@/db/schema';
+import { getActiveEffectiveQuestions } from '@/lib/dynamic-questions';
 import { buildFieldCatalogFromDefinitions } from '@/lib/document-merge/field-catalog';
 
 export async function GET() {
@@ -22,10 +23,7 @@ export async function GET() {
     const fields = await db.select().from(fieldDefinitions);
     
     // Get active form questions
-    const questions = await db
-      .select()
-      .from(formQuestions)
-      .where(eq(formQuestions.isActive, true));
+    const questions = await getActiveEffectiveQuestions();
     
     // Build catalog
     const catalog = buildFieldCatalogFromDefinitions(fields, questions);

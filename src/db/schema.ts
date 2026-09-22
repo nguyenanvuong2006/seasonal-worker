@@ -272,7 +272,7 @@ export const formQuestions = pgTable(
   "form_questions",
   {
     id: uuid("id").defaultRandom().primaryKey(),
-    fieldKey: varchar("field_key", { length: 64 }).notNull().unique(),
+    fieldKey: varchar("field_key", { length: 64 }).notNull(),
     questionText: text("question_text").notNull(),
     fieldType: varchar("field_type", { length: 24 }).notNull().default("TEXT"),
     options: jsonb("options").$type<string[]>().default([]),
@@ -282,7 +282,8 @@ export const formQuestions = pgTable(
     visibleToApplicants: boolean("visible_to_applicants").notNull().default(true),
     targetAudience: varchar("target_audience", { length: 20 }).notNull().default("ALL"),
     skipForReturning: boolean("skip_for_returning").notNull().default(false),
-    applyFrom: date("apply_from"),
+    applyFrom: date("apply_from").notNull(),
+    effectiveTo: date("effective_to"),
     // --- Metadata Engine: cho phép import/export nhận diện câu hỏi động theo nhiều tên cột ---
     aliases: jsonb("aliases").$type<string[]>().default([]),
     exportColumnName: varchar("export_column_name", { length: 160 }),
@@ -293,6 +294,7 @@ export const formQuestions = pgTable(
       "form_questions_target_audience_chk",
       sql`${t.targetAudience} IN ('ALL', 'NEW_ONLY', 'RETURNING_ONLY')`,
     ),
+    uniqueIndex("form_questions_field_key_apply_from_idx").on(t.fieldKey, t.applyFrom),
   ],
 );
 

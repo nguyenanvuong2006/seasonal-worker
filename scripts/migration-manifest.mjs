@@ -1258,6 +1258,30 @@ export const MIGRATION_MANIFEST = [
     notes:
       "Purely additive — seven brand-new tables, zero changes to any existing table, zero backfill of historical dw_data.code/dw_data.it_code (may not conform to any prefix scheme). dw_data.code/it_code remain the read mirrors every existing screen already reads; new assignment services write through them going forward. Run via the canonical single-migration runner (scripts/run-migration.mjs). NOT executed against Production by Mission E — owner approval required before execution (see PR body).",
   },
+  {
+    filename: "2026-09-22-effective-dated-dynamic-questions.sql",
+    category: "SCHEMA_ADDITIVE",
+    objectsCreatedOrModified: [
+      "column:form_questions.apply_from",
+      "column:form_questions.effective_to",
+      "column:form_questions.aliases",
+      "column:form_questions.export_column_name",
+      "index:form_questions_field_key_apply_from_idx",
+    ],
+    idempotent: true,
+    transactionSafe: true,
+    appDependency: "REQUIRED",
+    appDependencyEvidence:
+      "Migration adds apply_from default CURRENT_DATE making it safe to run before code deployment. The new code requires this column to exist.",
+    executionMechanism: "MANUAL_PSQL_GENERIC",
+    supersededBy: null,
+    tombstoned: false,
+    tombstonedReason: null,
+    requiresBackup: true,
+    productionAllowed: true,
+    notes:
+      "Effective-dated versioning for dynamic questions. Drops old unique constraint and adds composite unique index with backfill.",
+  },
 ];
 
 /** @type {Map<string, MigrationManifestEntry>} */
