@@ -4,6 +4,9 @@ on:
     branches:
       - feat/effective-dated-question-versioning
 
+permissions:
+  pull-requests: write
+
 jobs:
   diagnose:
     runs-on: ubuntu-latest
@@ -24,4 +27,9 @@ jobs:
       - name: Run Diagnostic
         env:
           DATABASE_URL: ${{ secrets.PROD_DATABASE_URL }}
-        run: node scripts/diagnose-pr234.mjs
+        run: node scripts/diagnose-pr234.mjs > output.txt
+
+      - name: Post Comment
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: gh pr comment 234 --body-file output.txt
