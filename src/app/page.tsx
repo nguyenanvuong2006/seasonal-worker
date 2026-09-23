@@ -157,7 +157,12 @@ export default async function ApplicantHomePage() {
       </section>
 
       <footer className="border-t border-[#e9e0d2] bg-[#fffdf8] px-4 py-5 text-center text-[10px] font-bold uppercase tracking-[0.12em] text-fg-muted">
-        © {new Date().getFullYear()} Dalat Hasfarm — Seasonal Internship
+        <p>© {new Date().getFullYear()} Dalat Hasfarm — Seasonal Internship</p>
+        <p className="mt-2 flex items-center justify-center gap-2 text-[11px] font-semibold normal-case tracking-normal text-[#154c2b]">
+          <Link href="/privacy" className="transition hover:text-[#f58220] hover:underline">Chính sách bảo mật</Link>
+          <span className="text-[#e7dece]">·</span>
+          <Link href="/terms" className="transition hover:text-[#f58220] hover:underline">Điều khoản sử dụng</Link>
+        </p>
       </footer>
     </main>
   );
