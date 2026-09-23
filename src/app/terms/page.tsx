@@ -50,7 +50,7 @@ export default function TermsPage() {
             <section>
               <h2 className="mb-3 text-2xl font-black text-[#154c2b]">2. Điều kiện sử dụng</h2>
               <p>
-                Người sử dụng phải đáp ứng các yêu cầu về độ tuổi lao động và tự nguyện cung cấp các thông tin liên quan theo yêu cầu của Dalat Hasfarm phục vụ cho mục đích tuyển dụng. Bằng việc nộp hồ sơ, bạn đồng ý với các điều khoản này.
+                Người sử dụng phải đáp ứng các yêu cầu về độ tuổi lao động và tự nguyện cung cấp các thông tin liên quan theo yêu cầu của Dalat Hasfarm phục vụ cho mục đích tuyển dụng. Khi sử dụng hệ thống để đăng ký và gửi thông tin, bạn có trách nhiệm đọc và tuân thủ các điều khoản sử dụng được công bố tại đây.
               </p>
             </section>
 
@@ -64,7 +64,7 @@ export default function TermsPage() {
             <section>
               <h2 className="mb-3 text-2xl font-black text-[#154c2b]">4. Quy trình tiếp nhận hồ sơ</h2>
               <p>
-                Sau khi gửi thông tin, hệ thống sẽ tiến hành đối chiếu hồ sơ và xếp bộ phận làm việc phù hợp với nhu cầu hiện tại. Kết quả sẽ được thông báo qua các kênh liên hệ mà bạn đã đăng ký hoặc có thể kiểm tra trực tiếp qua chức năng "Tra cứu".
+                Sau khi gửi thông tin, hệ thống sẽ tiến hành đối chiếu hồ sơ và xếp bộ phận làm việc phù hợp với nhu cầu hiện tại. Kết quả sẽ được thông báo qua các kênh liên hệ mà bạn đã đăng ký hoặc có thể kiểm tra trực tiếp qua chức năng &quot;Tra cứu&quot;.
               </p>
             </section>
 
@@ -85,7 +85,7 @@ export default function TermsPage() {
             <section>
               <h2 className="mb-3 text-2xl font-black text-[#154c2b]">7. Tài liệu điện tử và xác nhận</h2>
               <p>
-                Trong quá trình xử lý, hệ thống có thể cung cấp các tài liệu điện tử để bạn xem xét và xác nhận (ký điện tử). Việc bạn xác nhận trên hệ thống có giá trị tương đương với việc ký kết bằng văn bản theo quy trình số hóa của công ty.
+                Trong quá trình xử lý, hệ thống có thể cung cấp các tài liệu điện tử để bạn xem xét và xác nhận. Hệ thống ghi nhận nội dung xác nhận, thời điểm xác nhận và các thông tin bằng chứng kỹ thuật liên quan để phục vụ việc đối chiếu, lưu vết và xử lý nghiệp vụ.
               </p>
             </section>
 

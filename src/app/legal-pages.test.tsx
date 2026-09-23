@@ -37,6 +37,8 @@ test("Legal Pages - Terms of Service", () => {
   assert.doesNotMatch(termsCode, /bảo mật tuyệt đối/i, "No unsupported absolute-security wording");
   assert.doesNotMatch(termsCode, /auth/i, "Pages do not require auth (no auth middleware/imports)");
   assert.doesNotMatch(termsCode, /admin/i, "Pages do not import admin-only modules");
+  assert.doesNotMatch(termsCode, /giá trị tương đương với việc ký kết bằng văn bản/i, "Does not claim PKI equivalent signature");
+  assert.doesNotMatch(termsCode, /bằng việc nộp hồ sơ, bạn đồng ý/i, "Does not claim explicit consent unsupported by UI");
 });
 
 test("Legal Pages - Homepage links", () => {

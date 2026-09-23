@@ -84,7 +84,7 @@ export default function PrivacyPage() {
             <section>
               <h2 className="mb-3 text-2xl font-black text-[#154c2b]">6. Quyền truy cập nội bộ</h2>
               <p>
-                Thông tin chỉ được truy cập bởi các nhân sự được ủy quyền tại Dalat Hasfarm, tuân thủ theo nguyên tắc phân quyền. Mỗi bộ phận (Tuyển dụng, Quản lý bộ phận, Hành chính) chỉ xem được thông tin cần thiết phục vụ cho công việc chuyên môn tương ứng.
+                Quyền truy cập thông tin được giới hạn theo vai trò, phân quyền và nhu cầu nghiệp vụ của các bộ phận có liên quan trong Dalat Hasfarm. Mỗi bộ phận (Tuyển dụng, Quản lý bộ phận, Hành chính) chỉ xem được thông tin cần thiết phục vụ cho công việc chuyên môn tương ứng.
               </p>
             </section>
 
@@ -112,7 +112,7 @@ export default function PrivacyPage() {
             <section>
               <h2 className="mb-3 text-2xl font-black text-[#154c2b]">10. Quyền yêu cầu kiểm tra, cập nhật thông tin</h2>
               <p>
-                Ứng viên có quyền tra cứu tình trạng hồ sơ của mình thông qua tính năng "Tra cứu" trên hệ thống. Nếu có sai sót về thông tin cá nhân, vui lòng liên hệ bộ phận hỗ trợ để được hướng dẫn điều chỉnh.
+                Ứng viên có quyền tra cứu tình trạng hồ sơ của mình thông qua tính năng &quot;Tra cứu&quot; trên hệ thống. Nếu có sai sót về thông tin cá nhân, vui lòng liên hệ bộ phận hỗ trợ để được hướng dẫn điều chỉnh.
               </p>
             </section>
 
