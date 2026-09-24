@@ -1,0 +1,62 @@
+-- ============================================================
+-- MIGRATION — 2026-09-24 — departments.vn_name schema drift fix
+-- ============================================================
+-- Root cause: vn_name was defined in schema.sql and schema.ts from the start
+-- but was NEVER covered by an additive migration. Any Production database
+-- created from a pre-vn_name schema snapshot (before vn_name was added to
+-- schema.sql) is missing this column. Code in /api/registrations/check
+-- explicitly SELECT-s departments.vn_name, causing a query failure when the
+-- column is absent.
+--
+-- Affected code paths (all actively used in Production):
+--   src/app/api/registrations/check/route.ts:39       SELECT departments.vnName
+--   src/app/api/registrations/route.ts:330            SELECT departments.vnName
+--   src/app/api/departments/route.ts:54,99,117,129    READ + WRITE
+--   src/app/api/export/route.ts:94                    EXPORT
+--   src/app/api/global-search/route.ts:133,146        SEARCH
+--   src/app/api/planning/route.ts:78                  PLANNING
+--   src/app/api/document-merge/preview/route.ts:428   MERGE
+--   src/app/api/document-merge/merge/execute/route.ts:104 MERGE
+--   src/lib/import-engine.ts:128,131,137              IMPORT (writes vn_name)
+--   src/lib/import-jobs.ts:221,493,494,498            IMPORT (writes vn_name)
+--   src/lib/analytics.ts:74,85,558                    ANALYTICS
+--   src/components/registrations-grid.tsx:1195        DISPLAY
+--   src/app/(internal)/admin/departments/page.tsx     ADMIN UI
+--   src/app/(internal)/hr/registrations/page.tsx      HR VIEW
+--
+-- Classification: CANONICAL FIELD (Production MUST have it).
+-- Nullability: nullable (no DEFAULT, no NOT NULL) — matches schema.ts exactly.
+--   Reason: existing departments may not have a vn_name value; adding NOT NULL
+--   without a DEFAULT would fail on any non-empty departments table.
+--
+-- Safety:
+--   * Idempotent — ADD COLUMN IF NOT EXISTS: safe to run multiple times.
+--   * ADDITIVE ONLY — no DROP, no UPDATE, no DELETE, no data rewrite.
+--   * No NOT NULL, no DEFAULT — existing rows untouched (column = NULL for rows
+--     that didn't previously have a vn_name value).
+--   * No FK added, no constraint tightening.
+--   * Backward-compatible: schema.ts declares vnName as nullable varchar(200).
+--     Adding the column exactly as declared makes schema.ts and Production match.
+--
+-- PRODUCTION WRITES: this is a schema-only DDL operation (ALTER TABLE).
+--   No DML (INSERT/UPDATE/DELETE) is executed.
+--
+-- Verification after running:
+--   \d departments            -- must show vn_name varchar(200)
+--   SELECT column_name, data_type, is_nullable, column_default
+--     FROM information_schema.columns
+--    WHERE table_schema = 'public' AND table_name = 'departments'
+--      AND column_name = 'vn_name';
+--   -- Expected: column_name=vn_name, data_type=character varying, is_nullable=YES,
+--   --           column_default=NULL
+-- ============================================================
+
+ALTER TABLE departments ADD COLUMN IF NOT EXISTS vn_name varchar(200);
+
+-- ============================================================
+-- Confirm:
+--   SELECT column_name, data_type, is_nullable, column_default
+--     FROM information_schema.columns
+--    WHERE table_schema = 'public' AND table_name = 'departments'
+--    ORDER BY ordinal_position;
+-- ============================================================

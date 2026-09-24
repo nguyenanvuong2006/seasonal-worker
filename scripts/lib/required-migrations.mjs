@@ -83,6 +83,17 @@ export const REQUIRED_MIGRATIONS = [
       { label: "column:recruitment_requests.snapshot_at", ok: await columnExists(client, "recruitment_requests", "snapshot_at") },
     ],
   },
+  {
+    // P0 — departments.vn_name schema drift (2026-09-24).
+    // This column was always in schema.ts/schema.sql but was never covered by an
+    // additive migration. Any Production DB missing it causes /api/registrations/check
+    // to fail with a Postgres 'column departments.vn_name does not exist' error.
+    migrationId: "2026-09-24-departments-vn-name.sql",
+    description: "departments.vn_name — Vietnamese name column used by applicant check, export, global-search, import and document-merge routes",
+    probe: async (client) => [
+      { label: "column:departments.vn_name", ok: await columnExists(client, "departments", "vn_name") },
+    ],
+  },
 ];
 
 /**

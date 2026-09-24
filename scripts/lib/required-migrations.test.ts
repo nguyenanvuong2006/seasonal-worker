@@ -28,6 +28,14 @@ test("REQUIRED_MIGRATIONS: registry covers the five migrations Mission B section
   assert.ok(ids.includes("2026-09-09-recruitment-requests-snapshot-columns-only.sql"));
 });
 
+test("REQUIRED_MIGRATIONS: registry covers the P0 departments.vn_name schema drift migration (2026-09-24)", () => {
+  const ids = REQUIRED_MIGRATIONS.map((m) => m.migrationId);
+  assert.ok(
+    ids.includes("2026-09-24-departments-vn-name.sql"),
+    "departments.vn_name migration must be in the required-migration registry so production-health-check.mjs will FAIL when the column is absent",
+  );
+});
+
 test("checkRequiredMigrationEvidence: everything present -> allPresent true for every migration", async () => {
   const client = makeFakeClient(() => true);
   const results = await checkRequiredMigrationEvidence(client);
@@ -65,4 +73,22 @@ test("checkRequiredMigrationEvidence: partial evidence (one missing column) surf
 
   const others = results.filter((r) => r.migrationId !== ec.migrationId);
   assert.ok(others.every((r) => r.allPresent), "an unrelated migration's evidence must not be affected by another migration's missing column");
+});
+
+test("checkRequiredMigrationEvidence: missing departments.vn_name surfaces allPresent=false for vn_name migration only", async () => {
+  // Everything present EXCEPT departments.vn_name — simulates the Production schema drift incident.
+  const client = makeFakeClient((text, params) => {
+    if (/information_schema\.columns/i.test(text) && params[0] === "departments" && params[1] === "vn_name") return false;
+    return true;
+  });
+  const results = await checkRequiredMigrationEvidence(client);
+  const vnEntry = results.find((r) => r.migrationId === "2026-09-24-departments-vn-name.sql")!;
+  assert.ok(vnEntry, "vn_name migration must be registered and appear in results");
+  assert.equal(vnEntry.allPresent, false, "allPresent must be false when departments.vn_name is absent");
+  const failing = vnEntry.checks.filter((c) => !c.ok);
+  assert.deepEqual(failing.map((c) => c.label), ["column:departments.vn_name"]);
+
+  // Other migrations must be unaffected.
+  const others = results.filter((r) => r.migrationId !== vnEntry.migrationId);
+  assert.ok(others.every((r) => r.allPresent), "other migrations must not be affected by missing departments.vn_name");
 });

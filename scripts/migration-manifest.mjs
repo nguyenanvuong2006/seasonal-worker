@@ -1258,6 +1258,24 @@ export const MIGRATION_MANIFEST = [
     notes:
       "Purely additive — seven brand-new tables, zero changes to any existing table, zero backfill of historical dw_data.code/dw_data.it_code (may not conform to any prefix scheme). dw_data.code/it_code remain the read mirrors every existing screen already reads; new assignment services write through them going forward. Run via the canonical single-migration runner (scripts/run-migration.mjs). NOT executed against Production by Mission E — owner approval required before execution (see PR body).",
   },
+  {
+    filename: "2026-09-24-departments-vn-name.sql",
+    category: "SCHEMA_ADDITIVE",
+    objectsCreatedOrModified: ["column:departments.vn_name"],
+    idempotent: true,
+    transactionSafe: true,
+    appDependency: "REQUIRED",
+    appDependencyEvidence:
+      "departments.vn_name (ORM alias vnName) is actively selected in at minimum 10 route files and 3 lib files: src/app/api/registrations/check/route.ts:39 (public applicant check — the P0 failing path), src/app/api/registrations/route.ts:330, src/app/api/departments/route.ts:54/99, src/app/api/export/route.ts:94, src/app/api/global-search/route.ts:133/146, src/app/api/planning/route.ts:78, src/app/api/document-merge/preview/route.ts:428, src/app/api/document-merge/merge/execute/route.ts:104, src/app/api/admin/data-scopes/route.ts:35, src/lib/analytics.ts:74/85, src/lib/document-merge/record-loader.ts:26, src/lib/import-engine.ts:128/131/137 (writes vn_name), src/lib/import-jobs.ts:221/493/494/498 (writes vn_name). Missing column causes Postgres 'column departments.vn_name does not exist' on every query that references it.",
+    executionMechanism: "MANUAL_PSQL_GENERIC",
+    supersededBy: null,
+    tombstoned: false,
+    tombstonedReason: null,
+    requiresBackup: false,
+    productionAllowed: true,
+    notes:
+      "P0 schema drift fix. vn_name was always declared in schema.sql (line 18) and schema.ts (line 33) but was NEVER covered by a prior additive migration — confirmed by grep returning zero results across all 48 migration files. Any Production instance initialized from a snapshot before vn_name was added to schema.sql is missing this column. Single ADD COLUMN IF NOT EXISTS — no DEFAULT, no NOT NULL, preserves nullable matching schema.ts. Run via the canonical single-migration runner (scripts/run-migration.mjs) — or the GitHub Actions workflow 'Migrate Single Migration (Canonical) — PRODUCTION' (migrate-single-production.yml, workflow_dispatch, migration_id=2026-09-24-departments-vn-name.sql). Do NOT run manually in Neon SQL Editor or psql: doing so bypasses the schema_migrations ledger (no checksum record, no advisory lock, no APPLIED_BY/APP_COMMIT_SHA audit trail). Migration-first safe: this migration MUST be applied before or alongside the next deploy — the column absence is the live P0 incident. NOT executed against Production here — requires explicit operator approval.",
+  },
 ];
 
 /** @type {Map<string, MigrationManifestEntry>} */

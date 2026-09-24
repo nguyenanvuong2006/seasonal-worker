@@ -96,8 +96,18 @@ export async function POST(req: Request) {
 
     return NextResponse.json({ status: "NEW", confidence: match.confidence, active_employment: activeEmploymentPayload });
   } catch (error) {
+    // P0 — PUBLIC ERROR HARDENING: never expose raw DB/query text to applicants.
+    // Log sanitized server-side metadata only (no CCCD, no phone, no SQL params).
+    const pgCode = (error as Record<string, unknown>)?.["code"] ?? "UNKNOWN";
+    const errClass = (error as Error)?.constructor?.name ?? "Error";
+    console.error(
+      `[/api/registrations/check] ${errClass} pgCode=${pgCode} ts=${new Date().toISOString()}`,
+    );
     return NextResponse.json(
-      { error: "Lỗi hệ thống: " + (error as Error).message },
+      {
+        error:
+          "Lỗi hệ thống. Vui lòng thử lại sau hoặc liên hệ bộ phận hỗ trợ.",
+      },
       { status: 500 },
     );
   }
